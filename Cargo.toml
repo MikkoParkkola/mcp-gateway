@@ -1,0 +1,93 @@
+[package]
+name = "mcp-gateway"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Mikko Parkkola <mikko@parkkola.fi>"]
+description = "Universal MCP Gateway - Single-port multiplexing with Meta-MCP for ~95% context token savings"
+license = "MIT"
+repository = "https://github.com/MikkoParkkola/mcp-gateway"
+documentation = "https://github.com/MikkoParkkola/mcp-gateway#readme"
+readme = "README.md"
+keywords = ["mcp", "model-context-protocol", "gateway", "proxy", "ai"]
+categories = ["command-line-utilities", "network-programming", "web-programming"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.44", features = ["full", "tracing"] }
+
+# HTTP server/client
+axum = { version = "0.8", features = ["tracing", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+tower = { version = "0.5", features = ["timeout", "limit", "load-shed", "retry"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "compression-gzip", "request-id", "catch-panic"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Configuration
+figment = { version = "0.10", features = ["yaml", "env"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+
+# Logging & Telemetry
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+async-stream = "0.3"
+
+# Rate limiting & backoff
+governor = "0.10"
+backoff = { version = "0.4", features = ["tokio"] }
+
+# Utilities
+uuid = { version = "1.11", features = ["v4", "fast-rng"] }
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1"
+parking_lot = "0.12"
+bytes = "1.9"
+pin-project-lite = "0.2"
+
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+pretty_assertions = "1.4"
+tempfile = "3.14"
+
+[features]
+default = []
+metrics = ["dep:metrics-exporter-prometheus"]
+
+[[bin]]
+name = "mcp-gateway"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"

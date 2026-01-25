@@ -1,7 +1,7 @@
 # MCP Gateway
 
-[![PyPI version](https://badge.fury.io/py/mcp-gateway.svg)](https://badge.fury.io/py/mcp-gateway)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
+[![Rust](https://img.shields.io/badge/rust-1.85+-blue.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Universal Model Context Protocol (MCP) Gateway** - Single-port multiplexing with Meta-MCP for ~95% context token savings.
@@ -16,8 +16,9 @@ MCP is powerful, but scaling to many servers creates problems:
 | ~15,000 tokens overhead | ~400 tokens |
 | Multiple ports to manage | Single port |
 | Session loss on reconnect | Persistent proxy |
+| No resilience | Circuit breakers, retries, rate limiting |
 
-## The Solution
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -27,6 +28,10 @@ MCP is powerful, but scaling to many servers creates problems:
 │  │  • gateway_list_servers    • gateway_search_tools        │    │
 │  │  • gateway_list_tools      • gateway_invoke              │    │
 │  └─────────────────────────────────────────────────────────┘    │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  Failsafes: Circuit Breaker │ Retry │ Rate Limit        │    │
+│  └─────────────────────────────────────────────────────────┘    │
 │                              │                                   │
 │         ┌────────────────────┼────────────────────┐             │
 │         ▼                    ▼                    ▼             │
@@ -35,60 +40,6 @@ MCP is powerful, but scaling to many servers creates problems:
 │  │  (stdio)    │    │   (http)    │    │   (sse)     │         │
 │  └─────────────┘    └─────────────┘    └─────────────┘         │
 └─────────────────────────────────────────────────────────────────┘
-```
-
-## Quick Start
-
-### Installation
-
-```bash
-pip install mcp-gateway
-```
-
-### Basic Usage
-
-```bash
-# Start with configuration file
-mcp-gateway --config servers.yaml --port 39400
-```
-
-### Configuration
-
-Create `servers.yaml`:
-
-```yaml
-port: 39400
-enable_meta_mcp: true
-
-backends:
-  tavily:
-    command: "npx -y @anthropic/mcp-server-tavily"
-    description: "Web search"
-    env:
-      TAVILY_API_KEY: "${TAVILY_API_KEY}"
-
-  context7:
-    http_url: "http://localhost:8080/mcp"
-    description: "Documentation lookup"
-
-  pieces:
-    http_url: "http://localhost:39300/sse"
-    description: "Long-term memory"
-```
-
-### Client Configuration
-
-Point your MCP client to the gateway:
-
-```json
-{
-  "mcpServers": {
-    "gateway": {
-      "type": "http",
-      "url": "http://localhost:39400/mcp"
-    }
-  }
-}
 ```
 
 ## Features
@@ -109,199 +60,199 @@ Instead of loading 100+ tool definitions, Meta-MCP exposes 4 meta-tools:
 - Meta-MCP: 4 tools × 100 tokens = 400 tokens
 - **Savings: 97%**
 
-### Transport Support
+### Production Failsafes
 
-| Transport | Description | Example |
-|-----------|-------------|---------|
-| **stdio** | Subprocess with JSON-RPC | `command: "npx server"` |
-| **http** | HTTP POST | `http_url: "http://localhost:8080/mcp"` |
-| **sse** | Server-Sent Events | `http_url: "http://localhost:8080/sse"` |
-
-### Operational Features
-
-- **Lazy Loading**: Backends start on first access
-- **Idle Timeout**: Hibernate unused backends (configurable)
-- **Auto-Reconnect**: Survives client context compaction
-- **Health Aggregation**: Single `/health` endpoint
-- **Tool Caching**: Cached for session persistence
-
-## API Reference
-
-### HTTP Endpoints
-
-| Endpoint | Description |
+| Failsafe | Description |
 |----------|-------------|
-| `GET /health` | Health check with backend status |
-| `POST /mcp` | Meta-MCP mode (dynamic discovery) |
-| `POST /mcp/{backend}` | Direct backend access |
+| **Circuit Breaker** | Opens after 5 failures, half-opens after 30s |
+| **Retry with Backoff** | 3 attempts with exponential backoff |
+| **Rate Limiting** | Per-backend request throttling |
+| **Health Checks** | Periodic ping to detect failures |
+| **Graceful Shutdown** | Clean connection termination |
+| **Concurrency Limits** | Prevent backend overload |
 
-### Environment Variables
+### Protocol Support
 
-Configuration values support environment variable expansion:
+- **MCP Version**: 2025-11-25 (latest)
+- **Transports**: stdio, Streamable HTTP, SSE
+- **JSON-RPC 2.0**: Full compliance
+
+## Quick Start
+
+### Installation
+
+```bash
+cargo install mcp-gateway
+```
+
+### Usage
+
+```bash
+# Start with configuration file
+mcp-gateway --config servers.yaml
+
+# Override port
+mcp-gateway --config servers.yaml --port 8080
+
+# Debug logging
+mcp-gateway --config servers.yaml --log-level debug
+```
+
+### Configuration
+
+Create `servers.yaml`:
 
 ```yaml
+server:
+  port: 39400
+
+meta_mcp:
+  enabled: true
+
+failsafe:
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+  retry:
+    enabled: true
+    max_attempts: 3
+
 backends:
   tavily:
     command: "npx -y @anthropic/mcp-server-tavily"
+    description: "Web search"
     env:
-      TAVILY_API_KEY: "${TAVILY_API_KEY}"  # Expanded at runtime
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+
+  context7:
+    http_url: "http://localhost:8080/mcp"
+    description: "Documentation lookup"
 ```
 
-### CLI Options
+### Client Configuration
 
-```
-mcp-gateway [OPTIONS]
-
-Options:
-  -c, --config PATH       YAML configuration file
-  -p, --port PORT         Port to listen on (default: 39400)
-  --host HOST             Host to bind to (default: 127.0.0.1)
-  --log-level LEVEL       DEBUG, INFO, WARNING, ERROR
-  --no-meta-mcp           Disable Meta-MCP mode
-  --version               Show version
-  --help                  Show help
-```
-
-## Programmatic Usage
-
-```python
-import asyncio
-from mcp_gateway import Gateway, GatewayConfig, BackendConfig
-
-# Create configuration
-config = GatewayConfig(
-    port=39400,
-    enable_meta_mcp=True,
-    backends={
-        "tavily": BackendConfig(
-            name="tavily",
-            command="npx -y @anthropic/mcp-server-tavily",
-            description="Web search",
-        )
-    }
-)
-
-# Or load from YAML
-config = GatewayConfig.from_yaml("servers.yaml")
-
-# Create and run gateway
-gateway = Gateway(config)
-asyncio.run(gateway.run())
-```
-
-## Production Deployment
-
-### systemd Service
-
-```ini
-[Unit]
-Description=MCP Gateway
-After=network.target
-
-[Service]
-Type=simple
-User=mcp
-ExecStart=/usr/local/bin/mcp-gateway --config /etc/mcp-gateway/servers.yaml
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### macOS launchd
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.mcp.gateway</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/mcp-gateway</string>
-        <string>--config</string>
-        <string>/etc/mcp-gateway/servers.yaml</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
-```
-
-### Docker
-
-```dockerfile
-FROM python:3.12-slim
-
-RUN pip install mcp-gateway
-
-COPY servers.yaml /etc/mcp-gateway/
-EXPOSE 39400
-
-CMD ["mcp-gateway", "--config", "/etc/mcp-gateway/servers.yaml", "--host", "0.0.0.0"]
-```
-
-## Metrics & Monitoring
-
-### Health Endpoint
-
-```bash
-curl http://localhost:39400/health
-```
+Point your MCP client to the gateway:
 
 ```json
 {
-  "status": "healthy",
-  "backends": {
-    "tavily": {
-      "running": true,
-      "restart_count": 1,
-      "tools_cached": 3
+  "mcpServers": {
+    "gateway": {
+      "type": "http",
+      "url": "http://localhost:39400/mcp"
     }
   }
 }
 ```
 
-### Prometheus Metrics (Optional)
+## API Reference
 
-Install with metrics support:
+### Endpoints
 
-```bash
-pip install mcp-gateway[metrics]
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with backend status |
+| `/mcp` | POST | Meta-MCP mode (dynamic discovery) |
+| `/mcp/{backend}` | POST | Direct backend access |
+
+### Health Check Response
+
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "backends": {
+    "tavily": {
+      "name": "tavily",
+      "running": true,
+      "transport": "stdio",
+      "tools_cached": 3,
+      "circuit_state": "Closed",
+      "request_count": 42
+    }
+  }
+}
 ```
 
-## Troubleshooting
+## Configuration Reference
 
-### Backend Won't Start
+### Server
 
-1. Check the command is correct: `npx -y @package/name`
-2. Verify environment variables are set
-3. Check logs with `--log-level DEBUG`
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | `127.0.0.1` | Bind address |
+| `port` | u16 | `39400` | Listen port |
+| `request_timeout` | duration | `30s` | Request timeout |
+| `shutdown_timeout` | duration | `30s` | Graceful shutdown timeout |
 
-### Tool Not Found
+### Meta-MCP
 
-1. Use `gateway_search_tools` to verify tool exists
-2. Check backend is running: `gateway_list_servers`
-3. Verify backend has started: check `/health`
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable Meta-MCP mode |
+| `cache_tools` | bool | `true` | Cache tool lists |
+| `cache_ttl` | duration | `5m` | Cache TTL |
 
-### Session Issues
+### Failsafe
 
-The gateway caches tool lists on startup. If a backend restarts:
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `circuit_breaker.enabled` | bool | `true` | Enable circuit breaker |
+| `circuit_breaker.failure_threshold` | u32 | `5` | Failures before open |
+| `circuit_breaker.success_threshold` | u32 | `3` | Successes to close |
+| `circuit_breaker.reset_timeout` | duration | `30s` | Half-open delay |
+| `retry.enabled` | bool | `true` | Enable retries |
+| `retry.max_attempts` | u32 | `3` | Max retry attempts |
+| `retry.initial_backoff` | duration | `100ms` | Initial backoff |
+| `retry.max_backoff` | duration | `10s` | Max backoff |
+| `rate_limit.enabled` | bool | `true` | Enable rate limiting |
+| `rate_limit.requests_per_second` | u32 | `100` | RPS per backend |
 
-1. Tools are re-cached automatically
-2. Check `restart_count` in health endpoint
+### Backend
 
-## Contributing
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `command` | string | * | Stdio command |
+| `http_url` | string | * | HTTP/SSE URL |
+| `description` | string | | Human description |
+| `enabled` | bool | | Default: true |
+| `timeout` | duration | | Request timeout |
+| `idle_timeout` | duration | | Hibernation delay |
+| `env` | map | | Environment variables |
+| `headers` | map | | HTTP headers |
+| `cwd` | string | | Working directory |
+
+*One of `command` or `http_url` required
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `MCP_GATEWAY_CONFIG` | Config file path |
+| `MCP_GATEWAY_PORT` | Override port |
+| `MCP_GATEWAY_HOST` | Override host |
+| `MCP_GATEWAY_LOG_LEVEL` | Log level |
+| `MCP_GATEWAY_LOG_FORMAT` | `text` or `json` |
+
+## Metrics
+
+With `--features metrics`:
+
+```bash
+curl http://localhost:39400/metrics
+```
+
+Exposes Prometheus metrics for:
+- Request count/latency per backend
+- Circuit breaker state changes
+- Rate limiter rejections
+- Active connections
+
+## Building
 
 ```bash
 git clone https://github.com/MikkoParkkola/mcp-gateway
 cd mcp-gateway
-pip install -e ".[dev]"
-pytest
+cargo build --release
 ```
 
 ## License
@@ -312,4 +263,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 Created by [Mikko Parkkola](https://github.com/MikkoParkkola)
 
-Inspired by the need to scale MCP beyond a handful of servers without drowning in context tokens.
+Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25.

@@ -1,64 +1,74 @@
 # MCP Gateway Configuration Example
-# ================================
+# =================================
 #
-# This file demonstrates how to configure multiple MCP backends
-# through the gateway.
+# Full configuration with all available options.
 
-# Server settings
-port: 39400
-host: "127.0.0.1"
-enable_meta_mcp: true
-log_level: INFO
+server:
+  host: "127.0.0.1"
+  port: 39400
+  request_timeout: "30s"
+  shutdown_timeout: "30s"
+  max_body_size: 10485760  # 10MB
 
-# Backend configurations
+meta_mcp:
+  enabled: true
+  cache_tools: true
+  cache_ttl: "5m"
+
+failsafe:
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    success_threshold: 3
+    reset_timeout: "30s"
+  retry:
+    enabled: true
+    max_attempts: 3
+    initial_backoff: "100ms"
+    max_backoff: "10s"
+    multiplier: 2.0
+  rate_limit:
+    enabled: true
+    requests_per_second: 100
+    burst_size: 50
+  health_check:
+    enabled: true
+    interval: "30s"
+    timeout: "5s"
+
 backends:
-  # ==========================================================================
-  # Stdio Transport (subprocess with JSON-RPC over stdin/stdout)
-  # ==========================================================================
-
+  # Stdio transport (subprocess)
   tavily:
     command: "npx -y @anthropic/mcp-server-tavily"
     description: "Web search via Tavily API"
+    timeout: "30s"
+    idle_timeout: "5m"
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
-    idle_timeout: 300  # Hibernate after 5 minutes of inactivity
 
+  # Stdio with working directory
   filesystem:
-    command: "npx -y @modelcontextprotocol/server-filesystem /home/user/documents"
+    command: "npx -y @modelcontextprotocol/server-filesystem /home/user/docs"
     description: "Local filesystem access"
     cwd: "/home/user"
-    idle_timeout: 600
+    timeout: "10s"
 
-  # ==========================================================================
-  # HTTP Transport (Streamable HTTP with JSON-RPC POST)
-  # ==========================================================================
-
+  # HTTP transport (Streamable HTTP)
   context7:
     http_url: "http://localhost:8080/mcp"
     description: "Documentation and context lookup"
+    timeout: "30s"
     headers:
       Authorization: "Bearer ${CONTEXT7_TOKEN}"
 
-  custom-api:
-    http_url: "http://api.example.com/mcp"
-    description: "Custom enterprise API"
-    headers:
-      X-API-Key: "${API_KEY}"
-      X-Tenant-ID: "my-tenant"
-
-  # ==========================================================================
-  # SSE Transport (Server-Sent Events)
-  # ==========================================================================
-
+  # SSE transport
   pieces:
     http_url: "http://localhost:39300/sse"
     description: "Long-term memory and code snippets"
+    timeout: "60s"
 
-  # ==========================================================================
-  # Disabled Backend (for reference)
-  # ==========================================================================
-
+  # Disabled backend (for reference)
   experimental:
     command: "python -m experimental_server"
-    description: "Experimental features (disabled)"
+    description: "Experimental features"
     enabled: false

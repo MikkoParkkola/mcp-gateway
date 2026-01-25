@@ -1,9 +1,8 @@
 # Minimal MCP Gateway Configuration
 # ==================================
-#
-# Simplest possible configuration with a single backend.
 
-port: 39400
+server:
+  port: 39400
 
 backends:
   tavily:
