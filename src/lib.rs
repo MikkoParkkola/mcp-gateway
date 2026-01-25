@@ -11,7 +11,7 @@
 //!
 //! # Protocol Version
 //!
-//! Implements MCP protocol version 2025-11-25.
+//! Implements MCP protocol version 2024-11-05.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -30,7 +30,7 @@ pub use error::{Error, Result};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// MCP Protocol version supported by this gateway
-pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Setup tracing/logging
 pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
