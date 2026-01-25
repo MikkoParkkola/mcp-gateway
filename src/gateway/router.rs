@@ -89,6 +89,18 @@ async fn meta_mcp_handler(
 
     debug!(method = %method, "Meta-MCP request");
 
+    // Handle notifications (no id) - return 202 Accepted with empty body
+    if method.starts_with("notifications/") {
+        debug!(notification = %method, "Handling notification");
+        return (
+            StatusCode::ACCEPTED,
+            Json(json!({})),
+        );
+    }
+
+    // For requests, id is guaranteed to exist (checked in parse_request)
+    let id = id.expect("id should exist for non-notification requests");
+
     // Route to appropriate handler
     let response = match method.as_str() {
         "initialize" => state.meta_mcp.handle_initialize(id),
@@ -108,10 +120,6 @@ async fn meta_mcp_handler(
                 .meta_mcp
                 .handle_tools_call(id, tool_name, arguments)
                 .await
-        }
-        m if m.starts_with("notifications/") => {
-            // Notifications don't need responses
-            JsonRpcResponse::success(id, json!(null))
         }
         "ping" => JsonRpcResponse::success(id, json!({})),
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
@@ -158,6 +166,19 @@ async fn backend_handler(
 
     debug!(backend = %name, method = %method, "Backend request");
 
+    // Handle notifications - forward to backend but return 202 Accepted
+    if method.starts_with("notifications/") {
+        // Forward notification to backend (fire and forget)
+        let _ = backend.request(&method, params).await;
+        return (
+            StatusCode::ACCEPTED,
+            Json(json!({})),
+        );
+    }
+
+    // For requests, id is guaranteed to exist
+    let id = id.expect("id should exist for non-notification requests");
+
     // Forward to backend
     match backend.request(&method, params).await {
         Ok(response) => (
@@ -175,8 +196,9 @@ async fn backend_handler(
     }
 }
 
-/// Parse JSON-RPC request
-fn parse_request(value: &Value) -> Result<(RequestId, String, Option<Value>), JsonRpcResponse> {
+/// Parse JSON-RPC request or notification
+/// Returns (Option<RequestId>, method, params) - id is None for notifications
+fn parse_request(value: &Value) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
     // Check jsonrpc version
     let jsonrpc = value.get("jsonrpc").and_then(|v| v.as_str());
     if jsonrpc != Some("2.0") {
@@ -193,6 +215,8 @@ fn parse_request(value: &Value) -> Result<(RequestId, String, Option<Value>), Js
             Some(RequestId::String(v.as_str().unwrap().to_string()))
         } else if v.is_i64() {
             Some(RequestId::Number(v.as_i64().unwrap()))
+        } else if v.is_u64() {
+            Some(RequestId::Number(v.as_u64().unwrap() as i64))
         } else {
             None
         }
@@ -207,8 +231,11 @@ fn parse_request(value: &Value) -> Result<(RequestId, String, Option<Value>), Js
     // Get params (optional)
     let params = value.get("params").cloned();
 
-    // For requests, ID is required
-    let id = id.ok_or_else(|| JsonRpcResponse::error(None, -32600, "Missing id"))?;
+    // For notifications (methods starting with "notifications/"), id is optional
+    // For requests, id is required
+    if !method.starts_with("notifications/") && id.is_none() {
+        return Err(JsonRpcResponse::error(None, -32600, "Missing id"));
+    }
 
     Ok((id, method.to_string(), params))
 }
