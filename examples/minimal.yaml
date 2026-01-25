@@ -1,0 +1,13 @@
+# Minimal MCP Gateway Configuration
+# ==================================
+#
+# Simplest possible configuration with a single backend.
+
+port: 39400
+
+backends:
+  tavily:
+    command: "npx -y @anthropic/mcp-server-tavily"
+    description: "Web search"
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"

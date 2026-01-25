@@ -1,0 +1,64 @@
+# MCP Gateway Configuration Example
+# ================================
+#
+# This file demonstrates how to configure multiple MCP backends
+# through the gateway.
+
+# Server settings
+port: 39400
+host: "127.0.0.1"
+enable_meta_mcp: true
+log_level: INFO
+
+# Backend configurations
+backends:
+  # ==========================================================================
+  # Stdio Transport (subprocess with JSON-RPC over stdin/stdout)
+  # ==========================================================================
+
+  tavily:
+    command: "npx -y @anthropic/mcp-server-tavily"
+    description: "Web search via Tavily API"
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+    idle_timeout: 300  # Hibernate after 5 minutes of inactivity
+
+  filesystem:
+    command: "npx -y @modelcontextprotocol/server-filesystem /home/user/documents"
+    description: "Local filesystem access"
+    cwd: "/home/user"
+    idle_timeout: 600
+
+  # ==========================================================================
+  # HTTP Transport (Streamable HTTP with JSON-RPC POST)
+  # ==========================================================================
+
+  context7:
+    http_url: "http://localhost:8080/mcp"
+    description: "Documentation and context lookup"
+    headers:
+      Authorization: "Bearer ${CONTEXT7_TOKEN}"
+
+  custom-api:
+    http_url: "http://api.example.com/mcp"
+    description: "Custom enterprise API"
+    headers:
+      X-API-Key: "${API_KEY}"
+      X-Tenant-ID: "my-tenant"
+
+  # ==========================================================================
+  # SSE Transport (Server-Sent Events)
+  # ==========================================================================
+
+  pieces:
+    http_url: "http://localhost:39300/sse"
+    description: "Long-term memory and code snippets"
+
+  # ==========================================================================
+  # Disabled Backend (for reference)
+  # ==========================================================================
+
+  experimental:
+    command: "python -m experimental_server"
+    description: "Experimental features (disabled)"
+    enabled: false
