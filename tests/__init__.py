@@ -1,1 +1,0 @@
-"""MCP Gateway test suite."""
