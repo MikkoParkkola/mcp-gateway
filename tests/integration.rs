@@ -2,13 +2,28 @@
 
 use mcp_gateway::config::{CircuitBreakerConfig, Config, RetryConfig};
 use mcp_gateway::failsafe::{CircuitBreaker, CircuitState, RetryPolicy, with_retry};
-use mcp_gateway::protocol::{JsonRpcRequest, JsonRpcResponse, RequestId, PROTOCOL_VERSION};
+use mcp_gateway::protocol::{JsonRpcRequest, JsonRpcResponse, RequestId, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate_version};
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
 #[test]
 fn test_protocol_version() {
-    assert_eq!(PROTOCOL_VERSION, "2025-11-25");
+    // Latest protocol version
+    assert_eq!(PROTOCOL_VERSION, "2024-11-05");
+    // Supported versions include latest and older
+    assert!(SUPPORTED_VERSIONS.contains(&"2024-11-05"));
+    assert!(SUPPORTED_VERSIONS.contains(&"2024-10-07"));
+}
+
+#[test]
+fn test_version_negotiation() {
+    // Client requests supported version - gets it back
+    assert_eq!(negotiate_version("2024-11-05"), "2024-11-05");
+    assert_eq!(negotiate_version("2024-10-07"), "2024-10-07");
+
+    // Client requests unknown version - gets latest as fallback
+    assert_eq!(negotiate_version("2023-01-01"), "2024-11-05");
+    assert_eq!(negotiate_version("unknown"), "2024-11-05");
 }
 
 #[test]

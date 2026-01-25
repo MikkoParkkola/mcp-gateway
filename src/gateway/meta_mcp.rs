@@ -7,8 +7,9 @@ use tracing::debug;
 
 use crate::backend::BackendRegistry;
 use crate::protocol::{
-    Content, Info, InitializeResult, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    Content, Info, InitializeResult, JsonRpcResponse, RequestId,
     ServerCapabilities, Tool, ToolsCallResult, ToolsCapability, ToolsListResult,
+    negotiate_version,
 };
 use crate::{Error, Result};
 
@@ -24,10 +25,20 @@ impl MetaMcp {
         Self { backends }
     }
 
-    /// Handle initialize request
-    pub fn handle_initialize(&self, id: RequestId) -> JsonRpcResponse {
+    /// Handle initialize request with version negotiation
+    pub fn handle_initialize(&self, id: RequestId, params: Option<&Value>) -> JsonRpcResponse {
+        // Extract client's requested protocol version
+        let client_version = params
+            .and_then(|p| p.get("protocolVersion"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("2024-11-05");
+
+        // Negotiate to highest mutually supported version
+        let negotiated_version = negotiate_version(client_version);
+        debug!(client = client_version, negotiated = negotiated_version, "Protocol version negotiation");
+
         let result = InitializeResult {
-            protocol_version: PROTOCOL_VERSION.to_string(),
+            protocol_version: negotiated_version.to_string(),
             capabilities: ServerCapabilities {
                 tools: Some(ToolsCapability { list_changed: true }),
                 ..Default::default()
