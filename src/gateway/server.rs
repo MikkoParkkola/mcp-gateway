@@ -96,6 +96,26 @@ impl Gateway {
         }
         info!("============================================================");
 
+        // Warm-start specified backends
+        if !self.config.meta_mcp.warm_start.is_empty() {
+            info!("Warm-starting backends: {:?}", self.config.meta_mcp.warm_start);
+            let backends_clone = Arc::clone(&self.backends);
+            let warm_start_list = self.config.meta_mcp.warm_start.clone();
+
+            tokio::spawn(async move {
+                for name in warm_start_list {
+                    if let Some(backend) = backends_clone.get(&name) {
+                        match backend.start().await {
+                            Ok(()) => info!(backend = %name, "Warm-started successfully"),
+                            Err(e) => warn!(backend = %name, error = %e, "Warm-start failed"),
+                        }
+                    } else {
+                        warn!(backend = %name, "Backend not found for warm-start");
+                    }
+                }
+            });
+        }
+
         // Start health check task
         let backends_clone = Arc::clone(&self.backends);
         let health_config = self.config.failsafe.health_check.clone();

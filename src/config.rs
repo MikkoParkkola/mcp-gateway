@@ -3,8 +3,8 @@
 use std::{collections::HashMap, path::Path, time::Duration};
 
 use figment::{
-    Figment,
     providers::{Env, Format, Yaml},
+    Figment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +94,9 @@ pub struct MetaMcpConfig {
     /// Tool cache TTL
     #[serde(with = "humantime_serde")]
     pub cache_ttl: Duration,
+    /// Backends to warm-start on gateway startup (pre-connect and cache tools)
+    #[serde(default)]
+    pub warm_start: Vec<String>,
 }
 
 impl Default for MetaMcpConfig {
@@ -102,6 +105,7 @@ impl Default for MetaMcpConfig {
             enabled: true,
             cache_tools: true,
             cache_ttl: Duration::from_secs(300),
+            warm_start: Vec::new(),
         }
     }
 }
