@@ -42,6 +42,10 @@ impl HttpTransport {
     ) -> Result<Arc<Self>> {
         let client = Client::builder()
             .timeout(timeout)
+            .pool_max_idle_per_host(10)  // Keep up to 10 idle connections per host
+            .pool_idle_timeout(Duration::from_secs(90))  // Keep connections alive for 90s
+            .tcp_keepalive(Duration::from_secs(30))  // TCP keepalive every 30s
+            .tcp_nodelay(true)  // Disable Nagle's algorithm for lower latency
             .build()
             .map_err(|e| Error::Transport(e.to_string()))?;
 
