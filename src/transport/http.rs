@@ -252,9 +252,10 @@ impl HttpTransport {
 
         let mut headers = header::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        // Accept both JSON and SSE - some servers return SSE for POST requests
         headers.insert(
             header::ACCEPT,
-            "application/json".parse().unwrap(),
+            "application/json, text/event-stream".parse().unwrap(),
         );
         headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
 
@@ -297,11 +298,34 @@ impl HttpTransport {
             return Err(Error::Transport(format!("HTTP {status}: {body}")));
         }
 
-        // Parse JSON response
-        response
-            .json()
-            .await
-            .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
+        // Check Content-Type to determine response format
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        if content_type.contains("text/event-stream") {
+            // Parse SSE response - extract JSON from "data:" line
+            let text = response.text().await
+                .map_err(|e| Error::Transport(format!("Failed to read SSE response: {e}")))?;
+
+            // Find the data line and extract JSON
+            for line in text.lines() {
+                if let Some(data) = line.strip_prefix("data:") {
+                    let json_str = data.trim();
+                    return serde_json::from_str(json_str)
+                        .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")));
+                }
+            }
+            Err(Error::Transport("No data in SSE response".to_string()))
+        } else {
+            // Parse JSON response
+            response
+                .json()
+                .await
+                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
+        }
     }
 
     /// Get next request ID
