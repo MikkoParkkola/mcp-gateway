@@ -261,7 +261,10 @@ impl HttpTransport {
 
         // Add session ID if available
         if let Some(ref session_id) = *self.session_id.read() {
+            debug!(session_id = %session_id, method = %request.method, "Sending request with session ID");
             headers.insert("MCP-Session-Id", session_id.parse().unwrap());
+        } else {
+            debug!(method = %request.method, "Sending request without session ID");
         }
 
         // Add custom headers
@@ -287,9 +290,19 @@ impl HttpTransport {
         if self.session_id.read().is_none() {
             if let Some(session_id) = response.headers().get("mcp-session-id") {
                 if let Ok(id) = session_id.to_str() {
+                    info!(session_id = %id, url = %message_url, "Stored session ID from response");
                     *self.session_id.write() = Some(id.to_string());
                 }
+            } else {
+                // Debug: log all headers to find session ID
+                debug!(url = %message_url, "No session ID in response. Headers: {:?}",
+                    response.headers().iter()
+                        .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("?")))
+                        .collect::<Vec<_>>()
+                );
             }
+        } else {
+            debug!(session_id = %self.session_id.read().as_ref().unwrap(), "Using existing session ID");
         }
 
         let status = response.status();

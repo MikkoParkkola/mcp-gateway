@@ -285,7 +285,23 @@ impl MetaMcp {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::json_rpc(-32602, "Missing 'tool' parameter"))?;
 
-        let arguments = args.get("arguments").cloned().unwrap_or(json!({}));
+        let mut arguments = args.get("arguments").cloned().unwrap_or(json!({}));
+
+        // Accept OpenAI-style tool arguments passed as a JSON string.
+        // This prevents backends (e.g. rmcp-based servers) from crashing on invalid types.
+        if let Value::String(raw) = &arguments {
+            let parsed: Value = serde_json::from_str(raw).map_err(|e| {
+                Error::json_rpc(-32602, format!("Invalid 'arguments' JSON string: {e}"))
+            })?;
+            arguments = parsed;
+        }
+
+        if !arguments.is_object() {
+            return Err(Error::json_rpc(
+                -32602,
+                "Invalid 'arguments': expected object or JSON object string",
+            ));
+        }
 
         debug!(server = server, tool = tool, "Invoking tool");
 
