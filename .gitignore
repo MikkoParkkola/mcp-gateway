@@ -15,4 +15,8 @@ Thumbs.db
 # Project specific
 /servers.yaml
 *.log
+
+# Build artifacts
 .mypy_cache/
+.ruff_cache/
+.tiers/
