@@ -1,11 +1,12 @@
 //! Configuration management
 
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{collections::HashMap, env, path::Path, time::Duration};
 
 use figment::{
     providers::{Env, Format, Yaml},
     Figment,
 };
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
@@ -44,7 +45,29 @@ impl Config {
         // Merge environment variables (MCP_GATEWAY_ prefix)
         figment = figment.merge(Env::prefixed("MCP_GATEWAY_").split("__"));
 
-        figment.extract().map_err(|e| Error::Config(e.to_string()))
+        let mut config: Self = figment
+            .extract()
+            .map_err(|e| Error::Config(e.to_string()))?;
+
+        // Expand ${VAR} in backend headers
+        config.expand_env_vars();
+
+        Ok(config)
+    }
+
+    /// Expand ${VAR} patterns in header values
+    fn expand_env_vars(&mut self) {
+        let re = Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
+
+        for backend in self.backends.values_mut() {
+            for value in backend.headers.values_mut() {
+                let expanded = re.replace_all(value, |caps: &regex::Captures| {
+                    let var_name = &caps[1];
+                    env::var(var_name).unwrap_or_default()
+                });
+                *value = expanded.into_owned();
+            }
+        }
     }
 
     /// Get enabled backends only
