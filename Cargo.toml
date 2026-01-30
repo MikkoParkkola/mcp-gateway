@@ -9,7 +9,7 @@ license = "MIT"
 repository = "https://github.com/MikkoParkkola/mcp-gateway"
 documentation = "https://github.com/MikkoParkkola/mcp-gateway#readme"
 readme = "README.md"
-keywords = ["mcp", "model-context-protocol", "gateway", "proxy", "ai"]
+keywords = ["mcp", "model-context", "gateway", "proxy", "ai"]
 categories = ["command-line-utilities", "network-programming", "web-programming"]
 
 [dependencies]
