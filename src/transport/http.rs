@@ -81,12 +81,15 @@ impl HttpTransport {
     /// Initialize the connection
     ///
     /// For SSE mode: establishes SSE handshake to get message endpoint
-    /// For Streamable HTTP: uses URL directly (with trailing slash if needed)
+    /// For Streamable HTTP: uses URL directly (trailing slash only for localhost/Starlette)
     pub async fn initialize(&self) -> Result<()> {
         if self.streamable_http {
-            // Streamable HTTP: use URL directly (add trailing slash if needed for Starlette)
+            // Streamable HTTP: use URL directly
+            // Only add trailing slash for localhost (Starlette compatibility)
+            // Remote APIs (like Parallel.ai) reject trailing slashes
             let mut url = self.base_url.clone();
-            if !url.ends_with('/') {
+            let is_localhost = url.contains("localhost") || url.contains("127.0.0.1");
+            if is_localhost && !url.ends_with('/') {
                 url.push('/');
             }
             *self.message_url.write() = Some(url.clone());
