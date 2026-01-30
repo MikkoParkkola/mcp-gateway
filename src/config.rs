@@ -280,6 +280,10 @@ pub enum TransportConfig {
     Http {
         /// HTTP URL
         http_url: String,
+        /// Use Streamable HTTP (direct POST, no SSE handshake)
+        /// Default is false (use SSE handshake)
+        #[serde(default)]
+        streamable_http: bool,
     },
 }
 
@@ -287,6 +291,7 @@ impl Default for TransportConfig {
     fn default() -> Self {
         Self::Http {
             http_url: String::new(),
+            streamable_http: false,
         }
     }
 }
@@ -297,7 +302,14 @@ impl TransportConfig {
     pub fn transport_type(&self) -> &'static str {
         match self {
             Self::Stdio { .. } => "stdio",
-            Self::Http { http_url } if http_url.ends_with("/sse") => "sse",
+            Self::Http {
+                http_url,
+                streamable_http: false,
+            } if http_url.ends_with("/sse") => "sse",
+            Self::Http {
+                streamable_http: true,
+                ..
+            } => "streamable-http",
             Self::Http { .. } => "http",
         }
     }

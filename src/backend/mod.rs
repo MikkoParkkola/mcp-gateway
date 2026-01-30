@@ -97,9 +97,13 @@ impl Backend {
                 transport.start().await?;
                 transport
             }
-            TransportConfig::Http { http_url } => {
-                let transport =
-                    HttpTransport::new(http_url, self.config.headers.clone(), self.config.timeout)?;
+            TransportConfig::Http { http_url, streamable_http } => {
+                let transport = HttpTransport::new(
+                    http_url,
+                    self.config.headers.clone(),
+                    self.config.timeout,
+                    *streamable_http,
+                )?;
                 transport.initialize().await?;
                 transport
             }
