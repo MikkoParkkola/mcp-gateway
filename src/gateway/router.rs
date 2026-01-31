@@ -31,13 +31,37 @@ pub struct AppState {
 pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
-        .route("/mcp", post(meta_mcp_handler))
+        .route("/mcp", post(meta_mcp_handler).get(mcp_get_handler))
         .route("/mcp/{name}", post(backend_handler))
         .route("/mcp/{name}/{*path}", post(backend_handler))
+        // Helpful error for deprecated SSE endpoint (common misconfiguration)
+        .route("/sse", get(sse_deprecated_handler).post(sse_deprecated_handler))
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// GET /mcp handler - Streamable HTTP spec: return 405 Method Not Allowed
+/// Per MCP spec 2025-03-26, servers MAY return 405 if they don't offer an SSE stream on GET.
+async fn mcp_get_handler() -> impl IntoResponse {
+    (StatusCode::METHOD_NOT_ALLOWED, Json(json!({
+        "jsonrpc": "2.0",
+        "error": {
+            "code": -32600,
+            "message": "GET not supported. Use POST to send JSON-RPC requests to /mcp"
+        },
+        "id": null
+    })))
+}
+
+/// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
+async fn sse_deprecated_handler() -> impl IntoResponse {
+    (StatusCode::GONE, Json(json!({
+        "error": "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
+        "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
+        "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
+    })))
 }
 
 /// Health check handler
