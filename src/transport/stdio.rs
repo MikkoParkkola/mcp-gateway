@@ -99,11 +99,25 @@ impl StdioTransport {
         // Spawn reader task
         let transport = Arc::clone(self);
         tokio::spawn(async move {
+            debug!("Reader task started");
             let mut reader = BufReader::new(stdout).lines();
 
-            while let Ok(Some(line)) = reader.next_line().await {
-                if let Err(e) = transport.handle_response(&line) {
-                    error!(error = %e, "Failed to handle response");
+            loop {
+                match reader.next_line().await {
+                    Ok(Some(line)) => {
+                        debug!(line_len = line.len(), "Received line from stdout");
+                        if let Err(e) = transport.handle_response(&line) {
+                            error!(error = %e, line = %line, "Failed to handle response");
+                        }
+                    }
+                    Ok(None) => {
+                        debug!("Stdout EOF reached - process may have exited");
+                        break;
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Error reading from stdout");
+                        break;
+                    }
                 }
             }
 
@@ -137,8 +151,20 @@ impl StdioTransport {
             return Err(Error::Protocol("Initialize failed".to_string()));
         }
 
+        // Yield to ensure I/O is processed before sending notification
+        tokio::task::yield_now().await;
+
         // Send initialized notification
         self.notify("notifications/initialized", None).await?;
+
+        // Yield again to ensure notification reaches the server
+        tokio::task::yield_now().await;
+
+        // Give the server time to fully transition to ready state
+        // This is necessary because some MCP servers (like fulcrum) have async
+        // initialization that continues after receiving the notification
+        debug!("Waiting for server to complete initialization");
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
         self.connected.store(true, Ordering::Relaxed);
         debug!(command = %self.command, "Stdio transport initialized");
@@ -148,13 +174,20 @@ impl StdioTransport {
 
     /// Handle a response line from stdout
     fn handle_response(&self, line: &str) -> Result<()> {
+        debug!(line = %line, "Parsing response");
         let response: JsonRpcResponse = serde_json::from_str(line)?;
 
         if let Some(ref id) = response.id {
             let key = id.to_string();
+            debug!(id = %key, pending_keys = ?self.pending.iter().map(|r| r.key().clone()).collect::<Vec<_>>(), "Looking for pending request");
             if let Some((_, sender)) = self.pending.remove(&key) {
+                debug!(id = %key, "Found pending request, sending response");
                 let _ = sender.send(response);
+            } else {
+                debug!(id = %key, "No pending request found for response");
             }
+        } else {
+            debug!("Response has no ID (notification?)");
         }
 
         Ok(())
@@ -162,6 +195,7 @@ impl StdioTransport {
 
     /// Write a message to stdin
     async fn write_message(&self, message: &str) -> Result<()> {
+        debug!(message_len = message.len(), message = %message, "Writing to stdin");
         let mut writer = self.writer.lock().await;
         if let Some(ref mut stdin) = *writer {
             stdin
@@ -176,6 +210,11 @@ impl StdioTransport {
                 .flush()
                 .await
                 .map_err(|e| Error::Transport(e.to_string()))?;
+            // Drop the lock before yielding to allow concurrent reads
+            drop(writer);
+            // Yield to give the runtime a chance to process the I/O
+            tokio::task::yield_now().await;
+            debug!("Write complete and flushed");
             Ok(())
         } else {
             Err(Error::Transport("Not connected".to_string()))
