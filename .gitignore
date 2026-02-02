@@ -20,3 +20,4 @@ Thumbs.db
 .mypy_cache/
 .ruff_cache/
 .tiers/
+config.yaml
