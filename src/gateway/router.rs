@@ -11,10 +11,12 @@ use axum::{
 };
 use serde_json::{Value, json};
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::meta_mcp::MetaMcp;
+use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
+use crate::config::StreamingConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// Shared application state
@@ -25,13 +27,17 @@ pub struct AppState {
     pub meta_mcp: Arc<MetaMcp>,
     /// Whether Meta-MCP is enabled
     pub meta_mcp_enabled: bool,
+    /// Notification multiplexer for streaming
+    pub multiplexer: Arc<NotificationMultiplexer>,
+    /// Streaming configuration
+    pub streaming_config: StreamingConfig,
 }
 
 /// Create the router
 pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
-        .route("/mcp", post(meta_mcp_handler).get(mcp_get_handler))
+        .route("/mcp", post(meta_mcp_handler).get(mcp_sse_handler).delete(mcp_delete_handler))
         .route("/mcp/{name}", post(backend_handler))
         .route("/mcp/{name}/{*path}", post(backend_handler))
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
@@ -42,17 +48,118 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// GET /mcp handler - Streamable HTTP spec: return 405 Method Not Allowed
-/// Per MCP spec 2025-03-26, servers MAY return 405 if they don't offer an SSE stream on GET.
-async fn mcp_get_handler() -> impl IntoResponse {
-    (StatusCode::METHOD_NOT_ALLOWED, Json(json!({
-        "jsonrpc": "2.0",
-        "error": {
-            "code": -32600,
-            "message": "GET not supported. Use POST to send JSON-RPC requests to /mcp"
-        },
-        "id": null
-    })))
+/// GET /mcp handler - SSE stream for server→client notifications
+/// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
+/// We implement the full streaming support.
+async fn mcp_sse_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Check if streaming is enabled
+    if !state.streaming_config.enabled {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32600,
+                    "message": "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp"
+                },
+                "id": null
+            }))
+        ).into_response();
+    }
+
+    // Check Accept header - must accept text/event-stream
+    let accept = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !accept.contains("text/event-stream") {
+        return (
+            StatusCode::NOT_ACCEPTABLE,
+            Json(json!({
+                "error": "Must accept text/event-stream for SSE notifications"
+            }))
+        ).into_response();
+    }
+
+    // Get or create session - convert to owned strings for Rust 2024 lifetime rules
+    let existing_session_id = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
+    let last_event_id = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
+    let (session_id, _rx) = state.multiplexer.get_or_create_session(existing_session_id.as_deref());
+
+    info!(session_id = %session_id, "Client connected to SSE stream");
+
+    // Auto-subscribe to configured backends
+    let multiplexer = Arc::clone(&state.multiplexer);
+    let sid = session_id.clone();
+    tokio::spawn(async move {
+        multiplexer.auto_subscribe(&sid).await;
+    });
+
+    // Clone Arc for the stream (outlives the handler)
+    let multiplexer_for_stream = Arc::clone(&state.multiplexer);
+    let keep_alive = state.streaming_config.keep_alive_interval;
+
+    // Create SSE response with owned data
+    match create_sse_response(
+        multiplexer_for_stream,
+        session_id.clone(),
+        last_event_id,
+        keep_alive,
+    ) {
+        Some(sse) => {
+            // Add session ID header to response
+            let mut response = sse.into_response();
+            response.headers_mut().insert(
+                "mcp-session-id",
+                session_id.parse().unwrap(),
+            );
+            response
+        }
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "Failed to create SSE stream"
+            }))
+        ).into_response(),
+    }
+}
+
+/// DELETE /mcp handler - Session termination
+/// Per MCP spec 2025-03-26, clients SHOULD send DELETE to terminate session.
+async fn mcp_delete_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let session_id = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok());
+
+    match session_id {
+        Some(id) if state.multiplexer.has_session(id) => {
+            state.multiplexer.remove_session(id);
+            info!(session_id = %id, "Session terminated by client");
+            StatusCode::NO_CONTENT
+        }
+        Some(id) => {
+            debug!(session_id = %id, "Session not found for DELETE");
+            StatusCode::NOT_FOUND
+        }
+        None => {
+            StatusCode::BAD_REQUEST
+        }
+    }
 }
 
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404

@@ -20,6 +20,8 @@ pub struct Config {
     pub server: ServerConfig,
     /// Meta-MCP configuration
     pub meta_mcp: MetaMcpConfig,
+    /// Streaming configuration (for real-time notifications)
+    pub streaming: StreamingConfig,
     /// Failsafe configuration
     pub failsafe: FailsafeConfig,
     /// Backend configurations
@@ -129,6 +131,33 @@ impl Default for MetaMcpConfig {
             cache_tools: true,
             cache_ttl: Duration::from_secs(300),
             warm_start: Vec::new(),
+        }
+    }
+}
+
+/// Streaming configuration (for real-time notifications)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamingConfig {
+    /// Enable streaming (GET /mcp for notifications)
+    pub enabled: bool,
+    /// Notification buffer size per client
+    pub buffer_size: usize,
+    /// Keep-alive interval for SSE streams
+    #[serde(with = "humantime_serde")]
+    pub keep_alive_interval: Duration,
+    /// Backends to auto-subscribe for notifications
+    #[serde(default)]
+    pub auto_subscribe: Vec<String>,
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            buffer_size: 100,
+            keep_alive_interval: Duration::from_secs(15),
+            auto_subscribe: Vec::new(),
         }
     }
 }
@@ -339,11 +368,12 @@ impl TransportConfig {
 }
 
 /// Custom humantime serde module for Duration
-mod humantime_serde {
+pub mod humantime_serde {
     use std::time::Duration;
 
     use serde::{self, Deserialize, Deserializer, Serializer};
 
+    /// Serialize Duration to human-readable string (e.g., "30s")
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -351,6 +381,7 @@ mod humantime_serde {
         serializer.serialize_str(&format!("{}s", duration.as_secs()))
     }
 
+    /// Deserialize human-readable duration string (e.g., "30s", "5m", "100ms")
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: Deserializer<'de>,

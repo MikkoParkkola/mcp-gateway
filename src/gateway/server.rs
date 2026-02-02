@@ -9,6 +9,7 @@ use tracing::{info, warn};
 
 use super::meta_mcp::MetaMcp;
 use super::router::{AppState, create_router};
+use super::streaming::NotificationMultiplexer;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::Config;
 use crate::{Error, Result};
@@ -64,10 +65,16 @@ impl Gateway {
 
         // Create app state
         let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&self.backends)));
+        let multiplexer = Arc::new(NotificationMultiplexer::new(
+            Arc::clone(&self.backends),
+            self.config.streaming.clone(),
+        ));
         let state = Arc::new(AppState {
             backends: Arc::clone(&self.backends),
             meta_mcp,
             meta_mcp_enabled: self.config.meta_mcp.enabled,
+            multiplexer,
+            streaming_config: self.config.streaming.clone(),
         });
 
         // Create router
@@ -85,9 +92,20 @@ impl Gateway {
         if self.config.meta_mcp.enabled {
             info!("META-MCP (saves ~95% context tokens):");
             info!(
-                "  http://{}:{}/mcp",
+                "  POST http://{}:{}/mcp  (requests)",
                 self.config.server.host, self.config.server.port
             );
+        }
+
+        if self.config.streaming.enabled {
+            info!("STREAMING (real-time notifications):");
+            info!(
+                "  GET  http://{}:{}/mcp  (SSE stream)",
+                self.config.server.host, self.config.server.port
+            );
+            if !self.config.streaming.auto_subscribe.is_empty() {
+                info!("  Auto-subscribe backends: {:?}", self.config.streaming.auto_subscribe);
+            }
         }
 
         info!("Direct backend access:");

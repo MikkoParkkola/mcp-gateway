@@ -5,13 +5,15 @@
 //! # Features
 //!
 //! - **Meta-MCP Mode**: 4 meta-tools for dynamic tool discovery
+//! - **Streaming**: Real-time notifications via SSE (MCP 2025-03-26 Streamable HTTP)
+//! - **Notification Multiplexer**: Routes backend notifications to connected clients
 //! - **Multi-Transport**: stdio, Streamable HTTP, SSE support
 //! - **Failsafes**: Circuit breakers, retries, timeouts, rate limiting
 //! - **Production Ready**: Health checks, metrics, graceful shutdown
 //!
 //! # Protocol Version
 //!
-//! Implements MCP protocol version 2024-11-05.
+//! Implements MCP protocol versions 2024-11-05 and 2025-03-26 (Streamable HTTP).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
