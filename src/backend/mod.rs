@@ -117,8 +117,9 @@ impl Backend {
 
         *self.transport.write() = Some(transport);
 
-        // Pre-cache tools
-        let _ = self.get_tools().await;
+        // Note: Tools are fetched lazily on first get_tools() call
+        // We can't pre-cache here because get_tools() -> ensure_started() -> start()
+        // would create infinite async recursion
 
         Ok(())
     }
@@ -189,6 +190,11 @@ impl Backend {
                 }
             }
         }
+
+        // Ensure backend is started before fetching tools
+        // Note: start() also calls get_tools() at the end, but by then
+        // the transport is set so ensure_started() returns immediately
+        self.ensure_started().await?;
 
         // Fetch tools - use request_internal to avoid recursion
         let response = self.request_internal("tools/list", None).await?;

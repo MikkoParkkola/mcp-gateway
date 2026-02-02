@@ -433,6 +433,11 @@ impl Transport for HttpTransport {
 
         let mut headers = header::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        // Accept both JSON and SSE - some servers (Beeper) require this for all requests
+        headers.insert(
+            header::ACCEPT,
+            "application/json, text/event-stream".parse().unwrap(),
+        );
         headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
 
         // Add OAuth token if available

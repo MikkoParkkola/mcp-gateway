@@ -176,30 +176,23 @@ impl OAuthClient {
         let auth_meta = self.auth_metadata.as_ref()
             .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
 
-        // Ensure we have a client ID
-        let client_id = self.ensure_client_id().await?;
-
         // Generate PKCE parameters
         let (code_verifier, code_challenge) = generate_pkce();
 
         // Generate state for CSRF protection
         let state = generate_state();
 
-        // Build authorization URL
+        // Start callback server FIRST to get the actual callback URL
+        // This must happen BEFORE client registration so we know the port
+        let callback_server = callback::start_callback_server(state.clone(), None).await?;
+        let callback_url = callback_server.callback_url.clone();
+
+        // Now ensure we have a client ID, passing the actual callback URL for registration
+        let client_id = self.ensure_client_id_with_redirect(&callback_url).await?;
+
+        // Build authorization URL with the ACTUAL callback URL
         let mut auth_url = Url::parse(&auth_meta.authorization_endpoint)
             .map_err(|e| Error::Internal(format!("Invalid auth endpoint: {e}")))?;
-
-        // Start callback server first to get the redirect URI
-        let state_clone = state.clone();
-        let callback_task = tokio::spawn(async move {
-            callback::wait_for_callback(state_clone, None).await
-        });
-
-        // Wait a moment for the server to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // We need the callback URL - use a default port range
-        let callback_url = format!("http://127.0.0.1:0/oauth/callback");
 
         {
             let mut params = auth_url.query_pairs_mut();
@@ -225,10 +218,7 @@ impl OAuthClient {
         }
 
         // Wait for callback
-        let (actual_callback_url, callback_result) = callback_task
-            .await
-            .map_err(|e| Error::Internal(format!("Callback task failed: {e}")))?
-            ?;
+        let (actual_callback_url, callback_result) = callback_server.wait_for_callback().await?;
 
         debug!(code = %callback_result.code, "Received authorization code");
 
@@ -331,8 +321,8 @@ impl OAuthClient {
         Ok(token.access_token)
     }
 
-    /// Ensure we have a client ID, registering if necessary
-    async fn ensure_client_id(&self) -> Result<String> {
+    /// Ensure we have a client ID, registering with the specific redirect URI
+    async fn ensure_client_id_with_redirect(&self, redirect_uri: &str) -> Result<String> {
         // Check if we already have one
         if let Some(id) = self.client_id.read().clone() {
             return Ok(id);
@@ -343,7 +333,7 @@ impl OAuthClient {
 
         // Try dynamic registration if supported
         if let Some(ref reg_endpoint) = auth_meta.registration_endpoint {
-            match self.register_client(reg_endpoint).await {
+            match self.register_client(reg_endpoint, redirect_uri).await {
                 Ok(client_id) => {
                     *self.client_id.write() = Some(client_id.clone());
                     return Ok(client_id);
@@ -360,11 +350,11 @@ impl OAuthClient {
         Ok(generated)
     }
 
-    /// Register a new client dynamically
-    async fn register_client(&self, endpoint: &str) -> Result<String> {
+    /// Register a new client dynamically with the specified redirect URI
+    async fn register_client(&self, endpoint: &str, redirect_uri: &str) -> Result<String> {
         let body = serde_json::json!({
             "client_name": format!("MCP Gateway - {}", self.backend_name),
-            "redirect_uris": ["http://127.0.0.1/oauth/callback"],
+            "redirect_uris": [redirect_uri],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none"

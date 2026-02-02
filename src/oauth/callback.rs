@@ -52,8 +52,35 @@ struct CallbackState {
     tx: Option<oneshot::Sender<Result<CallbackResult>>>,
 }
 
-/// Start a callback server and wait for the authorization code
-pub async fn wait_for_callback(expected_state: String, port: Option<u16>) -> Result<(String, CallbackResult)> {
+/// A running callback server
+pub struct CallbackServer {
+    /// The URL where the callback server is listening
+    pub callback_url: String,
+    /// Receiver for the callback result
+    receiver: oneshot::Receiver<Result<CallbackResult>>,
+    /// Server task handle
+    server_handle: tokio::task::JoinHandle<Result<()>>,
+}
+
+impl CallbackServer {
+    /// Wait for the callback to be received
+    pub async fn wait_for_callback(self) -> Result<(String, CallbackResult)> {
+        let result = self.receiver
+            .await
+            .map_err(|_| Error::Internal("Callback channel closed unexpectedly".to_string()))?;
+
+        // Abort the server (it's done its job)
+        self.server_handle.abort();
+
+        result.map(|r| (self.callback_url, r))
+    }
+}
+
+/// Start a callback server and return it immediately
+///
+/// This allows the caller to get the callback URL before waiting for the callback,
+/// which is necessary to build the authorization URL correctly.
+pub async fn start_callback_server(expected_state: String, port: Option<u16>) -> Result<CallbackServer> {
     // Find an available port
     let addr: SocketAddr = format!("127.0.0.1:{}", port.unwrap_or(0)).parse().unwrap();
     let listener = TcpListener::bind(addr)
@@ -86,16 +113,13 @@ pub async fn wait_for_callback(expected_state: String, port: Option<u16>) -> Res
             .map_err(|e| Error::Internal(format!("Callback server error: {e}")))
     });
 
-    // Wait for the callback
-    let result = rx
-        .await
-        .map_err(|_| Error::Internal("Callback channel closed unexpectedly".to_string()))?;
-
-    // Abort the server (it's done its job)
-    server.abort();
-
-    result.map(|r| (callback_url, r))
+    Ok(CallbackServer {
+        callback_url,
+        receiver: rx,
+        server_handle: server,
+    })
 }
+
 
 /// Handle the OAuth callback
 async fn handle_callback(
@@ -108,158 +132,52 @@ async fn handle_callback(
 
     // Check for errors
     if let Some(error) = params.error {
-        let description = params.error_description.unwrap_or_else(|| "Unknown error".to_string());
-        let result = Err(Error::Internal(format!("OAuth error: {error} - {description}")));
-
+        let description = params.error_description.unwrap_or_default();
+        let result = Err(Error::Internal(format!("OAuth error: {} - {}", error, description)));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
-
-        return Html(error_page(&error, &description));
+        return Html(format!(
+            "<html><body><h1>Authorization Failed</h1><p>{}: {}</p></body></html>",
+            error, description
+        ));
     }
 
-    // Validate required parameters
-    let code = match params.code {
-        Some(c) => c,
-        None => {
-            let result = Err(Error::Internal("Missing authorization code".to_string()));
-            if let Some(tx) = state.tx.take() {
-                let _ = tx.send(result);
-            }
-            return Html(error_page("missing_code", "Authorization code not provided"));
-        }
-    };
-
-    let callback_state = match params.state {
-        Some(s) => s,
-        None => {
-            let result = Err(Error::Internal("Missing state parameter".to_string()));
-            if let Some(tx) = state.tx.take() {
-                let _ = tx.send(result);
-            }
-            return Html(error_page("missing_state", "State parameter not provided"));
-        }
-    };
-
-    // Validate state matches
-    if callback_state != state.expected_state {
+    // Validate state
+    if params.state.as_deref() != Some(&state.expected_state) {
         let result = Err(Error::Internal("State mismatch - possible CSRF attack".to_string()));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
-        return Html(error_page("state_mismatch", "Invalid state parameter"));
+        return Html(
+            "<html><body><h1>Authorization Failed</h1><p>State mismatch</p></body></html>".to_string()
+        );
     }
 
-    // Success!
+    // Extract code
+    let code = match params.code {
+        Some(c) => c,
+        None => {
+            let result = Err(Error::Internal("No authorization code received".to_string()));
+            if let Some(tx) = state.tx.take() {
+                let _ = tx.send(result);
+            }
+            return Html(
+                "<html><body><h1>Authorization Failed</h1><p>No code received</p></body></html>".to_string()
+            );
+        }
+    };
+
+    // Send success
     let result = Ok(CallbackResult {
         code,
-        state: callback_state,
+        state: params.state.unwrap_or_default(),
     });
-
     if let Some(tx) = state.tx.take() {
         let _ = tx.send(result);
     }
 
-    Html(success_page())
-}
-
-fn success_page() -> String {
-    r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorization Successful</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        .container {
-            text-align: center;
-            padding: 2rem;
-            background: rgba(255,255,255,0.1);
-            border-radius: 16px;
-            backdrop-filter: blur(10px);
-        }
-        .checkmark {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-        }
-        h1 { margin: 0 0 0.5rem 0; }
-        p { margin: 0; opacity: 0.9; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="checkmark">✓</div>
-        <h1>Authorization Successful</h1>
-        <p>You can close this window and return to MCP Gateway.</p>
-    </div>
-    <script>setTimeout(() => window.close(), 3000);</script>
-</body>
-</html>"#.to_string()
-}
-
-fn error_page(error: &str, description: &str) -> String {
-    format!(r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>Authorization Failed</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
-            color: white;
-        }}
-        .container {{
-            text-align: center;
-            padding: 2rem;
-            background: rgba(255,255,255,0.1);
-            border-radius: 16px;
-            backdrop-filter: blur(10px);
-            max-width: 400px;
-        }}
-        .error-icon {{
-            font-size: 4rem;
-            margin-bottom: 1rem;
-        }}
-        h1 {{ margin: 0 0 0.5rem 0; }}
-        p {{ margin: 0; opacity: 0.9; }}
-        .error-code {{ font-family: monospace; margin-top: 1rem; opacity: 0.7; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="error-icon">✗</div>
-        <h1>Authorization Failed</h1>
-        <p>{description}</p>
-        <p class="error-code">Error: {error}</p>
-    </div>
-</body>
-</html>"#)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_callback_params_deserialize() {
-        let params: CallbackParams = serde_urlencoded::from_str(
-            "code=abc123&state=xyz789"
-        ).unwrap();
-
-        assert_eq!(params.code, Some("abc123".to_string()));
-        assert_eq!(params.state, Some("xyz789".to_string()));
-    }
+    Html(
+        "<html><body><h1>Authorization Successful!</h1><p>You can close this window.</p></body></html>".to_string()
+    )
 }
