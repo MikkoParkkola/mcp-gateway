@@ -300,6 +300,27 @@ pub struct BackendConfig {
     pub env: HashMap<String, String>,
     /// HTTP headers (for http/sse)
     pub headers: HashMap<String, String>,
+    /// OAuth configuration (optional)
+    #[serde(default)]
+    pub oauth: Option<OAuthConfig>,
+}
+
+/// OAuth configuration for a backend
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthConfig {
+    /// Enable OAuth for this backend
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// OAuth scopes to request (if empty, uses server's supported scopes)
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Client ID (optional - uses dynamic registration or generates one if not set)
+    #[serde(default)]
+    pub client_id: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for BackendConfig {
@@ -312,6 +333,7 @@ impl Default for BackendConfig {
             timeout: Duration::from_secs(30),
             env: HashMap::new(),
             headers: HashMap::new(),
+            oauth: None,
         }
     }
 }

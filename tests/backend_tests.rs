@@ -17,6 +17,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         timeout: Duration::from_secs(30),
         env: Default::default(),
         headers: Default::default(),
+        oauth: None,
     };
 
     let failsafe = FailsafeConfig::default();

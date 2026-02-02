@@ -24,6 +24,7 @@ pub mod config;
 pub mod error;
 pub mod failsafe;
 pub mod gateway;
+pub mod oauth;
 pub mod protocol;
 pub mod transport;
 

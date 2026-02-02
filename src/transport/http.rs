@@ -4,6 +4,8 @@
 //! 1. GET /sse endpoint to establish connection and receive session endpoint
 //! 2. POST to the session endpoint (/`messages?session_id=XXX`) for requests
 //! 3. SSE stream provides server->client notifications (optional)
+//!
+//! Supports OAuth 2.0 with PKCE for authenticated backends.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,10 +16,12 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use reqwest::{Client, header};
 use serde_json::Value;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, info, warn};
 use url::Url;
 
 use super::Transport;
+use crate::oauth::OAuthClient;
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId};
 use crate::{Error, Result};
 
@@ -42,6 +46,8 @@ pub struct HttpTransport {
     timeout: Duration,
     /// Use Streamable HTTP (direct POST, no SSE handshake)
     streamable_http: bool,
+    /// OAuth client for authenticated backends (protected by async mutex for token refresh)
+    oauth_client: Option<TokioMutex<OAuthClient>>,
 }
 
 impl HttpTransport {
@@ -54,6 +60,17 @@ impl HttpTransport {
         headers: HashMap<String, String>,
         timeout: Duration,
         streamable_http: bool,
+    ) -> Result<Arc<Self>> {
+        Self::new_with_oauth(url, headers, timeout, streamable_http, None)
+    }
+
+    /// Create a new HTTP transport with optional OAuth client
+    pub fn new_with_oauth(
+        url: &str,
+        headers: HashMap<String, String>,
+        timeout: Duration,
+        streamable_http: bool,
+        oauth_client: Option<OAuthClient>,
     ) -> Result<Arc<Self>> {
         let client = Client::builder()
             .timeout(timeout)
@@ -75,6 +92,7 @@ impl HttpTransport {
             connected: AtomicBool::new(false),
             timeout,
             streamable_http,
+            oauth_client: oauth_client.map(TokioMutex::new),
         }))
     }
 
@@ -82,7 +100,20 @@ impl HttpTransport {
     ///
     /// For SSE mode: establishes SSE handshake to get message endpoint
     /// For Streamable HTTP: uses URL directly (trailing slash only for localhost/Starlette)
+    /// For OAuth-enabled backends: initializes OAuth client and obtains token first
     pub async fn initialize(&self) -> Result<()> {
+        // Initialize OAuth client if configured
+        if let Some(ref oauth_mutex) = self.oauth_client {
+            let mut oauth = oauth_mutex.lock().await;
+            oauth.initialize().await?;
+
+            // If we don't have a valid token, trigger authorization flow
+            if !oauth.has_valid_token() {
+                info!(url = %self.base_url, "OAuth required - initiating authorization flow");
+                oauth.authorize().await?;
+            }
+        }
+
         if self.streamable_http {
             // Streamable HTTP: use URL directly
             // Only add trailing slash for localhost (Starlette compatibility)
@@ -93,13 +124,13 @@ impl HttpTransport {
                 url.push('/');
             }
             *self.message_url.write() = Some(url.clone());
-            info!(url = %url, "Streamable HTTP mode - direct POST");
+            info!(url = %url, oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
         } else {
             // SSE mode: GET the SSE endpoint to receive the message endpoint
             let message_endpoint = self.establish_sse_connection().await?;
             let full_message_url = self.resolve_message_url(&message_endpoint)?;
             *self.message_url.write() = Some(full_message_url.clone());
-            info!(sse_url = %self.base_url, message_url = %full_message_url, "SSE handshake complete");
+            info!(sse_url = %self.base_url, message_url = %full_message_url, oauth = self.oauth_client.is_some(), "SSE handshake complete");
         }
 
         // Send initialize request via the message endpoint
@@ -132,6 +163,17 @@ impl HttpTransport {
         Ok(())
     }
 
+    /// Get OAuth access token if OAuth is configured
+    async fn get_oauth_token(&self) -> Result<Option<String>> {
+        if let Some(ref oauth_mutex) = self.oauth_client {
+            let oauth = oauth_mutex.lock().await;
+            let token = oauth.get_token().await?;
+            Ok(Some(token))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Establish SSE connection and get the message endpoint
     async fn establish_sse_connection(&self) -> Result<String> {
         use futures::StreamExt;
@@ -142,6 +184,15 @@ impl HttpTransport {
             "text/event-stream".parse().unwrap(),
         );
         headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
+
+        // Add OAuth token if available
+        if let Some(token) = self.get_oauth_token().await? {
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {token}").parse().unwrap(),
+            );
+            debug!(url = %self.base_url, "SSE connection with OAuth token");
+        }
 
         // Add custom headers (for auth, etc.)
         for (key, value) in &self.headers {
@@ -262,6 +313,14 @@ impl HttpTransport {
         );
         headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
 
+        // Add OAuth token if available (refreshes automatically if expired)
+        if let Some(token) = self.get_oauth_token().await? {
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {token}").parse().unwrap(),
+            );
+        }
+
         // Add session ID if available
         if let Some(ref session_id) = *self.session_id.read() {
             debug!(session_id = %session_id, method = %request.method, "Sending request with session ID");
@@ -375,6 +434,14 @@ impl Transport for HttpTransport {
         let mut headers = header::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
         headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
+
+        // Add OAuth token if available
+        if let Some(token) = self.get_oauth_token().await? {
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {token}").parse().unwrap(),
+            );
+        }
 
         if let Some(ref session_id) = *self.session_id.read() {
             headers.insert("MCP-Session-Id", session_id.parse().unwrap());

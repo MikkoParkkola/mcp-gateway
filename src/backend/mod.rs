@@ -7,12 +7,14 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
 use crate::config::{BackendConfig, TransportConfig};
 use crate::failsafe::{Failsafe, with_retry};
+use crate::oauth::{OAuthClient, TokenStorage};
 use crate::protocol::{JsonRpcResponse, Tool, ToolsListResult};
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
@@ -98,11 +100,15 @@ impl Backend {
                 transport
             }
             TransportConfig::Http { http_url, streamable_http } => {
-                let transport = HttpTransport::new(
+                // Create OAuth client if configured
+                let oauth_client = self.create_oauth_client(http_url)?;
+
+                let transport = HttpTransport::new_with_oauth(
                     http_url,
                     self.config.headers.clone(),
                     self.config.timeout,
                     *streamable_http,
+                    oauth_client,
                 )?;
                 transport.initialize().await?;
                 transport
@@ -115,6 +121,39 @@ impl Backend {
         let _ = self.get_tools().await;
 
         Ok(())
+    }
+
+    /// Create OAuth client if OAuth is configured for this backend
+    fn create_oauth_client(&self, resource_url: &str) -> Result<Option<OAuthClient>> {
+        let oauth_config = match &self.config.oauth {
+            Some(cfg) if cfg.enabled => cfg,
+            _ => return Ok(None),
+        };
+
+        info!(backend = %self.name, "Initializing OAuth client");
+
+        // Create HTTP client for OAuth requests
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| Error::Internal(format!("Failed to create OAuth HTTP client: {e}")))?;
+
+        // Get or create token storage
+        let storage = Arc::new(
+            TokenStorage::default_location()
+                .map_err(|e| Error::Internal(format!("Failed to create token storage: {e}")))?,
+        );
+
+        // Create OAuth client
+        let oauth = OAuthClient::new(
+            http_client,
+            self.name.clone(),
+            resource_url.to_string(),
+            oauth_config.scopes.clone(),
+            storage,
+        );
+
+        Ok(Some(oauth))
     }
 
     /// Stop the backend
