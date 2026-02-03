@@ -1,0 +1,75 @@
+fulcrum: "1.0"
+name: trivia_question
+description: Get trivia questions from Open Trivia Database. Supports difficulty levels and categories.
+
+schema:
+  input:
+    type: object
+    properties:
+      amount:
+        type: integer
+        description: Number of questions (1-50)
+        default: 1
+      difficulty:
+        type: string
+        description: Question difficulty
+        enum: ["easy", "medium", "hard"]
+      category:
+        type: integer
+        description: Category ID (9=General, 17=Science, 21=Sports, 23=History, 27=Animals)
+        examples:
+          - 9
+          - 17
+          - 23
+  output:
+    type: object
+    properties:
+      response_code:
+        type: integer
+      results:
+        type: array
+        items:
+          type: object
+          properties:
+            category:
+              type: string
+            difficulty:
+              type: string
+            question:
+              type: string
+            correct_answer:
+              type: string
+            incorrect_answers:
+              type: array
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://opentdb.com
+      path: /api.php
+      method: GET
+      params:
+        amount: "{amount}"
+        difficulty: "{difficulty}"
+        category: "{category}"
+
+cache:
+  strategy: none
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: entertainment
+  tags:
+    - trivia
+    - quiz
+    - games
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://opentdb.com/api_config.php

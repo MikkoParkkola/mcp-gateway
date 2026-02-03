@@ -1,0 +1,67 @@
+fulcrum: "1.0"
+name: random_quote
+description: Get random inspirational quotes from Quotable API. Filter by author or tags.
+
+schema:
+  input:
+    type: object
+    properties:
+      tags:
+        type: string
+        description: Comma-separated tags (inspirational, wisdom, technology, humor, love)
+        examples:
+          - "inspirational"
+          - "technology,wisdom"
+      author:
+        type: string
+        description: Filter by author slug
+        examples:
+          - "albert-einstein"
+          - "steve-jobs"
+  output:
+    type: object
+    properties:
+      _id:
+        type: string
+      content:
+        type: string
+        description: The quote text
+      author:
+        type: string
+      tags:
+        type: array
+      authorSlug:
+        type: string
+      length:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.quotable.io
+      path: /random
+      method: GET
+      params:
+        tags: "{tags}"
+        author: "{author}"
+
+cache:
+  strategy: none
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: entertainment
+  tags:
+    - quotes
+    - inspiration
+    - random
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://github.com/lukePeavey/quotable

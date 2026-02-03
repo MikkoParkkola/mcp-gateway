@@ -1,21 +1,21 @@
 # MCP Gateway Starter Capabilities
 
-34 curated capabilities for AI enthusiasts and home users. Mix of zero-config (17) and free-tier APIs (17).
+42 curated capabilities for AI enthusiasts and home users. Mix of zero-config (25) and free-tier APIs (17).
 
 ## Categories
 
 | Category | Count | Auth Required |
 |----------|-------|---------------|
-| **knowledge/** | 11 | None |
+| **knowledge/** | 14 | None |
 | **search/** | 11 | API key (Brave: 2K/mo free) |
 | **finance/** | 4 | API key (free tiers) |
 | **geo/** | 1 | API key (50K/mo free) |
-| **entertainment/** | 3 | API key / OAuth2 |
-| **utility/** | 4 | Mixed |
+| **entertainment/** | 6 | None / API key / OAuth2 |
+| **utility/** | 6 | None / API key |
 
 ## Zero-Config (Works Instantly)
 
-These 17 capabilities need no API keys:
+These 25 capabilities need no API keys:
 
 ```
 knowledge/weather.yaml          # Open-Meteo
@@ -26,12 +26,24 @@ knowledge/open_library_book.yaml
 knowledge/npm_package.yaml
 knowledge/pypi_package.yaml
 knowledge/hackernews_*.yaml     # (2)
+knowledge/country_info.yaml     # RestCountries
+knowledge/public_holidays.yaml  # Nager.Date
+knowledge/number_facts.yaml     # Numbers API
+
 search/reddit_search.yaml
 search/youtube_transcript.yaml
-finance/sec_edgar_filings.yaml
+search/github_search.yaml       # 60/hr unauthenticated
+
+finance/sec_edgar_filings.yaml  # SEC EDGAR (free gov data)
+
+entertainment/random_joke.yaml   # JokeAPI
+entertainment/trivia_question.yaml # Open Trivia DB
+entertainment/random_quote.yaml  # Quotable
+
 utility/air_quality.yaml        # OpenAQ
 utility/qr_generate.yaml        # GoQR
-search/github_search.yaml       # 60/hr unauthenticated
+utility/random_user.yaml        # Random User Generator
+utility/uuid_generate.yaml      # UUID Tools
 ```
 
 ## Free Tier (2-min Signup)
@@ -125,9 +137,10 @@ schema:
 
 providers:
   primary:
-    service: service_name
+    service: rest
     config:
-      endpoint: https://api.example.com/v1/endpoint
+      base_url: https://api.example.com
+      path: /v1/endpoint
       method: GET
 
 auth:
@@ -140,3 +153,12 @@ metadata:
   tags: [tag1, tag2]
   cost_category: free/cheap/paid
 ```
+
+## API Categories Explained
+
+- **knowledge/**: Reference data, facts, geocoding
+- **search/**: Web, news, images, code search
+- **finance/**: Stock quotes, currency exchange, SEC filings
+- **geo/**: IP geolocation
+- **entertainment/**: Movies, music, jokes, trivia
+- **utility/**: QR codes, UUIDs, mock data, air quality

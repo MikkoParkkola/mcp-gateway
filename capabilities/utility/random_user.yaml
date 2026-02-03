@@ -1,0 +1,74 @@
+fulcrum: "1.0"
+name: random_user
+description: Generate random user data for testing/mocking. Includes names, addresses, emails, photos.
+
+schema:
+  input:
+    type: object
+    properties:
+      results:
+        type: integer
+        description: Number of users to generate (1-5000)
+        default: 1
+      nat:
+        type: string
+        description: Nationality (AU, BR, CA, CH, DE, DK, ES, FI, FR, GB, IE, IN, MX, NL, NO, NZ, TR, US)
+        examples:
+          - "FI"
+          - "NL"
+          - "US"
+      gender:
+        type: string
+        description: Gender filter
+        enum: ["male", "female"]
+  output:
+    type: object
+    properties:
+      results:
+        type: array
+        items:
+          type: object
+          properties:
+            name:
+              type: object
+            location:
+              type: object
+            email:
+              type: string
+            phone:
+              type: string
+            picture:
+              type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://randomuser.me
+      path: /api
+      method: GET
+      params:
+        results: "{results}"
+        nat: "{nat}"
+        gender: "{gender}"
+
+cache:
+  strategy: none
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: utility
+  tags:
+    - mock-data
+    - testing
+    - users
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: unlimited
+  docs: https://randomuser.me/documentation

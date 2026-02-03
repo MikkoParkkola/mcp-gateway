@@ -64,6 +64,29 @@ src/
 3. Add configuration options
 4. Document in README.md
 
+## Adding Capabilities
+
+The easiest way to contribute is adding new API capabilities:
+
+1. Copy an existing YAML from `capabilities/`
+2. Modify for your API
+3. Test it works
+4. Submit PR
+
+### Zero-Config Capabilities Welcome
+
+APIs that work without authentication are especially valuable. Good candidates:
+- Government open data
+- Public datasets
+- Free utility APIs
+
+### Capability Guidelines
+
+- Keep YAML clean and readable
+- Include realistic examples
+- Document rate limits
+- Add appropriate tags
+
 ## Questions?
 
 Open an issue for discussion before large changes.

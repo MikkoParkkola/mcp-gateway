@@ -1,0 +1,66 @@
+fulcrum: "1.0"
+name: random_joke
+description: Get random jokes from JokeAPI. Supports categories (programming, misc, dark, pun, spooky, christmas) and filtering.
+
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        description: Joke category
+        enum: ["Any", "Programming", "Misc", "Dark", "Pun", "Spooky", "Christmas"]
+        default: "Any"
+      blacklist:
+        type: string
+        description: Comma-separated flags to exclude (nsfw, religious, political, racist, sexist, explicit)
+        examples:
+          - "nsfw,racist"
+  output:
+    type: object
+    properties:
+      type:
+        type: string
+        description: single or twopart
+      joke:
+        type: string
+        description: The joke (single type)
+      setup:
+        type: string
+        description: Setup line (twopart)
+      delivery:
+        type: string
+        description: Punchline (twopart)
+      category:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://v2.jokeapi.dev
+      path: /joke/{category}
+      method: GET
+      params:
+        blacklistFlags: "{blacklist}"
+
+cache:
+  strategy: none
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: entertainment
+  tags:
+    - jokes
+    - humor
+    - random
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 120 req/min
+  docs: https://jokeapi.dev/

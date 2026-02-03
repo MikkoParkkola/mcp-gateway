@@ -1,0 +1,72 @@
+fulcrum: "1.0"
+name: country_info
+description: Get detailed country information from RestCountries API. Capital, population, currencies, languages, timezones, borders.
+
+schema:
+  input:
+    type: object
+    properties:
+      name:
+        type: string
+        description: Country name (partial match supported)
+        examples:
+          - "Finland"
+          - "Netherlands"
+          - "United States"
+    required:
+      - name
+  output:
+    type: array
+    items:
+      type: object
+      properties:
+        name:
+          type: object
+          properties:
+            common:
+              type: string
+            official:
+              type: string
+        capital:
+          type: array
+        population:
+          type: integer
+        currencies:
+          type: object
+        languages:
+          type: object
+        timezones:
+          type: array
+        borders:
+          type: array
+        flag:
+          type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://restcountries.com
+      path: /v3.1/name/{name}
+      method: GET
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags:
+    - countries
+    - geography
+    - reference
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://restcountries.com/
