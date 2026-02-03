@@ -125,13 +125,13 @@ impl TokenStorage {
         hasher.update(b":");
         hasher.update(resource_url.as_bytes());
         let hash = hasher.finalize();
-        format!("{:x}", hash)[..16].to_string()
+        format!("{hash:x}")[..16].to_string()
     }
 
     /// Get the file path for a backend's tokens
     fn token_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
         let key = self.storage_key(backend_name, resource_url);
-        self.base_dir.join(format!("{}_tokens.json", key))
+        self.base_dir.join(format!("{key}_tokens.json"))
     }
 
     /// Load tokens for a backend

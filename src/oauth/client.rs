@@ -168,7 +168,7 @@ impl OAuthClient {
     /// Check if the client has a valid token
     pub fn has_valid_token(&self) -> bool {
         let token = self.current_token.read();
-        token.as_ref().map(|t| !t.is_expired()).unwrap_or(false)
+        token.as_ref().is_some_and(|t| !t.is_expired())
     }
 
     /// Perform the authorization flow
@@ -214,7 +214,7 @@ impl OAuthClient {
 
         if let Err(e) = open::that(&auth_url_str) {
             warn!(error = %e, "Failed to open browser automatically");
-            println!("\nPlease authorize this client by visiting:\n{}\n", auth_url_str);
+            println!("\nPlease authorize this client by visiting:\n{auth_url_str}\n");
         }
 
         // Wait for callback

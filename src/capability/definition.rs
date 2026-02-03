@@ -67,6 +67,15 @@ impl ProvidersConfig {
     }
 }
 
+impl<'de> Deserialize<'de> for ProvidersConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_providers(deserializer)
+    }
+}
+
 /// Custom deserializer for providers that handles both formats:
 /// - Standard: { primary: {...}, secondary: {...} }
 /// - With fallback array: { primary: {...}, fallback: [{...}, {...}] }
@@ -174,7 +183,7 @@ pub struct RestConfig {
     #[serde(default)]
     pub path: String,
 
-    /// Full endpoint URL (alternative to base_url + path)
+    /// Full endpoint URL (alternative to `base_url` + path)
     /// Takes precedence if set
     #[serde(default)]
     pub endpoint: String,
@@ -205,13 +214,13 @@ pub struct RestConfig {
 }
 
 impl RestConfig {
-    /// Get the effective base URL (from endpoint or base_url)
+    /// Get the effective base URL (from endpoint or `base_url`)
     pub fn effective_base_url(&self) -> &str {
-        if !self.endpoint.is_empty() {
+        if self.endpoint.is_empty() {
+            &self.base_url
+        } else {
             // Extract base from endpoint (everything before the path)
             &self.endpoint
-        } else {
-            &self.base_url
         }
     }
 
@@ -241,7 +250,7 @@ pub struct AuthConfig {
     #[serde(default)]
     pub required: bool,
 
-    /// Authentication type (oauth, api_key, basic, bearer, none)
+    /// Authentication type (oauth, `api_key`, basic, bearer, none)
     #[serde(rename = "type", default)]
     pub auth_type: String,
 
@@ -249,7 +258,7 @@ pub struct AuthConfig {
     #[serde(default)]
     pub scopes: Vec<String>,
 
-    /// Credential key reference (e.g., "keychain:gmail-oauth", "env:API_KEY")
+    /// Credential key reference (e.g., "keychain:gmail-oauth", "`env:API_KEY`")
     /// NEVER contains actual credentials
     #[serde(default)]
     pub key: String,

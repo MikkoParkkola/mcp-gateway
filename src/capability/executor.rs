@@ -159,7 +159,7 @@ impl CapabilityExecutor {
                 // Use explicit body template
                 let body = self.substitute_value(body_template, params)?;
                 request = request.json(&body);
-            } else if !params.is_null() && params.as_object().map_or(false, |o| !o.is_empty()) {
+            } else if !params.is_null() && params.as_object().is_some_and(|o| !o.is_empty()) {
                 // No body template - use input params directly as body
                 // This enables LLM APIs where input IS the request body
                 request = request.json(params);
@@ -172,7 +172,7 @@ impl CapabilityExecutor {
             .timeout(timeout)
             .send()
             .await
-            .map_err(|e| Error::Transport(format!("Request failed: {}", e)))?;
+            .map_err(|e| Error::Transport(format!("Request failed: {e}")))?;
 
         // Handle response
         self.handle_response(response, config).await
@@ -190,7 +190,7 @@ impl CapabilityExecutor {
         // Substitute path parameters like {id}
         if let Value::Object(map) = params {
             for (key, value) in map {
-                let placeholder = format!("{{{}}}", key);
+                let placeholder = format!("{{{key}}}");
                 if url.contains(&placeholder) {
                     let value_str = match value {
                         Value::String(s) => s.clone(),
@@ -265,7 +265,7 @@ impl CapabilityExecutor {
         let header_value = if prefix.is_empty() {
             credential
         } else {
-            format!("{} {}", prefix, credential)
+            format!("{prefix} {credential}")
         };
 
         let header_val: HeaderValue = header_value.parse().map_err(|_| {
@@ -291,30 +291,26 @@ impl CapabilityExecutor {
     async fn fetch_credential(&self, auth: &super::AuthConfig) -> Result<String> {
         let key = &auth.key;
 
-        if key.starts_with("env:") {
+        if let Some(var_name) = key.strip_prefix("env:") {
             // Explicit environment variable
-            let var_name = &key[4..];
             std::env::var(var_name).map_err(|_| {
                 Error::Config(format!(
                     "Environment variable '{}' not set (required for {})",
                     var_name, auth.description
                 ))
             })
-        } else if key.starts_with("keychain:") {
+        } else if let Some(keychain_key) = key.strip_prefix("keychain:") {
             // macOS Keychain
-            let keychain_key = &key[9..];
             self.fetch_from_keychain(keychain_key).await
-        } else if key.starts_with("oauth:") {
+        } else if let Some(provider) = key.strip_prefix("oauth:") {
             // OAuth token from vault
-            let provider = &key[6..];
             self.fetch_oauth_token(provider).await
         } else if key.starts_with("{env.") && key.ends_with('}') {
             // Template format: {env.VAR_NAME}
             let var_name = &key[5..key.len() - 1];
             std::env::var(var_name).map_err(|_| {
                 Error::Config(format!(
-                    "Environment variable '{}' not set",
-                    var_name
+                    "Environment variable '{var_name}' not set"
                 ))
             })
         } else if key.is_empty() {
@@ -323,8 +319,7 @@ impl CapabilityExecutor {
             // Fulcrum compatibility: bare name like BRAVE_API_KEY is treated as env var
             std::env::var(key).map_err(|_| {
                 Error::Config(format!(
-                    "Environment variable '{}' not set. Set it with: export {}=your_key",
-                    key, key
+                    "Environment variable '{key}' not set. Set it with: export {key}=your_key"
                 ))
             })
         } else {
@@ -339,7 +334,7 @@ impl CapabilityExecutor {
     /// (uppercase letters, digits, underscores, starts with letter)
     fn looks_like_env_var_name(s: &str) -> bool {
         !s.is_empty()
-            && s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+            && s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
             && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
     }
 
@@ -375,21 +370,19 @@ impl CapabilityExecutor {
                 // Token exists but is expired - we need a refresh mechanism
                 // For now, just report the issue
                 return Err(Error::Config(format!(
-                    "OAuth token for '{}' is expired. Re-authenticate using the gateway OAuth flow or refresh the token.",
-                    provider
+                    "OAuth token for '{provider}' is expired. Re-authenticate using the gateway OAuth flow or refresh the token."
                 )));
             }
         }
 
         // Not found - provide helpful instructions
         Err(Error::Config(format!(
-            "OAuth token for '{}' not found. \
+            "OAuth token for '{provider}' not found. \
             To authorize, use the gateway's OAuth flow: \
-            1. Configure an OAuth-enabled backend named '{}' in gateway config \
+            1. Configure an OAuth-enabled backend named '{provider}' in gateway config \
             2. Make a request to trigger authorization \
             3. Complete browser-based authorization \
-            Or manually set the token via set_oauth_token()",
-            provider, provider
+            Or manually set the token via set_oauth_token()"
         )))
     }
 
@@ -403,7 +396,7 @@ impl CapabilityExecutor {
         let output = Command::new("security")
             .args(["find-generic-password", "-s", key, "-w"])
             .output()
-            .map_err(|e| Error::Config(format!("Failed to access keychain: {}", e)))?;
+            .map_err(|e| Error::Config(format!("Failed to access keychain: {e}")))?;
 
         if output.status.success() {
             let credential = String::from_utf8_lossy(&output.stdout)
@@ -412,8 +405,7 @@ impl CapabilityExecutor {
             Ok(credential)
         } else {
             Err(Error::Config(format!(
-                "Keychain entry '{}' not found. Add it with: security add-generic-password -s '{}' -a 'mcp-gateway' -w 'YOUR_SECRET'",
-                key, key
+                "Keychain entry '{key}' not found. Add it with: security add-generic-password -s '{key}' -a 'mcp-gateway' -w 'YOUR_SECRET'"
             )))
         }
     }
@@ -442,7 +434,7 @@ impl CapabilityExecutor {
         let body: Value = response
             .json()
             .await
-            .map_err(|e| Error::Protocol(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| Error::Protocol(format!("Failed to parse response: {e}")))?;
 
         // Apply response path transformation if configured
         if let Some(ref path) = config.response_path {
@@ -484,7 +476,7 @@ impl CapabilityExecutor {
         // Substitute {param} references
         if let Value::Object(map) = params {
             for (key, value) in map {
-                let placeholder = format!("{{{}}}", key);
+                let placeholder = format!("{{{key}}}");
                 if result.contains(&placeholder) {
                     let value_str = match value {
                         Value::String(s) => s.clone(),
@@ -529,8 +521,8 @@ impl CapabilityExecutor {
         Ok(result)
     }
 
-    /// Map input parameters to API parameters using param_map
-    /// e.g., param_map: { query: q } maps input "query" to API param "q"
+    /// Map input parameters to API parameters using `param_map`
+    /// e.g., `param_map`: { query: q } maps input "query" to API param "q"
     fn map_params(
         &self,
         param_map: &std::collections::HashMap<String, String>,

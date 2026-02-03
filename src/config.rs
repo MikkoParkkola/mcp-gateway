@@ -36,7 +36,7 @@ pub struct Config {
 pub struct CapabilityConfig {
     /// Enable capability system
     pub enabled: bool,
-    /// Backend name for capabilities (shown in gateway_list_servers)
+    /// Backend name for capabilities (shown in `gateway_list_servers`)
     pub name: String,
     /// Directories to load capability definitions from
     pub directories: Vec<String>,
@@ -103,7 +103,7 @@ impl Config {
     fn expand_string(re: &Regex, value: &str) -> String {
         re.replace_all(value, |caps: &regex::Captures| {
             let var_name = &caps[1];
-            let default = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let default = caps.get(2).map_or("", |m| m.as_str());
             env::var(var_name).unwrap_or_else(|_| default.to_string())
         })
         .into_owned()

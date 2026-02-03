@@ -15,15 +15,13 @@ impl CapabilityLoader {
 
         if !path.exists() {
             return Err(Error::Config(format!(
-                "Capabilities directory does not exist: {:?}",
-                path
+                "Capabilities directory does not exist: {path:?}"
             )));
         }
 
         if !path.is_dir() {
             return Err(Error::Config(format!(
-                "Capabilities path is not a directory: {:?}",
-                path
+                "Capabilities path is not a directory: {path:?}"
             )));
         }
 
@@ -46,19 +44,19 @@ impl CapabilityLoader {
     ) -> Result<()> {
         let mut entries = tokio::fs::read_dir(dir)
             .await
-            .map_err(|e| Error::Config(format!("Failed to read directory {:?}: {}", dir, e)))?;
+            .map_err(|e| Error::Config(format!("Failed to read directory {dir:?}: {e}")))?;
 
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| Error::Config(format!("Failed to read directory entry: {}", e)))?
+            .map_err(|e| Error::Config(format!("Failed to read directory entry: {e}")))?
         {
             let path = entry.path();
 
             // Skip hidden files/directories
             if path
                 .file_name()
-                .map_or(false, |n| n.to_string_lossy().starts_with('.'))
+                .is_some_and(|n| n.to_string_lossy().starts_with('.'))
             {
                 continue;
             }
@@ -66,7 +64,7 @@ impl CapabilityLoader {
             if path.is_dir() {
                 // Recurse into subdirectories
                 Box::pin(Self::load_directory_recursive(&path, capabilities)).await?;
-            } else if path.extension().map_or(false, |ext| ext == "yaml" || ext == "yml") {
+            } else if path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
                 // Load YAML files
                 match Self::load_capability_file(&path).await {
                     Ok(cap) => {

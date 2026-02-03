@@ -66,9 +66,9 @@ pub enum CapCommand {
         directory: PathBuf,
     },
 
-    /// Convert OpenAPI spec to capabilities
+    /// Convert `OpenAPI` spec to capabilities
     Import {
-        /// Path to OpenAPI spec (YAML or JSON)
+        /// Path to `OpenAPI` spec (YAML or JSON)
         #[arg(required = true)]
         spec: PathBuf,
 
@@ -80,7 +80,7 @@ pub enum CapCommand {
         #[arg(short, long)]
         prefix: Option<String>,
 
-        /// Auth key reference (e.g., "env:API_TOKEN")
+        /// Auth key reference (e.g., "`env:API_TOKEN`")
         #[arg(long)]
         auth_key: Option<String>,
     },

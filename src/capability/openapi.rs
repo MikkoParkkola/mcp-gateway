@@ -1,7 +1,7 @@
-//! OpenAPI to Capability converter
+//! `OpenAPI` to Capability converter
 //!
-//! Generates capability YAML definitions from OpenAPI specifications.
-//! Supports OpenAPI 3.0 and 3.1.
+//! Generates capability YAML definitions from `OpenAPI` specifications.
+//! Supports `OpenAPI` 3.0 and 3.1.
 //!
 //! # Usage
 //!
@@ -23,7 +23,7 @@ use tracing::{debug, info, warn};
 
 use crate::{Error, Result};
 
-/// OpenAPI to Capability converter
+/// `OpenAPI` to Capability converter
 pub struct OpenApiConverter {
     /// Base name prefix for generated capabilities
     prefix: Option<String>,
@@ -36,7 +36,7 @@ pub struct OpenApiConverter {
 /// Template for auth configuration
 #[derive(Debug, Clone)]
 pub struct AuthTemplate {
-    /// Auth type (oauth, api_key, bearer)
+    /// Auth type (oauth, `api_key`, bearer)
     pub auth_type: String,
     /// Credential key reference
     pub key: String,
@@ -82,7 +82,7 @@ impl GeneratedCapability {
     }
 }
 
-/// Simplified OpenAPI spec structure (just what we need)
+/// Simplified `OpenAPI` spec structure (just what we need)
 #[derive(Debug, Deserialize)]
 struct OpenApiSpec {
     openapi: Option<String>,
@@ -94,6 +94,7 @@ struct OpenApiSpec {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields needed for parsing, may be used in future
 struct OpenApiInfo {
     title: String,
     #[serde(default)]
@@ -103,6 +104,7 @@ struct OpenApiInfo {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenApiServer {
     url: String,
     #[serde(default)]
@@ -111,6 +113,7 @@ struct OpenApiServer {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct OpenApiOperation {
     #[serde(default)]
     operation_id: Option<String>,
@@ -143,6 +146,7 @@ struct OpenApiParameter {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenApiRequestBody {
     #[serde(default)]
     required: bool,
@@ -155,6 +159,7 @@ struct OpenApiMediaType {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenApiResponse {
     #[serde(default)]
     description: Option<String>,
@@ -163,6 +168,7 @@ struct OpenApiResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenApiComponents {
     #[serde(default)]
     schemas: HashMap<String, Value>,
@@ -171,6 +177,7 @@ struct OpenApiComponents {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenApiSecurityScheme {
     #[serde(rename = "type")]
     scheme_type: String,
@@ -213,7 +220,7 @@ impl OpenApiConverter {
         self
     }
 
-    /// Convert an OpenAPI spec file to capabilities
+    /// Convert an `OpenAPI` spec file to capabilities
     pub fn convert_file(&self, path: &str) -> Result<Vec<GeneratedCapability>> {
         let content = fs::read_to_string(path)
             .map_err(|e| Error::Config(format!("Failed to read OpenAPI spec: {e}")))?;
@@ -221,7 +228,7 @@ impl OpenApiConverter {
         self.convert_string(&content)
     }
 
-    /// Convert an OpenAPI spec string to capabilities
+    /// Convert an `OpenAPI` spec string to capabilities
     pub fn convert_string(&self, content: &str) -> Result<Vec<GeneratedCapability>> {
         // Try YAML first, then JSON
         let spec: OpenApiSpec = serde_yaml::from_str(content)
@@ -231,7 +238,7 @@ impl OpenApiConverter {
         self.convert_spec(&spec)
     }
 
-    /// Convert a parsed OpenAPI spec to capabilities
+    /// Convert a parsed `OpenAPI` spec to capabilities
     fn convert_spec(&self, spec: &OpenApiSpec) -> Result<Vec<GeneratedCapability>> {
         let version = spec.openapi.as_deref().or(spec.swagger.as_deref()).unwrap_or("unknown");
         info!(title = %spec.info.title, version = %version, "Converting OpenAPI spec");
@@ -240,16 +247,13 @@ impl OpenApiConverter {
         let base_url = spec
             .servers
             .as_ref()
-            .and_then(|s| s.first())
-            .map(|s| s.url.clone())
-            .unwrap_or_else(|| "https://api.example.com".to_string());
+            .and_then(|s| s.first()).map_or_else(|| "https://api.example.com".to_string(), |s| s.url.clone());
 
         // Detect auth requirements
         let auth_required = spec
             .components
             .as_ref()
-            .map(|c| !c.security_schemes.is_empty())
-            .unwrap_or(false);
+            .is_some_and(|c| !c.security_schemes.is_empty());
 
         let mut capabilities = Vec::new();
 
@@ -465,21 +469,21 @@ impl OpenApiConverter {
 
         // Basic info
         yaml.push_str("fulcrum: \"1.0\"\n");
-        yaml.push_str(&format!("name: {}\n", name));
+        yaml.push_str(&format!("name: {name}\n"));
         yaml.push_str(&format!(
             "description: {}\n\n",
-            serde_yaml::to_string(&description).unwrap_or_else(|_| format!("\"{}\"", description))
+            serde_yaml::to_string(&description).unwrap_or_else(|_| format!("\"{description}\""))
         ));
 
         // Schema
         yaml.push_str("schema:\n");
         yaml.push_str("  input:\n");
         for line in serde_yaml::to_string(input_schema).unwrap_or_default().lines() {
-            yaml.push_str(&format!("    {}\n", line));
+            yaml.push_str(&format!("    {line}\n"));
         }
         yaml.push_str("  output:\n");
         for line in serde_yaml::to_string(output_schema).unwrap_or_default().lines() {
-            yaml.push_str(&format!("    {}\n", line));
+            yaml.push_str(&format!("    {line}\n"));
         }
         yaml.push('\n');
 
@@ -490,8 +494,8 @@ impl OpenApiConverter {
         yaml.push_str("    cost_per_call: 0\n");
         yaml.push_str("    timeout: 30\n");
         yaml.push_str("    config:\n");
-        yaml.push_str(&format!("      base_url: {}\n", base_url));
-        yaml.push_str(&format!("      path: {}\n", path));
+        yaml.push_str(&format!("      base_url: {base_url}\n"));
+        yaml.push_str(&format!("      path: {path}\n"));
         yaml.push_str(&format!("      method: {}\n", method.to_uppercase()));
 
         // Headers
@@ -557,7 +561,7 @@ impl OpenApiConverter {
         yaml.push_str("  cost_category: unknown\n");
         yaml.push_str("  execution_time: medium\n");
         let read_only = method.eq_ignore_ascii_case("get") || method.eq_ignore_ascii_case("head");
-        yaml.push_str(&format!("  read_only: {}\n", read_only));
+        yaml.push_str(&format!("  read_only: {read_only}\n"));
 
         yaml
     }

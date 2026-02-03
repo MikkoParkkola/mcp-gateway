@@ -145,7 +145,7 @@ impl CapabilityBackend {
         // Get capability (clone to release lock)
         let capability = self
             .get(name)
-            .ok_or_else(|| crate::Error::Config(format!("Capability not found: {}", name)))?;
+            .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
 
         let result = self.executor.execute(&capability, arguments).await?;
 

@@ -133,13 +133,12 @@ async fn handle_callback(
     // Check for errors
     if let Some(error) = params.error {
         let description = params.error_description.unwrap_or_default();
-        let result = Err(Error::Internal(format!("OAuth error: {} - {}", error, description)));
+        let result = Err(Error::Internal(format!("OAuth error: {error} - {description}")));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
         return Html(format!(
-            "<html><body><h1>Authorization Failed</h1><p>{}: {}</p></body></html>",
-            error, description
+            "<html><body><h1>Authorization Failed</h1><p>{error}: {description}</p></body></html>"
         ));
     }
 
@@ -155,17 +154,14 @@ async fn handle_callback(
     }
 
     // Extract code
-    let code = match params.code {
-        Some(c) => c,
-        None => {
-            let result = Err(Error::Internal("No authorization code received".to_string()));
-            if let Some(tx) = state.tx.take() {
-                let _ = tx.send(result);
-            }
-            return Html(
-                "<html><body><h1>Authorization Failed</h1><p>No code received</p></body></html>".to_string()
-            );
+    let code = if let Some(c) = params.code { c } else {
+        let result = Err(Error::Internal("No authorization code received".to_string()));
+        if let Some(tx) = state.tx.take() {
+            let _ = tx.send(result);
         }
+        return Html(
+            "<html><body><h1>Authorization Failed</h1><p>No code received</p></body></html>".to_string()
+        );
     };
 
     // Send success

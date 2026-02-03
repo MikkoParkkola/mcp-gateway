@@ -71,7 +71,7 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
             match CapabilityLoader::load_directory(&path).await {
                 Ok(caps) => {
                     if caps.is_empty() {
-                        println!("No capabilities found in {}", path);
+                        println!("No capabilities found in {path}");
                     } else {
                         println!("Found {} capabilities in {}:\n", caps.len(), path);
                         for cap in caps {
@@ -126,7 +126,7 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
                         }
                     }
 
-                    println!("\nCapabilities written to {}/", out_path);
+                    println!("\nCapabilities written to {out_path}/");
                     ExitCode::SUCCESS
                 }
                 Err(e) => {

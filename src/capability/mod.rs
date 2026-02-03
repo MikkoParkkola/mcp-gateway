@@ -82,7 +82,7 @@ impl CapabilityRegistry {
 
     /// List all capability names
     pub fn list(&self) -> Vec<&str> {
-        self.capabilities.keys().map(|s| s.as_str()).collect()
+        self.capabilities.keys().map(std::string::String::as_str).collect()
     }
 
     /// Execute a capability
@@ -93,7 +93,7 @@ impl CapabilityRegistry {
     ) -> Result<serde_json::Value> {
         let capability = self
             .get(name)
-            .ok_or_else(|| crate::Error::Config(format!("Capability not found: {}", name)))?;
+            .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         self.executor.execute(capability, params).await
     }
 

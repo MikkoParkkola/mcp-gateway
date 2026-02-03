@@ -81,9 +81,7 @@ impl NotificationMultiplexer {
 
     /// Create or get a session
     pub fn get_or_create_session(&self, session_id: Option<&str>) -> (String, broadcast::Receiver<TaggedNotification>) {
-        let id = session_id
-            .map(String::from)
-            .unwrap_or_else(|| format!("gw-{}", Uuid::new_v4()));
+        let id = session_id.map_or_else(|| format!("gw-{}", Uuid::new_v4()), String::from);
 
         let mut sessions = self.sessions.write();
 

@@ -157,7 +157,7 @@ impl ProtectedResourceMetadata {
 
     /// Get the first authorization server URL
     pub fn authorization_server(&self) -> Option<&str> {
-        self.authorization_servers.first().map(|s| s.as_str())
+        self.authorization_servers.first().map(std::string::String::as_str)
     }
 }
 
@@ -169,7 +169,7 @@ pub fn base_url(url: &str) -> Result<String> {
     let mut base = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or("localhost"));
 
     if let Some(port) = parsed.port() {
-        base.push_str(&format!(":{}", port));
+        base.push_str(&format!(":{port}"));
     }
 
     Ok(base)
