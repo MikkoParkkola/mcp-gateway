@@ -7,6 +7,7 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::{debug, info, warn};
 
+use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::MetaMcp;
 use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
@@ -121,12 +122,14 @@ impl Gateway {
             Arc::clone(&self.backends),
             self.config.streaming.clone(),
         ));
+        let auth_config = Arc::new(ResolvedAuthConfig::from_config(&self.config.auth));
         let state = Arc::new(AppState {
             backends: Arc::clone(&self.backends),
             meta_mcp,
             meta_mcp_enabled: self.config.meta_mcp.enabled,
             multiplexer,
             streaming_config: self.config.streaming.clone(),
+            auth_config,
         });
 
         // Create router
@@ -140,6 +143,17 @@ impl Gateway {
         info!("============================================================");
         info!(host = %self.config.server.host, port = %self.config.server.port, "Listening");
         info!(backends = self.backends.all().len(), "Backends registered");
+
+        if self.config.auth.enabled {
+            let key_count = self.config.auth.api_keys.len();
+            let has_bearer = self.config.auth.bearer_token.is_some();
+            info!(
+                "AUTHENTICATION enabled (bearer={}, api_keys={})",
+                has_bearer, key_count
+            );
+        } else {
+            warn!("AUTHENTICATION disabled - gateway is open to all requests");
+        }
 
         if self.config.meta_mcp.enabled {
             info!("META-MCP (saves ~95% context tokens):");

@@ -71,6 +71,41 @@ Instead of loading 100+ tool definitions, Meta-MCP exposes 4 meta-tools:
 | **Graceful Shutdown** | Clean connection termination |
 | **Concurrency Limits** | Prevent backend overload |
 
+### Authentication
+
+Protect your gateway with bearer tokens and/or API keys:
+
+```yaml
+auth:
+  enabled: true
+
+  # Simple bearer token (good for single-user/dev)
+  bearer_token: "auto"  # auto-generates, or use env:VAR_NAME, or literal
+
+  # API keys for multi-client access
+  api_keys:
+    - key: "env:CLIENT_A_KEY"
+      name: "Client A"
+      rate_limit: 100        # requests per minute (0 = unlimited)
+      backends: ["tavily"]   # restrict to specific backends (empty = all)
+    - key: "my-literal-key"
+      name: "Client B"
+      backends: []           # all backends
+
+  # Paths that bypass auth (always includes /health)
+  public_paths: ["/health", "/metrics"]
+```
+
+**Token Options:**
+- `"auto"` - Auto-generate random token (logged at startup)
+- `"env:VAR_NAME"` - Read from environment variable
+- `"literal-value"` - Use literal string
+
+**Usage:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:39400/mcp
+```
+
 ### Protocol Support
 
 - **MCP Version**: 2025-11-25 (latest)

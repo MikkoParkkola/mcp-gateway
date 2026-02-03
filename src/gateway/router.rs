@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
+    middleware,
     response::IntoResponse,
     routing::{get, post},
 };
@@ -13,6 +14,7 @@ use serde_json::{Value, json};
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 use tracing::{debug, error, info};
 
+use super::auth::{auth_middleware, ResolvedAuthConfig};
 use super::meta_mcp::MetaMcp;
 use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
@@ -31,10 +33,14 @@ pub struct AppState {
     pub multiplexer: Arc<NotificationMultiplexer>,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
+    /// Authentication configuration
+    pub auth_config: Arc<ResolvedAuthConfig>,
 }
 
 /// Create the router
 pub fn create_router(state: Arc<AppState>) -> Router {
+    let auth_config = Arc::clone(&state.auth_config);
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/mcp", post(meta_mcp_handler).get(mcp_sse_handler).delete(mcp_delete_handler))
@@ -42,6 +48,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/{name}/{*path}", post(backend_handler))
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route("/sse", get(sse_deprecated_handler).post(sse_deprecated_handler))
+        // Authentication middleware (applied before other layers)
+        .layer(middleware::from_fn_with_state(auth_config, auth_middleware))
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

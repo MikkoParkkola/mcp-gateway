@@ -18,6 +18,8 @@ use crate::{Error, Result};
 pub struct Config {
     /// Server configuration
     pub server: ServerConfig,
+    /// Authentication configuration
+    pub auth: AuthConfig,
     /// Meta-MCP configuration
     pub meta_mcp: MetaMcpConfig,
     /// Streaming configuration (for real-time notifications)
@@ -49,6 +51,98 @@ impl Default for CapabilityConfig {
             name: "fulcrum".to_string(),
             directories: vec!["capabilities".to_string()],
         }
+    }
+}
+
+/// Authentication configuration for gateway access
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Enable authentication (default: false for backwards compatibility)
+    pub enabled: bool,
+
+    /// Bearer token for simple authentication
+    /// Supports: literal value, "env:VAR_NAME", or "auto" (generates random token)
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+
+    /// API keys for multi-client access with optional restrictions
+    #[serde(default)]
+    pub api_keys: Vec<ApiKeyConfig>,
+
+    /// Paths that bypass authentication (default: ["/health"])
+    #[serde(default = "default_public_paths")]
+    pub public_paths: Vec<String>,
+}
+
+fn default_public_paths() -> Vec<String> {
+    vec!["/health".to_string()]
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bearer_token: None,
+            api_keys: Vec::new(),
+            public_paths: default_public_paths(),
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Resolve the bearer token (expand env vars, generate if "auto")
+    pub fn resolve_bearer_token(&self) -> Option<String> {
+        self.bearer_token.as_ref().map(|token| {
+            if token == "auto" {
+                // Generate a random token
+                use rand::Rng;
+                let random_bytes: [u8; 32] = rand::rng().random();
+                format!("mcp_{}", base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    random_bytes
+                ))
+            } else if let Some(var_name) = token.strip_prefix("env:") {
+                env::var(var_name).unwrap_or_else(|_| token.clone())
+            } else {
+                token.clone()
+            }
+        })
+    }
+}
+
+/// API key configuration for multi-client access
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyConfig {
+    /// The API key value (supports "env:VAR_NAME")
+    pub key: String,
+
+    /// Human-readable name for this client
+    #[serde(default)]
+    pub name: String,
+
+    /// Rate limit (requests per minute, 0 = unlimited)
+    #[serde(default)]
+    pub rate_limit: u32,
+
+    /// Allowed backends (empty = all backends)
+    #[serde(default)]
+    pub backends: Vec<String>,
+}
+
+impl ApiKeyConfig {
+    /// Resolve the API key (expand env vars)
+    pub fn resolve_key(&self) -> String {
+        if let Some(var_name) = self.key.strip_prefix("env:") {
+            env::var(var_name).unwrap_or_else(|_| self.key.clone())
+        } else {
+            self.key.clone()
+        }
+    }
+
+    /// Check if this key has access to a backend
+    pub fn can_access_backend(&self, backend: &str) -> bool {
+        self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
     }
 }
 
