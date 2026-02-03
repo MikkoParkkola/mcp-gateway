@@ -81,19 +81,32 @@ impl Config {
         Ok(config)
     }
 
-    /// Expand ${VAR} patterns in header values
+    /// Expand ${VAR} and ${VAR:-default} patterns in config values
     fn expand_env_vars(&mut self) {
-        let re = Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
+        // Pattern: ${VAR} or ${VAR:-default}
+        let re = Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").unwrap();
 
+        // Expand in backend headers
         for backend in self.backends.values_mut() {
             for value in backend.headers.values_mut() {
-                let expanded = re.replace_all(value, |caps: &regex::Captures| {
-                    let var_name = &caps[1];
-                    env::var(var_name).unwrap_or_default()
-                });
-                *value = expanded.into_owned();
+                *value = Self::expand_string(&re, value);
             }
         }
+
+        // Expand in capability directories
+        for dir in &mut self.capabilities.directories {
+            *dir = Self::expand_string(&re, dir);
+        }
+    }
+
+    /// Expand environment variables in a string
+    fn expand_string(re: &Regex, value: &str) -> String {
+        re.replace_all(value, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            let default = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            env::var(var_name).unwrap_or_else(|_| default.to_string())
+        })
+        .into_owned()
     }
 
     /// Get enabled backends only
