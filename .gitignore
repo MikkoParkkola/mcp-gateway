@@ -27,3 +27,4 @@ config.yaml
 .ruff_cache/
 .tiers/
 config.yaml
+/dist/

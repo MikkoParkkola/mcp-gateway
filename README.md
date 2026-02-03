@@ -116,8 +116,29 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:39400/mcp
 
 ### Installation
 
+**Homebrew (macOS/Linux):**
+```bash
+brew tap MikkoParkkola/tap
+brew install mcp-gateway
+```
+
+**Cargo:**
 ```bash
 cargo install mcp-gateway
+```
+
+**Docker:**
+```bash
+docker run -v /path/to/servers.yaml:/config.yaml \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest \
+  --config /config.yaml
+```
+
+**Binary (from GitHub Releases):**
+```bash
+# macOS ARM64
+curl -L https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mcp-gateway-darwin-arm64 -o mcp-gateway
+chmod +x mcp-gateway
 ```
 
 ### Usage
