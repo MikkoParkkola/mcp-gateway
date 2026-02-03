@@ -19,6 +19,7 @@
 #![warn(missing_docs)]
 
 pub mod backend;
+pub mod capability;
 pub mod cli;
 pub mod config;
 pub mod error;

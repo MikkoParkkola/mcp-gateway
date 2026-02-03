@@ -1,0 +1,69 @@
+# Example: GitHub API capability with authentication
+#
+# SECURITY NOTE: This uses environment variable for authentication.
+# Set GITHUB_TOKEN before using:
+#   export GITHUB_TOKEN="ghp_your_token_here"
+#
+# For macOS, you could also use:
+#   auth:
+#     key: keychain:github-token
+#
+# NEVER put actual tokens in YAML files.
+
+fulcrum: "1.0"
+name: github_user
+description: Get GitHub user information
+
+schema:
+  input:
+    type: object
+    properties:
+      username:
+        type: string
+        description: GitHub username
+    required: [username]
+  output:
+    type: object
+    properties:
+      login:
+        type: string
+      name:
+        type: string
+      bio:
+        type: string
+      public_repos:
+        type: integer
+      followers:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.github.com
+      path: /users/{username}
+      method: GET
+      headers:
+        Accept: "application/vnd.github+json"
+        User-Agent: "mcp-gateway"
+        X-GitHub-Api-Version: "2022-11-28"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: true
+  type: bearer
+  # Reference to environment variable - NOT the actual token
+  key: env:GITHUB_TOKEN
+  description: "GitHub personal access token (set GITHUB_TOKEN env var)"
+
+metadata:
+  category: developer
+  tags: [github, api, user]
+  cost_category: free
+  execution_time: fast
+  read_only: true

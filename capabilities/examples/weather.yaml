@@ -1,0 +1,67 @@
+# Example: Weather API capability
+# This uses the free Open-Meteo API (no authentication required)
+#
+# SECURITY NOTE: This example uses a public API with no secrets.
+# For APIs requiring authentication, use:
+#   - keychain:name   (macOS Keychain)
+#   - env:VAR_NAME    (environment variable)
+# NEVER put actual API keys in YAML files.
+
+fulcrum: "1.0"
+name: weather
+description: Get current weather for a location using Open-Meteo API (free, no API key required)
+
+schema:
+  input:
+    type: object
+    properties:
+      latitude:
+        type: number
+        description: Latitude coordinate
+      longitude:
+        type: number
+        description: Longitude coordinate
+    required: [latitude, longitude]
+  output:
+    type: object
+    properties:
+      temperature:
+        type: number
+        description: Current temperature in Celsius
+      windspeed:
+        type: number
+        description: Wind speed in km/h
+      weathercode:
+        type: integer
+        description: WMO weather code
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.open-meteo.com
+      path: /v1/forecast
+      method: GET
+      headers:
+        Accept: "application/json"
+      params:
+        latitude: "{latitude}"
+        longitude: "{longitude}"
+        current_weather: "true"
+      response_path: current_weather
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: false
+
+metadata:
+  category: weather
+  tags: [weather, forecast, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true

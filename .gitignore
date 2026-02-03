@@ -16,6 +16,10 @@ Thumbs.db
 /servers.yaml
 *.log
 
+# User capabilities (may contain credential references)
+/capabilities/
+!/capabilities/examples/
+
 # Build artifacts
 .mypy_cache/
 .ruff_cache/
