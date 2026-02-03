@@ -1,0 +1,90 @@
+fulcrum: "1.0"
+name: qr_generate
+description: Generate QR codes using GoQR.me API - free, no API key required. Returns PNG image URL.
+
+schema:
+  input:
+    type: object
+    properties:
+      data:
+        type: string
+        description: Data to encode (URL, text, phone, email, SMS, WiFi, etc.)
+        examples:
+          - "https://example.com"
+          - "Hello World"
+          - "tel:+1234567890"
+          - "WIFI:T:WPA;S:NetworkName;P:Password;;"
+      size:
+        type: string
+        description: "Image size in pixels (WxH format, default: 200x200)"
+        default: "200x200"
+        examples:
+          - "200x200"
+          - "400x400"
+          - "150x150"
+      format:
+        type: string
+        description: Output format
+        enum: [png, gif, jpeg, jpg, svg, eps]
+        default: png
+      margin:
+        type: integer
+        description: Quiet zone margin in modules (0-50)
+        default: 1
+      color:
+        type: string
+        description: QR code color (hex without #, e.g., "000000")
+        default: "000000"
+      bgcolor:
+        type: string
+        description: Background color (hex without #, e.g., "ffffff")
+        default: "ffffff"
+      ecc:
+        type: string
+        description: Error correction level
+        enum: [L, M, Q, H]
+        default: M
+    required: [data]
+  output:
+    type: object
+    properties:
+      url:
+        type: string
+        description: Direct URL to the generated QR code image
+      data:
+        type: string
+        description: Original data encoded
+      size:
+        type: string
+        description: Image dimensions
+
+providers:
+  primary:
+    service: goqr
+    cost_per_call: 0.0
+    timeout: 10
+    config:
+      endpoint: https://api.qrserver.com/v1/create-qr-code/
+      method: GET
+      param_map:
+        data: data
+        size: size
+        format: format
+        margin: margin
+        color: color
+        bgcolor: bgcolor
+        ecc: ecc
+
+cache:
+  strategy: exact
+  ttl: 86400  # 24h - QR codes don't change
+
+auth:
+  required: false
+
+metadata:
+  category: utility
+  tags: [qr-code, generator, image, barcode]
+  cost_category: free
+  execution_time: fast
+  read_only: true

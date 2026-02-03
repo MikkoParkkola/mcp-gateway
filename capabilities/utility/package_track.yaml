@@ -1,0 +1,112 @@
+fulcrum: "1.0"
+name: package_track
+description: Track packages from 1200+ carriers worldwide using 17track API. 100 requests/day free tier.
+
+schema:
+  input:
+    type: object
+    properties:
+      tracking_number:
+        type: string
+        description: Package tracking number
+        examples:
+          - "1Z999AA10123456784"
+          - "JD014600003494594300"
+          - "420221539405511899223428076128"
+      carrier:
+        type: string
+        description: Carrier code (auto-detected if not provided)
+        examples:
+          - ups
+          - fedex
+          - dhl
+          - usps
+          - postnl
+          - posti
+      auto_detect:
+        type: boolean
+        description: Auto-detect carrier from tracking number
+        default: true
+    required: [tracking_number]
+  output:
+    type: object
+    properties:
+      tracking_number:
+        type: string
+      carrier:
+        type: string
+        description: Detected or specified carrier
+      carrier_name:
+        type: string
+        description: Full carrier name
+      status:
+        type: string
+        description: Current status
+        enum: [pending, in_transit, delivered, expired, undelivered, exception]
+      origin:
+        type: string
+        description: Origin country/location
+      destination:
+        type: string
+        description: Destination country/location
+      estimated_delivery:
+        type: string
+        description: Estimated delivery date
+      events:
+        type: array
+        items:
+          type: object
+          properties:
+            date:
+              type: string
+            time:
+              type: string
+            location:
+              type: string
+            description:
+              type: string
+            status:
+              type: string
+
+providers:
+  primary:
+    service: 17track
+    cost_per_call: 0.0
+    timeout: 15
+    config:
+      endpoint: https://api.17track.net/track/v2/gettrackinfo
+      method: POST
+      body_template:
+        - number: "{tracking_number}"
+          carrier: "{carrier}"
+
+cache:
+  strategy: exact
+  ttl: 1800  # 30 min - tracking updates frequently
+
+auth:
+  required: true
+  type: api_key
+  key: 17TRACK_API_KEY
+  header: 17token
+  notes: Free tier at https://api.17track.net (100/day)
+
+metadata:
+  category: utility
+  tags: [shipping, tracking, packages, logistics, delivery, carriers]
+  cost_category: free
+  execution_time: medium
+  read_only: true
+  rate_limit:
+    free: 100/day
+  notes: |
+    Supports 1200+ carriers worldwide including:
+    - UPS, FedEx, DHL, USPS (US)
+    - PostNL, DPD (Netherlands)
+    - Posti (Finland)
+    - Royal Mail (UK)
+    - Deutsche Post, DPD (Germany)
+    - And many more...
+
+    Free tier: 100 tracking requests/day
+    Sign up at https://api.17track.net

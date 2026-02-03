@@ -1,0 +1,55 @@
+fulcrum: "1.0"
+name: hackernews_stories
+description: Get top stories from Hacker News - tech news and discussions. Returns story IDs that can be fetched for details.
+
+schema:
+  input:
+    type: object
+    properties:
+      type:
+        type: string
+        description: Type of stories to fetch
+        default: top
+        enum: [top, new, best, ask, show, job]
+      limit:
+        type: integer
+        description: Number of story IDs to return
+        default: 30
+  output:
+    type: array
+    items:
+      type: integer
+      description: Story IDs (fetch details via /v0/item/{id}.json)
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://hacker-news.firebaseio.com
+      path: /v0/{type}stories.json
+      method: GET
+      headers:
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: news
+  tags:
+    - hackernews
+    - tech
+    - news
+    - startups
+    - ycombinator
+  cost_category: free
+  execution_time: instant
+  read_only: true
+  docs: https://github.com/HackerNews/API

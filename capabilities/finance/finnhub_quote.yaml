@@ -1,0 +1,82 @@
+fulcrum: "1.0"
+name: finnhub_quote
+description: Get real-time stock quotes from Finnhub. Includes price, change, high/low, and previous close.
+
+schema:
+  input:
+    type: object
+    properties:
+      symbol:
+        type: string
+        description: Stock ticker symbol
+        examples:
+          - "AAPL"
+          - "MSFT"
+          - "NOKIA.HE"
+    required:
+      - symbol
+  output:
+    type: object
+    properties:
+      c:
+        type: number
+        description: Current price
+      d:
+        type: number
+        description: Change
+      dp:
+        type: number
+        description: Percent change
+      h:
+        type: number
+        description: High of the day
+      l:
+        type: number
+        description: Low of the day
+      o:
+        type: number
+        description: Open price
+      pc:
+        type: number
+        description: Previous close
+      t:
+        type: integer
+        description: Timestamp
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://finnhub.io
+      path: /api/v1/quote
+      method: GET
+      headers:
+        Accept: "application/json"
+      params:
+        symbol: "{symbol}"
+        token: "{env.FINNHUB_API_KEY}"
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: api_key
+  key: FINNHUB_API_KEY
+  description: Get API key from https://finnhub.io/dashboard
+
+metadata:
+  category: finance
+  tags:
+    - finance
+    - stocks
+    - quotes
+    - finnhub
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 60 req/min (free)
+  docs: https://finnhub.io/docs/api

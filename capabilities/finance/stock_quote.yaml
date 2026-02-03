@@ -1,0 +1,78 @@
+fulcrum: "1.0"
+name: stock_quote
+description: Get real-time stock quote with current price, change, volume, and market data
+
+schema:
+  input:
+    type: object
+    properties:
+      symbol:
+        type: string
+        description: Stock ticker symbol (e.g., AAPL, MSFT, HARVIA.HE for Helsinki)
+    required: [symbol]
+  output:
+    type: object
+    properties:
+      symbol:
+        type: string
+        description: Stock ticker symbol
+      price:
+        type: number
+        description: Current price
+      change:
+        type: number
+        description: Price change from previous close
+      change_percent:
+        type: number
+        description: Percentage change from previous close
+      volume:
+        type: integer
+        description: Trading volume
+      open:
+        type: number
+        description: Opening price
+      high:
+        type: number
+        description: Day high
+      low:
+        type: number
+        description: Day low
+      previous_close:
+        type: number
+        description: Previous day close
+      timestamp:
+        type: string
+        description: Latest trading day
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.alphavantage.co
+      path: /query
+      method: GET
+      headers:
+        Accept: "application/json"
+      params:
+        function: "GLOBAL_QUOTE"
+        symbol: "{symbol}"
+        apikey: "{env.ALPHA_VANTAGE_API_KEY}"
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: api_key
+  key: ALPHA_VANTAGE_API_KEY
+  description: Get API key from https://www.alphavantage.co/support/#api-key
+
+metadata:
+  category: finance
+  tags: [finance, stocks, investment, quote, real-time]
+  cost_category: free
+  execution_time: fast
+  read_only: true

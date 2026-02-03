@@ -1,0 +1,120 @@
+fulcrum: "1.0"
+name: weather
+description: Get current weather and forecast using Open-Meteo API (free, no API key required)
+
+schema:
+  input:
+    type: object
+    properties:
+      latitude:
+        type: number
+        description: Latitude coordinate (e.g., 60.17 for Helsinki)
+      longitude:
+        type: number
+        description: Longitude coordinate (e.g., 24.94 for Helsinki)
+      location:
+        type: string
+        description: Location name to geocode (alternative to lat/lon)
+      forecast_days:
+        type: integer
+        description: "Number of forecast days (1-16, default: 3)"
+      hourly:
+        type: boolean
+        description: "Include hourly forecast (default: false)"
+    required: []
+  output:
+    type: object
+    properties:
+      location:
+        type: object
+        properties:
+          latitude:
+            type: number
+          longitude:
+            type: number
+          timezone:
+            type: string
+          elevation:
+            type: number
+      current:
+        type: object
+        properties:
+          temperature:
+            type: number
+            description: Current temperature in Celsius
+          feels_like:
+            type: number
+            description: Feels like temperature
+          humidity:
+            type: integer
+            description: Relative humidity percentage
+          wind_speed:
+            type: number
+            description: Wind speed in km/h
+          wind_direction:
+            type: integer
+            description: Wind direction in degrees
+          weather_code:
+            type: integer
+            description: WMO weather code
+          weather_description:
+            type: string
+            description: Human-readable weather description
+          precipitation:
+            type: number
+            description: Precipitation in mm
+          cloud_cover:
+            type: integer
+            description: Cloud cover percentage
+      daily:
+        type: array
+        items:
+          type: object
+          properties:
+            date:
+              type: string
+            temperature_max:
+              type: number
+            temperature_min:
+              type: number
+            precipitation_sum:
+              type: number
+            weather_code:
+              type: integer
+            weather_description:
+              type: string
+            sunrise:
+              type: string
+            sunset:
+              type: string
+
+providers:
+  primary:
+    service: open_meteo
+    cost_per_call: 0.0
+    timeout: 30
+    config:
+      endpoint: https://api.open-meteo.com/v1/forecast
+      method: GET
+      param_map:
+        latitude: latitude
+        longitude: longitude
+        forecast_days: forecast_days
+      static_params:
+        current: temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m
+        daily: temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code,sunrise,sunset
+        timezone: auto
+
+cache:
+  strategy: exact
+  ttl: 900  # 15 min - weather updates frequently
+
+auth:
+  required: false
+
+metadata:
+  category: utility
+  tags: [weather, forecast, climate, temperature, utility]
+  cost_category: free
+  execution_time: fast
+  read_only: true

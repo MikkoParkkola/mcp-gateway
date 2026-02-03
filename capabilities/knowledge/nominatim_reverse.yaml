@@ -1,0 +1,113 @@
+fulcrum: "1.0"
+name: nominatim_reverse
+description: Reverse geocode coordinates to address using OpenStreetMap Nominatim. Free, no API key required.
+
+schema:
+  input:
+    type: object
+    properties:
+      lat:
+        type: number
+        description: Latitude
+        examples:
+          - 60.1699
+          - 52.3676
+      lon:
+        type: number
+        description: Longitude
+        examples:
+          - 24.9384
+          - 4.9041
+      zoom:
+        type: integer
+        description: Level of detail (0-18, higher = more detail)
+        default: 18
+      language:
+        type: string
+        description: Preferred language for results
+        default: en
+    required:
+      - lat
+      - lon
+  output:
+    type: object
+    properties:
+      place_id:
+        type: integer
+      licence:
+        type: string
+      osm_type:
+        type: string
+      osm_id:
+        type: integer
+      lat:
+        type: string
+      lon:
+        type: string
+      display_name:
+        type: string
+      address:
+        type: object
+        properties:
+          house_number:
+            type: string
+          road:
+            type: string
+          neighbourhood:
+            type: string
+          suburb:
+            type: string
+          city:
+            type: string
+          state:
+            type: string
+          postcode:
+            type: string
+          country:
+            type: string
+          country_code:
+            type: string
+      boundingbox:
+        type: array
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://nominatim.openstreetmap.org
+      path: /reverse
+      method: GET
+      headers:
+        User-Agent: "Fulcrum-MCP/1.0 (https://github.com/MikkoParkkola/fulcrum)"
+        Accept: "application/json"
+      params:
+        lat: "{lat}"
+        lon: "{lon}"
+        zoom: "{zoom}"
+        format: "jsonv2"
+        accept-language: "{language}"
+        addressdetails: "1"
+
+cache:
+  strategy: exact
+  ttl: 604800
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: location
+  tags:
+    - geocoding
+    - reverse-geocoding
+    - maps
+    - openstreetmap
+    - nominatim
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 1 req/sec
+  docs: https://nominatim.org/release-docs/latest/api/Reverse/

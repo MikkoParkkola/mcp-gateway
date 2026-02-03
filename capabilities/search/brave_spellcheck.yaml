@@ -1,0 +1,74 @@
+fulcrum: "1.0"
+name: brave_spellcheck
+description: Intelligent spell checking for search queries (FREE on all plans)
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Query text to check for spelling errors
+      country:
+        type: string
+        description: Country code for localized spelling corrections
+        default: US
+      lang:
+        type: string
+        description: Language for spell checking (ISO 639-1)
+        default: en
+    required: [query]
+  output:
+    type: object
+    properties:
+      type:
+        type: string
+        enum: [spellcheck]
+      query:
+        type: object
+        properties:
+          original:
+            type: string
+            description: Original input query
+          altered:
+            type: string
+            description: Corrected query (same as original if no errors)
+          spellcheck_off:
+            type: boolean
+            description: Whether spellcheck was disabled
+
+providers:
+  primary:
+    service: brave
+    cost_per_call: 0
+    timeout: 5
+    config:
+      endpoint: https://api.search.brave.com/res/v1/spellcheck/search
+      method: GET
+      param_map:
+        query: q
+
+cache:
+  strategy: exact
+  ttl: 86400  # 24h - spelling corrections are stable
+
+auth:
+  required: true
+  type: api_key
+  key: BRAVE_API_KEY
+  header: X-Subscription-Token
+
+metadata:
+  category: search
+  tags: [search, spellcheck, correction, brave, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  notes: |
+    - FREE on all plans (no cost per request)
+    - Multi-language spell checking support
+    - Contextual corrections based on search patterns
+    - Use for "Did you mean?" functionality
+    - Best practice: Debounce requests (200-300ms)
+    - Best practice: Show suggestions gracefully without forcing corrections
+    - Best practice: Allow users to search original query if desired

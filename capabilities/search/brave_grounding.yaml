@@ -1,0 +1,120 @@
+fulcrum: "1.0"
+name: brave_grounding
+description: AI Grounding with web-verified answers and citations (SOTA 94.1% F1 on SimpleQA)
+
+schema:
+  input:
+    type: object
+    properties:
+      messages:
+        type: array
+        description: Chat messages in OpenAI format
+        items:
+          type: object
+          properties:
+            role:
+              type: string
+              enum: [system, user, assistant]
+            content:
+              type: string
+        minItems: 1
+      model:
+        type: string
+        description: Model identifier (use "brave")
+        default: brave
+      stream:
+        type: boolean
+        description: Stream response as messages
+        default: true
+      enable_research:
+        type: boolean
+        description: Allow multiple searches for thorough answers (slower, more accurate)
+        default: false
+    required: [messages]
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      object:
+        type: string
+        enum: [chat.completion]
+      choices:
+        type: array
+        items:
+          type: object
+          properties:
+            index:
+              type: integer
+            message:
+              type: object
+              properties:
+                role:
+                  type: string
+                content:
+                  type: string
+                  description: Stringified message (see response types below)
+            finish_reason:
+              type: string
+      # Metadata (in response header or final stream message):
+      usage:
+        type: object
+        properties:
+          num_searches:
+            type: integer
+            description: Number of web searches performed
+          input_tokens:
+            type: integer
+          output_tokens:
+            type: integer
+          cost:
+            type: number
+            description: Cost for this answer in dollars
+
+providers:
+  primary:
+    service: brave
+    cost_per_call: 0.004
+    timeout: 60
+    config:
+      endpoint: https://api.search.brave.com/res/v1/chat/completions
+      method: POST
+      content_type: application/json
+
+cache:
+  strategy: semantic
+  ttl: 1800
+  similarity_threshold: 0.90
+
+auth:
+  required: true
+  type: api_key
+  key: BRAVE_API_KEY
+  header: X-Subscription-Token
+
+metadata:
+  category: search
+  tags: [search, ai, grounding, citations, brave, factual, llm]
+  cost_category: cheap
+  execution_time: fast
+  read_only: true
+  notes: |
+    AI Grounding Pricing:
+    - $4/1000 web searches + $5/million tokens (input + output)
+    - Approximately $0.004 per simple query
+
+    Performance:
+    - SOTA 94.1% F1-score on SimpleQA benchmark
+    - Single search: median 24.2 seconds
+    - Research mode: up to 53 queries, 1000 pages, ~300 seconds for complex questions
+
+    Features:
+    - OpenAI SDK compatible endpoint
+    - Answers grounded in verifiable web sources
+    - Inline citations to source materials
+    - Research mode for thorough multi-search answers
+    - Powers Brave's "Answer with AI" (15M+ queries/day)
+
+    Rate Limit: 2 requests/second (contact for higher limits)
+
+    Best for: Factual Q&A, reducing hallucinations, grounded AI responses

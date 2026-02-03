@@ -1,0 +1,92 @@
+fulcrum: "1.0"
+name: sec_edgar_filings
+description: Get SEC EDGAR company filings - 10-K (annual), 10-Q (quarterly), 8-K (events), insider trades. Free official US government data.
+
+schema:
+  input:
+    type: object
+    properties:
+      cik:
+        type: string
+        description: SEC CIK number (10 digits, zero-padded) or ticker symbol
+        examples:
+          - "0000320193"
+          - "AAPL"
+          - "0001018724"
+      filing_type:
+        type: string
+        description: Filter by filing type
+        enum: ["10-K", "10-Q", "8-K", "4", "SC 13G", "DEF 14A", "S-1"]
+        examples:
+          - "10-K"
+          - "8-K"
+    required:
+      - cik
+  output:
+    type: object
+    properties:
+      cik:
+        type: string
+      entityType:
+        type: string
+      sic:
+        type: string
+        description: Industry code
+      sicDescription:
+        type: string
+      name:
+        type: string
+      tickers:
+        type: array
+      exchanges:
+        type: array
+      filings:
+        type: object
+        properties:
+          recent:
+            type: object
+            properties:
+              accessionNumber:
+                type: array
+              filingDate:
+                type: array
+              form:
+                type: array
+              primaryDocument:
+                type: array
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://data.sec.gov
+      path: /submissions/CIK{cik}.json
+      method: GET
+      headers:
+        User-Agent: "claude-elite/1.0 (mikko@example.com)"
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 3600  # 1 hour
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: finance
+  tags:
+    - sec
+    - edgar
+    - filings
+    - 10-k
+    - insider-trading
+    - us-companies
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 10 req/sec (be respectful)
+  docs: https://www.sec.gov/edgar/sec-api-documentation

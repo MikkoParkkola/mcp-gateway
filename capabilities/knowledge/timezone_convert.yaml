@@ -1,0 +1,75 @@
+fulcrum: "1.0"
+name: timezone_convert
+description: Convert time between timezones with DST awareness and get current time in any timezone
+
+schema:
+  input:
+    type: object
+    properties:
+      time:
+        type: string
+        description: "Time to convert in ISO 8601 format or natural language (default: now)"
+      from_timezone:
+        type: string
+        description: Source timezone (e.g., "Europe/Helsinki", "UTC", "America/New_York")
+      to_timezone:
+        type: string
+        description: Target timezone (e.g., "Asia/Tokyo", "UTC")
+      format:
+        type: string
+        description: "Output format (iso, human, unix) - default: human"
+    required: [to_timezone]
+  output:
+    type: object
+    properties:
+      original:
+        type: object
+        properties:
+          time:
+            type: string
+            description: Original time
+          timezone:
+            type: string
+            description: Original timezone
+          utc_offset:
+            type: string
+            description: UTC offset of original timezone
+      converted:
+        type: object
+        properties:
+          time:
+            type: string
+            description: Converted time
+          timezone:
+            type: string
+            description: Target timezone
+          utc_offset:
+            type: string
+            description: UTC offset of target timezone
+          is_dst:
+            type: boolean
+            description: Whether daylight saving time is active
+      difference:
+        type: string
+        description: Time difference between zones
+
+providers:
+  primary:
+    service: local
+    cost_per_call: 0.0
+    timeout: 1
+    config:
+      handler: timezone_convert
+
+cache:
+  strategy: exact  # Time conversion should be real-time
+
+auth:
+  required: false
+
+metadata:
+  category: utility
+  tags: [timezone, time, conversion, utility]
+  cost_category: free
+  execution_time: instant
+  read_only: true
