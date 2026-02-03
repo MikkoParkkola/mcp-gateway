@@ -1,0 +1,5 @@
+# Gitleaks ignore file
+# These are false positives - test data only
+
+# Fake API key used in unit tests for secret validation
+src/capability/parser.rs:generic-api-key:151

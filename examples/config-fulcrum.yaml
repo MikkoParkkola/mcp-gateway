@@ -16,8 +16,9 @@ capabilities:
   enabled: true
   name: fulcrum
   directories:
-    # Primary: Fulcrum capabilities repository
-    - /Users/mikko/github/fulcrum/capabilities
+    # Primary: Your fulcrum capabilities repository
+    # Clone from: https://github.com/anthropics/fulcrum
+    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}
     # Secondary: Local examples
     - capabilities
 

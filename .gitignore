@@ -14,10 +14,12 @@ Thumbs.db
 
 # Project specific
 /servers.yaml
+config.yaml
 *.log
 
 # User capabilities (may contain credential references)
-/capabilities/
+/capabilities/*.yaml
+!/capabilities/examples/
 !/capabilities/examples/
 
 # Build artifacts
