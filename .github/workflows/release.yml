@@ -16,14 +16,12 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: mcp-gateway-linux-x86_64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            artifact: mcp-gateway-linux-arm64
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: mcp-gateway-darwin-arm64
@@ -37,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
@@ -89,12 +87,7 @@ jobs:
           body: |
             ## Installation
 
-            ### Homebrew (macOS)
-            ```bash
-            brew install MikkoParkkola/tap/mcp-gateway
-            ```
-
-            ### Cargo
+            ### Cargo (Recommended)
             ```bash
             cargo install mcp-gateway
             ```
@@ -106,12 +99,28 @@ jobs:
             - `mcp-gateway-darwin-arm64` - macOS Apple Silicon (M1/M2/M3)
             - `mcp-gateway-darwin-x86_64` - macOS Intel
             - `mcp-gateway-linux-x86_64` - Linux x86_64
-            - `mcp-gateway-linux-arm64` - Linux ARM64
 
             ## Verify checksums
             ```bash
             sha256sum -c SHA256SUMS.txt
             ```
+
+            ## Quick Start
+            ```bash
+            # Create config file
+            cat > servers.yaml << 'EOF'
+            server:
+              port: 39400
+            meta_mcp:
+              enabled: true
+            backends: {}
+            EOF
+
+            # Start gateway
+            mcp-gateway --config servers.yaml
+            ```
+
+            See [README](https://github.com/MikkoParkkola/mcp-gateway#readme) for full documentation.
           files: |
             release/*
           draft: false
