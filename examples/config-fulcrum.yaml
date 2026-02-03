@@ -1,0 +1,30 @@
+# MCP Gateway Configuration - Fulcrum Integration
+# 
+# This config loads capabilities from the fulcrum repository,
+# providing 117+ REST API integrations via gateway_invoke.
+#
+# Usage: mcp-gateway --config examples/config-fulcrum.yaml
+
+server:
+  host: "127.0.0.1"
+  port: 39401
+  request_timeout: 30s
+  shutdown_timeout: 5s
+
+# Capability backend (direct REST API integration)
+capabilities:
+  enabled: true
+  name: fulcrum
+  directories:
+    # Primary: Fulcrum capabilities repository
+    - /Users/mikko/github/fulcrum/capabilities
+    # Secondary: Local examples
+    - capabilities
+
+backends:
+  beeper:
+    description: "Beeper unified messaging (WhatsApp, Signal, etc.)"
+    enabled: true
+    http_url: "http://localhost:23373/mcp"
+    streamable_http: true
+    timeout: 30s
