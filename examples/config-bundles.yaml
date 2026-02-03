@@ -1,6 +1,6 @@
 # MCP Gateway Configuration - Category-Based Loading
 #
-# Load specific capability categories instead of all 132+
+# Load specific capability categories instead of everything.
 # This keeps context lean and costs low.
 #
 # Usage: mcp-gateway --config examples/config-bundles.yaml
@@ -13,40 +13,55 @@ server:
 
 capabilities:
   enabled: true
-  name: fulcrum
+  name: my-gateway  # Your gateway name (appears in gateway_list_servers)
 
-  # Load only the categories you need:
+  # Load capabilities from directories:
   directories:
-    # === MINIMAL (everyday) ===
-    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/google    # Gmail, Calendar, Drive
-    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/misc      # Weather, utilities
+    # Option 1: Point to your capability YAML files
+    - ${CAPABILITIES_PATH:-./capabilities}
 
-    # === DEVELOPER (add these for dev work) ===
-    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/search    # Brave, Exa, Reddit
-    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/security  # Shodan, VirusTotal
-    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/llm       # LLM providers
+    # Option 2: Organize by category
+    # - ${CAPABILITIES_PATH:-./capabilities}/google    # Gmail, Calendar, Drive
+    # - ${CAPABILITIES_PATH:-./capabilities}/search    # Brave, Exa
+    # - ${CAPABILITIES_PATH:-./capabilities}/llm       # LLM providers
 
-    # === ANALYST (add for research) ===
-    # - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/finance # Stock APIs
-    # - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/news    # RSS, HackerNews
-
-    # === FULL (everything) ===
-    # - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}         # All 132 capabilities
-
-    # Local overrides (always last)
-    - capabilities
-
-# Categories available:
-# - finance (15): stock_quote, portfolio_*, stock_*
-# - google (16): gmail_*, calendar_*, drive_*, contacts_*
-# - health (5): oura_*, apple_health_*, tanita_*
-# - infrastructure (2): system monitoring
-# - llm (8): openai, anthropic, groq, ollama, etc.
-# - misc (28): weather, timezone, utilities
-# - ml (13): face_*, gliner_* (local ML)
-# - news (9): hackernews_*, folo_*, rss
-# - search (13): brave_*, exa_*, reddit_*
-# - security (15): shodan_*, virustotal_*, hibp_*
-# - travel (3): duffel_flights_*
-
+# Add MCP server backends here (if you also want to proxy MCP servers)
 backends: {}
+
+# =============================================================================
+# How Capabilities Work
+# =============================================================================
+#
+# Each .yaml file in your capabilities directory defines a REST API tool:
+#
+#   name: weather
+#   description: Get current weather for a location
+#   auth:
+#     type: api_key
+#     key: env:WEATHER_API_KEY
+#   rest:
+#     base_url: https://api.weather.com
+#     path: /v1/current
+#     method: GET
+#     params:
+#       lat: "{latitude}"
+#       lon: "{longitude}"
+#   input:
+#     type: object
+#     properties:
+#       latitude: { type: number, description: Latitude }
+#       longitude: { type: number, description: Longitude }
+#
+# The gateway:
+# 1. Loads YAML definitions
+# 2. Exposes them via Meta-MCP (gateway_list_tools, gateway_invoke)
+# 3. Injects credentials at runtime (never stored in definitions)
+# 4. Hot-reloads when files change
+#
+# Credential sources:
+#   - env:VAR_NAME     - Environment variable
+#   - keychain:name    - macOS Keychain entry
+#   - oauth:provider   - OAuth token from vault
+#
+# Auto-generate from OpenAPI:
+#   mcp-gateway convert openapi --input api.yaml --output capabilities/
