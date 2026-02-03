@@ -3,65 +3,151 @@
 //! This module provides a bridge between the capability system and the
 //! gateway's backend infrastructure, allowing capabilities to appear
 //! as tools via the Meta-MCP interface.
+//!
+//! # Hot Reload
+//!
+//! The backend supports hot-reloading of capabilities. When capability
+//! files change, call `reload()` to refresh the registry without
+//! restarting the gateway.
 
 use std::sync::Arc;
 
+use parking_lot::RwLock;
 use serde_json::Value;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use super::{CapabilityDefinition, CapabilityExecutor, CapabilityRegistry};
+use super::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
 use crate::protocol::{Content, Tool, ToolsCallResult};
 use crate::Result;
 
 /// Backend that exposes capabilities as MCP tools
+///
+/// This backend is thread-safe and supports hot-reloading via the
+/// `reload()` method.
 pub struct CapabilityBackend {
-    /// Capability registry
-    registry: CapabilityRegistry,
     /// Backend name (for gateway integration)
     pub name: String,
+    /// Executor for running capabilities
+    executor: Arc<CapabilityExecutor>,
+    /// Loaded capabilities (protected for hot-reload)
+    capabilities: RwLock<Vec<CapabilityDefinition>>,
+    /// Directories to load capabilities from
+    directories: RwLock<Vec<String>>,
 }
 
 impl CapabilityBackend {
     /// Create a new capability backend
     pub fn new(name: &str, executor: Arc<CapabilityExecutor>) -> Self {
         Self {
-            registry: CapabilityRegistry::new(executor),
             name: name.to_string(),
+            executor,
+            capabilities: RwLock::new(Vec::new()),
+            directories: RwLock::new(Vec::new()),
         }
     }
 
     /// Load capabilities from a directory
-    pub async fn load_from_directory(&mut self, path: &str) -> Result<usize> {
-        let count = self.registry.load_from_directory(path).await?;
+    pub async fn load_from_directory(&self, path: &str) -> Result<usize> {
+        let loaded = CapabilityLoader::load_directory(path).await?;
+        let count = loaded.len();
+
+        // Add directory to watch list
+        {
+            let mut dirs = self.directories.write();
+            if !dirs.contains(&path.to_string()) {
+                dirs.push(path.to_string());
+            }
+        }
+
+        // Add capabilities
+        {
+            let mut caps = self.capabilities.write();
+            for cap in loaded {
+                // Remove existing with same name (allows updates)
+                caps.retain(|c| c.name != cap.name);
+                caps.push(cap);
+            }
+        }
+
         info!(backend = %self.name, count = count, path = path, "Loaded capabilities");
         Ok(count)
     }
 
+    /// Reload all capabilities from registered directories
+    ///
+    /// This is the hot-reload entry point. It re-reads all capability
+    /// files from the registered directories and updates the registry.
+    pub async fn reload(&self) -> Result<usize> {
+        let dirs: Vec<String> = self.directories.read().clone();
+
+        if dirs.is_empty() {
+            debug!(backend = %self.name, "No directories to reload");
+            return Ok(0);
+        }
+
+        // Clear and reload all capabilities
+        let mut all_caps = Vec::new();
+        let mut total = 0;
+
+        for dir in &dirs {
+            match CapabilityLoader::load_directory(dir).await {
+                Ok(loaded) => {
+                    total += loaded.len();
+                    all_caps.extend(loaded);
+                }
+                Err(e) => {
+                    warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
+                }
+            }
+        }
+
+        // Atomic swap
+        {
+            let mut caps = self.capabilities.write();
+            *caps = all_caps;
+        }
+
+        info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
+        Ok(total)
+    }
+
     /// Get all tools (capability definitions as MCP tools)
     pub fn get_tools(&self) -> Vec<Tool> {
-        self.registry
-            .list()
+        self.capabilities
+            .read()
             .iter()
-            .filter_map(|name| self.registry.get(name))
             .map(CapabilityDefinition::to_mcp_tool)
             .collect()
     }
 
-    /// Get a specific capability
-    pub fn get(&self, name: &str) -> Option<&CapabilityDefinition> {
-        self.registry.get(name)
+    /// Get a specific capability by name
+    pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
+        self.capabilities
+            .read()
+            .iter()
+            .find(|c| c.name == name)
+            .cloned()
     }
 
     /// List all capability names
-    pub fn list(&self) -> Vec<&str> {
-        self.registry.list()
+    pub fn list(&self) -> Vec<String> {
+        self.capabilities
+            .read()
+            .iter()
+            .map(|c| c.name.clone())
+            .collect()
     }
 
     /// Execute a capability (call a tool)
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
 
-        let result = self.registry.execute(name, arguments).await?;
+        // Get capability (clone to release lock)
+        let capability = self
+            .get(name)
+            .ok_or_else(|| crate::Error::Config(format!("Capability not found: {}", name)))?;
+
+        let result = self.executor.execute(&capability, arguments).await?;
 
         // Format result as MCP tool response
         let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
@@ -77,26 +163,32 @@ impl CapabilityBackend {
 
     /// Check if a capability exists
     pub fn has_capability(&self, name: &str) -> bool {
-        self.registry.get(name).is_some()
+        self.capabilities.read().iter().any(|c| c.name == name)
     }
 
     /// Get capability count
     pub fn len(&self) -> usize {
-        self.registry.len()
+        self.capabilities.read().len()
     }
 
     /// Check if backend has no capabilities
     pub fn is_empty(&self) -> bool {
-        self.registry.is_empty()
+        self.capabilities.read().is_empty()
     }
 
     /// Get backend status
     pub fn status(&self) -> CapabilityBackendStatus {
+        let caps = self.capabilities.read();
         CapabilityBackendStatus {
             name: self.name.clone(),
-            capabilities_count: self.registry.len(),
-            capabilities: self.registry.list().iter().map(|s| s.to_string()).collect(),
+            capabilities_count: caps.len(),
+            capabilities: caps.iter().map(|c| c.name.clone()).collect(),
         }
+    }
+
+    /// Get watched directories
+    pub fn watched_directories(&self) -> Vec<String> {
+        self.directories.read().clone()
     }
 }
 

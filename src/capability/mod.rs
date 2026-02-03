@@ -36,6 +36,7 @@ mod executor;
 mod loader;
 mod openapi;
 mod parser;
+mod watcher;
 
 pub use backend::{CapabilityBackend, CapabilityBackendStatus};
 pub use definition::*;
@@ -43,6 +44,7 @@ pub use executor::CapabilityExecutor;
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
+pub use watcher::CapabilityWatcher;
 
 use crate::Result;
 use std::collections::HashMap;

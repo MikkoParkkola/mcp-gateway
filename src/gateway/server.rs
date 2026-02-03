@@ -11,7 +11,7 @@ use super::meta_mcp::MetaMcp;
 use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
 use crate::backend::{Backend, BackendRegistry};
-use crate::capability::{CapabilityBackend, CapabilityExecutor};
+use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
 use crate::{Error, Result};
 
@@ -68,10 +68,11 @@ impl Gateway {
         let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&self.backends)));
 
         // Load capabilities if enabled
-        if self.config.capabilities.enabled {
+        let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
             let executor = Arc::new(CapabilityExecutor::new());
-            let mut cap_backend =
-                CapabilityBackend::new(&self.config.capabilities.name, executor);
+            let cap_backend = Arc::new(
+                CapabilityBackend::new(&self.config.capabilities.name, executor)
+            );
 
             let mut total_caps = 0;
             for dir in &self.config.capabilities.directories {
@@ -93,9 +94,28 @@ impl Gateway {
                     name = %self.config.capabilities.name,
                     "Capability backend ready"
                 );
-                meta_mcp.set_capabilities(Arc::new(cap_backend));
             }
-        }
+
+            // Start file watcher for hot-reload
+            let watcher = match CapabilityWatcher::start(
+                Arc::clone(&cap_backend),
+                shutdown_tx.subscribe(),
+            ) {
+                Ok(w) => {
+                    info!("Capability hot-reload enabled");
+                    Some(w)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to start capability watcher, hot-reload disabled");
+                    None
+                }
+            };
+
+            meta_mcp.set_capabilities(cap_backend);
+            watcher
+        } else {
+            None
+        };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&self.backends),
