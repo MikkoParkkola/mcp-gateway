@@ -2,7 +2,7 @@
 //!
 //! These types map directly to the YAML capability definition format.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
 /// A capability definition describing how to call a REST API
@@ -24,8 +24,9 @@ pub struct CapabilityDefinition {
     #[serde(default)]
     pub schema: SchemaDefinition,
 
-    /// Provider configurations (primary, fallback, etc.)
-    pub providers: HashMap<String, ProviderConfig>,
+    /// Provider configurations
+    #[serde(deserialize_with = "deserialize_providers")]
+    pub providers: ProvidersConfig,
 
     /// Authentication configuration
     #[serde(default)]
@@ -38,6 +39,84 @@ pub struct CapabilityDefinition {
     /// Metadata for categorization and discovery
     #[serde(default)]
     pub metadata: CapabilityMetadata,
+}
+
+/// Provider configurations supporting both named and fallback arrays
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ProvidersConfig {
+    /// Named providers (primary, secondary, etc.)
+    pub named: HashMap<String, ProviderConfig>,
+    /// Fallback providers (ordered list)
+    pub fallback: Vec<ProviderConfig>,
+}
+
+impl ProvidersConfig {
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.named.is_empty() && self.fallback.is_empty()
+    }
+
+    /// Check if contains a key
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.named.contains_key(key)
+    }
+
+    /// Get a named provider
+    pub fn get(&self, key: &str) -> Option<&ProviderConfig> {
+        self.named.get(key)
+    }
+}
+
+/// Custom deserializer for providers that handles both formats:
+/// - Standard: { primary: {...}, secondary: {...} }
+/// - With fallback array: { primary: {...}, fallback: [{...}, {...}] }
+fn deserialize_providers<'de, D>(deserializer: D) -> Result<ProvidersConfig, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{MapAccess, Visitor};
+    use std::fmt;
+
+    struct ProvidersVisitor;
+
+    impl<'de> Visitor<'de> for ProvidersVisitor {
+        type Value = ProvidersConfig;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a map of provider configurations")
+        }
+
+        fn visit_map<M>(self, mut map: M) -> Result<ProvidersConfig, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            let mut named = HashMap::new();
+            let mut fallback = Vec::new();
+
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "fallback" {
+                    // Try to deserialize as array first, then as single provider
+                    let value: serde_json::Value = map.next_value()?;
+                    if let Some(arr) = value.as_array() {
+                        for item in arr {
+                            if let Ok(provider) = serde_json::from_value(item.clone()) {
+                                fallback.push(provider);
+                            }
+                        }
+                    } else if let Ok(provider) = serde_json::from_value(value) {
+                        fallback.push(provider);
+                    }
+                } else {
+                    let provider: ProviderConfig = map.next_value()?;
+                    named.insert(key, provider);
+                }
+            }
+
+            Ok(ProvidersConfig { named, fallback })
+        }
+    }
+
+    deserializer.deserialize_map(ProvidersVisitor)
 }
 
 fn default_version() -> String {
@@ -249,6 +328,11 @@ impl CapabilityDefinition {
         self.providers.get("primary")
     }
 
+    /// Get all fallback providers
+    pub fn fallback_providers(&self) -> &[ProviderConfig] {
+        &self.providers.fallback
+    }
+
     /// Check if caching is enabled
     pub fn is_cacheable(&self) -> bool {
         self.cache.ttl > 0 && !self.cache.strategy.is_empty() && self.cache.strategy != "none"
@@ -273,7 +357,7 @@ mod tests {
             name: "test_tool".to_string(),
             description: "A test tool".to_string(),
             schema: SchemaDefinition::default(),
-            providers: HashMap::new(),
+            providers: ProvidersConfig::default(),
             auth: AuthConfig::default(),
             cache: CacheConfig::default(),
             metadata: CapabilityMetadata::default(),
@@ -282,5 +366,27 @@ mod tests {
         let tool = cap.to_mcp_tool();
         assert_eq!(tool.name, "test_tool");
         assert_eq!(tool.description, Some("A test tool".to_string()));
+    }
+
+    #[test]
+    fn test_providers_with_fallback_array() {
+        let yaml = r#"
+primary:
+  service: openai
+  config:
+    endpoint: https://api.openai.com/v1/chat
+fallback:
+  - service: anthropic
+    config:
+      endpoint: https://api.anthropic.com/v1/messages
+  - service: groq
+    config:
+      endpoint: https://api.groq.com/v1/chat
+"#;
+        let providers: ProvidersConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(providers.named.contains_key("primary"));
+        assert_eq!(providers.fallback.len(), 2);
+        assert_eq!(providers.fallback[0].service, "anthropic");
+        assert_eq!(providers.fallback[1].service, "groq");
     }
 }
