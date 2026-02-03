@@ -137,10 +137,19 @@ impl CapabilityExecutor {
         let headers = self.build_headers(config, &capability.auth, params).await?;
         request = request.headers(headers);
 
-        // Add query parameters
+        // Add query parameters (from config.params with substitution)
         if !config.params.is_empty() {
             let query_params = self.substitute_params(&config.params, params)?;
             request = request.query(&query_params);
+        }
+
+        // Add query parameters from param_map (maps input params to API params)
+        // e.g., param_map: { query: q } means input "query" becomes API param "q"
+        if !config.param_map.is_empty() {
+            let mapped_params = self.map_params(&config.param_map, params)?;
+            if !mapped_params.is_empty() {
+                request = request.query(&mapped_params);
+            }
         }
 
         // Add body for POST/PUT
@@ -163,25 +172,30 @@ impl CapabilityExecutor {
 
     /// Build URL with path parameter substitution
     fn build_url(&self, config: &RestConfig, params: &Value) -> Result<String> {
-        let mut path = config.path.clone();
+        // Use endpoint if set, otherwise combine base_url + path
+        let mut url = if config.uses_endpoint() {
+            config.endpoint.clone()
+        } else {
+            format!("{}{}", config.base_url, config.path)
+        };
 
         // Substitute path parameters like {id}
         if let Value::Object(map) = params {
             for (key, value) in map {
                 let placeholder = format!("{{{}}}", key);
-                if path.contains(&placeholder) {
+                if url.contains(&placeholder) {
                     let value_str = match value {
                         Value::String(s) => s.clone(),
                         Value::Number(n) => n.to_string(),
                         Value::Bool(b) => b.to_string(),
                         _ => serde_json::to_string(value).unwrap_or_default(),
                     };
-                    path = path.replace(&placeholder, &value_str);
+                    url = url.replace(&placeholder, &value_str);
                 }
             }
         }
 
-        Ok(format!("{}{}", config.base_url, path))
+        Ok(url)
     }
 
     /// Build headers with credential injection
@@ -262,13 +276,15 @@ impl CapabilityExecutor {
     /// This method resolves credential references to actual values.
     /// Supported formats:
     /// - `keychain:name` - macOS Keychain
-    /// - `env:VAR_NAME` - Environment variable
+    /// - `env:VAR_NAME` - Environment variable (explicit)
     /// - `oauth:provider` - OAuth token from vault
+    /// - `{env.VAR_NAME}` - Template format
+    /// - `VAR_NAME` - Implicit env var (fulcrum compatibility)
     async fn fetch_credential(&self, auth: &super::AuthConfig) -> Result<String> {
         let key = &auth.key;
 
         if key.starts_with("env:") {
-            // Environment variable
+            // Explicit environment variable
             let var_name = &key[4..];
             std::env::var(var_name).map_err(|_| {
                 Error::Config(format!(
@@ -295,12 +311,28 @@ impl CapabilityExecutor {
             })
         } else if key.is_empty() {
             Err(Error::Config("No credential key configured".to_string()))
+        } else if Self::looks_like_env_var_name(key) {
+            // Fulcrum compatibility: bare name like BRAVE_API_KEY is treated as env var
+            std::env::var(key).map_err(|_| {
+                Error::Config(format!(
+                    "Environment variable '{}' not set. Set it with: export {}=your_key",
+                    key, key
+                ))
+            })
         } else {
             Err(Error::Config(format!(
-                "Unknown credential format: {}. Use keychain:, env:, or oauth:",
-                key.chars().take(10).collect::<String>()
+                "Unknown credential format: {}. Use keychain:, env:, oauth:, or set environment variable",
+                key.chars().take(20).collect::<String>()
             )))
         }
+    }
+
+    /// Check if a string looks like an environment variable name
+    /// (uppercase letters, digits, underscores, starts with letter)
+    fn looks_like_env_var_name(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+            && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
     }
 
     /// Fetch OAuth token from vault
@@ -483,6 +515,35 @@ impl CapabilityExecutor {
             // Skip empty values
             if !value.is_empty() && value != "null" {
                 result.push((key.clone(), value));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Map input parameters to API parameters using param_map
+    /// e.g., param_map: { query: q } maps input "query" to API param "q"
+    fn map_params(
+        &self,
+        param_map: &std::collections::HashMap<String, String>,
+        params: &Value,
+    ) -> Result<Vec<(String, String)>> {
+        let mut result = Vec::new();
+
+        if let Value::Object(map) = params {
+            for (input_name, api_name) in param_map {
+                if let Some(value) = map.get(input_name) {
+                    let value_str = match value {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => continue, // Skip null values
+                        _ => serde_json::to_string(value).unwrap_or_default(),
+                    };
+                    if !value_str.is_empty() {
+                        result.push((api_name.clone(), value_str));
+                    }
+                }
             }
         }
 

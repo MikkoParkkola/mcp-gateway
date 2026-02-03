@@ -95,6 +95,11 @@ pub struct RestConfig {
     #[serde(default)]
     pub path: String,
 
+    /// Full endpoint URL (alternative to base_url + path)
+    /// Takes precedence if set
+    #[serde(default)]
+    pub endpoint: String,
+
     /// HTTP method
     #[serde(default = "default_method")]
     pub method: String,
@@ -107,6 +112,10 @@ pub struct RestConfig {
     #[serde(default)]
     pub params: HashMap<String, String>,
 
+    /// Parameter name mapping (e.g., query -> q for search APIs)
+    #[serde(default)]
+    pub param_map: HashMap<String, String>,
+
     /// Request body template (for POST/PUT)
     #[serde(default)]
     pub body: Option<serde_json::Value>,
@@ -114,6 +123,23 @@ pub struct RestConfig {
     /// Response transformation (jq-like path)
     #[serde(default)]
     pub response_path: Option<String>,
+}
+
+impl RestConfig {
+    /// Get the effective base URL (from endpoint or base_url)
+    pub fn effective_base_url(&self) -> &str {
+        if !self.endpoint.is_empty() {
+            // Extract base from endpoint (everything before the path)
+            &self.endpoint
+        } else {
+            &self.base_url
+        }
+    }
+
+    /// Check if this uses endpoint style (full URL with path params)
+    pub fn uses_endpoint(&self) -> bool {
+        !self.endpoint.is_empty()
+    }
 }
 
 fn default_method() -> String {

@@ -74,7 +74,12 @@ fn validate_no_secrets(auth: &super::AuthConfig) -> Result<()> {
         let valid_prefixes = ["keychain:", "env:", "oauth:", "{env."];
         let is_reference = valid_prefixes.iter().any(|p| auth.key.starts_with(p));
 
-        if !is_reference && !auth.key.contains('{') {
+        // Check if it looks like a bare environment variable name (UPPERCASE_WITH_UNDERSCORES)
+        let looks_like_env_var = !auth.key.is_empty()
+            && auth.key.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+            && auth.key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+
+        if !is_reference && !looks_like_env_var && !auth.key.contains('{') {
             // Looks like a raw secret - reject it
             if auth.key.len() > 20 || auth.key.contains("sk-") || auth.key.contains("token") {
                 return Err(Error::Config(
