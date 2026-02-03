@@ -179,10 +179,7 @@ impl HttpTransport {
         use futures::StreamExt;
 
         let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::ACCEPT,
-            "text/event-stream".parse().unwrap(),
-        );
+        headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
         headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
 
         // Add OAuth token if available
@@ -250,9 +247,9 @@ impl HttpTransport {
                         debug!(endpoint = %data, "Received message endpoint from SSE");
 
                         // Extract session_id from the endpoint URL if present
-                        if let Ok(url) = Url::parse(data).or_else(|_| {
-                            Url::parse(&format!("http://localhost{data}"))
-                        }) {
+                        if let Ok(url) = Url::parse(data)
+                            .or_else(|_| Url::parse(&format!("http://localhost{data}")))
+                        {
                             for (key, value) in url.query_pairs() {
                                 if key == "session_id" {
                                     *self.session_id.write() = Some(value.to_string());
@@ -268,10 +265,10 @@ impl HttpTransport {
         }
 
         Err(Error::Transport(
-            "SSE stream ended without endpoint event. Server may not support MCP SSE protocol.".to_string()
+            "SSE stream ended without endpoint event. Server may not support MCP SSE protocol."
+                .to_string(),
         ))
     }
-
 
     /// Resolve a potentially relative message URL against the SSE URL
     fn resolve_message_url(&self, endpoint: &str) -> Result<String> {
@@ -382,7 +379,9 @@ impl HttpTransport {
 
         if content_type.contains("text/event-stream") {
             // Parse SSE response - extract JSON from "data:" line
-            let text = response.text().await
+            let text = response
+                .text()
+                .await
                 .map_err(|e| Error::Transport(format!("Failed to read SSE response: {e}")))?;
 
             // Find the data line and extract JSON

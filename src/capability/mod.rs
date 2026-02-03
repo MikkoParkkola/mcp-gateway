@@ -82,7 +82,10 @@ impl CapabilityRegistry {
 
     /// List all capability names
     pub fn list(&self) -> Vec<&str> {
-        self.capabilities.keys().map(std::string::String::as_str).collect()
+        self.capabilities
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 
     /// Execute a capability

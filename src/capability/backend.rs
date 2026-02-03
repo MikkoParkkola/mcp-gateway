@@ -17,8 +17,8 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use super::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
-use crate::protocol::{Content, Tool, ToolsCallResult};
 use crate::Result;
+use crate::protocol::{Content, Tool, ToolsCallResult};
 
 /// Backend that exposes capabilities as MCP tools
 ///

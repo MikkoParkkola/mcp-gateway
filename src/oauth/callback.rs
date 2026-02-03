@@ -65,7 +65,8 @@ pub struct CallbackServer {
 impl CallbackServer {
     /// Wait for the callback to be received
     pub async fn wait_for_callback(self) -> Result<(String, CallbackResult)> {
-        let result = self.receiver
+        let result = self
+            .receiver
             .await
             .map_err(|_| Error::Internal("Callback channel closed unexpectedly".to_string()))?;
 
@@ -80,14 +81,18 @@ impl CallbackServer {
 ///
 /// This allows the caller to get the callback URL before waiting for the callback,
 /// which is necessary to build the authorization URL correctly.
-pub async fn start_callback_server(expected_state: String, port: Option<u16>) -> Result<CallbackServer> {
+pub async fn start_callback_server(
+    expected_state: String,
+    port: Option<u16>,
+) -> Result<CallbackServer> {
     // Find an available port
     let addr: SocketAddr = format!("127.0.0.1:{}", port.unwrap_or(0)).parse().unwrap();
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|e| Error::Internal(format!("Failed to bind callback server: {e}")))?;
 
-    let actual_addr = listener.local_addr()
+    let actual_addr = listener
+        .local_addr()
         .map_err(|e| Error::Internal(format!("Failed to get callback server address: {e}")))?;
 
     let callback_url = format!("http://127.0.0.1:{}/oauth/callback", actual_addr.port());
@@ -120,7 +125,6 @@ pub async fn start_callback_server(expected_state: String, port: Option<u16>) ->
     })
 }
 
-
 /// Handle the OAuth callback
 async fn handle_callback(
     State(state): State<Arc<tokio::sync::Mutex<CallbackState>>>,
@@ -133,7 +137,9 @@ async fn handle_callback(
     // Check for errors
     if let Some(error) = params.error {
         let description = params.error_description.unwrap_or_default();
-        let result = Err(Error::Internal(format!("OAuth error: {error} - {description}")));
+        let result = Err(Error::Internal(format!(
+            "OAuth error: {error} - {description}"
+        )));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
@@ -144,23 +150,31 @@ async fn handle_callback(
 
     // Validate state
     if params.state.as_deref() != Some(&state.expected_state) {
-        let result = Err(Error::Internal("State mismatch - possible CSRF attack".to_string()));
+        let result = Err(Error::Internal(
+            "State mismatch - possible CSRF attack".to_string(),
+        ));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
         return Html(
-            "<html><body><h1>Authorization Failed</h1><p>State mismatch</p></body></html>".to_string()
+            "<html><body><h1>Authorization Failed</h1><p>State mismatch</p></body></html>"
+                .to_string(),
         );
     }
 
     // Extract code
-    let code = if let Some(c) = params.code { c } else {
-        let result = Err(Error::Internal("No authorization code received".to_string()));
+    let code = if let Some(c) = params.code {
+        c
+    } else {
+        let result = Err(Error::Internal(
+            "No authorization code received".to_string(),
+        ));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
         return Html(
-            "<html><body><h1>Authorization Failed</h1><p>No code received</p></body></html>".to_string()
+            "<html><body><h1>Authorization Failed</h1><p>No code received</p></body></html>"
+                .to_string(),
         );
     };
 

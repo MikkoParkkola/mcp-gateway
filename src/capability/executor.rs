@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
     Client, Method, Response,
+    header::{HeaderMap, HeaderName, HeaderValue},
 };
 use serde_json::Value;
 use tracing::debug;
@@ -81,11 +81,7 @@ impl CapabilityExecutor {
     }
 
     /// Execute a capability with the given parameters
-    pub async fn execute(
-        &self,
-        capability: &CapabilityDefinition,
-        params: Value,
-    ) -> Result<Value> {
+    pub async fn execute(&self, capability: &CapabilityDefinition, params: Value) -> Result<Value> {
         let provider = capability
             .primary_provider()
             .ok_or_else(|| Error::Config("No primary provider configured".to_string()))?;
@@ -100,15 +96,12 @@ impl CapabilityExecutor {
         }
 
         // Build and execute request
-        let response = self
-            .execute_provider(capability, provider, &params)
-            .await?;
+        let response = self.execute_provider(capability, provider, &params).await?;
 
         // Cache response if configured
         if capability.is_cacheable() {
             let cache_key = self.build_cache_key(capability, &params);
-            self.cache
-                .set(&cache_key, &response, capability.cache.ttl);
+            self.cache.set(&cache_key, &response, capability.cache.ttl);
         }
 
         Ok(response)
@@ -255,12 +248,15 @@ impl CapabilityExecutor {
             .parse()
             .map_err(|_| Error::Config("Invalid auth header name".to_string()))?;
 
-        let prefix = auth.prefix.as_deref().unwrap_or(match auth.auth_type.as_str() {
-            "oauth" | "bearer" => "Bearer",
-            "basic" => "Basic",
-            "api_key" => "",
-            _ => "Bearer",
-        });
+        let prefix = auth
+            .prefix
+            .as_deref()
+            .unwrap_or(match auth.auth_type.as_str() {
+                "oauth" | "bearer" => "Bearer",
+                "basic" => "Basic",
+                "api_key" => "",
+                _ => "Bearer",
+            });
 
         let header_value = if prefix.is_empty() {
             credential
@@ -308,11 +304,8 @@ impl CapabilityExecutor {
         } else if key.starts_with("{env.") && key.ends_with('}') {
             // Template format: {env.VAR_NAME}
             let var_name = &key[5..key.len() - 1];
-            std::env::var(var_name).map_err(|_| {
-                Error::Config(format!(
-                    "Environment variable '{var_name}' not set"
-                ))
-            })
+            std::env::var(var_name)
+                .map_err(|_| Error::Config(format!("Environment variable '{var_name}' not set")))
         } else if key.is_empty() {
             Err(Error::Config("No credential key configured".to_string()))
         } else if Self::looks_like_env_var_name(key) {
@@ -335,7 +328,8 @@ impl CapabilityExecutor {
     fn looks_like_env_var_name(s: &str) -> bool {
         !s.is_empty()
             && s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-            && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            && s.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
     }
 
     /// Fetch OAuth token from vault
@@ -399,9 +393,7 @@ impl CapabilityExecutor {
             .map_err(|e| Error::Config(format!("Failed to access keychain: {e}")))?;
 
         if output.status.success() {
-            let credential = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let credential = String::from_utf8_lossy(&output.stdout).trim().to_string();
             Ok(credential)
         } else {
             Err(Error::Config(format!(
@@ -422,7 +414,10 @@ impl CapabilityExecutor {
         let status = response.status();
 
         if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(Error::Protocol(format!(
                 "API returned {}: {}",
                 status,
@@ -572,8 +567,10 @@ impl CapabilityExecutor {
                 Ok(Value::Object(result))
             }
             Value::Array(arr) => {
-                let result: Result<Vec<Value>> =
-                    arr.iter().map(|v| self.substitute_value(v, params)).collect();
+                let result: Result<Vec<Value>> = arr
+                    .iter()
+                    .map(|v| self.substitute_value(v, params))
+                    .collect();
                 Ok(Value::Array(result?))
             }
             _ => Ok(template.clone()),

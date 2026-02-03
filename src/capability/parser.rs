@@ -5,7 +5,8 @@ use crate::{Error, Result};
 
 /// Parse a capability definition from YAML content
 pub fn parse_capability(content: &str) -> Result<CapabilityDefinition> {
-    serde_yaml::from_str(content).map_err(|e| Error::Config(format!("Failed to parse capability YAML: {e}")))
+    serde_yaml::from_str(content)
+        .map_err(|e| Error::Config(format!("Failed to parse capability YAML: {e}")))
 }
 
 /// Parse a capability definition from a file
@@ -76,8 +77,15 @@ fn validate_no_secrets(auth: &super::AuthConfig) -> Result<()> {
 
         // Check if it looks like a bare environment variable name (UPPERCASE_WITH_UNDERSCORES)
         let looks_like_env_var = !auth.key.is_empty()
-            && auth.key.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-            && auth.key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+            && auth
+                .key
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase())
+            && auth
+                .key
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
 
         if !is_reference && !looks_like_env_var && !auth.key.contains('{') {
             // Looks like a raw secret - reject it

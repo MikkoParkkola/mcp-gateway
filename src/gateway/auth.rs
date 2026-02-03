@@ -10,15 +10,19 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use axum::{
+    Json,
     body::Body,
     extract::State,
     http::{Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
-    Json,
 };
 use dashmap::DashMap;
-use governor::{Quota, RateLimiter, clock::DefaultClock, state::{InMemoryState, NotKeyed}};
+use governor::{
+    Quota, RateLimiter,
+    clock::DefaultClock,
+    state::{InMemoryState, NotKeyed},
+};
 use serde_json::json;
 use tracing::{debug, warn};
 
@@ -63,10 +67,7 @@ impl ResolvedAuthConfig {
         // Log if auto-generated token
         if config.bearer_token.as_deref() == Some("auto") {
             if let Some(ref token) = bearer_token {
-                tracing::info!(
-                    "Auto-generated bearer token: {}",
-                    token
-                );
+                tracing::info!("Auto-generated bearer token: {}", token);
             }
         }
 
@@ -196,7 +197,10 @@ pub async fn auth_middleware(
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")));
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        });
 
     match token {
         Some(token) => {
@@ -218,7 +222,9 @@ pub async fn auth_middleware(
         }
         None => {
             warn!(path = %path, "Missing Authorization header");
-            unauthorized_response("Missing Authorization header. Use: Authorization: Bearer <token>")
+            unauthorized_response(
+                "Missing Authorization header. Use: Authorization: Bearer <token>",
+            )
         }
     }
 }
@@ -362,7 +368,7 @@ mod tests {
         let client_unrestricted = AuthenticatedClient {
             name: "unrestricted".to_string(),
             rate_limit: 0,
-            backends: vec![],  // empty = all access
+            backends: vec![], // empty = all access
         };
 
         let client_wildcard = AuthenticatedClient {

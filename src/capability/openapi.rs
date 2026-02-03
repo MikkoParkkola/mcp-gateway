@@ -240,14 +240,19 @@ impl OpenApiConverter {
 
     /// Convert a parsed `OpenAPI` spec to capabilities
     fn convert_spec(&self, spec: &OpenApiSpec) -> Result<Vec<GeneratedCapability>> {
-        let version = spec.openapi.as_deref().or(spec.swagger.as_deref()).unwrap_or("unknown");
+        let version = spec
+            .openapi
+            .as_deref()
+            .or(spec.swagger.as_deref())
+            .unwrap_or("unknown");
         info!(title = %spec.info.title, version = %version, "Converting OpenAPI spec");
 
         // Get base URL
         let base_url = spec
             .servers
             .as_ref()
-            .and_then(|s| s.first()).map_or_else(|| "https://api.example.com".to_string(), |s| s.url.clone());
+            .and_then(|s| s.first())
+            .map_or_else(|| "https://api.example.com".to_string(), |s| s.url.clone());
 
         // Detect auth requirements
         let auth_required = spec
@@ -323,7 +328,13 @@ impl OpenApiConverter {
     fn format_name(&self, raw: &str) -> String {
         let cleaned = raw
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect::<String>()
             .to_lowercase();
 
@@ -361,7 +372,10 @@ impl OpenApiConverter {
 
         // Add parameters
         for param in params {
-            let schema = param.schema.clone().unwrap_or(serde_json::json!({"type": "string"}));
+            let schema = param
+                .schema
+                .clone()
+                .unwrap_or(serde_json::json!({"type": "string"}));
             let mut prop = if schema.is_object() {
                 schema.as_object().cloned().unwrap_or_default()
             } else {
@@ -443,16 +457,10 @@ impl OpenApiConverter {
         auth_required: bool,
     ) -> String {
         // Build header params
-        let header_params: Vec<_> = params
-            .iter()
-            .filter(|p| p.location == "header")
-            .collect();
+        let header_params: Vec<_> = params.iter().filter(|p| p.location == "header").collect();
 
         // Build query params
-        let query_params: Vec<_> = params
-            .iter()
-            .filter(|p| p.location == "query")
-            .collect();
+        let query_params: Vec<_> = params.iter().filter(|p| p.location == "query").collect();
 
         // Check for body
         let has_body = method.eq_ignore_ascii_case("post")
@@ -478,11 +486,17 @@ impl OpenApiConverter {
         // Schema
         yaml.push_str("schema:\n");
         yaml.push_str("  input:\n");
-        for line in serde_yaml::to_string(input_schema).unwrap_or_default().lines() {
+        for line in serde_yaml::to_string(input_schema)
+            .unwrap_or_default()
+            .lines()
+        {
             yaml.push_str(&format!("    {line}\n"));
         }
         yaml.push_str("  output:\n");
-        for line in serde_yaml::to_string(output_schema).unwrap_or_default().lines() {
+        for line in serde_yaml::to_string(output_schema)
+            .unwrap_or_default()
+            .lines()
+        {
             yaml.push_str(&format!("    {line}\n"));
         }
         yaml.push('\n');
@@ -502,10 +516,7 @@ impl OpenApiConverter {
         if !header_params.is_empty() {
             yaml.push_str("      headers:\n");
             for param in &header_params {
-                yaml.push_str(&format!(
-                    "        {}: \"{{{}}}\"\n",
-                    param.name, param.name
-                ));
+                yaml.push_str(&format!("        {}: \"{{{}}}\"\n", param.name, param.name));
             }
         }
 
@@ -513,10 +524,7 @@ impl OpenApiConverter {
         if !query_params.is_empty() {
             yaml.push_str("      params:\n");
             for param in &query_params {
-                yaml.push_str(&format!(
-                    "        {}: \"{{{}}}\"\n",
-                    param.name, param.name
-                ));
+                yaml.push_str(&format!("        {}: \"{{{}}}\"\n", param.name, param.name));
             }
         }
 

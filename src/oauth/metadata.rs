@@ -96,7 +96,10 @@ where
 impl AuthorizationServerMetadata {
     /// Discover authorization server metadata from a base URL
     pub async fn discover(client: &Client, base_url: &str) -> Result<Self> {
-        let url = format!("{}/.well-known/oauth-authorization-server", base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/.well-known/oauth-authorization-server",
+            base_url.trim_end_matches('/')
+        );
         debug!(url = %url, "Discovering OAuth authorization server metadata");
 
         let response = client
@@ -123,21 +126,23 @@ impl AuthorizationServerMetadata {
 
     /// Check if PKCE is supported (S256 method)
     pub fn supports_pkce(&self) -> bool {
-        self.code_challenge_methods_supported.contains(&"S256".to_string())
+        self.code_challenge_methods_supported
+            .contains(&"S256".to_string())
     }
 }
 
 impl ProtectedResourceMetadata {
     /// Discover protected resource metadata from a base URL
     pub async fn discover(client: &Client, base_url: &str) -> Result<Self> {
-        let url = format!("{}/.well-known/oauth-protected-resource", base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/.well-known/oauth-protected-resource",
+            base_url.trim_end_matches('/')
+        );
         debug!(url = %url, "Discovering OAuth protected resource metadata");
 
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to fetch protected resource metadata: {e}")))?;
+        let response = client.get(&url).send().await.map_err(|e| {
+            Error::Internal(format!("Failed to fetch protected resource metadata: {e}"))
+        })?;
 
         if !response.status().is_success() {
             return Err(Error::Internal(format!(
@@ -146,10 +151,9 @@ impl ProtectedResourceMetadata {
             )));
         }
 
-        let metadata: Self = response
-            .json()
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to parse protected resource metadata: {e}")))?;
+        let metadata: Self = response.json().await.map_err(|e| {
+            Error::Internal(format!("Failed to parse protected resource metadata: {e}"))
+        })?;
 
         debug!(resource = %metadata.resource, "Discovered protected resource");
         Ok(metadata)
@@ -157,16 +161,21 @@ impl ProtectedResourceMetadata {
 
     /// Get the first authorization server URL
     pub fn authorization_server(&self) -> Option<&str> {
-        self.authorization_servers.first().map(std::string::String::as_str)
+        self.authorization_servers
+            .first()
+            .map(std::string::String::as_str)
     }
 }
 
 /// Extract the base URL (scheme + host + port) from a full URL
 pub fn base_url(url: &str) -> Result<String> {
-    let parsed = Url::parse(url)
-        .map_err(|e| Error::Internal(format!("Invalid URL: {e}")))?;
+    let parsed = Url::parse(url).map_err(|e| Error::Internal(format!("Invalid URL: {e}")))?;
 
-    let mut base = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or("localhost"));
+    let mut base = format!(
+        "{}://{}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or("localhost")
+    );
 
     if let Some(port) = parsed.port() {
         base.push_str(&format!(":{port}"));
@@ -196,7 +205,13 @@ mod tests {
 
     #[test]
     fn test_base_url_extraction() {
-        assert_eq!(base_url("http://localhost:8080/api/v1").unwrap(), "http://localhost:8080");
-        assert_eq!(base_url("https://example.com/path").unwrap(), "https://example.com");
+        assert_eq!(
+            base_url("http://localhost:8080/api/v1").unwrap(),
+            "http://localhost:8080"
+        );
+        assert_eq!(
+            base_url("https://example.com/path").unwrap(),
+            "https://example.com"
+        );
     }
 }

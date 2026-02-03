@@ -41,7 +41,13 @@ fn default_token_type() -> String {
 
 impl TokenInfo {
     /// Create token info from OAuth token response
-    pub fn from_response(access_token: String, token_type: Option<String>, refresh_token: Option<String>, expires_in: Option<u64>, scope: Option<String>) -> Self {
+    pub fn from_response(
+        access_token: String,
+        token_type: Option<String>,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+        scope: Option<String>,
+    ) -> Self {
         let expires_at = expires_in.map(|secs| {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -210,13 +216,8 @@ mod tests {
     #[test]
     fn test_token_expiry() {
         // Token that expires in 1 hour
-        let token = TokenInfo::from_response(
-            "test_token".to_string(),
-            None,
-            None,
-            Some(3600),
-            None,
-        );
+        let token =
+            TokenInfo::from_response("test_token".to_string(), None, None, Some(3600), None);
         assert!(!token.is_expired());
 
         // Token that expired
@@ -227,13 +228,7 @@ mod tests {
 
     #[test]
     fn test_token_no_expiry() {
-        let token = TokenInfo::from_response(
-            "test_token".to_string(),
-            None,
-            None,
-            None,
-            None,
-        );
+        let token = TokenInfo::from_response("test_token".to_string(), None, None, None, None);
         assert!(!token.is_expired());
     }
 }

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 use tracing::{debug, error, info};
 
-use super::auth::{AuthenticatedClient, auth_middleware, ResolvedAuthConfig};
+use super::auth::{AuthenticatedClient, ResolvedAuthConfig, auth_middleware};
 use super::meta_mcp::MetaMcp;
 use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
@@ -43,11 +43,19 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .route("/health", get(health_handler))
-        .route("/mcp", post(meta_mcp_handler).get(mcp_sse_handler).delete(mcp_delete_handler))
+        .route(
+            "/mcp",
+            post(meta_mcp_handler)
+                .get(mcp_sse_handler)
+                .delete(mcp_delete_handler),
+        )
         .route("/mcp/{name}", post(backend_handler))
         .route("/mcp/{name}/{*path}", post(backend_handler))
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
-        .route("/sse", get(sse_deprecated_handler).post(sse_deprecated_handler))
+        .route(
+            "/sse",
+            get(sse_deprecated_handler).post(sse_deprecated_handler),
+        )
         // Authentication middleware (applied before other layers)
         .layer(middleware::from_fn_with_state(auth_config, auth_middleware))
         .layer(CatchPanicLayer::new())
@@ -74,8 +82,9 @@ async fn mcp_sse_handler(
                     "message": "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp"
                 },
                 "id": null
-            }))
-        ).into_response();
+            })),
+        )
+            .into_response();
     }
 
     // Check Accept header - must accept text/event-stream
@@ -89,8 +98,9 @@ async fn mcp_sse_handler(
             StatusCode::NOT_ACCEPTABLE,
             Json(json!({
                 "error": "Must accept text/event-stream for SSE notifications"
-            }))
-        ).into_response();
+            })),
+        )
+            .into_response();
     }
 
     // Get or create session - convert to owned strings for Rust 2024 lifetime rules
@@ -104,7 +114,9 @@ async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state.multiplexer.get_or_create_session(existing_session_id.as_deref());
+    let (session_id, _rx) = state
+        .multiplexer
+        .get_or_create_session(existing_session_id.as_deref());
 
     info!(session_id = %session_id, "Client connected to SSE stream");
 
@@ -129,18 +141,18 @@ async fn mcp_sse_handler(
         Some(sse) => {
             // Add session ID header to response
             let mut response = sse.into_response();
-            response.headers_mut().insert(
-                "mcp-session-id",
-                session_id.parse().unwrap(),
-            );
+            response
+                .headers_mut()
+                .insert("mcp-session-id", session_id.parse().unwrap());
             response
         }
         None => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
                 "error": "Failed to create SSE stream"
-            }))
-        ).into_response(),
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -150,9 +162,7 @@ async fn mcp_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let session_id = headers
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok());
+    let session_id = headers.get("mcp-session-id").and_then(|v| v.to_str().ok());
 
     match session_id {
         Some(id) if state.multiplexer.has_session(id) => {
@@ -164,19 +174,20 @@ async fn mcp_delete_handler(
             debug!(session_id = %id, "Session not found for DELETE");
             StatusCode::NOT_FOUND
         }
-        None => {
-            StatusCode::BAD_REQUEST
-        }
+        None => StatusCode::BAD_REQUEST,
     }
 }
 
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
 async fn sse_deprecated_handler() -> impl IntoResponse {
-    (StatusCode::GONE, Json(json!({
-        "error": "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
-        "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
-        "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
-    })))
+    (
+        StatusCode::GONE,
+        Json(json!({
+            "error": "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
+            "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
+            "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
+        })),
+    )
 }
 
 /// Health check handler
@@ -231,10 +242,7 @@ async fn meta_mcp_handler(
     // Handle notifications (no id) - return 202 Accepted with empty body
     if method.starts_with("notifications/") {
         debug!(notification = %method, "Handling notification");
-        return (
-            StatusCode::ACCEPTED,
-            Json(json!({})),
-        );
+        return (StatusCode::ACCEPTED, Json(json!({})));
     }
 
     // For requests, id is guaranteed to exist (checked in parse_request)
@@ -357,10 +365,7 @@ async fn backend_handler(
     if method.starts_with("notifications/") {
         // Forward notification to backend (fire and forget)
         let _ = backend.request(&method, params).await;
-        return (
-            StatusCode::ACCEPTED,
-            Json(json!({})),
-        );
+        return (StatusCode::ACCEPTED, Json(json!({})));
     }
 
     // For requests, id is guaranteed to exist
@@ -385,7 +390,9 @@ async fn backend_handler(
 
 /// Parse JSON-RPC request or notification
 /// Returns (Option<RequestId>, method, params) - id is None for notifications
-fn parse_request(value: &Value) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
+fn parse_request(
+    value: &Value,
+) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
     // Check jsonrpc version
     let jsonrpc = value.get("jsonrpc").and_then(|v| v.as_str());
     if jsonrpc != Some("2.0") {

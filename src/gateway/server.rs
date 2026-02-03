@@ -71,9 +71,10 @@ impl Gateway {
         // Load capabilities if enabled
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
             let executor = Arc::new(CapabilityExecutor::new());
-            let cap_backend = Arc::new(
-                CapabilityBackend::new(&self.config.capabilities.name, executor)
-            );
+            let cap_backend = Arc::new(CapabilityBackend::new(
+                &self.config.capabilities.name,
+                executor,
+            ));
 
             let mut total_caps = 0;
             for dir in &self.config.capabilities.directories {
@@ -170,7 +171,10 @@ impl Gateway {
                 self.config.server.host, self.config.server.port
             );
             if !self.config.streaming.auto_subscribe.is_empty() {
-                info!("  Auto-subscribe backends: {:?}", self.config.streaming.auto_subscribe);
+                info!(
+                    "  Auto-subscribe backends: {:?}",
+                    self.config.streaming.auto_subscribe
+                );
             }
         }
 
@@ -182,7 +186,10 @@ impl Gateway {
 
         // Warm-start specified backends
         if !self.config.meta_mcp.warm_start.is_empty() {
-            info!("Warm-starting backends: {:?}", self.config.meta_mcp.warm_start);
+            info!(
+                "Warm-starting backends: {:?}",
+                self.config.meta_mcp.warm_start
+            );
             let backends_clone = Arc::clone(&self.backends);
             let warm_start_list = self.config.meta_mcp.warm_start.clone();
 

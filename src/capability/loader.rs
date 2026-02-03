@@ -1,6 +1,6 @@
 //! Capability directory loader
 
-use super::{parse_capability_file, validate_capability, CapabilityDefinition};
+use super::{CapabilityDefinition, parse_capability_file, validate_capability};
 use crate::{Error, Result};
 use std::path::Path;
 use tracing::{debug, info, warn};
@@ -64,7 +64,10 @@ impl CapabilityLoader {
             if path.is_dir() {
                 // Recurse into subdirectories
                 Box::pin(Self::load_directory_recursive(&path, capabilities)).await?;
-            } else if path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+            {
                 // Load YAML files
                 match Self::load_capability_file(&path).await {
                     Ok(cap) => {

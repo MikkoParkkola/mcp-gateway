@@ -21,9 +21,9 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
-use crate::Result;
 
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
@@ -80,7 +80,10 @@ impl NotificationMultiplexer {
     }
 
     /// Create or get a session
-    pub fn get_or_create_session(&self, session_id: Option<&str>) -> (String, broadcast::Receiver<TaggedNotification>) {
+    pub fn get_or_create_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> (String, broadcast::Receiver<TaggedNotification>) {
         let id = session_id.map_or_else(|| format!("gw-{}", Uuid::new_v4()), String::from);
 
         let mut sessions = self.sessions.write();
@@ -149,15 +152,18 @@ impl NotificationMultiplexer {
 
     /// Generate a unique event ID
     pub fn next_event_id(&self) -> String {
-        let id = self.event_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = self
+            .event_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         format!("evt-{id}")
     }
-
 
     /// Subscribe a session to a backend's notifications
     pub async fn subscribe_backend(&self, session_id: &str, backend_name: &str) -> Result<()> {
         // Verify backend exists
-        let _backend = self.backends.get(backend_name)
+        let _backend = self
+            .backends
+            .get(backend_name)
             .ok_or_else(|| crate::Error::BackendNotFound(backend_name.to_string()))?;
 
         // Record subscription
@@ -250,14 +256,7 @@ pub fn create_sse_response(
         }
     };
 
-    Some(
-        Sse::new(stream)
-            .keep_alive(
-                KeepAlive::new()
-                    .interval(keep_alive_interval)
-                    .text("ping")
-            )
-    )
+    Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
 }
 
 #[cfg(test)]

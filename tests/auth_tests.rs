@@ -15,14 +15,12 @@ fn test_auth_config_resolution() {
     let auth_config = AuthConfig {
         enabled: true,
         bearer_token: Some("test-token".to_string()),
-        api_keys: vec![
-            ApiKeyConfig {
-                key: "api-key-1".to_string(),
-                name: "Test Client".to_string(),
-                rate_limit: 100,
-                backends: vec!["tavily".to_string()],
-            },
-        ],
+        api_keys: vec![ApiKeyConfig {
+            key: "api-key-1".to_string(),
+            name: "Test Client".to_string(),
+            rate_limit: 100,
+            backends: vec!["tavily".to_string()],
+        }],
         public_paths: vec!["/health".to_string()],
     };
 
@@ -105,14 +103,12 @@ fn test_rate_limiting() {
     let auth_config = AuthConfig {
         enabled: true,
         bearer_token: None,
-        api_keys: vec![
-            ApiKeyConfig {
-                key: "rate-limited-key".to_string(),
-                name: "Rate Limited".to_string(),
-                rate_limit: 2, // Very low for testing
-                backends: vec![],
-            },
-        ],
+        api_keys: vec![ApiKeyConfig {
+            key: "rate-limited-key".to_string(),
+            name: "Rate Limited".to_string(),
+            rate_limit: 2, // Very low for testing
+            backends: vec![],
+        }],
         public_paths: vec![],
     };
 

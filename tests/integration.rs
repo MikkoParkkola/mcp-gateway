@@ -2,7 +2,10 @@
 
 use mcp_gateway::config::{CircuitBreakerConfig, Config, RetryConfig};
 use mcp_gateway::failsafe::{CircuitBreaker, CircuitState, RetryPolicy, with_retry};
-use mcp_gateway::protocol::{JsonRpcRequest, JsonRpcResponse, RequestId, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate_version};
+use mcp_gateway::protocol::{
+    JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, SUPPORTED_VERSIONS,
+    negotiate_version,
+};
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
@@ -52,10 +55,7 @@ fn test_json_rpc_request_serialization() {
 
 #[test]
 fn test_json_rpc_response_success() {
-    let response = JsonRpcResponse::success(
-        RequestId::Number(1),
-        serde_json::json!({"tools": []}),
-    );
+    let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({"tools": []}));
 
     assert!(response.error.is_none());
     assert!(response.result.is_some());
@@ -64,11 +64,7 @@ fn test_json_rpc_response_success() {
 
 #[test]
 fn test_json_rpc_response_error() {
-    let response = JsonRpcResponse::error(
-        Some(RequestId::Number(1)),
-        -32600,
-        "Invalid request",
-    );
+    let response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32600, "Invalid request");
 
     assert!(response.result.is_none());
     assert!(response.error.is_some());

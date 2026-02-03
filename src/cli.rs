@@ -22,7 +22,12 @@ pub struct Cli {
     pub host: Option<String>,
 
     /// Log level (trace, debug, info, warn, error)
-    #[arg(long, default_value = "info", env = "MCP_GATEWAY_LOG_LEVEL", global = true)]
+    #[arg(
+        long,
+        default_value = "info",
+        env = "MCP_GATEWAY_LOG_LEVEL",
+        global = true
+    )]
     pub log_level: String,
 
     /// Log format (text, json)

@@ -125,7 +125,8 @@ impl OAuthClient {
 
         // Discover authorization server metadata
         let auth_base = self.oauth_base_url.as_ref().unwrap();
-        self.auth_metadata = Some(AuthorizationServerMetadata::discover(&self.http_client, auth_base).await?);
+        self.auth_metadata =
+            Some(AuthorizationServerMetadata::discover(&self.http_client, auth_base).await?);
 
         // Load any cached token
         if let Some(token) = self.storage.load(&self.backend_name, &self.resource_url) {
@@ -173,7 +174,9 @@ impl OAuthClient {
 
     /// Perform the authorization flow
     pub async fn authorize(&self) -> Result<String> {
-        let auth_meta = self.auth_metadata.as_ref()
+        let auth_meta = self
+            .auth_metadata
+            .as_ref()
             .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
 
         // Generate PKCE parameters
@@ -223,21 +226,34 @@ impl OAuthClient {
         debug!(code = %callback_result.code, "Received authorization code");
 
         // Exchange code for token
-        let token = self.exchange_code(&callback_result.code, &actual_callback_url, &code_verifier).await?;
+        let token = self
+            .exchange_code(&callback_result.code, &actual_callback_url, &code_verifier)
+            .await?;
 
         // Store and cache the token
-        self.storage.save(&self.backend_name, &self.resource_url, &token)?;
+        self.storage
+            .save(&self.backend_name, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)
     }
 
     /// Exchange authorization code for tokens
-    async fn exchange_code(&self, code: &str, redirect_uri: &str, code_verifier: &str) -> Result<TokenInfo> {
-        let auth_meta = self.auth_metadata.as_ref()
+    async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        code_verifier: &str,
+    ) -> Result<TokenInfo> {
+        let auth_meta = self
+            .auth_metadata
+            .as_ref()
             .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
 
-        let client_id = self.client_id.read().clone()
+        let client_id = self
+            .client_id
+            .read()
+            .clone()
             .ok_or_else(|| Error::Internal("No client ID".to_string()))?;
 
         let mut params = HashMap::new();
@@ -247,7 +263,8 @@ impl OAuthClient {
         params.insert("client_id", &client_id);
         params.insert("code_verifier", code_verifier);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&auth_meta.token_endpoint)
             .form(&params)
             .send()
@@ -257,7 +274,9 @@ impl OAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Internal(format!("Token exchange failed: HTTP {status} - {body}")));
+            return Err(Error::Internal(format!(
+                "Token exchange failed: HTTP {status} - {body}"
+            )));
         }
 
         let token_response: TokenResponse = response
@@ -276,10 +295,15 @@ impl OAuthClient {
 
     /// Refresh an access token
     async fn refresh_token(&self, refresh_token: &str) -> Result<String> {
-        let auth_meta = self.auth_metadata.as_ref()
+        let auth_meta = self
+            .auth_metadata
+            .as_ref()
             .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
 
-        let client_id = self.client_id.read().clone()
+        let client_id = self
+            .client_id
+            .read()
+            .clone()
             .ok_or_else(|| Error::Internal("No client ID".to_string()))?;
 
         let mut params = HashMap::new();
@@ -287,7 +311,8 @@ impl OAuthClient {
         params.insert("refresh_token", refresh_token);
         params.insert("client_id", &client_id);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&auth_meta.token_endpoint)
             .form(&params)
             .send()
@@ -297,7 +322,9 @@ impl OAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Internal(format!("Token refresh failed: HTTP {status} - {body}")));
+            return Err(Error::Internal(format!(
+                "Token refresh failed: HTTP {status} - {body}"
+            )));
         }
 
         let token_response: TokenResponse = response
@@ -314,7 +341,8 @@ impl OAuthClient {
         );
 
         // Store and cache
-        self.storage.save(&self.backend_name, &self.resource_url, &token)?;
+        self.storage
+            .save(&self.backend_name, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token refreshed successfully");
@@ -328,7 +356,9 @@ impl OAuthClient {
             return Ok(id);
         }
 
-        let auth_meta = self.auth_metadata.as_ref()
+        let auth_meta = self
+            .auth_metadata
+            .as_ref()
             .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
 
         // Try dynamic registration if supported
@@ -360,7 +390,8 @@ impl OAuthClient {
             "token_endpoint_auth_method": "none"
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(endpoint)
             .json(&body)
             .send()
@@ -370,7 +401,9 @@ impl OAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Internal(format!("Client registration failed: HTTP {status} - {body}")));
+            return Err(Error::Internal(format!(
+                "Client registration failed: HTTP {status} - {body}"
+            )));
         }
 
         let reg_response: ClientRegistrationResponse = response

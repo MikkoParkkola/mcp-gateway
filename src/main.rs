@@ -10,8 +10,8 @@ use tracing::{error, info};
 
 use mcp_gateway::{
     capability::{
-        parse_capability_file, validate_capability, AuthTemplate, CapabilityExecutor,
-        CapabilityLoader, OpenApiConverter,
+        AuthTemplate, CapabilityExecutor, CapabilityLoader, OpenApiConverter,
+        parse_capability_file, validate_capability,
     },
     cli::{CapCommand, Cli, Command},
     config::Config,
@@ -39,32 +39,36 @@ async fn main() -> ExitCode {
 /// Run capability management commands
 async fn run_cap_command(cmd: CapCommand) -> ExitCode {
     match cmd {
-        CapCommand::Validate { file } => {
-            match parse_capability_file(&file).await {
-                Ok(cap) => {
-                    if let Err(e) = validate_capability(&cap) {
-                        eprintln!("❌ Validation failed: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                    println!("✅ {} - valid", cap.name);
-                    if !cap.description.is_empty() {
-                        println!("   {}", cap.description);
-                    }
-                    if let Some(provider) = cap.primary_provider() {
-                        println!("   Provider: {} ({})", provider.service, provider.config.method);
-                        println!("   URL: {}{}", provider.config.base_url, provider.config.path);
-                    }
-                    if cap.auth.required {
-                        println!("   Auth: {} ({})", cap.auth.auth_type, cap.auth.key);
-                    }
-                    ExitCode::SUCCESS
+        CapCommand::Validate { file } => match parse_capability_file(&file).await {
+            Ok(cap) => {
+                if let Err(e) = validate_capability(&cap) {
+                    eprintln!("❌ Validation failed: {e}");
+                    return ExitCode::FAILURE;
                 }
-                Err(e) => {
-                    eprintln!("❌ Failed to parse: {e}");
-                    ExitCode::FAILURE
+                println!("✅ {} - valid", cap.name);
+                if !cap.description.is_empty() {
+                    println!("   {}", cap.description);
                 }
+                if let Some(provider) = cap.primary_provider() {
+                    println!(
+                        "   Provider: {} ({})",
+                        provider.service, provider.config.method
+                    );
+                    println!(
+                        "   URL: {}{}",
+                        provider.config.base_url, provider.config.path
+                    );
+                }
+                if cap.auth.required {
+                    println!("   Auth: {} ({})", cap.auth.auth_type, cap.auth.key);
+                }
+                ExitCode::SUCCESS
             }
-        }
+            Err(e) => {
+                eprintln!("❌ Failed to parse: {e}");
+                ExitCode::FAILURE
+            }
+        },
 
         CapCommand::List { directory } => {
             let path = directory.to_string_lossy();
@@ -156,7 +160,10 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
             };
 
             println!("Testing capability: {}", cap.name);
-            println!("Arguments: {}", serde_json::to_string_pretty(&params).unwrap_or_default());
+            println!(
+                "Arguments: {}",
+                serde_json::to_string_pretty(&params).unwrap_or_default()
+            );
             println!();
 
             // Execute
@@ -164,7 +171,10 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
             match executor.execute(&cap, params).await {
                 Ok(result) => {
                     println!("✅ Success:\n");
-                    println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&result).unwrap_or_default()
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(e) => {

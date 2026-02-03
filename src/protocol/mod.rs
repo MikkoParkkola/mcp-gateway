@@ -14,7 +14,7 @@ pub const SUPPORTED_VERSIONS: &[&str] = &["2024-11-05", "2024-10-07"];
 
 /// Negotiate the best protocol version between client and server
 /// Returns the highest version supported by both parties
-#[must_use] 
+#[must_use]
 pub fn negotiate_version(client_version: &str) -> &'static str {
     // If client requests a version we support, use it
     for &version in SUPPORTED_VERSIONS {

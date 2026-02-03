@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use mcp_gateway::backend::Backend;
+use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 
 fn create_test_backend(name: &str, command: &str) -> Backend {
     let config = BackendConfig {
@@ -60,8 +60,8 @@ fn test_backend_transport_type() {
 
 #[tokio::test]
 async fn test_backend_registry() {
-    use std::sync::Arc;
     use mcp_gateway::backend::BackendRegistry;
+    use std::sync::Arc;
 
     let registry = BackendRegistry::new();
 

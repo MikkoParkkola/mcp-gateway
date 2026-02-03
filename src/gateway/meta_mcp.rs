@@ -14,9 +14,8 @@ use tracing::debug;
 use crate::backend::BackendRegistry;
 use crate::capability::CapabilityBackend;
 use crate::protocol::{
-    Content, Info, InitializeResult, JsonRpcResponse, RequestId,
-    ServerCapabilities, Tool, ToolsCallResult, ToolsCapability, ToolsListResult,
-    negotiate_version,
+    Content, Info, InitializeResult, JsonRpcResponse, RequestId, ServerCapabilities, Tool,
+    ToolsCallResult, ToolsCapability, ToolsListResult, negotiate_version,
 };
 use crate::{Error, Result};
 
@@ -57,7 +56,11 @@ impl MetaMcp {
 
         // Negotiate to highest mutually supported version
         let negotiated_version = negotiate_version(client_version);
-        debug!(client = client_version, negotiated = negotiated_version, "Protocol version negotiation");
+        debug!(
+            client = client_version,
+            negotiated = negotiated_version,
+            "Protocol version negotiation"
+        );
 
         let result = InitializeResult {
             protocol_version: negotiated_version.to_string(),

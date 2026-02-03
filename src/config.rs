@@ -3,8 +3,8 @@
 use std::{collections::HashMap, env, path::Path, time::Duration};
 
 use figment::{
-    providers::{Env, Format, Yaml},
     Figment,
+    providers::{Env, Format, Yaml},
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -98,10 +98,13 @@ impl AuthConfig {
                 // Generate a random token
                 use rand::Rng;
                 let random_bytes: [u8; 32] = rand::rng().random();
-                format!("mcp_{}", base64::Engine::encode(
-                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                    random_bytes
-                ))
+                format!(
+                    "mcp_{}",
+                    base64::Engine::encode(
+                        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                        random_bytes
+                    )
+                )
             } else if let Some(var_name) = token.strip_prefix("env:") {
                 env::var(var_name).unwrap_or_else(|_| token.clone())
             } else {
