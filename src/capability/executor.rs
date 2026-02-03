@@ -152,10 +152,18 @@ impl CapabilityExecutor {
             }
         }
 
-        // Add body for POST/PUT
-        if let Some(ref body_template) = config.body {
-            let body = self.substitute_value(body_template, params)?;
-            request = request.json(&body);
+        // Add body for POST/PUT/PATCH
+        let method_upper = config.method.to_uppercase();
+        if method_upper == "POST" || method_upper == "PUT" || method_upper == "PATCH" {
+            if let Some(ref body_template) = config.body {
+                // Use explicit body template
+                let body = self.substitute_value(body_template, params)?;
+                request = request.json(&body);
+            } else if !params.is_null() && params.as_object().map_or(false, |o| !o.is_empty()) {
+                // No body template - use input params directly as body
+                // This enables LLM APIs where input IS the request body
+                request = request.json(params);
+            }
         }
 
         // Execute with timeout

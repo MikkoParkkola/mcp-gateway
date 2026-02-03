@@ -1,0 +1,52 @@
+# MCP Gateway Configuration - Category-Based Loading
+#
+# Load specific capability categories instead of all 132+
+# This keeps context lean and costs low.
+#
+# Usage: mcp-gateway --config examples/config-bundles.yaml
+
+server:
+  host: "127.0.0.1"
+  port: 39401
+  request_timeout: 30s
+  shutdown_timeout: 5s
+
+capabilities:
+  enabled: true
+  name: fulcrum
+
+  # Load only the categories you need:
+  directories:
+    # === MINIMAL (everyday) ===
+    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/google    # Gmail, Calendar, Drive
+    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/misc      # Weather, utilities
+
+    # === DEVELOPER (add these for dev work) ===
+    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/search    # Brave, Exa, Reddit
+    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/security  # Shodan, VirusTotal
+    - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/llm       # LLM providers
+
+    # === ANALYST (add for research) ===
+    # - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/finance # Stock APIs
+    # - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}/news    # RSS, HackerNews
+
+    # === FULL (everything) ===
+    # - ${FULCRUM_CAPABILITIES_PATH:-./capabilities}         # All 132 capabilities
+
+    # Local overrides (always last)
+    - capabilities
+
+# Categories available:
+# - finance (15): stock_quote, portfolio_*, stock_*
+# - google (16): gmail_*, calendar_*, drive_*, contacts_*
+# - health (5): oura_*, apple_health_*, tanita_*
+# - infrastructure (2): system monitoring
+# - llm (8): openai, anthropic, groq, ollama, etc.
+# - misc (28): weather, timezone, utilities
+# - ml (13): face_*, gliner_* (local ML)
+# - news (9): hackernews_*, folo_*, rss
+# - search (13): brave_*, exa_*, reddit_*
+# - security (15): shodan_*, virustotal_*, hibp_*
+# - travel (3): duffel_flights_*
+
+backends: {}
