@@ -3,8 +3,10 @@
 //! Supports:
 //! - Bearer token authentication
 //! - API key authentication with per-key restrictions
+//! - Rate limiting per client
 //! - Public paths that bypass authentication
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use axum::{
@@ -15,13 +17,18 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use dashmap::DashMap;
+use governor::{Quota, RateLimiter, clock::DefaultClock, state::{InMemoryState, NotKeyed}};
 use serde_json::json;
 use tracing::{debug, warn};
 
 use crate::config::AuthConfig;
 
+/// Type alias for our rate limiter
+type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+
 /// Resolved authentication configuration (tokens expanded)
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ResolvedAuthConfig {
     /// Whether auth is enabled
     pub enabled: bool,
@@ -31,6 +38,8 @@ pub struct ResolvedAuthConfig {
     pub api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
+    /// Rate limiters per client (keyed by client name)
+    rate_limiters: DashMap<String, Arc<ClientRateLimiter>>,
 }
 
 /// Resolved API key with expanded values
@@ -61,7 +70,7 @@ impl ResolvedAuthConfig {
             }
         }
 
-        let api_keys = config
+        let api_keys: Vec<ResolvedApiKey> = config
             .api_keys
             .iter()
             .map(|k| ResolvedApiKey {
@@ -72,11 +81,23 @@ impl ResolvedAuthConfig {
             })
             .collect();
 
+        // Pre-create rate limiters for clients with rate limits
+        let rate_limiters = DashMap::new();
+        for key in &api_keys {
+            if key.rate_limit > 0 {
+                if let Some(quota) = NonZeroU32::new(key.rate_limit) {
+                    let limiter = RateLimiter::direct(Quota::per_minute(quota));
+                    rate_limiters.insert(key.name.clone(), Arc::new(limiter));
+                }
+            }
+        }
+
         Self {
             enabled: config.enabled,
             bearer_token,
             api_keys,
             public_paths: config.public_paths.clone(),
+            rate_limiters,
         }
     }
 
@@ -111,6 +132,16 @@ impl ResolvedAuthConfig {
 
         None
     }
+
+    /// Check rate limit for a client. Returns true if allowed, false if rate limited.
+    pub fn check_rate_limit(&self, client_name: &str) -> bool {
+        if let Some(limiter) = self.rate_limiters.get(client_name) {
+            limiter.check().is_ok()
+        } else {
+            // No rate limiter = unlimited
+            true
+        }
+    }
 }
 
 /// Information about an authenticated client
@@ -134,11 +165,16 @@ impl AuthenticatedClient {
 /// Authentication middleware
 pub async fn auth_middleware(
     State(auth_config): State<Arc<ResolvedAuthConfig>>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    // If auth is disabled, pass through
+    // If auth is disabled, pass through with anonymous client
     if !auth_config.enabled {
+        request.extensions_mut().insert(AuthenticatedClient {
+            name: "anonymous".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+        });
         return next.run(request).await;
     }
 
@@ -147,6 +183,11 @@ pub async fn auth_middleware(
     // Check if path is public
     if auth_config.is_public_path(path) {
         debug!(path = %path, "Public path, skipping auth");
+        request.extensions_mut().insert(AuthenticatedClient {
+            name: "public".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+        });
         return next.run(request).await;
     }
 
@@ -160,8 +201,15 @@ pub async fn auth_middleware(
     match token {
         Some(token) => {
             if let Some(client) = auth_config.validate_token(token) {
+                // Check rate limit
+                if !auth_config.check_rate_limit(&client.name) {
+                    warn!(client = %client.name, path = %path, "Rate limit exceeded");
+                    return rate_limited_response(&client.name);
+                }
+
                 debug!(client = %client.name, path = %path, "Authenticated request");
-                // TODO: Could inject client info into request extensions for downstream use
+                // Inject client info for downstream handlers
+                request.extensions_mut().insert(client);
                 next.run(request).await
             } else {
                 warn!(path = %path, "Invalid token");
@@ -192,6 +240,23 @@ fn unauthorized_response(message: &str) -> Response {
         .into_response()
 }
 
+/// Create a 429 Rate Limited response
+fn rate_limited_response(client_name: &str) -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [("Retry-After", "60")],
+        Json(json!({
+            "jsonrpc": "2.0",
+            "error": {
+                "code": -32000,
+                "message": format!("Rate limit exceeded for client '{client_name}'. Try again later.")
+            },
+            "id": null
+        })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +268,7 @@ mod tests {
             bearer_token: Some("test".to_string()),
             api_keys: vec![],
             public_paths: vec!["/health".to_string(), "/metrics".to_string()],
+            rate_limiters: DashMap::new(),
         };
 
         assert!(config.is_public_path("/health"));
@@ -219,6 +285,7 @@ mod tests {
             bearer_token: Some("secret123".to_string()),
             api_keys: vec![],
             public_paths: vec![],
+            rate_limiters: DashMap::new(),
         };
 
         assert!(config.validate_token("secret123").is_some());
@@ -245,6 +312,7 @@ mod tests {
                 },
             ],
             public_paths: vec![],
+            rate_limiters: DashMap::new(),
         };
 
         let client_a = config.validate_token("key1").unwrap();
@@ -257,5 +325,61 @@ mod tests {
         assert!(client_b.can_access_backend("anything"));
 
         assert!(config.validate_token("wrong").is_none());
+    }
+
+    #[test]
+    fn test_rate_limiting() {
+        let rate_limiters = DashMap::new();
+        // Create a rate limiter with 2 requests per minute for testing
+        let limiter = RateLimiter::direct(Quota::per_minute(NonZeroU32::new(2).unwrap()));
+        rate_limiters.insert("limited_client".to_string(), Arc::new(limiter));
+
+        let config = ResolvedAuthConfig {
+            enabled: true,
+            bearer_token: None,
+            api_keys: vec![],
+            public_paths: vec![],
+            rate_limiters,
+        };
+
+        // First two requests should succeed
+        assert!(config.check_rate_limit("limited_client"));
+        assert!(config.check_rate_limit("limited_client"));
+        // Third request should be rate limited
+        assert!(!config.check_rate_limit("limited_client"));
+        // Unknown client (no limiter) should always succeed
+        assert!(config.check_rate_limit("unknown_client"));
+    }
+
+    #[test]
+    fn test_backend_access_control() {
+        let client_restricted = AuthenticatedClient {
+            name: "restricted".to_string(),
+            rate_limit: 0,
+            backends: vec!["tavily".to_string(), "brave".to_string()],
+        };
+
+        let client_unrestricted = AuthenticatedClient {
+            name: "unrestricted".to_string(),
+            rate_limit: 0,
+            backends: vec![],  // empty = all access
+        };
+
+        let client_wildcard = AuthenticatedClient {
+            name: "wildcard".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+        };
+
+        // Restricted client
+        assert!(client_restricted.can_access_backend("tavily"));
+        assert!(client_restricted.can_access_backend("brave"));
+        assert!(!client_restricted.can_access_backend("context7"));
+
+        // Unrestricted client (empty backends = all)
+        assert!(client_unrestricted.can_access_backend("anything"));
+
+        // Wildcard client
+        assert!(client_wildcard.can_access_backend("anything"));
     }
 }

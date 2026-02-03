@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 use tracing::{debug, error, info};
 
-use super::auth::{auth_middleware, ResolvedAuthConfig};
+use super::auth::{AuthenticatedClient, auth_middleware, ResolvedAuthConfig};
 use super::meta_mcp::MetaMcp;
 use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
@@ -274,9 +274,57 @@ async fn meta_mcp_handler(
 async fn backend_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-    _headers: HeaderMap,
-    Json(request): Json<Value>,
+    request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
+    // Extract authenticated client from extensions (injected by auth middleware)
+    let client = request.extensions().get::<AuthenticatedClient>().cloned();
+
+    // Check backend access if auth is enabled
+    if let Some(ref client) = client {
+        if !client.can_access_backend(&name) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32003,
+                        "message": format!("Client '{}' not authorized for backend '{}'", client.name, name)
+                    },
+                    "id": null
+                })),
+            );
+        }
+    }
+
+    // Parse JSON body
+    let body_bytes = match axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": format!("Failed to read body: {e}")},
+                    "id": null
+                })),
+            );
+        }
+    };
+
+    let json_request: Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": format!("Invalid JSON: {e}")},
+                    "id": null
+                })),
+            );
+        }
+    };
+
     // Find backend
     let backend = match state.backends.get(&name) {
         Some(b) => b,
@@ -293,7 +341,7 @@ async fn backend_handler(
     };
 
     // Parse request
-    let (id, method, params) = match parse_request(&request) {
+    let (id, method, params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
             return (
@@ -303,7 +351,7 @@ async fn backend_handler(
         }
     };
 
-    debug!(backend = %name, method = %method, "Backend request");
+    debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
 
     // Handle notifications - forward to backend but return 202 Accepted
     if method.starts_with("notifications/") {
