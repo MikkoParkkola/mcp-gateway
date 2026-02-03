@@ -13,6 +13,7 @@ use tracing::debug;
 
 use crate::backend::BackendRegistry;
 use crate::capability::CapabilityBackend;
+use crate::intelligence::manager::IntelligenceManager;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, RequestId,
     ServerCapabilities, Tool, ToolsCallResult, ToolsCapability, ToolsListResult,
@@ -26,14 +27,35 @@ pub struct MetaMcp {
     backends: Arc<BackendRegistry>,
     /// Capability backend (direct REST APIs)
     capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
+    /// Intelligence manager
+    intelligence: Arc<IntelligenceManager>,
 }
 
 impl MetaMcp {
     /// Create a new Meta-MCP handler
-    pub fn new(backends: Arc<BackendRegistry>) -> Self {
+    pub fn new(backends: Arc<BackendRegistry>, config: &crate::config::IntelligenceConfig) -> Self {
+        let mut manager = IntelligenceManager::new();
+        
+        if config.enabled {
+            // Add Ethereum/Whale Alert fetcher
+            if !config.whale_alert_key.is_empty() {
+                manager.add_fetcher(Arc::new(crate::intelligence::ethereum::EthereumFetcher::new(
+                    config.whale_alert_key.clone(),
+                )));
+            }
+            
+            // Add Solana/Helius fetcher
+            if !config.helius_key.is_empty() {
+                manager.add_fetcher(Arc::new(crate::intelligence::solana::SolanaFetcher::new(
+                    config.helius_key.clone(),
+                )));
+            }
+        }
+
         Self {
             backends,
             capabilities: RwLock::new(None),
+            intelligence: Arc::new(manager),
         }
     }
 
@@ -161,6 +183,23 @@ impl MetaMcp {
                 }),
                 output_schema: None,
             },
+            Tool {
+                name: "gateway_get_intelligence".to_string(),
+                title: Some("Get Market Intelligence".to_string()),
+                description: Some("Get real-time on-chain market intelligence (whales, dex flows)".to_string()),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "chains": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Filter by chains (ethereum, solana, base, arbitrum)"
+                        }
+                    },
+                    "required": []
+                }),
+                output_schema: None,
+            },
         ];
 
         let result = ToolsListResult {
@@ -183,6 +222,7 @@ impl MetaMcp {
             "gateway_list_tools" => self.list_tools(&arguments).await,
             "gateway_search_tools" => self.search_tools(&arguments).await,
             "gateway_invoke" => self.invoke_tool(&arguments).await,
+            "gateway_get_intelligence" => self.get_intelligence(&arguments).await,
             _ => Err(Error::json_rpc(
                 -32601,
                 format!("Unknown tool: {tool_name}"),
@@ -409,5 +449,12 @@ impl MetaMcp {
         } else {
             Ok(response.result.unwrap_or(json!(null)))
         }
+    }
+
+    /// Get market intelligence
+    async fn get_intelligence(&self, _args: &Value) -> Result<Value> {
+        // Run aggregation
+        let insights = self.intelligence.aggregate_insights().await?;
+        Ok(serde_json::to_value(insights)?)
     }
 }

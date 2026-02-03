@@ -28,6 +28,30 @@ pub struct Config {
     pub backends: HashMap<String, BackendConfig>,
     /// Capability configuration (direct REST API integration)
     pub capabilities: CapabilityConfig,
+    /// Market Intelligence configuration
+    pub intelligence: IntelligenceConfig,
+}
+
+/// Market Intelligence configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntelligenceConfig {
+    /// Enable intelligence system
+    pub enabled: bool,
+    /// Whale Alert API key
+    pub whale_alert_key: String,
+    /// Helius API key (for Solana)
+    pub helius_key: String,
+}
+
+impl Default for IntelligenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            whale_alert_key: String::new(),
+            helius_key: String::new(),
+        }
+    }
 }
 
 /// Capability configuration for direct REST API integration

@@ -65,7 +65,7 @@ impl Gateway {
         self.shutdown_tx = Some(shutdown_tx.clone());
 
         // Create app state
-        let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&self.backends)));
+        let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&self.backends), &self.config.intelligence));
 
         // Load capabilities if enabled
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {

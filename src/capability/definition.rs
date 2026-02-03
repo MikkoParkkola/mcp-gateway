@@ -25,7 +25,6 @@ pub struct CapabilityDefinition {
     pub schema: SchemaDefinition,
 
     /// Provider configurations
-    #[serde(deserialize_with = "deserialize_providers")]
     pub providers: ProvidersConfig,
 
     /// Authentication configuration
@@ -50,6 +49,57 @@ pub struct ProvidersConfig {
     pub fallback: Vec<ProviderConfig>,
 }
 
+impl<'de> Deserialize<'de> for ProvidersConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{MapAccess, Visitor};
+        use std::fmt;
+
+        struct ProvidersVisitor;
+
+        impl<'de> Visitor<'de> for ProvidersVisitor {
+            type Value = ProvidersConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a map of provider configurations")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<ProvidersConfig, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut named = HashMap::new();
+                let mut fallback = Vec::new();
+
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "fallback" {
+                        // Try to deserialize as array first, then as single provider
+                        let value: serde_json::Value = map.next_value()?;
+                        if let Some(arr) = value.as_array() {
+                            for item in arr {
+                                if let Ok(provider) = serde_json::from_value(item.clone()) {
+                                    fallback.push(provider);
+                                }
+                            }
+                        } else if let Ok(provider) = serde_json::from_value(value) {
+                            fallback.push(provider);
+                        }
+                    } else {
+                        let provider: ProviderConfig = map.next_value()?;
+                        named.insert(key, provider);
+                    }
+                }
+
+                Ok(ProvidersConfig { named, fallback })
+            }
+        }
+
+        deserializer.deserialize_map(ProvidersVisitor)
+    }
+}
+
 impl ProvidersConfig {
     /// Check if empty
     pub fn is_empty(&self) -> bool {
@@ -65,58 +115,6 @@ impl ProvidersConfig {
     pub fn get(&self, key: &str) -> Option<&ProviderConfig> {
         self.named.get(key)
     }
-}
-
-/// Custom deserializer for providers that handles both formats:
-/// - Standard: { primary: {...}, secondary: {...} }
-/// - With fallback array: { primary: {...}, fallback: [{...}, {...}] }
-fn deserialize_providers<'de, D>(deserializer: D) -> Result<ProvidersConfig, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::{MapAccess, Visitor};
-    use std::fmt;
-
-    struct ProvidersVisitor;
-
-    impl<'de> Visitor<'de> for ProvidersVisitor {
-        type Value = ProvidersConfig;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a map of provider configurations")
-        }
-
-        fn visit_map<M>(self, mut map: M) -> Result<ProvidersConfig, M::Error>
-        where
-            M: MapAccess<'de>,
-        {
-            let mut named = HashMap::new();
-            let mut fallback = Vec::new();
-
-            while let Some(key) = map.next_key::<String>()? {
-                if key == "fallback" {
-                    // Try to deserialize as array first, then as single provider
-                    let value: serde_json::Value = map.next_value()?;
-                    if let Some(arr) = value.as_array() {
-                        for item in arr {
-                            if let Ok(provider) = serde_json::from_value(item.clone()) {
-                                fallback.push(provider);
-                            }
-                        }
-                    } else if let Ok(provider) = serde_json::from_value(value) {
-                        fallback.push(provider);
-                    }
-                } else {
-                    let provider: ProviderConfig = map.next_value()?;
-                    named.insert(key, provider);
-                }
-            }
-
-            Ok(ProvidersConfig { named, fallback })
-        }
-    }
-
-    deserializer.deserialize_map(ProvidersVisitor)
 }
 
 fn default_version() -> String {
