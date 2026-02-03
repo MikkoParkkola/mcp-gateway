@@ -30,14 +30,18 @@
 //! The executor injects credentials at runtime, so they never appear in
 //! logs, error messages, or MCP responses.
 
+mod backend;
 mod definition;
 mod executor;
 mod loader;
+mod openapi;
 mod parser;
 
+pub use backend::{CapabilityBackend, CapabilityBackendStatus};
 pub use definition::*;
 pub use executor::CapabilityExecutor;
 pub use loader::CapabilityLoader;
+pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
 
 use crate::Result;

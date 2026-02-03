@@ -1,11 +1,18 @@
 //! Meta-MCP implementation - 4 meta-tools for dynamic discovery
+//!
+//! This module provides the gateway's meta-tools for discovering and invoking
+//! tools across all backends, including:
+//! - MCP backends (stdio, http)
+//! - Capability backends (direct REST API integration)
 
 use std::sync::Arc;
 
+use parking_lot::RwLock;
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::backend::BackendRegistry;
+use crate::capability::CapabilityBackend;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, RequestId,
     ServerCapabilities, Tool, ToolsCallResult, ToolsCapability, ToolsListResult,
@@ -15,14 +22,29 @@ use crate::{Error, Result};
 
 /// Meta-MCP handler
 pub struct MetaMcp {
-    /// Backend registry
+    /// Backend registry (MCP backends)
     backends: Arc<BackendRegistry>,
+    /// Capability backend (direct REST APIs)
+    capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
 }
 
 impl MetaMcp {
     /// Create a new Meta-MCP handler
     pub fn new(backends: Arc<BackendRegistry>) -> Self {
-        Self { backends }
+        Self {
+            backends,
+            capabilities: RwLock::new(None),
+        }
+    }
+
+    /// Set the capability backend
+    pub fn set_capabilities(&self, capabilities: Arc<CapabilityBackend>) {
+        *self.capabilities.write() = Some(capabilities);
+    }
+
+    /// Get capability backend if available
+    fn get_capabilities(&self) -> Option<Arc<CapabilityBackend>> {
+        self.capabilities.read().clone()
     }
 
     /// Handle initialize request with version negotiation
@@ -184,7 +206,7 @@ impl MetaMcp {
 
     /// List all servers
     async fn list_servers(&self) -> Result<Value> {
-        let servers: Vec<Value> = self
+        let mut servers: Vec<Value> = self
             .backends
             .all()
             .iter()
@@ -200,6 +222,18 @@ impl MetaMcp {
             })
             .collect();
 
+        // Add capability backend if available
+        if let Some(cap) = self.get_capabilities() {
+            let status = cap.status();
+            servers.push(json!({
+                "name": status.name,
+                "running": true,
+                "transport": "capability",
+                "tools_count": status.capabilities_count,
+                "circuit_state": "Closed"
+            }));
+        }
+
         Ok(json!({ "servers": servers }))
     }
 
@@ -210,6 +244,18 @@ impl MetaMcp {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::json_rpc(-32602, "Missing 'server' parameter"))?;
 
+        // Check if it's the capability backend
+        if let Some(cap) = self.get_capabilities() {
+            if server == cap.name {
+                let tools = cap.get_tools();
+                return Ok(json!({
+                    "server": server,
+                    "tools": tools
+                }));
+            }
+        }
+
+        // Otherwise, look in MCP backends
         let backend = self
             .backends
             .get(server)
@@ -238,7 +284,35 @@ impl MetaMcp {
 
         let mut matches = Vec::new();
 
+        // Search capability backend first (faster, no network)
+        if let Some(cap) = self.get_capabilities() {
+            for tool in cap.get_tools() {
+                let name_match = tool.name.to_lowercase().contains(&query);
+                let desc_match = tool
+                    .description
+                    .as_ref()
+                    .is_some_and(|d| d.to_lowercase().contains(&query));
+
+                if name_match || desc_match {
+                    matches.push(json!({
+                        "server": cap.name,
+                        "tool": tool.name,
+                        "description": tool.description.as_deref().unwrap_or("").chars().take(200).collect::<String>()
+                    }));
+
+                    if matches.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Then search MCP backends
         for backend in self.backends.all() {
+            if matches.len() >= limit {
+                break;
+            }
+
             if let Ok(tools) = backend.get_tools().await {
                 for tool in tools {
                     let name_match = tool.name.to_lowercase().contains(&query);
@@ -259,10 +333,6 @@ impl MetaMcp {
                         }
                     }
                 }
-            }
-
-            if matches.len() >= limit {
-                break;
             }
         }
 
@@ -305,6 +375,15 @@ impl MetaMcp {
 
         debug!(server = server, tool = tool, "Invoking tool");
 
+        // Check if it's a capability
+        if let Some(cap) = self.get_capabilities() {
+            if server == cap.name && cap.has_capability(tool) {
+                let result = cap.call_tool(tool, arguments).await?;
+                return Ok(serde_json::to_value(result)?);
+            }
+        }
+
+        // Otherwise, invoke on MCP backend
         let backend = self
             .backends
             .get(server)

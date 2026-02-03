@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 /// Universal MCP Gateway - Single-port multiplexing with Meta-MCP
 #[derive(Parser, Debug)]
@@ -10,7 +10,7 @@ use clap::Parser;
 #[command(version, about, long_about = None)]
 pub struct Cli {
     /// Path to configuration file (YAML)
-    #[arg(short, long, env = "MCP_GATEWAY_CONFIG")]
+    #[arg(short, long, env = "MCP_GATEWAY_CONFIG", global = true)]
     pub config: Option<PathBuf>,
 
     /// Port to listen on
@@ -22,14 +22,77 @@ pub struct Cli {
     pub host: Option<String>,
 
     /// Log level (trace, debug, info, warn, error)
-    #[arg(long, default_value = "info", env = "MCP_GATEWAY_LOG_LEVEL")]
+    #[arg(long, default_value = "info", env = "MCP_GATEWAY_LOG_LEVEL", global = true)]
     pub log_level: String,
 
     /// Log format (text, json)
-    #[arg(long, env = "MCP_GATEWAY_LOG_FORMAT")]
+    #[arg(long, env = "MCP_GATEWAY_LOG_FORMAT", global = true)]
     pub log_format: Option<String>,
 
     /// Disable Meta-MCP mode
     #[arg(long)]
     pub no_meta_mcp: bool,
+
+    /// Subcommand (optional - defaults to server mode)
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Available subcommands
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Start the gateway server (default)
+    Serve,
+
+    /// Capability management commands
+    #[command(subcommand)]
+    Cap(CapCommand),
+}
+
+/// Capability subcommands
+#[derive(Subcommand, Debug)]
+pub enum CapCommand {
+    /// Validate a capability definition
+    Validate {
+        /// Path to capability YAML file
+        #[arg(required = true)]
+        file: PathBuf,
+    },
+
+    /// List capabilities in a directory
+    List {
+        /// Directory containing capability definitions
+        #[arg(default_value = "capabilities")]
+        directory: PathBuf,
+    },
+
+    /// Convert OpenAPI spec to capabilities
+    Import {
+        /// Path to OpenAPI spec (YAML or JSON)
+        #[arg(required = true)]
+        spec: PathBuf,
+
+        /// Output directory for generated capabilities
+        #[arg(short, long, default_value = "capabilities")]
+        output: PathBuf,
+
+        /// Prefix for generated capability names
+        #[arg(short, long)]
+        prefix: Option<String>,
+
+        /// Auth key reference (e.g., "env:API_TOKEN")
+        #[arg(long)]
+        auth_key: Option<String>,
+    },
+
+    /// Test a capability by executing it
+    Test {
+        /// Path to capability YAML file
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// JSON arguments to pass to the capability
+        #[arg(short, long, default_value = "{}")]
+        args: String,
+    },
 }

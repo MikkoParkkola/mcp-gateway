@@ -26,6 +26,30 @@ pub struct Config {
     pub failsafe: FailsafeConfig,
     /// Backend configurations
     pub backends: HashMap<String, BackendConfig>,
+    /// Capability configuration (direct REST API integration)
+    pub capabilities: CapabilityConfig,
+}
+
+/// Capability configuration for direct REST API integration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CapabilityConfig {
+    /// Enable capability system
+    pub enabled: bool,
+    /// Backend name for capabilities (shown in gateway_list_servers)
+    pub name: String,
+    /// Directories to load capability definitions from
+    pub directories: Vec<String>,
+}
+
+impl Default for CapabilityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            name: "fulcrum".to_string(),
+            directories: vec!["capabilities".to_string()],
+        }
+    }
 }
 
 impl Config {

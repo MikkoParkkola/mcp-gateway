@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio::signal;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::meta_mcp::MetaMcp;
 use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
 use crate::backend::{Backend, BackendRegistry};
+use crate::capability::{CapabilityBackend, CapabilityExecutor};
 use crate::config::Config;
 use crate::{Error, Result};
 
@@ -65,6 +66,37 @@ impl Gateway {
 
         // Create app state
         let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&self.backends)));
+
+        // Load capabilities if enabled
+        if self.config.capabilities.enabled {
+            let executor = Arc::new(CapabilityExecutor::new());
+            let mut cap_backend =
+                CapabilityBackend::new(&self.config.capabilities.name, executor);
+
+            let mut total_caps = 0;
+            for dir in &self.config.capabilities.directories {
+                match cap_backend.load_from_directory(dir).await {
+                    Ok(count) => {
+                        total_caps += count;
+                        debug!(directory = %dir, count = count, "Loaded capabilities");
+                    }
+                    Err(e) => {
+                        // Don't fail startup if capability dir doesn't exist
+                        debug!(directory = %dir, error = %e, "Failed to load capabilities");
+                    }
+                }
+            }
+
+            if total_caps > 0 {
+                info!(
+                    capabilities = total_caps,
+                    name = %self.config.capabilities.name,
+                    "Capability backend ready"
+                );
+                meta_mcp.set_capabilities(Arc::new(cap_backend));
+            }
+        }
+
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&self.backends),
             self.config.streaming.clone(),

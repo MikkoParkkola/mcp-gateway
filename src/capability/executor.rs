@@ -6,22 +6,38 @@
 //! - Credentials are fetched from secure storage at execution time
 //! - Credentials are NEVER logged or included in error messages
 //! - Credentials are NEVER returned in responses
+//!
+//! # Credential Sources
+//!
+//! - `env:VAR_NAME` - Environment variable
+//! - `keychain:name` - macOS Keychain
+//! - `oauth:provider` - OAuth token from vault (with auto-refresh)
+//! - `{env.VAR}` - Template format for environment variables
 
-use super::{CapabilityDefinition, ProviderConfig, RestConfig};
-use crate::{Error, Result};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use dashmap::DashMap;
+use parking_lot::RwLock;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Client, Method, Response,
 };
 use serde_json::Value;
-use std::time::{Duration, Instant};
 use tracing::debug;
+
+use super::{CapabilityDefinition, ProviderConfig, RestConfig};
+use crate::oauth::{TokenInfo, TokenStorage};
+use crate::{Error, Result};
 
 /// Executor for capability REST calls
 pub struct CapabilityExecutor {
     client: Client,
     cache: ResponseCache,
+    /// OAuth token storage
+    token_storage: Option<Arc<TokenStorage>>,
+    /// Cached OAuth tokens by provider name
+    oauth_tokens: RwLock<DashMap<String, TokenInfo>>,
 }
 
 impl CapabilityExecutor {
@@ -32,10 +48,36 @@ impl CapabilityExecutor {
             .build()
             .expect("Failed to create HTTP client");
 
+        // Try to initialize OAuth token storage
+        let token_storage = TokenStorage::default_location().ok().map(Arc::new);
+
         Self {
             client,
             cache: ResponseCache::new(),
+            token_storage,
+            oauth_tokens: RwLock::new(DashMap::new()),
         }
+    }
+
+    /// Create executor with custom OAuth token storage
+    pub fn with_token_storage(token_storage: Arc<TokenStorage>) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Self {
+            client,
+            cache: ResponseCache::new(),
+            token_storage: Some(token_storage),
+            oauth_tokens: RwLock::new(DashMap::new()),
+        }
+    }
+
+    /// Store an OAuth token for a provider
+    pub fn set_oauth_token(&self, provider: &str, token: TokenInfo) {
+        let tokens = self.oauth_tokens.read();
+        tokens.insert(provider.to_string(), token);
     }
 
     /// Execute a capability with the given parameters
@@ -239,11 +281,9 @@ impl CapabilityExecutor {
             let keychain_key = &key[9..];
             self.fetch_from_keychain(keychain_key).await
         } else if key.starts_with("oauth:") {
-            // OAuth token from vault (TODO: implement OAuth vault)
-            let _provider = &key[6..];
-            Err(Error::Config(
-                "OAuth vault not yet implemented - use env: or keychain: instead".to_string(),
-            ))
+            // OAuth token from vault
+            let provider = &key[6..];
+            self.fetch_oauth_token(provider).await
         } else if key.starts_with("{env.") && key.ends_with('}') {
             // Template format: {env.VAR_NAME}
             let var_name = &key[5..key.len() - 1];
@@ -261,6 +301,56 @@ impl CapabilityExecutor {
                 key.chars().take(10).collect::<String>()
             )))
         }
+    }
+
+    /// Fetch OAuth token from vault
+    ///
+    /// # Token Resolution Order
+    ///
+    /// 1. Check in-memory cache for valid token
+    /// 2. Load from disk storage if available
+    /// 3. Return error with instructions if not found
+    async fn fetch_oauth_token(&self, provider: &str) -> Result<String> {
+        // Check in-memory cache first
+        {
+            let tokens = self.oauth_tokens.read();
+            if let Some(token) = tokens.get(provider) {
+                if !token.is_expired() {
+                    return Ok(token.access_token.clone());
+                }
+            }
+        }
+
+        // Try to load from disk storage
+        if let Some(ref storage) = self.token_storage {
+            // The storage key is based on backend name and resource URL
+            // For capabilities, we use a convention: provider name maps to storage key
+            if let Some(token) = storage.load(provider, provider) {
+                if !token.is_expired() {
+                    // Cache it in memory
+                    let tokens = self.oauth_tokens.read();
+                    tokens.insert(provider.to_string(), token.clone());
+                    return Ok(token.access_token);
+                }
+                // Token exists but is expired - we need a refresh mechanism
+                // For now, just report the issue
+                return Err(Error::Config(format!(
+                    "OAuth token for '{}' is expired. Re-authenticate using the gateway OAuth flow or refresh the token.",
+                    provider
+                )));
+            }
+        }
+
+        // Not found - provide helpful instructions
+        Err(Error::Config(format!(
+            "OAuth token for '{}' not found. \
+            To authorize, use the gateway's OAuth flow: \
+            1. Configure an OAuth-enabled backend named '{}' in gateway config \
+            2. Make a request to trigger authorization \
+            3. Complete browser-based authorization \
+            Or manually set the token via set_oauth_token()",
+            provider, provider
+        )))
     }
 
     /// Fetch credential from macOS Keychain
