@@ -212,37 +212,59 @@ async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// Meta-MCP handler (POST /mcp)
 async fn meta_mcp_handler(
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> impl IntoResponse {
     if !state.meta_mcp_enabled {
         return (
             StatusCode::FORBIDDEN,
+            [(
+                axum::http::header::HeaderName::from_static("content-type"),
+                axum::http::header::HeaderValue::from_static("application/json"),
+            )],
             Json(json!({
                 "jsonrpc": "2.0",
                 "error": {"code": -32600, "message": "Meta-MCP disabled"},
                 "id": null
             })),
-        );
+        )
+            .into_response();
     }
+
+    // Get or create session for this client
+    let existing_session_id = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
+    let (session_id, _rx) = state
+        .multiplexer
+        .get_or_create_session(existing_session_id.as_deref());
 
     // Parse request
     let (id, method, params) = match parse_request(&request) {
         Ok(parsed) => parsed,
         Err(response) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::to_value(response).unwrap()),
+            let mut resp = Json(serde_json::to_value(response).unwrap()).into_response();
+            resp.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("mcp-session-id"),
+                session_id.parse().unwrap(),
             );
+            return (StatusCode::BAD_REQUEST, resp).into_response();
         }
     };
 
-    debug!(method = %method, "Meta-MCP request");
+    debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
     // Handle notifications (no id) - return 202 Accepted with empty body
     if method.starts_with("notifications/") {
         debug!(notification = %method, "Handling notification");
-        return (StatusCode::ACCEPTED, Json(json!({})));
+        let mut resp = Json(json!({})).into_response();
+        resp.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("mcp-session-id"),
+            session_id.parse().unwrap(),
+        );
+        return (StatusCode::ACCEPTED, resp).into_response();
     }
 
     // For requests, id is guaranteed to exist (checked in parse_request)
@@ -272,10 +294,13 @@ async fn meta_mcp_handler(
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
-    (
-        StatusCode::OK,
-        Json(serde_json::to_value(response).unwrap()),
-    )
+    // Return response with session ID header
+    let mut resp = Json(serde_json::to_value(response).unwrap()).into_response();
+    resp.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("mcp-session-id"),
+        session_id.parse().unwrap(),
+    );
+    (StatusCode::OK, resp).into_response()
 }
 
 /// Backend handler (POST /mcp/{name})
