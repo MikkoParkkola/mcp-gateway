@@ -101,6 +101,7 @@ impl MetaMcp {
                     "required": []
                 }),
                 output_schema: None,
+                annotations: None,
             },
             Tool {
                 name: "gateway_list_tools".to_string(),
@@ -117,6 +118,7 @@ impl MetaMcp {
                     "required": ["server"]
                 }),
                 output_schema: None,
+                annotations: None,
             },
             Tool {
                 name: "gateway_search_tools".to_string(),
@@ -138,6 +140,7 @@ impl MetaMcp {
                     "required": ["query"]
                 }),
                 output_schema: None,
+                annotations: None,
             },
             Tool {
                 name: "gateway_invoke".to_string(),
@@ -163,6 +166,7 @@ impl MetaMcp {
                     "required": ["server", "tool"]
                 }),
                 output_schema: None,
+                annotations: None,
             },
         ];
 

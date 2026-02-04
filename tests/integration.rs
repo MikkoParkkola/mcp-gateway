@@ -11,9 +11,12 @@ use std::time::Duration;
 
 #[test]
 fn test_protocol_version() {
-    // Latest protocol version
-    assert_eq!(PROTOCOL_VERSION, "2024-11-05");
-    // Supported versions include latest and older
+    // Latest protocol version (2025-11-25)
+    assert_eq!(PROTOCOL_VERSION, "2025-11-25");
+    // Supported versions include latest and all previous
+    assert!(SUPPORTED_VERSIONS.contains(&"2025-11-25"));
+    assert!(SUPPORTED_VERSIONS.contains(&"2025-06-18"));
+    assert!(SUPPORTED_VERSIONS.contains(&"2025-03-26"));
     assert!(SUPPORTED_VERSIONS.contains(&"2024-11-05"));
     assert!(SUPPORTED_VERSIONS.contains(&"2024-10-07"));
 }
@@ -21,12 +24,15 @@ fn test_protocol_version() {
 #[test]
 fn test_version_negotiation() {
     // Client requests supported version - gets it back
+    assert_eq!(negotiate_version("2025-11-25"), "2025-11-25");
+    assert_eq!(negotiate_version("2025-06-18"), "2025-06-18");
+    assert_eq!(negotiate_version("2025-03-26"), "2025-03-26");
     assert_eq!(negotiate_version("2024-11-05"), "2024-11-05");
     assert_eq!(negotiate_version("2024-10-07"), "2024-10-07");
 
     // Client requests unknown version - gets latest as fallback
-    assert_eq!(negotiate_version("2023-01-01"), "2024-11-05");
-    assert_eq!(negotiate_version("unknown"), "2024-11-05");
+    assert_eq!(negotiate_version("2023-01-01"), "2025-11-25");
+    assert_eq!(negotiate_version("unknown"), "2025-11-25");
 }
 
 #[test]

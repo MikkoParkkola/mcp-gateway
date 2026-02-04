@@ -329,6 +329,7 @@ impl CapabilityDefinition {
             } else {
                 Some(self.schema.output.clone())
             },
+            annotations: None,
         }
     }
 
