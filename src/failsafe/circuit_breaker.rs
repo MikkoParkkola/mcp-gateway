@@ -56,6 +56,7 @@ impl CircuitBreaker {
     }
 
     /// Check if requests can proceed
+    #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn can_proceed(&self) -> bool {
         if !self.enabled {
             return true;
@@ -64,7 +65,10 @@ impl CircuitBreaker {
         let state = *self.state.read();
 
         match state {
-            CircuitState::Closed => true,
+            CircuitState::Closed => {
+                tracing::trace!("Circuit closed, allowing request");
+                true
+            }
             CircuitState::Open => {
                 // Check if reset timeout has passed
                 let last_change = self.last_state_change.load(Ordering::Relaxed);
@@ -77,17 +81,23 @@ impl CircuitBreaker {
                     .as_millis() as u64;
 
                 if now >= self.reset_timeout.as_millis() as u64 {
+                    tracing::debug!("Reset timeout elapsed, transitioning to half-open");
                     self.transition_to(CircuitState::HalfOpen);
                     true
                 } else {
+                    tracing::warn!("Circuit open, rejecting request");
                     false
                 }
             }
-            CircuitState::HalfOpen => true,
+            CircuitState::HalfOpen => {
+                tracing::debug!("Circuit half-open, allowing probe request");
+                true
+            }
         }
     }
 
     /// Record a successful request
+    #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn record_success(&self) {
         if !self.enabled {
             return;
@@ -99,18 +109,23 @@ impl CircuitBreaker {
             CircuitState::Closed => {
                 // Reset failure count on success
                 self.failures.store(0, Ordering::Relaxed);
+                tracing::trace!("Success in closed state, reset failure count");
             }
             CircuitState::HalfOpen => {
                 let successes = self.successes.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::debug!(successes, threshold = self.success_threshold, "Success in half-open state");
                 if successes >= self.success_threshold {
                     self.transition_to(CircuitState::Closed);
                 }
             }
-            CircuitState::Open => {}
+            CircuitState::Open => {
+                tracing::trace!("Success recorded in open state (ignored)");
+            }
         }
     }
 
     /// Record a failed request
+    #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn record_failure(&self) {
         if !self.enabled {
             return;
@@ -121,15 +136,19 @@ impl CircuitBreaker {
         match state {
             CircuitState::Closed => {
                 let failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::warn!(failures, threshold = self.failure_threshold, "Failure in closed state");
                 if failures >= self.failure_threshold {
                     self.transition_to(CircuitState::Open);
                 }
             }
             CircuitState::HalfOpen => {
                 // Any failure in half-open goes back to open
+                tracing::warn!("Failure in half-open state, reopening circuit");
                 self.transition_to(CircuitState::Open);
             }
-            CircuitState::Open => {}
+            CircuitState::Open => {
+                tracing::trace!("Failure recorded in open state (ignored)");
+            }
         }
     }
 

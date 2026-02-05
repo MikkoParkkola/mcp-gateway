@@ -236,9 +236,20 @@ impl Backend {
     }
 
     /// Send a request to the backend
+    #[tracing::instrument(
+        skip(self, params),
+        fields(
+            backend = %self.name,
+            method = %method,
+            request_id = %uuid::Uuid::new_v4()
+        )
+    )]
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        let start_time = std::time::Instant::now();
+
         // Check failsafe
         if !self.failsafe.can_proceed() {
+            tracing::warn!("Request rejected by failsafe mechanisms");
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
 
@@ -247,7 +258,10 @@ impl Backend {
             .semaphore
             .acquire()
             .await
-            .map_err(|_| Error::BackendUnavailable("Concurrency limit reached".to_string()))?;
+            .map_err(|_| {
+                tracing::warn!("Concurrency limit reached");
+                Error::BackendUnavailable("Concurrency limit reached".to_string())
+            })?;
 
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
@@ -259,7 +273,10 @@ impl Backend {
             t.clone()
         };
 
-        let transport = transport.ok_or_else(|| Error::BackendUnavailable(self.name.clone()))?;
+        let transport = transport.ok_or_else(|| {
+            tracing::error!("Transport not available");
+            Error::BackendUnavailable(self.name.clone())
+        })?;
 
         // Execute with retry
         let name = self.name.clone();
@@ -271,10 +288,19 @@ impl Backend {
         })
         .await;
 
-        // Record success/failure
+        // Calculate latency
+        let latency = start_time.elapsed();
+
+        // Record success/failure with metrics
         match &result {
-            Ok(_) => self.failsafe.record_success(),
-            Err(_) => self.failsafe.record_failure(),
+            Ok(_) => {
+                tracing::info!(latency_ms = latency.as_millis(), "Request completed successfully");
+                self.failsafe.record_success(latency);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
+                self.failsafe.record_failure();
+            }
         }
 
         result

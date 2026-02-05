@@ -25,7 +25,6 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
 };
 use serde_json::Value;
-use tracing::debug;
 
 use super::{CapabilityDefinition, ProviderConfig, RestConfig};
 use crate::oauth::{TokenInfo, TokenStorage};
@@ -82,7 +81,16 @@ impl CapabilityExecutor {
     }
 
     /// Execute a capability with the given parameters
+    #[tracing::instrument(
+        skip(self, params),
+        fields(
+            capability = %capability.name,
+            request_id = %uuid::Uuid::new_v4()
+        )
+    )]
     pub async fn execute(&self, capability: &CapabilityDefinition, params: Value) -> Result<Value> {
+        let start_time = std::time::Instant::now();
+
         let provider = capability
             .primary_provider()
             .ok_or_else(|| Error::Config("No primary provider configured".to_string()))?;
@@ -91,13 +99,20 @@ impl CapabilityExecutor {
         if capability.is_cacheable() {
             let cache_key = self.build_cache_key(capability, &params);
             if let Some(cached) = self.cache.get(&cache_key) {
-                debug!(capability = %capability.name, "Cache hit");
+                tracing::debug!("Cache hit");
                 return Ok(cached);
             }
         }
 
         // Build and execute request
         let response = self.execute_provider(capability, provider, &params).await?;
+
+        let latency = start_time.elapsed();
+        tracing::info!(
+            latency_ms = latency.as_millis(),
+            provider = %provider.service,
+            "Capability executed successfully"
+        );
 
         // Cache response if configured
         if capability.is_cacheable() {
@@ -109,6 +124,13 @@ impl CapabilityExecutor {
     }
 
     /// Execute a request using a provider configuration
+    #[tracing::instrument(
+        skip(self, params),
+        fields(
+            capability = %capability.name,
+            provider = %provider.service
+        )
+    )]
     async fn execute_provider(
         &self,
         capability: &CapabilityDefinition,
@@ -119,6 +141,7 @@ impl CapabilityExecutor {
 
         // Build URL
         let url = self.build_url(config, params)?;
+        tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 
         // Build request
         let method = config.method.parse::<Method>().map_err(|e| {
