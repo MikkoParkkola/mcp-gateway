@@ -17,7 +17,19 @@ MCP is powerful, but scaling to many servers creates problems:
 | ~15,000 tokens overhead | ~400 tokens |
 | Multiple ports to manage | Single port |
 | Session loss on reconnect | Persistent proxy |
+| Restart AI session to change MCP servers | Restart gateway (~8ms), session stays alive |
 | No resilience | Circuit breakers, retries, rate limiting |
+
+### Session Stability: Change MCP Servers Without Losing Context
+
+With tools like Claude Code, changing your MCP server configuration normally means restarting the entire AI session -- losing your conversation history, working context, and flow.
+
+MCP Gateway eliminates this. Your AI client connects to **one stable endpoint** (`localhost:39400`). Behind that endpoint, you can reconfigure freely:
+
+- **REST API capabilities** (YAML files in capability directories) are **hot-reloaded automatically** -- add, modify, or remove a capability file and it's live within ~500ms. No restart of anything.
+- **MCP backends** (stdio/HTTP/SSE servers in `config.yaml`) require a gateway restart to pick up changes -- but the gateway restarts in **~8ms**. Your AI session stays connected; just retry the tool call.
+
+The net effect: you can experiment with new MCP servers, troubleshoot broken ones, or swap configurations **without ever losing your AI session context**.
 
 ## Architecture
 
