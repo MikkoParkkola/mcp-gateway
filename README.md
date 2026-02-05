@@ -1,10 +1,11 @@
 # MCP Gateway
 
+[![CI](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.85+-blue.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Universal Model Context Protocol (MCP) Gateway** - Single-port multiplexing with Meta-MCP for ~95% context token savings.
+**Universal Model Context Protocol (MCP) Gateway** - Single-port multiplexing with Meta-MCP for ~97% context token savings. At $15/M input tokens (Claude Opus pricing), that reduction saves roughly $0.22 per request -- or **$220 per 1,000 requests** that would otherwise carry 100+ tool definitions.
 
 ## The Problem
 
@@ -60,6 +61,56 @@ Instead of loading 100+ tool definitions, Meta-MCP exposes 4 meta-tools:
 - Meta-MCP: 4 tools × 100 tokens = 400 tokens
 - **Savings: 97%**
 
+### Real-World Example
+
+Suppose you have 12 MCP servers (Tavily, filesystem, GitHub, Slack, Postgres, Redis, Brave, Jira, Linear, Sentry, Datadog, PagerDuty) exposing 180+ tools. Without a gateway, every LLM request carries all 180 tool definitions -- roughly 27,000 tokens of context overhead before the conversation even starts.
+
+With MCP Gateway, the LLM sees only 4 meta-tools (~400 tokens). It discovers and invokes the right tool on demand:
+
+**Step 1: Search for relevant tools**
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "gateway_search_tools",
+    "arguments": { "query": "search" }
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "query": "search",
+  "matches": [
+    { "server": "tavily",  "tool": "tavily_search",   "description": "Web search via Tavily API" },
+    { "server": "brave",   "tool": "brave_web_search", "description": "Search the web with Brave" },
+    { "server": "github",  "tool": "search_code",      "description": "Search code across repositories" }
+  ],
+  "total": 3
+}
+```
+
+**Step 2: Invoke the tool you need**
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "gateway_invoke",
+    "arguments": {
+      "server": "tavily",
+      "tool": "tavily_search",
+      "arguments": { "query": "MCP protocol specification" }
+    }
+  }
+}
+```
+
+The gateway routes the call to the Tavily backend, applies circuit breaker/retry logic, and returns the result. The LLM never needed to load all 180 tool schemas -- it discovered and used exactly the one it needed.
+
 ### Production Failsafes
 
 | Failsafe | Description |
@@ -111,6 +162,22 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:39400/mcp
 - **MCP Version**: 2025-11-25 (latest)
 - **Transports**: stdio, Streamable HTTP, SSE
 - **JSON-RPC 2.0**: Full compliance
+
+### Supported Backends
+
+MCP Gateway supports all three MCP transport types. Any MCP-compliant server works -- here are common examples:
+
+| Transport | Backend | Config Example |
+|-----------|---------|----------------|
+| **stdio** | `@anthropic/mcp-server-tavily` | `command: "npx -y @anthropic/mcp-server-tavily"` |
+| **stdio** | `@modelcontextprotocol/server-filesystem` | `command: "npx -y @modelcontextprotocol/server-filesystem /path"` |
+| **stdio** | `@modelcontextprotocol/server-github` | `command: "npx -y @modelcontextprotocol/server-github"` |
+| **stdio** | `@modelcontextprotocol/server-postgres` | `command: "npx -y @modelcontextprotocol/server-postgres"` |
+| **stdio** | `@modelcontextprotocol/server-brave-search` | `command: "npx -y @modelcontextprotocol/server-brave-search"` |
+| **HTTP** | Any Streamable HTTP server | `http_url: "http://localhost:8080/mcp"` |
+| **SSE** | Pieces, LangChain, etc. | `http_url: "http://localhost:39300/sse"` |
+
+**stdio** backends are spawned as child processes. **HTTP** and **SSE** backends connect to already-running servers. Set `env:` for API keys, `headers:` for auth tokens, and `cwd:` for working directories -- see the [Configuration Reference](#backend) below.
 
 ## Quick Start
 
@@ -303,6 +370,73 @@ Exposes Prometheus metrics for:
 - Rate limiter rejections
 - Active connections
 
+## Performance
+
+MCP Gateway is a local Rust proxy -- it adds minimal overhead between your client and backends.
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Startup time** | ~8ms | Measured with `hyperfine` ([benchmarks](docs/BENCHMARKS.md)) |
+| **Binary size** | 7.1 MB | Release build with LTO, stripped |
+| **Gateway overhead** | <2ms per request | Local routing + JSON-RPC parsing (does not include backend latency) |
+| **Memory** | Low | Async I/O via tokio; no per-request allocations for routing |
+
+The gateway overhead is the time spent inside the proxy itself (request parsing, backend lookup, failsafe checks, response forwarding). Actual end-to-end latency depends on the backend -- a stdio subprocess adds ~10-50ms for process I/O, while an HTTP backend adds only network round-trip time.
+
+For detailed benchmarks, see [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+## Troubleshooting
+
+### Backend won't connect
+
+**stdio backend fails to start:**
+```bash
+# Test the command directly to verify it works
+npx -y @anthropic/mcp-server-tavily
+
+# Check the gateway logs for the actual error
+mcp-gateway --config servers.yaml --log-level debug
+```
+
+Common causes: missing `npx`/`node`, missing API key environment variable, or incorrect `command` path.
+
+**HTTP/SSE backend unreachable:**
+- Verify the backend server is running and listening on the configured URL.
+- Check that `http_url` includes the full path (e.g., `http://localhost:8080/mcp`, not just `http://localhost:8080`).
+- If the backend requires auth, set `headers:` in the backend config.
+
+### Circuit breaker is open
+
+When a backend fails 5 times consecutively, the circuit breaker opens and rejects requests for 30 seconds. Check the health endpoint to see circuit state:
+
+```bash
+curl http://localhost:39400/health | jq '.backends'
+```
+
+To adjust thresholds:
+```yaml
+failsafe:
+  circuit_breaker:
+    failure_threshold: 10   # more tolerance before opening
+    reset_timeout: "15s"    # shorter recovery window
+```
+
+### Debugging requests
+
+Enable debug logging to see every request routed through the gateway:
+
+```bash
+mcp-gateway --config servers.yaml --log-level debug
+```
+
+This shows: backend selection, tool invocations, circuit breaker state changes, retry attempts, and rate limiter decisions.
+
+### Tools not appearing in search
+
+- Verify the backend is running: check `gateway_list_servers` output.
+- Tool lists are cached (default 5 minutes). Restart the gateway or wait for cache expiry after adding new backends.
+- Confirm the backend responds to `tools/list` -- some servers require initialization first.
+
 ## Building
 
 ```bash
@@ -310,6 +444,20 @@ git clone https://github.com/MikkoParkkola/mcp-gateway
 cd mcp-gateway
 cargo build --release
 ```
+
+## Contributing
+
+Contributions are welcome. The short version:
+
+1. **Fork and branch** -- `git checkout -b feature/your-feature`
+2. **Test** -- `cargo test` (all tests must pass)
+3. **Lint** -- `cargo fmt && cargo clippy -- -D warnings`
+4. **PR** -- open a pull request against `main` with a clear description
+5. **Changelog** -- add an entry to [CHANGELOG.md](CHANGELOG.md) for user-facing changes
+
+Look for issues labeled [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted) to get started. For larger changes, open an issue first to discuss the approach.
+
+Full details: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
@@ -320,3 +468,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 Created by [Mikko Parkkola](https://github.com/MikkoParkkola)
 
 Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25.
+
+[Changelog](CHANGELOG.md) | [Releases](https://github.com/MikkoParkkola/mcp-gateway/releases)
