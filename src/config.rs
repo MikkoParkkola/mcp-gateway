@@ -47,7 +47,7 @@ pub struct IntelligenceConfig {
 impl Default for IntelligenceConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             whale_alert_key: String::new(),
             helius_key: String::new(),
         }

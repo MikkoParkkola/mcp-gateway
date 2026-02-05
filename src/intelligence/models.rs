@@ -47,6 +47,8 @@ pub enum SwapSide {
     Buy,
     /// Token Sale
     Sell,
+    /// Unknown side
+    Unknown,
 }
 
 /// Swap event on a Decentralized Exchange.
@@ -90,7 +92,8 @@ pub struct MarketInsight {
     /// Detailed insight data.
     pub data: InsightData,
     /// Confidence level (0.0 to 1.0).
-    pub confidence_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_score: Option<f32>,
     /// When the insight was generated.
     pub timestamp: DateTime<Utc>,
 }

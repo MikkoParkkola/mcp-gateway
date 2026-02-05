@@ -25,41 +25,36 @@ impl IntelligenceManager {
         self.fetchers.push(fetcher);
     }
 
-    /// Run a single aggregation cycle across all fetchers.
-    pub async fn aggregate_insights(&self) -> Result<Vec<MarketInsight>> {
+    /// Run a single aggregation cycle across all fetchers, optionally filtering by chain.
+    pub async fn aggregate_insights(&self, chains: Option<Vec<String>>) -> Result<Vec<MarketInsight>> {
         let (tx, mut rx) = mpsc::channel(100);
         let mut insights = Vec::new();
 
         for fetcher in &self.fetchers {
             let tx = tx.clone();
             let fetcher = fetcher.clone();
+            let chains = chains.clone();
             
             tokio::spawn(async move {
-                // Fetch whale movements
-                if let Ok(whales) = fetcher.fetch_whale_movements().await {
-                    for movement in whales {
-                        let insight = MarketInsight {
-                            id: uuid::Uuid::new_v4(),
-                            summary: format!("Whale Alert: {} {} moved on {:?}", movement.amount, movement.asset, movement.chain),
-                            data: super::models::InsightData::Whale(movement),
-                            confidence_score: 1.0,
-                            timestamp: chrono::Utc::now(),
-                        };
-                        let _ = tx.send(insight).await;
+                match fetcher.fetch_insights().await {
+                    Ok(results) => {
+                        for insight in results {
+                            // Filter by chain if specified
+                            if let Some(ref c) = chains {
+                                let chain_str = match &insight.data {
+                                    super::models::InsightData::Whale(w) => format!("{:?}", w.chain),
+                                    super::models::InsightData::Dex(d) => format!("{:?}", d.chain),
+                                }.to_lowercase();
+                                
+                                if !c.iter().any(|filter| filter.to_lowercase() == chain_str) {
+                                    continue;
+                                }
+                            }
+                            let _ = tx.send(insight).await;
+                        }
                     }
-                }
-                
-                // Fetch DEX flows
-                if let Ok(flows) = fetcher.fetch_dex_flows().await {
-                    for flow in flows {
-                        let insight = MarketInsight {
-                            id: uuid::Uuid::new_v4(),
-                            summary: format!("DEX Signal: {} swap on {} ({})", flow.pair, flow.dex, flow.usd_value),
-                            data: super::models::InsightData::Dex(flow),
-                            confidence_score: 0.8,
-                            timestamp: chrono::Utc::now(),
-                        };
-                        let _ = tx.send(insight).await;
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch insights from fetcher: {}", e);
                     }
                 }
             });
@@ -79,29 +74,31 @@ impl IntelligenceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::models::{WhaleMovement, DexFlow, Chain};
+    use super::super::models::{WhaleMovement, Chain, MarketInsight, InsightData};
     use async_trait::async_trait;
 
     struct MockFetcher;
 
     #[async_trait]
     impl crate::intelligence::ChainFetcher for MockFetcher {
-        async fn fetch_whale_movements(&self) -> Result<Vec<WhaleMovement>> {
-            Ok(vec![WhaleMovement {
-                chain: Chain::Ethereum,
-                tx_hash: "0x123".to_string(),
-                from_address: "from".to_string(),
-                to_address: "to".to_string(),
-                asset: "ETH".to_string(),
-                amount: 100.0,
-                usd_value: 200000.0,
+        async fn fetch_insights(&self) -> Result<Vec<MarketInsight>> {
+            Ok(vec![MarketInsight {
+                id: uuid::Uuid::new_v4(),
+                summary: "Mock Insight".to_string(),
+                data: InsightData::Whale(WhaleMovement {
+                    chain: Chain::Ethereum,
+                    tx_hash: "0x123".to_string(),
+                    from_address: "from".to_string(),
+                    to_address: "to".to_string(),
+                    asset: "ETH".to_string(),
+                    amount: 100.0,
+                    usd_value: 200000.0,
+                    timestamp: chrono::Utc::now(),
+                    labels: vec![],
+                }),
+                confidence_score: Some(1.0),
                 timestamp: chrono::Utc::now(),
-                labels: vec![],
             }])
-        }
-
-        async fn fetch_dex_flows(&self) -> Result<Vec<DexFlow>> {
-            Ok(vec![])
         }
     }
 
@@ -110,9 +107,9 @@ mod tests {
         let mut manager = IntelligenceManager::new();
         manager.add_fetcher(Arc::new(MockFetcher));
         
-        let insights = manager.aggregate_insights().await.unwrap();
+        let insights = manager.aggregate_insights(None).await.unwrap();
         assert_eq!(insights.len(), 1);
-        assert!(insights[0].summary.contains("Whale Alert"));
+        assert!(insights[0].summary.contains("Mock Insight"));
     }
 }
 
