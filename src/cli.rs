@@ -100,4 +100,19 @@ pub enum CapCommand {
         #[arg(short, long, default_value = "{}")]
         args: String,
     },
+
+    /// Discover existing MCP servers from configs and running processes
+    Discover {
+        /// Output format (table, json, yaml)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+
+        /// Write discovered servers to gateway config
+        #[arg(long)]
+        write_config: bool,
+
+        /// Config file path to write to
+        #[arg(long)]
+        config_path: Option<PathBuf>,
+    },
 }

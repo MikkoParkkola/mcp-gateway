@@ -27,12 +27,14 @@ pub mod backend;
 pub mod capability;
 pub mod cli;
 pub mod config;
+pub mod discovery;
 pub mod error;
 pub mod failsafe;
 pub mod gateway;
 pub mod oauth;
 pub mod protocol;
 pub mod transport;
+pub mod validator;
 
 pub use error::{Error, Result};
 

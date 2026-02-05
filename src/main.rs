@@ -15,6 +15,7 @@ use mcp_gateway::{
     },
     cli::{CapCommand, Cli, Command},
     config::Config,
+    discovery::AutoDiscovery,
     gateway::Gateway,
     setup_tracing,
 };
@@ -183,6 +184,109 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
                 }
             }
         }
+
+        CapCommand::Discover {
+            format,
+            write_config,
+            config_path,
+        } => {
+            let discovery = AutoDiscovery::new();
+
+            println!("🔍 Discovering MCP servers...\n");
+
+            match discovery.discover_all().await {
+                Ok(servers) => {
+                    if servers.is_empty() {
+                        println!("No MCP servers found.");
+                        println!("\nSearched locations:");
+                        println!("  • Claude Desktop config");
+                        println!("  • VS Code/Cursor MCP configs");
+                        println!("  • Windsurf config");
+                        println!("  • ~/.config/mcp/*.json");
+                        println!("  • Running processes (pieces, surreal, etc.)");
+                        println!("  • Environment variables (MCP_SERVER_*_URL)");
+                        return ExitCode::SUCCESS;
+                    }
+
+                    match format.as_str() {
+                        "json" => {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&servers).unwrap_or_default()
+                            );
+                        }
+                        "yaml" => {
+                            println!(
+                                "{}",
+                                serde_yaml::to_string(&servers).unwrap_or_default()
+                            );
+                        }
+                        _ => {
+                            // Table format
+                            println!("Discovered {} MCP server(s):\n", servers.len());
+                            for server in &servers {
+                                println!("📦 {}", server.name);
+                                println!("   Description: {}", server.description);
+                                println!("   Source: {:?}", server.source);
+
+                                match &server.transport {
+                                    mcp_gateway::config::TransportConfig::Stdio {
+                                        command,
+                                        ..
+                                    } => {
+                                        println!("   Transport: stdio");
+                                        println!("   Command: {command}");
+                                    }
+                                    mcp_gateway::config::TransportConfig::Http {
+                                        http_url,
+                                        ..
+                                    } => {
+                                        println!("   Transport: http");
+                                        println!("   URL: {http_url}");
+                                    }
+                                }
+
+                                if let Some(ref path) = server.metadata.config_path {
+                                    println!("   Config: {}", path.display());
+                                }
+                                if let Some(pid) = server.metadata.pid {
+                                    println!("   PID: {pid}");
+                                }
+
+                                println!();
+                            }
+                        }
+                    }
+
+                    if write_config {
+                        println!("\n📝 Writing discovered servers to config...");
+                        let result = write_discovered_to_config(&servers, config_path.as_deref());
+                        match result {
+                            Ok(path) => {
+                                println!("✅ Config written to {}", path.display());
+                                println!(
+                                    "\nTo use discovered servers, start gateway with: mcp-gateway -c {}",
+                                    path.display()
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Failed to write config: {e}");
+                                return ExitCode::FAILURE;
+                            }
+                        }
+                    } else {
+                        println!("\n💡 To add these servers to your gateway config, run:");
+                        println!("   mcp-gateway cap discover --write-config");
+                    }
+
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("❌ Discovery failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
 }
 
@@ -234,4 +338,41 @@ async fn run_server(cli: Cli) -> ExitCode {
 
     info!("Gateway shutdown complete");
     ExitCode::SUCCESS
+}
+
+/// Write discovered servers to a config file
+fn write_discovered_to_config(
+    servers: &[mcp_gateway::discovery::DiscoveredServer],
+    config_path: Option<&std::path::Path>,
+) -> mcp_gateway::Result<std::path::PathBuf> {
+
+    // Determine config path
+    let path = if let Some(p) = config_path {
+        p.to_path_buf()
+    } else {
+        std::path::PathBuf::from("mcp-gateway-discovered.yaml")
+    };
+
+    // Load existing config or create new
+    let mut config = if path.exists() {
+        Config::load(Some(&path))?
+    } else {
+        Config::default()
+    };
+
+    // Add discovered servers to backends
+    for server in servers {
+        let backend_config = server.to_backend_config();
+        config.backends.insert(server.name.clone(), backend_config);
+    }
+
+    // Serialize to YAML
+    let yaml = serde_yaml::to_string(&config)
+        .map_err(|e| mcp_gateway::Error::Config(format!("Failed to serialize config: {e}")))?;
+
+    // Write to file
+    std::fs::write(&path, yaml)
+        .map_err(|e| mcp_gateway::Error::Config(format!("Failed to write config: {e}")))?;
+
+    Ok(path)
 }
