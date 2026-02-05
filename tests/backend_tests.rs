@@ -18,6 +18,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         env: Default::default(),
         headers: Default::default(),
         oauth: None,
+        circuit_breaker: None,
     };
 
     let failsafe = FailsafeConfig::default();

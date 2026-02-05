@@ -1,0 +1,82 @@
+# MCP Gateway Configuration - Circuit Breaker Example
+# =====================================================
+#
+# This example shows how to configure circuit breakers globally and per-backend.
+# Circuit breakers prevent cascading failures when backends go down.
+
+server:
+  host: "127.0.0.1"
+  port: 39400
+
+# Global circuit breaker configuration (applies to all backends by default)
+failsafe:
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5      # Open circuit after 5 consecutive failures
+    success_threshold: 2      # Close circuit after 2 consecutive successes in half-open state
+    reset_timeout: "30s"      # Wait 30s before trying again (half-open)
+  retry:
+    enabled: true
+    max_attempts: 3
+  rate_limit:
+    enabled: true
+    requests_per_second: 100
+
+backends:
+  # Use global circuit breaker settings
+  reliable-backend:
+    http_url: "http://localhost:8080/mcp"
+    description: "Reliable service - uses global settings"
+    timeout: "10s"
+
+  # Override circuit breaker for flaky backend (more lenient)
+  flaky-backend:
+    http_url: "http://localhost:8081/mcp"
+    description: "Flaky service - custom circuit breaker"
+    timeout: "10s"
+    circuit_breaker:
+      enabled: true
+      failure_threshold: 10   # More lenient - 10 failures before opening
+      success_threshold: 3    # Require 3 successes to close
+      reset_timeout: "60s"    # Longer recovery timeout
+
+  # Override circuit breaker for critical backend (more strict)
+  critical-backend:
+    http_url: "http://localhost:8082/mcp"
+    description: "Critical service - strict circuit breaker"
+    timeout: "5s"
+    circuit_breaker:
+      enabled: true
+      failure_threshold: 3    # Strict - open after just 3 failures
+      success_threshold: 5    # Require 5 successes before trusting again
+      reset_timeout: "10s"    # Quick retry to test recovery
+
+  # Disable circuit breaker for specific backend
+  testing-backend:
+    command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
+    description: "Testing service - no circuit breaker"
+    circuit_breaker:
+      enabled: false
+
+# Circuit Breaker Behavior:
+# =========================
+#
+# States:
+#   - Closed (normal): Requests flow through, failures increment counter
+#   - Open (failing): Requests blocked, error returned immediately
+#   - HalfOpen (testing): Limited requests allowed to test recovery
+#
+# State Transitions:
+#   Closed -> Open: After failure_threshold consecutive failures
+#   Open -> HalfOpen: After reset_timeout has passed
+#   HalfOpen -> Closed: After success_threshold consecutive successes
+#   HalfOpen -> Open: On any failure
+#
+# Error Messages:
+#   When circuit is open, you'll see:
+#   "Backend 'X' circuit breaker is open (5 failures in last 10 seconds, retry in 20 seconds)"
+#
+# Logs (with tracing):
+#   INFO  Circuit breaker for 'backend-name' closed
+#   WARN  Circuit breaker for 'backend-name' opened after 5 failures
+#   DEBUG Circuit breaker half-open (testing recovery)

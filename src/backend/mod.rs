@@ -52,11 +52,14 @@ impl Backend {
         failsafe_config: &crate::config::FailsafeConfig,
         cache_ttl: Duration,
     ) -> Self {
+        // Use per-backend circuit breaker config if provided, otherwise use global
+        let cb_config = config.circuit_breaker.clone().unwrap_or_else(|| failsafe_config.circuit_breaker.clone());
+
         Self {
             name: name.to_string(),
             config,
             transport: RwLock::new(None),
-            failsafe: Failsafe::new(name, failsafe_config),
+            failsafe: Failsafe::new_with_cb(name, failsafe_config, &cb_config),
             tools_cache: RwLock::new(None),
             cache_time: RwLock::new(None),
             cache_ttl,
@@ -239,7 +242,8 @@ impl Backend {
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         // Check failsafe
         if !self.failsafe.can_proceed() {
-            return Err(Error::BackendUnavailable(self.name.clone()));
+            let status = self.failsafe.circuit_breaker.status_message();
+            return Err(Error::BackendUnavailable(status));
         }
 
         // Acquire semaphore

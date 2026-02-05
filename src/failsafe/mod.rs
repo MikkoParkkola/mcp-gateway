@@ -10,7 +10,7 @@ pub use retry::{RetryPolicy, with_retry};
 
 use std::sync::Arc;
 
-use crate::config::FailsafeConfig;
+use crate::config::{CircuitBreakerConfig, FailsafeConfig};
 
 /// Combined failsafe wrapper for backends
 #[derive(Clone)]
@@ -29,6 +29,16 @@ impl Failsafe {
     pub fn new(name: &str, config: &FailsafeConfig) -> Self {
         Self {
             circuit_breaker: Arc::new(CircuitBreaker::new(name, &config.circuit_breaker)),
+            rate_limiter: Arc::new(RateLimiter::new(&config.rate_limit)),
+            retry_policy: RetryPolicy::new(&config.retry),
+        }
+    }
+
+    /// Create a new failsafe with custom circuit breaker config
+    #[must_use]
+    pub fn new_with_cb(name: &str, config: &FailsafeConfig, cb_config: &CircuitBreakerConfig) -> Self {
+        Self {
+            circuit_breaker: Arc::new(CircuitBreaker::new(name, cb_config)),
             rate_limiter: Arc::new(RateLimiter::new(&config.rate_limit)),
             retry_policy: RetryPolicy::new(&config.retry),
         }

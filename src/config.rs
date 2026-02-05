@@ -437,6 +437,9 @@ pub struct BackendConfig {
     /// OAuth configuration (optional)
     #[serde(default)]
     pub oauth: Option<OAuthConfig>,
+    /// Per-backend circuit breaker configuration (overrides global)
+    #[serde(default)]
+    pub circuit_breaker: Option<CircuitBreakerConfig>,
 }
 
 /// OAuth configuration for a backend
@@ -468,6 +471,7 @@ impl Default for BackendConfig {
             env: HashMap::new(),
             headers: HashMap::new(),
             oauth: None,
+            circuit_breaker: None,
         }
     }
 }
