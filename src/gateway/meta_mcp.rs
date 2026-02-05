@@ -13,6 +13,7 @@ use tracing::debug;
 
 use crate::backend::BackendRegistry;
 use crate::capability::CapabilityBackend;
+use crate::intelligence::manager::IntelligenceManager;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, RequestId, ServerCapabilities, Tool,
     ToolsCallResult, ToolsCapability, ToolsListResult, negotiate_version,
@@ -25,14 +26,38 @@ pub struct MetaMcp {
     backends: Arc<BackendRegistry>,
     /// Capability backend (direct REST APIs)
     capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
+    /// Intelligence manager
+    intelligence: Arc<IntelligenceManager>,
 }
 
 impl MetaMcp {
     /// Create a new Meta-MCP handler
-    pub fn new(backends: Arc<BackendRegistry>) -> Self {
+    pub fn new(backends: Arc<BackendRegistry>, config: &crate::config::IntelligenceConfig) -> Self {
+        let mut manager = IntelligenceManager::new();
+        
+        if config.enabled {
+            // Add Ethereum/Whale Alert fetcher
+            if !config.whale_alert_key.is_empty() {
+                manager.add_fetcher(Arc::new(crate::intelligence::ethereum::EthereumFetcher::new(
+                    config.whale_alert_key.clone(),
+                )));
+            }
+            
+            // Add Solana/Helius fetcher
+            if !config.helius_key.is_empty() {
+                manager.add_fetcher(Arc::new(crate::intelligence::solana::SolanaFetcher::new(
+                    config.helius_key.clone(),
+                )));
+            }
+
+            // Add Base fetcher (free API)
+            manager.add_fetcher(Arc::new(crate::intelligence::base::BaseFetcher::new()));
+        }
+
         Self {
             backends,
             capabilities: RwLock::new(None),
+            intelligence: Arc::new(manager),
         }
     }
 
@@ -168,6 +193,58 @@ impl MetaMcp {
                 output_schema: None,
                 annotations: None,
             },
+            Tool {
+                name: "gateway_get_intelligence".to_string(),
+                title: Some("Get Market Intelligence".to_string()),
+                description: Some("Get aggregated real-time on-chain market intelligence (whales, dex flows)".to_string()),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "chains": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Filter by chains (ethereum, solana, base, arbitrum)"
+                        }
+                    }
+                }),
+                output_schema: None,
+            },
+            Tool {
+                name: "gateway_get_whales".to_string(),
+                title: Some("Get Whale Movements".to_string()),
+                description: Some("Get recent large asset movements (whale alerts)".to_string()),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "chains": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Filter by chains"
+                        },
+                        "min_usd_value": {
+                            "type": "number",
+                            "description": "Minimum USD value of movement"
+                        }
+                    }
+                }),
+                output_schema: None,
+            },
+            Tool {
+                name: "gateway_get_dex_flows".to_string(),
+                title: Some("Get DEX Flows".to_string()),
+                description: Some("Get recent large swaps and volume spikes on decentralized exchanges".to_string()),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "chains": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Filter by chains"
+                        }
+                    }
+                }),
+                output_schema: None,
+            },
         ];
 
         let result = ToolsListResult {
@@ -190,6 +267,9 @@ impl MetaMcp {
             "gateway_list_tools" => self.list_tools(&arguments).await,
             "gateway_search_tools" => self.search_tools(&arguments).await,
             "gateway_invoke" => self.invoke_tool(&arguments).await,
+            "gateway_get_intelligence" => self.get_intelligence(&arguments).await,
+            "gateway_get_whales" => self.get_whales(&arguments).await,
+            "gateway_get_dex_flows" => self.get_dex_flows(&arguments).await,
             _ => Err(Error::json_rpc(
                 -32601,
                 format!("Unknown tool: {tool_name}"),
@@ -416,5 +496,66 @@ impl MetaMcp {
         } else {
             Ok(response.result.unwrap_or(json!(null)))
         }
+    }
+
+    /// Get market intelligence
+    async fn get_intelligence(&self, args: &Value) -> Result<Value> {
+        let chains = args
+            .get("chains")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<String>>()
+            });
+
+        // Run aggregation
+        let insights = self.intelligence.aggregate_insights(chains).await?;
+        Ok(serde_json::to_value(insights)?)
+    }
+
+    /// Get whale movements
+    async fn get_whales(&self, args: &Value) -> Result<Value> {
+        let chains = args
+            .get("chains")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<String>>()
+            });
+
+        let min_usd = args.get("min_usd_value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+        let insights = self.intelligence.aggregate_insights(chains).await?;
+        let whales: Vec<_> = insights
+            .into_iter()
+            .filter(|i| match &i.data {
+                crate::intelligence::models::InsightData::Whale(w) => w.usd_value >= min_usd,
+                _ => false,
+            })
+            .collect();
+
+        Ok(serde_json::to_value(whales)?)
+    }
+
+    /// Get DEX flows
+    async fn get_dex_flows(&self, args: &Value) -> Result<Value> {
+        let chains = args
+            .get("chains")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<String>>()
+            });
+
+        let insights = self.intelligence.aggregate_insights(chains).await?;
+        let flows: Vec<_> = insights
+            .into_iter()
+            .filter(|i| matches!(i.data, crate::intelligence::models::InsightData::Dex(_)))
+            .collect();
+
+        Ok(serde_json::to_value(flows)?)
     }
 }
