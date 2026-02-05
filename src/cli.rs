@@ -52,6 +52,17 @@ pub enum Command {
     /// Capability management commands
     #[command(subcommand)]
     Cap(CapCommand),
+
+    /// Discover MCP servers on this system
+    Discover {
+        /// Generate gateway.yaml configuration snippet
+        #[arg(short, long)]
+        generate: bool,
+
+        /// Output format (text or json)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+    },
 }
 
 /// Capability subcommands

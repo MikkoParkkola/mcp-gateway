@@ -15,6 +15,7 @@ use mcp_gateway::{
     },
     cli::{CapCommand, Cli, Command},
     config::Config,
+    discovery,
     gateway::Gateway,
     setup_tracing,
 };
@@ -32,7 +33,81 @@ async fn main() -> ExitCode {
     // Handle subcommands
     match cli.command {
         Some(Command::Cap(cap_cmd)) => run_cap_command(cap_cmd).await,
+        Some(Command::Discover { generate, format }) => run_discover(generate, &format).await,
         Some(Command::Serve) | None => run_server(cli).await,
+    }
+}
+
+/// Run discovery command
+async fn run_discover(generate: bool, format: &str) -> ExitCode {
+    info!("Discovering MCP servers on this system...");
+
+    match discovery::discover_servers().await {
+        Ok(servers) => {
+            if servers.is_empty() {
+                println!("No MCP servers found on this system.");
+                println!("\nSearched:");
+                println!("  • Configuration files (Claude Desktop, VS Code)");
+                println!("  • Running processes");
+                println!("  • Package managers (npm, pip, cargo)");
+                return ExitCode::SUCCESS;
+            }
+
+            if generate {
+                // Generate gateway.yaml snippet
+                println!("{}", discovery::generate_config(&servers));
+            } else if format == "json" {
+                // JSON output
+                match serde_json::to_string_pretty(&servers) {
+                    Ok(json) => println!("{}", json),
+                    Err(e) => {
+                        eprintln!("❌ Failed to serialize to JSON: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                // Text output
+                println!("Found {} MCP server(s):\n", servers.len());
+
+                for server in &servers {
+                    println!("📦 {}", server.name);
+                    println!("   Transport: {}", server.transport);
+                    println!("   Source: {}", server.source);
+
+                    match server.transport {
+                        discovery::TransportType::Stdio => {
+                            if let Some(ref cmd) = server.command {
+                                print!("   Command: {}", cmd);
+                                if !server.args.is_empty() {
+                                    print!(" {}", server.args.join(" "));
+                                }
+                                println!();
+                            }
+                        }
+                        _ => {
+                            if let Some(ref url) = server.url {
+                                println!("   URL: {}", url);
+                            }
+                        }
+                    }
+
+                    if !server.env.is_empty() {
+                        println!("   Environment: {} variable(s)", server.env.len());
+                    }
+
+                    println!();
+                }
+
+                println!("💡 Tip: Use --generate to output gateway.yaml configuration");
+                println!("💡 Tip: Use --format json for JSON output");
+            }
+
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("❌ Discovery failed: {}", e);
+            ExitCode::FAILURE
+        }
     }
 }
 

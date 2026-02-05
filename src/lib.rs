@@ -27,6 +27,7 @@ pub mod backend;
 pub mod capability;
 pub mod cli;
 pub mod config;
+pub mod discovery;
 pub mod error;
 pub mod failsafe;
 pub mod gateway;
