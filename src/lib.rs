@@ -33,6 +33,7 @@ pub mod gateway;
 pub mod oauth;
 pub mod protocol;
 pub mod transport;
+pub mod validator;
 
 pub use error::{Error, Result};
 

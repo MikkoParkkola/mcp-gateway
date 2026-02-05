@@ -64,6 +64,17 @@ pub enum CapCommand {
         file: PathBuf,
     },
 
+    /// Validate agent-UX best practices for a capability
+    ValidateUx {
+        /// Path to capability YAML file
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Output format (text or json)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+    },
+
     /// List capabilities in a directory
     List {
         /// Directory containing capability definitions

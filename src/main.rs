@@ -17,6 +17,7 @@ use mcp_gateway::{
     config::Config,
     gateway::Gateway,
     setup_tracing,
+    validator,
 };
 
 #[tokio::main]
@@ -39,6 +40,41 @@ async fn main() -> ExitCode {
 /// Run capability management commands
 async fn run_cap_command(cmd: CapCommand) -> ExitCode {
     match cmd {
+        CapCommand::ValidateUx { file, format } => match parse_capability_file(&file).await {
+            Ok(cap) => {
+                let report = validator::validate_ux(&cap);
+
+                match format.as_str() {
+                    "json" => match report.format_json() {
+                        Ok(json) => {
+                            println!("{json}");
+                            if report.passed() {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::FAILURE
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Failed to format JSON: {e}");
+                            ExitCode::FAILURE
+                        }
+                    },
+                    _ => {
+                        print!("{}", report.format_text());
+                        if report.passed() {
+                            ExitCode::SUCCESS
+                        } else {
+                            ExitCode::FAILURE
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to parse: {e}");
+                ExitCode::FAILURE
+            }
+        },
+
         CapCommand::Validate { file } => match parse_capability_file(&file).await {
             Ok(cap) => {
                 if let Err(e) = validate_capability(&cap) {
