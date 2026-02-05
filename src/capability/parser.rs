@@ -72,7 +72,7 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
 fn validate_no_secrets(auth: &super::AuthConfig) -> Result<()> {
     // Check that key references are properly formatted
     if !auth.key.is_empty() {
-        let valid_prefixes = ["keychain:", "env:", "oauth:", "{env."];
+        let valid_prefixes = ["keychain:", "env:", "oauth:", "file:", "{env."];
         let is_reference = valid_prefixes.iter().any(|p| auth.key.starts_with(p));
 
         // Check if it looks like a bare environment variable name (UPPERCASE_WITH_UNDERSCORES)
@@ -155,6 +155,13 @@ providers:
 
         let auth = AuthConfig {
             key: "{env.API_KEY}".to_string(),
+            ..Default::default()
+        };
+        assert!(validate_no_secrets(&auth).is_ok());
+
+        // File-based credential
+        let auth = AuthConfig {
+            key: "file:~/.config/tokens.json:access_token".to_string(),
             ..Default::default()
         };
         assert!(validate_no_secrets(&auth).is_ok());

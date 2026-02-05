@@ -12,6 +12,7 @@
 //! - `env:VAR_NAME` - Environment variable
 //! - `keychain:name` - macOS Keychain
 //! - `oauth:provider` - OAuth token from vault (with auto-refresh)
+//! - `file:/path/to/file.json:field` - JSON file with dot-path field extraction
 //! - `{env.VAR}` - Template format for environment variables
 
 use std::sync::Arc;
@@ -212,7 +213,8 @@ impl CapabilityExecutor {
         for (name, value_template) in &config.headers {
             let value = self.substitute_string(value_template, params)?;
 
-            // Skip auth header if it references credentials (we'll add it below)
+            // Skip Authorization headers with unresolved {access_token} —
+            // inject_auth will handle auth from the credential key
             if name.eq_ignore_ascii_case("authorization") && value.contains("{access_token}") {
                 continue;
             }
@@ -224,7 +226,7 @@ impl CapabilityExecutor {
             }
         }
 
-        // Inject authentication
+        // Inject authentication from configured credential source
         if auth.required {
             self.inject_auth(&mut headers, auth).await?;
         }
@@ -279,11 +281,12 @@ impl CapabilityExecutor {
     ///
     /// This method resolves credential references to actual values.
     /// Supported formats:
-    /// - `keychain:name` - macOS Keychain
     /// - `env:VAR_NAME` - Environment variable (explicit)
+    /// - `keychain:name` - macOS Keychain
     /// - `oauth:provider` - OAuth token from vault
+    /// - `file:/path/to/file.json:field` - JSON file with dot-path extraction
     /// - `{env.VAR_NAME}` - Template format
-    /// - `VAR_NAME` - Implicit env var (fulcrum compatibility)
+    /// - `VAR_NAME` - Implicit env var (bare uppercase name)
     async fn fetch_credential(&self, auth: &super::AuthConfig) -> Result<String> {
         let key = &auth.key;
 
@@ -301,6 +304,9 @@ impl CapabilityExecutor {
         } else if let Some(provider) = key.strip_prefix("oauth:") {
             // OAuth token from vault
             self.fetch_oauth_token(provider).await
+        } else if let Some(file_spec) = key.strip_prefix("file:") {
+            // JSON file with field extraction
+            self.fetch_from_file(file_spec)
         } else if key.starts_with("{env.") && key.ends_with('}') {
             // Template format: {env.VAR_NAME}
             let var_name = &key[5..key.len() - 1];
@@ -309,7 +315,7 @@ impl CapabilityExecutor {
         } else if key.is_empty() {
             Err(Error::Config("No credential key configured".to_string()))
         } else if Self::looks_like_env_var_name(key) {
-            // Fulcrum compatibility: bare name like BRAVE_API_KEY is treated as env var
+            // Bare name like BRAVE_API_KEY is treated as env var
             std::env::var(key).map_err(|_| {
                 Error::Config(format!(
                     "Environment variable '{key}' not set. Set it with: export {key}=your_key"
@@ -317,7 +323,7 @@ impl CapabilityExecutor {
             })
         } else {
             Err(Error::Config(format!(
-                "Unknown credential format: {}. Use keychain:, env:, oauth:, or set environment variable",
+                "Unknown credential format: {}. Use env:, keychain:, oauth:, file:, or set environment variable",
                 key.chars().take(20).collect::<String>()
             )))
         }
@@ -330,6 +336,94 @@ impl CapabilityExecutor {
             && s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
             && s.chars()
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    }
+
+    /// Fetch credential from a JSON file
+    ///
+    /// Format: `file:/path/to/file.json:field_name`
+    ///
+    /// Supports:
+    /// - `~` expansion to home directory
+    /// - Nested fields with dot notation: `file:~/.config/tokens.json:data.access_token`
+    /// - String and numeric values
+    ///
+    /// # Security
+    ///
+    /// The file should have restrictive permissions (0600).
+    /// Credential values are never logged.
+    fn fetch_from_file(&self, spec: &str) -> Result<String> {
+        // Split on last colon to separate path from field
+        let (path, field) = spec.rsplit_once(':').ok_or_else(|| {
+            Error::Config(format!(
+                "Invalid file credential format. Expected: file:/path/to/file.json:field_name (got 'file:{}')",
+                spec.chars().take(50).collect::<String>()
+            ))
+        })?;
+
+        if field.is_empty() {
+            return Err(Error::Config(
+                "Empty field name in file credential. Expected: file:/path/to/file.json:field_name".to_string()
+            ));
+        }
+
+        // Expand ~ to home directory
+        let expanded_path = if let Some(rest) = path.strip_prefix("~/") {
+            match dirs::home_dir() {
+                Some(home) => home.join(rest),
+                None => {
+                    return Err(Error::Config(
+                        "Cannot expand ~ in file credential path: HOME not set".to_string(),
+                    ))
+                }
+            }
+        } else {
+            std::path::PathBuf::from(path)
+        };
+
+        let content = std::fs::read_to_string(&expanded_path).map_err(|e| {
+            Error::Config(format!(
+                "Failed to read credential file '{}': {}",
+                expanded_path.display(),
+                e
+            ))
+        })?;
+
+        let json: Value = serde_json::from_str(&content).map_err(|e| {
+            Error::Config(format!(
+                "Failed to parse credential file '{}' as JSON: {}",
+                expanded_path.display(),
+                e
+            ))
+        })?;
+
+        // Navigate the JSON path using dot notation
+        let mut current = &json;
+        for segment in field.split('.') {
+            current = current.get(segment).ok_or_else(|| {
+                Error::Config(format!(
+                    "Field '{}' not found in credential file '{}'",
+                    field,
+                    expanded_path.display()
+                ))
+            })?;
+        }
+
+        match current {
+            Value::String(s) => Ok(s.clone()),
+            Value::Number(n) => Ok(n.to_string()),
+            _ => Err(Error::Config(format!(
+                "Field '{}' in '{}' must be a string or number, got {}",
+                field,
+                expanded_path.display(),
+                match current {
+                    Value::Bool(_) => "boolean",
+                    Value::Array(_) => "array",
+                    Value::Object(_) => "object",
+                    Value::Null => "null",
+                    _ => "unknown",
+                }
+            ))),
+        }
     }
 
     /// Fetch OAuth token from vault
@@ -507,8 +601,8 @@ impl CapabilityExecutor {
 
         for (key, value_template) in template {
             let value = self.substitute_string(value_template, params)?;
-            // Skip empty values
-            if !value.is_empty() && value != "null" {
+            // Skip empty values and unresolved {placeholder} templates
+            if !value.is_empty() && value != "null" && !value.starts_with('{') {
                 result.push((key.clone(), value));
             }
         }
@@ -695,5 +789,106 @@ mod tests {
         assert_eq!(cache.get("key1"), Some(value));
 
         assert_eq!(cache.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_fetch_from_file_simple() {
+        let executor = CapabilityExecutor::new();
+        let dir = std::env::temp_dir().join("mcp-gateway-test-cred");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tokens.json");
+        std::fs::write(
+            &file,
+            r#"{"access_token": "test-token-123", "refresh_token": "refresh-456"}"#,
+        )
+        .unwrap();
+
+        let spec = format!("{}:access_token", file.display());
+        let result = executor.fetch_from_file(&spec).unwrap();
+        assert_eq!(result, "test-token-123");
+
+        let spec = format!("{}:refresh_token", file.display());
+        let result = executor.fetch_from_file(&spec).unwrap();
+        assert_eq!(result, "refresh-456");
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_fetch_from_file_nested() {
+        let executor = CapabilityExecutor::new();
+        let dir = std::env::temp_dir().join("mcp-gateway-test-cred-nested");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("config.json");
+        std::fs::write(
+            &file,
+            r#"{"auth": {"google": {"token": "nested-token"}, "count": 42}}"#,
+        )
+        .unwrap();
+
+        let spec = format!("{}:auth.google.token", file.display());
+        let result = executor.fetch_from_file(&spec).unwrap();
+        assert_eq!(result, "nested-token");
+
+        // Numeric values work too
+        let spec = format!("{}:auth.count", file.display());
+        let result = executor.fetch_from_file(&spec).unwrap();
+        assert_eq!(result, "42");
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_fetch_from_file_missing_field() {
+        let executor = CapabilityExecutor::new();
+        let dir = std::env::temp_dir().join("mcp-gateway-test-cred-missing");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tokens.json");
+        std::fs::write(&file, r#"{"access_token": "value"}"#).unwrap();
+
+        let spec = format!("{}:nonexistent", file.display());
+        let result = executor.fetch_from_file(&spec);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_fetch_from_file_missing_file() {
+        let executor = CapabilityExecutor::new();
+        let result = executor.fetch_from_file("/nonexistent/path/tokens.json:field");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to read"));
+    }
+
+    #[test]
+    fn test_fetch_from_file_invalid_format() {
+        let executor = CapabilityExecutor::new();
+        // No colon separator for field
+        let result = executor.fetch_from_file("/path/to/file.json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid file credential format"));
+    }
+
+    #[test]
+    fn test_substitute_params_skips_unresolved_placeholders() {
+        let executor = CapabilityExecutor::new();
+        let mut template = std::collections::HashMap::new();
+        template.insert("resolved".to_string(), "{name}".to_string());
+        template.insert("unresolved".to_string(), "{missing_param}".to_string());
+        template.insert("static_val".to_string(), "hello".to_string());
+
+        let params = serde_json::json!({"name": "world"});
+        let result = executor.substitute_params(&template, &params).unwrap();
+
+        // resolved and static_val should be present, unresolved should be filtered
+        let keys: Vec<&str> = result.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"resolved"));
+        assert!(keys.contains(&"static_val"));
+        assert!(!keys.contains(&"unresolved"));
     }
 }
