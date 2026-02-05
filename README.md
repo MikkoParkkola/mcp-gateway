@@ -5,31 +5,105 @@
 [![Rust](https://img.shields.io/badge/rust-1.85+-blue.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Universal Model Context Protocol (MCP) Gateway** - Single-port multiplexing with Meta-MCP for ~97% context token savings. At $15/M input tokens (Claude Opus pricing), that reduction saves roughly $0.22 per request -- or **$220 per 1,000 requests** that would otherwise carry 100+ tool definitions.
+**Give your AI access to every tool it needs -- without burning your context window or building MCP servers.**
 
-## The Problem
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets 4 meta-tools and discovers the right one on demand -- like searching an app store instead of installing every app.
 
-MCP is powerful, but scaling to many servers creates problems:
+## Why
 
-| Without Gateway | With Gateway |
-|----------------|--------------|
-| 100+ tool definitions in context | 4 meta-tools |
-| ~15,000 tokens overhead | ~400 tokens |
-| Multiple ports to manage | Single port |
-| Session loss on reconnect | Persistent proxy |
-| Restart AI session to change MCP servers | Restart gateway (~8ms), session stays alive |
-| No resilience | Circuit breakers, retries, rate limiting |
+**The context window is the bottleneck.** Every MCP tool you connect costs ~150 tokens of context overhead. Connect 20 servers with 100+ tools and you've burned 15,000 tokens before the conversation starts -- on tool definitions the AI probably won't use this turn.
 
-### Session Stability: Change MCP Servers Without Losing Context
+Worse: context limits force you to **choose** which tools to connect. You leave tools out because they don't fit -- and your AI makes worse decisions because it can't reach the right data.
 
-With tools like Claude Code, changing your MCP server configuration normally means restarting the entire AI session -- losing your conversation history, working context, and flow.
+MCP Gateway removes that tradeoff entirely.
 
-MCP Gateway eliminates this. Your AI client connects to **one stable endpoint** (`localhost:39400`). Behind that endpoint, you can reconfigure freely:
+| | Without Gateway | With Gateway |
+|---|----------------|--------------|
+| **Tools in context** | Every definition, every request | 4 meta-tools (~400 tokens) |
+| **Token overhead** | ~15,000 tokens (100 tools) | ~400 tokens -- **97% savings** |
+| **Cost at scale** | ~$0.22/request (Opus input) | ~$0.006/request -- **$219 saved per 1K** |
+| **Practical tool limit** | 20-50 tools (context pressure) | **Unlimited** -- discovered on demand |
+| **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
+| **Changing MCP config** | Restart AI session, lose context | Restart gateway (~8ms), session stays alive |
+| **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-- **REST API capabilities** (YAML files in capability directories) are **hot-reloaded automatically** -- add, modify, or remove a capability file and it's live within ~500ms. No restart of anything.
-- **MCP backends** (stdio/HTTP/SSE servers in `config.yaml`) require a gateway restart to pick up changes -- but the gateway restarts in **~8ms**. Your AI session stays connected; just retry the tool call.
+## Key Benefits
 
-The net effect: you can experiment with new MCP servers, troubleshoot broken ones, or swap configurations **without ever losing your AI session context**.
+### 1. Unlimited Tools, Minimal Tokens
+
+The gateway exposes 4 meta-tools. Your AI searches for what it needs (`gateway_search_tools`), then invokes it (`gateway_invoke`). Tool definitions load on demand, not upfront. Connect 500 tools and pay the token cost of 4.
+
+This isn't just a cost optimization -- it's a **capability unlock**. Without the gateway, you pick which 20-30 tools fit in context. With it, the AI has access to everything and dynamically selects the best tool for each task.
+
+**Token math** (Claude Opus @ $15/M input tokens):
+- **Without**: 100 tools × 150 tokens × 1,000 requests = 15M tokens = **$225**
+- **With**: 4 meta-tools × 100 tokens × 1,000 requests = 0.4M tokens = **$6**
+
+### 2. Any REST API → MCP Tool -- No Code
+
+Most APIs will never get a dedicated MCP server. The gateway turns any REST API into a tool your AI can use:
+
+**From an OpenAPI spec** (automatic):
+```bash
+mcp-gateway cap import stripe-openapi.yaml --output capabilities/ --prefix stripe
+# Generates one capability YAML per endpoint, ready to use
+```
+
+**From a YAML definition** (~30 seconds):
+```yaml
+name: stock_quote
+description: Get real-time stock price
+
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://finnhub.io
+      path: /api/v1/quote
+      method: GET
+      params:
+        symbol: "{symbol}"
+        token: "{env.FINNHUB_API_KEY}"
+```
+
+Drop the file in a capability directory -- **hot-reloaded in ~500ms**, no restart needed.
+
+The gateway ships with **42 starter capabilities** -- 25 work instantly with zero configuration:
+
+| Category | Zero-Config Tools | Source |
+|----------|------------------|--------|
+| **Knowledge** | Weather, Wikipedia, country info, public holidays, timezones, number facts | Open-Meteo, Wikipedia, RestCountries, Nager.Date |
+| **Developer** | npm packages, PyPI packages, GitHub search, QR codes, UUIDs | npm, PyPI, GitHub API, GoQR |
+| **News & Social** | Hacker News, Reddit | HN API, Reddit |
+| **Finance** | SEC EDGAR filings (10-K, 10-Q, 8-K, insider trades) | US Gov (free) |
+| **Geo** | Geocoding, reverse geocoding | OpenStreetMap Nominatim |
+| **Reference** | Book search, air quality | Open Library, OpenAQ |
+
+Plus 17 more with free-tier API keys (Brave Search, stock quotes, movies, IP geolocation, recipes, package tracking).
+
+### 3. Change Your MCP Stack Without Losing Your AI Session
+
+With Claude Code and similar tools, modifying your MCP configuration means restarting the entire AI session -- losing your conversation history, working context, and debugging flow mid-thought.
+
+The gateway is a **stable endpoint**. Your AI connects once to `localhost:39400`. Behind it:
+
+- **REST API capabilities** (YAML files) are **hot-reloaded automatically** -- add, modify, or remove a file and it's live in ~500ms. Zero downtime.
+- **MCP server backends** (stdio/HTTP/SSE) require a gateway restart -- but the gateway starts in **~8ms**. Your AI session stays connected.
+
+Experiment with new tools, troubleshoot broken ones, swap configurations -- without ever losing context.
+
+### 4. Production Resilience
+
+One flaky MCP server shouldn't take down your entire toolchain.
+
+| Failsafe | What It Does |
+|----------|-------------|
+| **Circuit Breaker** | Isolates failing backends after 5 errors, auto-recovers after 30s |
+| **Retry with Backoff** | 3 attempts with exponential backoff for transient failures |
+| **Rate Limiting** | Per-backend throttling prevents quota exhaustion |
+| **Health Checks** | Continuous monitoring with automatic recovery detection |
+| **Graceful Shutdown** | Clean connection teardown, no orphaned processes |
+| **Concurrency Limits** | Prevent backend overload under burst traffic |
 
 ## Architecture
 
@@ -55,11 +129,9 @@ The net effect: you can experiment with new MCP servers, troubleshoot broken one
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Features
+## How It Works
 
-### Meta-MCP Mode (~95% Token Savings)
-
-Instead of loading 100+ tool definitions, Meta-MCP exposes 4 meta-tools:
+The gateway exposes 4 meta-tools that replace hundreds of individual tool definitions:
 
 | Meta-Tool | Purpose |
 |-----------|---------|
@@ -68,16 +140,7 @@ Instead of loading 100+ tool definitions, Meta-MCP exposes 4 meta-tools:
 | `gateway_search_tools` | Search tools by keyword across all backends |
 | `gateway_invoke` | Invoke any tool on any backend |
 
-**Token Math:**
-- Traditional: 100 tools × 150 tokens = 15,000 tokens
-- Meta-MCP: 4 tools × 100 tokens = 400 tokens
-- **Savings: 97%**
-
-### Real-World Example
-
-Suppose you have 12 MCP servers (Tavily, filesystem, GitHub, Slack, Postgres, Redis, Brave, Jira, Linear, Sentry, Datadog, PagerDuty) exposing 180+ tools. Without a gateway, every LLM request carries all 180 tool definitions -- roughly 27,000 tokens of context overhead before the conversation even starts.
-
-With MCP Gateway, the LLM sees only 4 meta-tools (~400 tokens). It discovers and invokes the right tool on demand:
+**Example:** You have 12 MCP servers exposing 180+ tools. Without a gateway, every request carries all 180 definitions (~27,000 tokens). With the gateway, the AI discovers and invokes tools on demand:
 
 **Step 1: Search for relevant tools**
 
@@ -121,18 +184,9 @@ Response:
 }
 ```
 
-The gateway routes the call to the Tavily backend, applies circuit breaker/retry logic, and returns the result. The LLM never needed to load all 180 tool schemas -- it discovered and used exactly the one it needed.
+The gateway routes the call to the Tavily backend, applies circuit breaker/retry logic, and returns the result. The AI never loaded all 180 tool schemas -- it discovered and used exactly the one it needed.
 
-### Production Failsafes
-
-| Failsafe | Description |
-|----------|-------------|
-| **Circuit Breaker** | Opens after 5 failures, half-opens after 30s |
-| **Retry with Backoff** | 3 attempts with exponential backoff |
-| **Rate Limiting** | Per-backend request throttling |
-| **Health Checks** | Periodic ping to detect failures |
-| **Graceful Shutdown** | Clean connection termination |
-| **Concurrency Limits** | Prevent backend overload |
+## Features
 
 ### Authentication
 
