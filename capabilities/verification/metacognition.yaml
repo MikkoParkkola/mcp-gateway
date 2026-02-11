@@ -1,0 +1,63 @@
+# Metacognition NLI Verification - Gateway Capability
+#
+# This capability exposes metacognition verification via the MCP Gateway
+# for on-demand semantic verification. Use this for occasional verification
+# when the full MCP server overhead isn't justified.
+#
+# For high-frequency verification (every Write/Edit), use direct MCP instead.
+
+name: metacognition_verify
+description: |
+  Semantic NLI verification for LLM outputs. Detects contradictions and
+  hallucinations with 91.5% accuracy using DeBERTa NLI model.
+
+  Use when: Verifying important outputs before accepting them.
+  Returns: {passed: bool, confidence: float, failures: [...]}
+
+providers:
+  primary:
+    service: cli
+    config:
+      command: "/Users/mikko/github/metacognition-rs/target/release/metacog"
+      args:
+        - "verify"
+        - "{text}"
+        - "--model"
+        - "/Users/mikko/github/metacognition-rs/models/nli-deberta-v3-xsmall"
+        - "--format"
+        - "json"
+      timeout_ms: 5000
+
+parameters:
+  text:
+    description: "Text to verify for contradictions and hallucinations"
+    type: string
+    required: true
+  context:
+    description: "Optional source context to verify against"
+    type: string
+    required: false
+
+examples:
+  - name: "Verify consistent text"
+    params:
+      text: "All tests passed successfully. The test suite completed without errors."
+    expected: '{"passed": true, "confidence": 0.99}'
+
+  - name: "Detect contradiction"
+    params:
+      text: "All tests passed. Several tests failed with errors."
+    expected: '{"passed": false, "failures": ["CONTRADICTION..."]}'
+
+tags:
+  - verification
+  - nli
+  - quality
+  - hallucination
+  - contradiction
+
+metadata:
+  latency_ms: 15
+  cost_per_call: 0
+  accuracy: 0.915
+  value_per_year: 15000
