@@ -55,7 +55,7 @@ cache:
 auth:
   required: true
   type: api_key
-  key: BRAVE_API_KEY
+  key: BRAVE_SPELLCHECK_API_KEY
   header: X-Subscription-Token
 
 metadata:
