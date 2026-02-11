@@ -166,6 +166,7 @@ impl ProcessScanner {
                         TransportConfig::Http {
                             http_url: format!("http://127.0.0.1:{port}"),
                             streamable_http: false,
+                            protocol_version: None,
                         }
                     } else {
                         // Can't determine transport, skip this one
@@ -231,6 +232,7 @@ impl ProcessScanner {
                         TransportConfig::Http {
                             http_url: format!("http://127.0.0.1:{port}"),
                             streamable_http: false,
+                            protocol_version: None,
                         }
                     } else {
                         warn!(

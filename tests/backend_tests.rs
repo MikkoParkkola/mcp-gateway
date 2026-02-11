@@ -42,18 +42,21 @@ fn test_backend_transport_type() {
     let http_config = TransportConfig::Http {
         http_url: "http://localhost:8080/mcp".to_string(),
         streamable_http: false,
+        protocol_version: None,
     };
     assert_eq!(http_config.transport_type(), "http");
 
     let sse_config = TransportConfig::Http {
         http_url: "http://localhost:8080/sse".to_string(),
         streamable_http: false,
+        protocol_version: None,
     };
     assert_eq!(sse_config.transport_type(), "sse");
 
     let streamable_config = TransportConfig::Http {
         http_url: "http://localhost:8080/mcp".to_string(),
         streamable_http: true,
+        protocol_version: None,
     };
     assert_eq!(streamable_config.transport_type(), "streamable-http");
 }

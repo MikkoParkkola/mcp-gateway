@@ -102,6 +102,7 @@ impl Backend {
             TransportConfig::Http {
                 http_url,
                 streamable_http,
+                protocol_version,
             } => {
                 // Create OAuth client if configured
                 let oauth_client = self.create_oauth_client(http_url)?;
@@ -112,6 +113,7 @@ impl Backend {
                     self.config.timeout,
                     *streamable_http,
                     oauth_client,
+                    protocol_version.clone(),
                 )?;
                 transport.initialize().await?;
                 transport

@@ -167,6 +167,7 @@ impl ConfigScanner {
                     transport: TransportConfig::Http {
                         http_url: value,
                         streamable_http: false,
+                        protocol_version: None,
                     },
                     metadata: ServerMetadata {
                         config_path: None,
@@ -294,6 +295,7 @@ impl ConfigScanner {
                 transport: TransportConfig::Http {
                     http_url: url.to_string(),
                     streamable_http: false,
+                    protocol_version: None,
                 },
                 metadata: ServerMetadata {
                     config_path: Some(config_path.to_path_buf()),

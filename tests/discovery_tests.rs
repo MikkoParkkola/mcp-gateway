@@ -91,6 +91,7 @@ async fn test_discovered_server_to_backend_config() {
         transport: TransportConfig::Http {
             http_url: "http://localhost:3000".to_string(),
             streamable_http: false,
+            protocol_version: None,
         },
         metadata: ServerMetadata {
             config_path: None,

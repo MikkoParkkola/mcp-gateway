@@ -22,7 +22,7 @@ use url::Url;
 
 use super::Transport;
 use crate::oauth::OAuthClient;
-use crate::protocol::{JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId};
+use crate::protocol::{JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, SUPPORTED_VERSIONS, RequestId};
 use crate::{Error, Result};
 
 /// HTTP transport for MCP servers using SSE or Streamable HTTP protocol
@@ -48,6 +48,8 @@ pub struct HttpTransport {
     streamable_http: bool,
     /// OAuth client for authenticated backends (protected by async mutex for token refresh)
     oauth_client: Option<TokioMutex<OAuthClient>>,
+    /// Protocol version override (if None, uses PROTOCOL_VERSION with fallback)
+    protocol_version: RwLock<Option<String>>,
 }
 
 impl HttpTransport {
@@ -61,16 +63,17 @@ impl HttpTransport {
         timeout: Duration,
         streamable_http: bool,
     ) -> Result<Arc<Self>> {
-        Self::new_with_oauth(url, headers, timeout, streamable_http, None)
+        Self::new_with_oauth(url, headers, timeout, streamable_http, None, None)
     }
 
-    /// Create a new HTTP transport with optional OAuth client
+    /// Create a new HTTP transport with optional OAuth client and protocol version
     pub fn new_with_oauth(
         url: &str,
         headers: HashMap<String, String>,
         timeout: Duration,
         streamable_http: bool,
         oauth_client: Option<OAuthClient>,
+        protocol_version: Option<String>,
     ) -> Result<Arc<Self>> {
         let client = Client::builder()
             .timeout(timeout)
@@ -93,6 +96,7 @@ impl HttpTransport {
             timeout,
             streamable_http,
             oauth_client: oauth_client.map(TokioMutex::new),
+            protocol_version: RwLock::new(protocol_version),
         }))
     }
 
@@ -134,12 +138,15 @@ impl HttpTransport {
         }
 
         // Send initialize request via the message endpoint
+        // Use configured protocol version if set, otherwise use latest
+        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: RequestId::Number(0),
             method: "initialize".to_string(),
             params: Some(serde_json::json!({
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": version,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "mcp-gateway",
@@ -150,8 +157,56 @@ impl HttpTransport {
 
         let response = self.send_request(&request).await?;
 
-        if response.error.is_some() {
-            return Err(Error::Protocol("Initialize failed".to_string()));
+        // Check for protocol version mismatch error
+        if let Some(ref error) = response.error {
+            let error_msg = &error.message;
+
+            // If server rejected our protocol version, try to negotiate
+            if error_msg.contains("Unsupported protocol version") || error_msg.contains("protocol version") {
+                // Try to extract supported versions from error message
+                if let Some(negotiated_version) = self.negotiate_protocol_version(error_msg).await {
+                    warn!(
+                        url = %self.base_url,
+                        rejected_version = %version,
+                        negotiated_version = %negotiated_version,
+                        "Server rejected protocol version, retrying with negotiated version"
+                    );
+
+                    // Update our protocol version
+                    *self.protocol_version.write() = Some(negotiated_version.clone());
+
+                    // Retry initialize with new version
+                    let retry_request = JsonRpcRequest {
+                        jsonrpc: "2.0".to_string(),
+                        id: RequestId::Number(0),
+                        method: "initialize".to_string(),
+                        params: Some(serde_json::json!({
+                            "protocolVersion": negotiated_version,
+                            "capabilities": {},
+                            "clientInfo": {
+                                "name": "mcp-gateway",
+                                "version": env!("CARGO_PKG_VERSION")
+                            }
+                        })),
+                    };
+
+                    let retry_response = self.send_request(&retry_request).await?;
+
+                    if retry_response.error.is_some() {
+                        return Err(Error::Protocol(format!(
+                            "Initialize failed with negotiated version {}: {:?}",
+                            negotiated_version, retry_response.error
+                        )));
+                    }
+
+                    // Success with negotiated version
+                    info!(url = %self.base_url, version = %negotiated_version, "Successfully negotiated protocol version");
+                } else {
+                    return Err(Error::Protocol(format!("Protocol version negotiation failed: {}", error_msg)));
+                }
+            } else {
+                return Err(Error::Protocol(format!("Initialize failed: {:?}", error)));
+            }
         }
 
         // Send initialized notification
@@ -174,13 +229,81 @@ impl HttpTransport {
         }
     }
 
+    /// Negotiate protocol version from error message
+    /// Parse "supported versions: X, Y, Z" and find best match
+    async fn negotiate_protocol_version(&self, error_msg: &str) -> Option<String> {
+        // Try to extract supported versions from error message
+        // Example: "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"
+        let supported_versions = self.parse_supported_versions(error_msg)?;
+
+        debug!(
+            url = %self.base_url,
+            server_versions = ?supported_versions,
+            client_versions = ?SUPPORTED_VERSIONS,
+            "Negotiating protocol version"
+        );
+
+        // Find highest version supported by both client and server
+        for &client_version in SUPPORTED_VERSIONS {
+            if supported_versions.iter().any(|v| v == client_version) {
+                return Some(client_version.to_string());
+            }
+        }
+
+        // No match found
+        warn!(
+            url = %self.base_url,
+            server_versions = ?supported_versions,
+            client_versions = ?SUPPORTED_VERSIONS,
+            "No compatible protocol version found"
+        );
+        None
+    }
+
+    /// Parse supported versions from error message
+    fn parse_supported_versions(&self, error_msg: &str) -> Option<Vec<String>> {
+        // Look for pattern: "supported versions: X, Y, Z" or "supported: X, Y, Z"
+        let patterns = [
+            "supported versions:",
+            "supported:",
+        ];
+
+        for pattern in &patterns {
+            if let Some(versions_start) = error_msg.to_lowercase().find(pattern) {
+                let versions_str = &error_msg[versions_start + pattern.len()..];
+
+                // Extract until closing paren or end of string
+                let versions_str = if let Some(end) = versions_str.find(')') {
+                    &versions_str[..end]
+                } else {
+                    versions_str
+                };
+
+                // Split by comma and trim
+                let versions: Vec<String> = versions_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                if !versions.is_empty() {
+                    return Some(versions);
+                }
+            }
+        }
+
+        None
+    }
+
     /// Establish SSE connection and get the message endpoint
     async fn establish_sse_connection(&self) -> Result<String> {
         use futures::StreamExt;
 
+        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+
         let mut headers = header::HeaderMap::new();
         headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
-        headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
+        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
 
         // Add OAuth token if available
         if let Some(token) = self.get_oauth_token().await? {
@@ -300,6 +423,7 @@ impl HttpTransport {
     /// Send a raw request to the message endpoint
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
+        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         let mut headers = header::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
@@ -308,7 +432,7 @@ impl HttpTransport {
             header::ACCEPT,
             "application/json, text/event-stream".parse().unwrap(),
         );
-        headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
+        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
 
         // Add OAuth token if available (refreshes automatically if expired)
         if let Some(token) = self.get_oauth_token().await? {
@@ -423,6 +547,7 @@ impl Transport for HttpTransport {
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         let message_url = self.get_message_url();
+        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
@@ -437,7 +562,7 @@ impl Transport for HttpTransport {
             header::ACCEPT,
             "application/json, text/event-stream".parse().unwrap(),
         );
-        headers.insert("MCP-Protocol-Version", PROTOCOL_VERSION.parse().unwrap());
+        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
 
         // Add OAuth token if available
         if let Some(token) = self.get_oauth_token().await? {
