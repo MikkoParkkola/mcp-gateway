@@ -1,0 +1,71 @@
+fulcrum: "1.0"
+name: slack_post_message
+description: Post a message to a Slack channel using incoming webhook. Simple and fast, no OAuth required.
+
+schema:
+  input:
+    type: object
+    properties:
+      text:
+        type: string
+        description: Message text (Markdown supported)
+      channel:
+        type: string
+        description: Channel to post to (optional if webhook is channel-specific)
+      username:
+        type: string
+        description: Bot username to display
+        default: "Gateway Bot"
+      icon_emoji:
+        type: string
+        description: Emoji to use as icon
+        default: ":robot_face:"
+      attachments:
+        type: array
+        description: Rich message attachments
+        items:
+          type: object
+    required:
+      - text
+  output:
+    type: string
+    description: Response from Slack (typically "ok")
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      endpoint: "{env.SLACK_WEBHOOK_URL}"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        text: "{text}"
+        channel: "{channel}"
+        username: "{username}"
+        icon_emoji: "{icon_emoji}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: webhook
+  key: env:SLACK_WEBHOOK_URL
+  description: Create incoming webhook at https://api.slack.com/messaging/webhooks
+
+metadata:
+  category: communication
+  tags:
+    - slack
+    - communication
+    - messaging
+    - notifications
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  rate_limit: 1 req/sec per webhook
+  docs: https://api.slack.com/messaging/webhooks

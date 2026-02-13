@@ -1,0 +1,85 @@
+fulcrum: "1.0"
+name: gmail_send_email
+description: Send email via Gmail API. Requires OAuth 2.0 authentication with Gmail send scope.
+
+schema:
+  input:
+    type: object
+    properties:
+      to:
+        type: string
+        description: Recipient email address
+        format: email
+      subject:
+        type: string
+        description: Email subject
+      body:
+        type: string
+        description: Email body (plain text or HTML)
+      cc:
+        type: string
+        description: CC recipients (comma-separated)
+      bcc:
+        type: string
+        description: BCC recipients (comma-separated)
+      html:
+        type: boolean
+        description: Whether body is HTML
+        default: false
+    required:
+      - to
+      - subject
+      - body
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+        description: Message ID
+      threadId:
+        type: string
+        description: Thread ID
+      labelIds:
+        type: array
+        description: Labels applied to the message
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/messages/send
+      method: POST
+      headers:
+        Accept: "application/json"
+        Content-Type: "application/json"
+        Authorization: "Bearer {oauth.gmail}"
+      body:
+        raw: "{base64_encoded_email}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth
+  scopes:
+    - https://www.googleapis.com/auth/gmail.send
+  key: oauth:gmail
+  description: Authorize via Google OAuth 2.0 with Gmail send scope
+
+metadata:
+  category: communication
+  tags:
+    - email
+    - google
+    - gmail
+    - communication
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  rate_limit: 250 quotas/day (free), 1B/day (paid)
+  docs: https://developers.google.com/gmail/api/reference/rest/v1/users.messages/send

@@ -1,0 +1,82 @@
+fulcrum: "1.0"
+name: wikipedia_search
+description: Search Wikipedia articles. Free API, no key required. Returns article summaries with links.
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query
+        examples:
+          - "Albert Einstein"
+          - "Rust programming language"
+      limit:
+        type: integer
+        description: Number of results to return (1-50)
+        default: 10
+        minimum: 1
+        maximum: 50
+      language:
+        type: string
+        description: Wikipedia language edition (ISO 639-1)
+        default: "en"
+        examples:
+          - "en"
+          - "de"
+          - "fr"
+          - "es"
+    required:
+      - query
+  output:
+    type: object
+    properties:
+      query:
+        type: object
+        properties:
+          search:
+            type: array
+            description: Array of search results
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://{language}.wikipedia.org
+      path: /w/api.php
+      method: GET
+      headers:
+        Accept: "application/json"
+        User-Agent: "MCPGateway/1.0"
+      params:
+        action: "query"
+        list: "search"
+        srsearch: "{query}"
+        srlimit: "{limit}"
+        format: "json"
+      param_map:
+        language: language
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: productivity
+  tags:
+    - search
+    - reference
+    - wikipedia
+    - free
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 500 req/sec
+  docs: https://www.mediawiki.org/wiki/API:Search

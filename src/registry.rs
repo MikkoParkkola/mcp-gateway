@@ -376,4 +376,102 @@ mod tests {
 
         assert!(!entry_no_key.requires_key);
     }
+
+    #[tokio::test]
+    async fn test_registry_yaml_files_exist_and_valid() {
+        use crate::capability::{parse_capability_file, validate_capability};
+        use std::path::PathBuf;
+
+        // Load registry index
+        let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registry");
+        let registry = Registry::new(&registry_path);
+
+        let index = registry.load_index().expect("Failed to load registry index");
+
+        // Verify all 8 expected capabilities are present
+        assert_eq!(
+            index.capabilities.len(),
+            8,
+            "Registry should contain exactly 8 capabilities"
+        );
+
+        // Verify each capability file exists and is valid
+        for entry in &index.capabilities {
+            let capability_path = registry_path.join(&entry.path);
+
+            // File must exist
+            assert!(
+                capability_path.exists(),
+                "Capability file not found: {}",
+                capability_path.display()
+            );
+
+            // File must parse correctly
+            let capability = parse_capability_file(&capability_path)
+                .await
+                .unwrap_or_else(|e| panic!(
+                    "Failed to parse {}: {e}",
+                    capability_path.display()
+                ));
+
+            // Capability must validate
+            validate_capability(&capability).unwrap_or_else(|e| panic!(
+                "Validation failed for {}: {e}",
+                capability.name
+            ));
+
+            // Name must match registry entry
+            assert_eq!(
+                capability.name, entry.name,
+                "Capability name mismatch in {}",
+                capability_path.display()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_all_registry_capabilities_match_index() {
+        use crate::capability::parse_capability_file;
+        use std::path::PathBuf;
+
+        let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registry");
+        let registry = Registry::new(&registry_path);
+        let index = registry.load_index().expect("Failed to load registry index");
+
+        // Expected capabilities with their metadata
+        let expected = vec![
+            ("yahoo_stock_quote", "finance", false),
+            ("ecb_exchange_rates", "finance", false),
+            ("stripe_list_charges", "finance", true),
+            ("weather_current", "productivity", false),
+            ("wikipedia_search", "productivity", false),
+            ("github_create_issue", "productivity", true),
+            ("slack_post_message", "communication", true),
+            ("gmail_send_email", "communication", true),
+        ];
+
+        for (name, category, requires_key) in expected {
+            let entry = index
+                .find(name)
+                .unwrap_or_else(|| panic!("Capability '{name}' not found in index"));
+
+            assert_eq!(
+                entry.requires_key, requires_key,
+                "{name} should have requires_key={requires_key}"
+            );
+
+            assert!(
+                entry.path.contains(category),
+                "{name} should be in {category} directory"
+            );
+
+            // Verify the capability file is valid
+            let capability_path = registry_path.join(&entry.path);
+            let capability = parse_capability_file(&capability_path)
+                .await
+                .unwrap_or_else(|e| panic!("Failed to parse {name}: {e}"));
+
+            assert_eq!(capability.name, name);
+        }
+    }
 }

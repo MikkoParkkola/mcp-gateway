@@ -4,56 +4,56 @@
     {
       "name": "stripe_list_charges",
       "description": "List Stripe charges with pagination and filtering",
-      "path": "registry/finance/stripe_list_charges.yaml",
+      "path": "finance/stripe_list_charges.yaml",
       "tags": ["finance", "stripe", "payments"],
       "requires_key": true
     },
     {
       "name": "yahoo_stock_quote",
       "description": "Get real-time stock quotes from Yahoo Finance",
-      "path": "registry/finance/yahoo_stock_quote.yaml",
+      "path": "finance/yahoo_stock_quote.yaml",
       "tags": ["finance", "stocks", "market-data"],
       "requires_key": false
     },
     {
       "name": "ecb_exchange_rates",
       "description": "Get ECB foreign exchange rates",
-      "path": "registry/finance/ecb_exchange_rates.yaml",
+      "path": "finance/ecb_exchange_rates.yaml",
       "tags": ["finance", "forex", "currency"],
       "requires_key": false
     },
     {
       "name": "gmail_send_email",
       "description": "Send email via Gmail API",
-      "path": "registry/communication/gmail_send_email.yaml",
+      "path": "communication/gmail_send_email.yaml",
       "tags": ["email", "google", "communication"],
       "requires_key": true
     },
     {
       "name": "slack_post_message",
       "description": "Post message to Slack channel",
-      "path": "registry/communication/slack_post_message.yaml",
+      "path": "communication/slack_post_message.yaml",
       "tags": ["slack", "communication", "messaging"],
       "requires_key": true
     },
     {
       "name": "weather_current",
       "description": "Get current weather using OpenMeteo API (free, no key required)",
-      "path": "registry/productivity/weather_current.yaml",
+      "path": "productivity/weather_current.yaml",
       "tags": ["weather", "forecast", "free"],
       "requires_key": false
     },
     {
       "name": "wikipedia_search",
       "description": "Search Wikipedia articles",
-      "path": "registry/productivity/wikipedia_search.yaml",
+      "path": "productivity/wikipedia_search.yaml",
       "tags": ["search", "reference", "free"],
       "requires_key": false
     },
     {
       "name": "github_create_issue",
       "description": "Create a GitHub issue",
-      "path": "registry/productivity/github_create_issue.yaml",
+      "path": "productivity/github_create_issue.yaml",
       "tags": ["github", "development", "issues"],
       "requires_key": true
     }
