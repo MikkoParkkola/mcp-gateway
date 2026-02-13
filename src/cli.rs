@@ -156,15 +156,15 @@ pub enum CapCommand {
         #[arg(required = true)]
         query: String,
 
-        /// Local registry path
-        #[arg(short, long, default_value = "registry")]
-        registry: PathBuf,
+        /// Capabilities directory path
+        #[arg(short = 'c', long, default_value = "capabilities")]
+        capabilities: PathBuf,
     },
 
     /// List all available capabilities in registry
     RegistryList {
-        /// Local registry path
-        #[arg(short, long, default_value = "registry")]
-        registry: PathBuf,
+        /// Capabilities directory path
+        #[arg(short = 'c', long, default_value = "capabilities")]
+        capabilities: PathBuf,
     },
 }

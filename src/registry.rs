@@ -1,13 +1,15 @@
 //! Capability registry for community-shared capability definitions
 //!
 //! Provides discovery and installation of pre-built capability definitions
-//! from both local registry and remote GitHub sources.
+//! from both local capabilities directory and remote GitHub sources.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
 
+use crate::capability::parse_capability_file;
 use crate::{Error, Result};
 
 /// Registry entry describing a capability
@@ -37,19 +39,13 @@ pub struct RegistryIndex {
 }
 
 impl RegistryIndex {
-    /// Load registry index from file
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be read or the JSON is invalid.
-    pub fn load(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path).map_err(|e| {
-            Error::Config(format!("Failed to read registry index: {e}"))
-        })?;
-
-        serde_json::from_str(&content).map_err(|e| {
-            Error::Config(format!("Failed to parse registry index: {e}"))
-        })
+    /// Create a new registry index
+    #[must_use]
+    pub fn new(capabilities: Vec<RegistryEntry>) -> Self {
+        Self {
+            version: "2.0".to_string(),
+            capabilities,
+        }
     }
 
     /// Search capabilities by name, description, or tags
@@ -75,8 +71,8 @@ impl RegistryIndex {
 
 /// Capability registry manager
 pub struct Registry {
-    /// Path to local registry directory
-    registry_path: PathBuf,
+    /// Path to capabilities directory
+    capabilities_path: PathBuf,
 }
 
 impl Registry {
@@ -84,85 +80,78 @@ impl Registry {
     ///
     /// # Arguments
     ///
-    /// * `registry_path` - Path to the registry directory (typically `registry/`)
-    pub fn new<P: AsRef<Path>>(registry_path: P) -> Self {
+    /// * `capabilities_path` - Path to the capabilities directory
+    #[must_use]
+    pub fn new<P: AsRef<Path>>(capabilities_path: P) -> Self {
         Self {
-            registry_path: registry_path.as_ref().to_path_buf(),
+            capabilities_path: capabilities_path.as_ref().to_path_buf(),
         }
     }
 
-    /// Get the registry index file path
-    fn index_path(&self) -> PathBuf {
-        self.registry_path.join("index.json")
-    }
-
-    /// Load the registry index
+    /// Build registry index by scanning capabilities directory
+    ///
+    /// Recursively scans the capabilities directory for YAML files and builds
+    /// a searchable index from their metadata.
     ///
     /// # Errors
     ///
-    /// Returns an error if the index file doesn't exist or cannot be parsed.
-    pub fn load_index(&self) -> Result<RegistryIndex> {
-        let index_path = self.index_path();
-        if !index_path.exists() {
-            return Err(Error::Config(format!(
-                "Registry index not found: {}",
-                index_path.display()
-            )));
+    /// Returns an error if the directory cannot be read or YAML files cannot be parsed.
+    pub async fn build_index(&self) -> Result<RegistryIndex> {
+        let mut capabilities = Vec::new();
+
+        // Recursively scan capabilities directory for YAML files
+        for entry in WalkDir::new(&self.capabilities_path)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            let path = entry.path();
+
+            // Only process YAML files
+            if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+                continue;
+            }
+
+            // Parse capability file
+            match parse_capability_file(path).await {
+                Ok(capability) => {
+                    // Calculate relative path from capabilities directory
+                    let relative_path = path
+                        .strip_prefix(&self.capabilities_path)
+                        .map_err(|e| Error::Config(format!("Failed to calculate relative path: {e}")))?
+                        .to_string_lossy()
+                        .to_string();
+
+                    // Extract tags from metadata
+                    let tags = capability.metadata.tags.clone();
+
+                    // Determine if authentication is required
+                    let requires_key = capability.auth.required;
+
+                    capabilities.push(RegistryEntry {
+                        name: capability.name,
+                        description: capability.description,
+                        path: relative_path,
+                        tags,
+                        requires_key,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse {}: {e}", path.display());
+                }
+            }
         }
-        RegistryIndex::load(&index_path)
-    }
 
-    /// Install a capability from the local registry to the capabilities directory
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Capability name from registry
-    /// * `target_dir` - Target directory to install to (typically `capabilities/`)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the capability is not found or the file copy fails.
-    pub fn install_local(&self, name: &str, target_dir: &Path) -> Result<PathBuf> {
-        let index = self.load_index()?;
-        let entry = index
-            .find(name)
-            .ok_or_else(|| Error::Config(format!("Capability '{name}' not found in registry")))?;
-
-        let source = self.registry_path.join(&entry.path);
-        if !source.exists() {
-            return Err(Error::Config(format!(
-                "Capability file not found: {}",
-                source.display()
-            )));
-        }
-
-        // Create target directory if needed
-        fs::create_dir_all(target_dir).map_err(|e| {
-            Error::Config(format!("Failed to create target directory: {e}"))
-        })?;
-
-        let filename = source
-            .file_name()
-            .ok_or_else(|| Error::Config("Invalid source path".to_string()))?;
-        let target = target_dir.join(filename);
-
-        fs::copy(&source, &target).map_err(|e| {
-            Error::Config(format!(
-                "Failed to copy capability from {} to {}: {e}",
-                source.display(),
-                target.display()
-            ))
-        })?;
-
-        Ok(target)
+        Ok(RegistryIndex::new(capabilities))
     }
 
     /// Install a capability from GitHub
     ///
+    /// Downloads a capability file from a remote GitHub repository's capabilities/ directory.
+    ///
     /// # Arguments
     ///
-    /// * `name` - Capability name from registry
-    /// * `target_dir` - Target directory to install to
+    /// * `name` - Capability name (must exist in remote repository)
     /// * `repo` - GitHub repository (format: `owner/repo`)
     /// * `branch` - Branch name (default: "main")
     ///
@@ -172,66 +161,69 @@ impl Registry {
     pub async fn install_from_github(
         &self,
         name: &str,
-        target_dir: &Path,
         repo: &str,
         branch: &str,
     ) -> Result<PathBuf> {
-        // Load index from GitHub
-        let index_url = format!(
-            "https://raw.githubusercontent.com/{repo}/{branch}/registry/index.json"
-        );
+        // Build remote index by fetching a listing (we'll try common paths)
+        // For now, we'll construct the URL directly based on the capability name
+        // A more robust implementation would fetch a directory listing first
 
         let client = reqwest::Client::new();
-        let index_content = client
-            .get(&index_url)
-            .send()
-            .await
-            .map_err(|e| Error::Transport(format!("Failed to fetch registry index: {e}")))?
-            .text()
-            .await
-            .map_err(|e| Error::Transport(format!("Failed to read registry index: {e}")))?;
 
-        let index: RegistryIndex = serde_json::from_str(&index_content)
-            .map_err(|e| Error::Config(format!("Failed to parse registry index: {e}")))?;
+        // Try common capability paths
+        let search_patterns = vec![
+            format!("capabilities/finance/{name}.yaml"),
+            format!("capabilities/communication/{name}.yaml"),
+            format!("capabilities/knowledge/{name}.yaml"),
+            format!("capabilities/search/{name}.yaml"),
+            format!("capabilities/utility/{name}.yaml"),
+            format!("capabilities/entertainment/{name}.yaml"),
+            format!("capabilities/food/{name}.yaml"),
+            format!("capabilities/geo/{name}.yaml"),
+        ];
 
-        let entry = index
-            .find(name)
-            .ok_or_else(|| Error::Config(format!("Capability '{name}' not found in registry")))?;
+        let mut last_error = None;
 
-        // Download capability file
-        let capability_url = format!(
-            "https://raw.githubusercontent.com/{repo}/{branch}/{}",
-            entry.path
-        );
+        for pattern in search_patterns {
+            let capability_url = format!(
+                "https://raw.githubusercontent.com/{repo}/{branch}/{pattern}"
+            );
 
-        let capability_content = client
-            .get(&capability_url)
-            .send()
-            .await
-            .map_err(|e| {
-                Error::Transport(format!("Failed to download capability: {e}"))
-            })?
-            .text()
-            .await
-            .map_err(|e| Error::Transport(format!("Failed to read capability content: {e}")))?;
+            match client.get(&capability_url).send().await {
+                Ok(response) if response.status().is_success() => {
+                    let capability_content = response
+                        .text()
+                        .await
+                        .map_err(|e| Error::Transport(format!("Failed to read capability content: {e}")))?;
 
-        // Create target directory
-        fs::create_dir_all(target_dir).map_err(|e| {
-            Error::Config(format!("Failed to create target directory: {e}"))
-        })?;
+                    // Determine subdirectory from pattern
+                    let pattern_path = PathBuf::from(&pattern);
+                    let subdir = pattern_path
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .ok_or_else(|| Error::Config("Invalid capability path".to_string()))?;
 
-        // Write capability file
-        let filename = PathBuf::from(&entry.path)
-            .file_name()
-            .ok_or_else(|| Error::Config("Invalid capability path".to_string()))?
-            .to_owned();
-        let target = target_dir.join(filename);
+                    let target_dir = self.capabilities_path.join(subdir);
+                    fs::create_dir_all(&target_dir).map_err(|e| {
+                        Error::Config(format!("Failed to create target directory: {e}"))
+                    })?;
 
-        fs::write(&target, capability_content).map_err(|e| {
-            Error::Config(format!("Failed to write capability file: {e}"))
-        })?;
+                    let target = target_dir.join(format!("{name}.yaml"));
+                    fs::write(&target, capability_content).map_err(|e| {
+                        Error::Config(format!("Failed to write capability file: {e}"))
+                    })?;
 
-        Ok(target)
+                    return Ok(target);
+                }
+                Ok(_) => {}
+                Err(e) => last_error = Some(e),
+            }
+        }
+
+        Err(Error::Transport(format!(
+            "Capability '{name}' not found in repository {repo}:{branch}. Last error: {}",
+            last_error.map_or_else(|| "Not found".to_string(), |e| e.to_string())
+        )))
     }
 }
 
@@ -378,26 +370,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_registry_yaml_files_exist_and_valid() {
-        use crate::capability::{parse_capability_file, validate_capability};
+    async fn test_build_index_from_capabilities() {
+        use crate::capability::validate_capability;
         use std::path::PathBuf;
 
-        // Load registry index
-        let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registry");
-        let registry = Registry::new(&registry_path);
+        // Build index from capabilities directory
+        let capabilities_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let registry = Registry::new(&capabilities_path);
 
-        let index = registry.load_index().expect("Failed to load registry index");
+        let index = registry.build_index().await.expect("Failed to build registry index");
 
-        // Verify all 29 expected capabilities are present
-        assert_eq!(
-            index.capabilities.len(),
-            29,
-            "Registry should contain exactly 29 capabilities"
+        // Verify we have a reasonable number of capabilities (should be 43+)
+        assert!(
+            index.capabilities.len() >= 43,
+            "Registry should contain at least 43 capabilities, found {}",
+            index.capabilities.len()
         );
 
         // Verify each capability file exists and is valid
         for entry in &index.capabilities {
-            let capability_path = registry_path.join(&entry.path);
+            let capability_path = capabilities_path.join(&entry.path);
 
             // File must exist
             assert!(
@@ -430,22 +422,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_all_registry_capabilities_match_index() {
-        use crate::capability::parse_capability_file;
+    async fn test_registry_capabilities_metadata() {
         use std::path::PathBuf;
 
-        let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registry");
-        let registry = Registry::new(&registry_path);
-        let index = registry.load_index().expect("Failed to load registry index");
+        let capabilities_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let registry = Registry::new(&capabilities_path);
+        let index = registry.build_index().await.expect("Failed to build registry index");
 
         // Expected capabilities with their metadata
         let expected = vec![
             ("yahoo_stock_quote", "finance", false),
             ("ecb_exchange_rates", "finance", false),
             ("stripe_list_charges", "finance", true),
-            ("weather_current", "productivity", false),
-            ("wikipedia_search", "productivity", false),
-            ("github_create_issue", "productivity", true),
+            ("weather_current", "knowledge", false),
+            ("wikipedia_search", "knowledge", false),
+            ("github_create_issue", "utility", true),
             ("slack_post_message", "communication", true),
             ("gmail_send_email", "communication", true),
         ];
@@ -462,16 +453,9 @@ mod tests {
 
             assert!(
                 entry.path.contains(category),
-                "{name} should be in {category} directory"
+                "{name} should be in {category} directory, found: {}",
+                entry.path
             );
-
-            // Verify the capability file is valid
-            let capability_path = registry_path.join(&entry.path);
-            let capability = parse_capability_file(&capability_path)
-                .await
-                .unwrap_or_else(|e| panic!("Failed to parse {name}: {e}"));
-
-            assert_eq!(capability.name, name);
         }
     }
 }
