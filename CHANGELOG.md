@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-02-13
+
+### Added
+
+- **Validate CLI** (`mcp-gateway validate`): Lint capability YAMLs against 9 built-in rules.
+  SARIF output for CI integration. `--fix` flag auto-corrects common issues.
+- **Response Transforms**: Per-capability field projection and PII redaction applied before
+  the response reaches the AI client. Configured via `transform` block in capability YAML.
+- **Playbooks**: Multi-step tool chains defined in YAML. Executed via the
+  `gateway_run_playbook` meta-tool. Steps can reference previous outputs with `$prev`.
+
 ## [2.1.0] - 2026-02-13
 
 ### Added
@@ -91,6 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
-[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/MikkoParkkola/mcp-gateway/releases/tag/v1.0.0

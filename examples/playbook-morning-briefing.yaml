@@ -1,0 +1,26 @@
+# Example: Playbook — Morning Briefing
+# Chains multiple tools into a single invocable workflow.
+#
+# Run via: gateway_run_playbook(name: "morning-briefing")
+# Each step can reference the previous step's output with "$prev".
+
+name: morning-briefing
+description: Fetch weather, top news, and summarize into a morning briefing
+
+steps:
+  - name: weather
+    tool: weather
+    args:
+      location: "Helsinki"
+      units: metric
+
+  - name: top-stories
+    tool: hacker_news_top
+    args:
+      count: 5
+
+  - name: briefing
+    tool: summarize
+    args:
+      context: "Create a concise morning briefing from the following data."
+      texts: "$prev"

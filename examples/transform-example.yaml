@@ -1,0 +1,32 @@
+# Example: Response Transform capability
+# Demonstrates field projection and PII redaction.
+#
+# The `transform` block runs after the backend responds and before
+# the result is returned to the AI client.
+
+name: user_lookup
+description: Look up a user by ID with PII redacted
+backend: user-service
+method: GET
+path: /users/{user_id}
+
+params:
+  - name: user_id
+    required: true
+    description: The user ID to look up
+
+transform:
+  # Only these fields are forwarded to the AI (field projection)
+  project:
+    - id
+    - name
+    - department
+    - role
+    - status
+
+  # These fields are replaced with "[REDACTED]" if present (PII redaction)
+  redact:
+    - email
+    - phone
+    - ssn
+    - address

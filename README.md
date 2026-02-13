@@ -93,6 +93,53 @@ Then connect your AI client to `http://localhost:39400/mcp`:
 - **Capability registry** -- `mcp-gateway cap install weather` / `mcp-gateway cap search finance`.
 - **Keychain integration** -- Store secrets in macOS Keychain or Linux secret-service, not env files.
 - **Usage stats & cost tracking** -- Token savings, cache hit rates, invocation counts in real time.
+- **Validate CLI** -- Lint capability YAMLs with 9 rules, SARIF output, and `--fix` auto-correction.
+- **Response transforms** -- Per-capability field projection and PII redaction before responses reach the AI.
+- **Playbooks** -- Multi-step tool chains via YAML. Execute with the `gateway_run_playbook` meta-tool.
+
+## Validate CLI
+
+Lint your capability files against 9 built-in rules. Outputs SARIF for CI integration.
+
+```bash
+mcp-gateway validate capabilities/         # lint all YAMLs in directory
+mcp-gateway validate capabilities/ --fix   # auto-fix common issues
+mcp-gateway validate my-cap.yaml -f sarif  # SARIF output for CI
+```
+
+## Response Transforms
+
+Strip fields or redact PII before the response reaches the AI client. Configured per-capability:
+
+```yaml
+transform:
+  project:
+    - name
+    - summary
+    - status
+  redact:
+    - email
+    - phone
+```
+
+See [examples/transform-example.yaml](examples/transform-example.yaml) for a full capability with transforms.
+
+## Playbooks
+
+Chain multiple tool invocations into a single reusable workflow:
+
+```yaml
+name: morning-briefing
+steps:
+  - tool: weather
+    args: { location: "Helsinki" }
+  - tool: hacker_news_top
+    args: { count: 5 }
+  - tool: summarize
+    args: { texts: "$prev" }
+```
+
+Run with `gateway_run_playbook(name: "morning-briefing")`. See [examples/playbook-morning-briefing.yaml](examples/playbook-morning-briefing.yaml).
 
 ## Installation
 

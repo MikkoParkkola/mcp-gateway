@@ -7,9 +7,11 @@
 //!
 //! - <https://www.philschmid.de/mcp-best-practices>
 
+pub mod cli_handler;
 pub mod fix;
 pub mod report;
 pub mod rules;
+pub mod rules_schema;
 pub mod sarif;
 
 use crate::protocol::Tool;
