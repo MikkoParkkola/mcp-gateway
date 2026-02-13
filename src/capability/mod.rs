@@ -36,6 +36,7 @@ mod executor;
 mod loader;
 mod openapi;
 mod parser;
+mod response_cache;
 mod watcher;
 
 pub use backend::{CapabilityBackend, CapabilityBackendStatus};

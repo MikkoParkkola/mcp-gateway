@@ -2,6 +2,7 @@
 
 pub mod auth;
 mod meta_mcp;
+mod meta_mcp_helpers;
 mod router;
 mod server;
 pub mod streaming;
