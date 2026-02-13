@@ -7,14 +7,62 @@
 //!
 //! - <https://www.philschmid.de/mcp-best-practices>
 
+pub mod fix;
 pub mod report;
 pub mod rules;
+pub mod sarif;
 
 use crate::protocol::Tool;
 use crate::Result;
 
 pub use report::{ValidationReport, ValidationResult, Severity};
-pub use rules::{Rule, ValidationRules};
+pub use rules::{Rule, ValidationRules, ConflictDetectionRule, NamingConsistencyRule};
+
+/// Output format for validation reports
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable colored text
+    Text,
+    /// Structured JSON
+    Json,
+    /// SARIF 2.1.0 for CI integration
+    Sarif,
+}
+
+/// Minimum severity filter
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+pub enum SeverityFilter {
+    /// Show only failures
+    Fail,
+    /// Show warnings and failures
+    Warn,
+    /// Show everything including informational
+    Info,
+}
+
+/// Configuration for a validation run
+pub struct ValidateConfig {
+    /// Output format
+    pub format: OutputFormat,
+    /// Minimum severity to report
+    pub min_severity: SeverityFilter,
+    /// Whether to attempt auto-fixing
+    pub auto_fix: bool,
+    /// Whether to use colored output
+    pub color: bool,
+}
+
+impl SeverityFilter {
+    /// Check whether a `Severity` passes this filter
+    #[must_use]
+    pub fn includes(self, severity: Severity) -> bool {
+        match self {
+            Self::Info => true,
+            Self::Warn => matches!(severity, Severity::Fail | Severity::Warn | Severity::Pass),
+            Self::Fail => matches!(severity, Severity::Fail | Severity::Pass),
+        }
+    }
+}
 
 /// Validator for MCP tool definitions against agent-UX best practices
 pub struct AgentUxValidator {

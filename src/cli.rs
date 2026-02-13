@@ -86,6 +86,34 @@ pub enum Command {
         #[arg(short, long, default_value_t = 15.0)]
         price: f64,
     },
+
+    /// Lint capability YAMLs against agent-UX best practices
+    ///
+    /// Validates one or more capability files (or directories) against the
+    /// full agent-UX rules engine (AX-001..AX-009) and reports issues with
+    /// colored output. Supports JSON, SARIF, and auto-fix modes.
+    #[command(about = "Validate capability definitions against agent-UX rules")]
+    Validate {
+        /// Files or directories to validate (YAML capabilities)
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+
+        /// Output format
+        #[arg(short, long, default_value = "text", value_enum)]
+        format: crate::validator::OutputFormat,
+
+        /// Minimum severity to report
+        #[arg(short, long, default_value = "info", value_enum)]
+        severity: crate::validator::SeverityFilter,
+
+        /// Auto-fix issues where possible (rewrites YAML in place)
+        #[arg(long)]
+        fix: bool,
+
+        /// Disable colored output
+        #[arg(long)]
+        no_color: bool,
+    },
 }
 
 /// Capability management subcommands

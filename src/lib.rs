@@ -33,11 +33,13 @@ pub mod error;
 pub mod failsafe;
 pub mod gateway;
 pub mod oauth;
+pub mod playbook;
 pub mod protocol;
 pub mod ranking;
 pub mod registry;
 pub mod secrets;
 pub mod stats;
+pub mod transform;
 pub mod transport;
 pub mod validator;
 

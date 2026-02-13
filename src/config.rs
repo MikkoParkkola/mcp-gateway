@@ -37,6 +37,8 @@ pub struct Config {
     pub capabilities: CapabilityConfig,
     /// Cache configuration
     pub cache: CacheConfig,
+    /// Playbook configuration
+    pub playbooks: PlaybooksConfig,
 }
 
 /// Cache configuration for response caching
@@ -58,6 +60,25 @@ impl Default for CacheConfig {
             enabled: true,
             default_ttl: Duration::from_secs(60),
             max_entries: 10_000,
+        }
+    }
+}
+
+/// Playbook configuration for multi-step tool chains
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaybooksConfig {
+    /// Enable playbook engine
+    pub enabled: bool,
+    /// Directories to load playbook definitions from
+    pub directories: Vec<String>,
+}
+
+impl Default for PlaybooksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directories: vec!["playbooks".to_string()],
         }
     }
 }

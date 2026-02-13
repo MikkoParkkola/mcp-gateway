@@ -161,12 +161,42 @@ fn build_stats_tool() -> Tool {
     }
 }
 
-/// Construct the full meta-tool list, optionally including stats.
+/// Build the playbook runner meta-tool definition.
+fn build_playbook_tool() -> Tool {
+    Tool {
+        name: "gateway_run_playbook".to_string(),
+        title: Some("Run Playbook".to_string()),
+        description: Some(
+            "Execute a multi-step playbook (collapses multiple tool calls into one invocation)"
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Playbook name to execute"
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": "Playbook input arguments",
+                    "default": {}
+                }
+            },
+            "required": ["name"]
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
+/// Construct the full meta-tool list, optionally including stats and playbooks.
 pub(crate) fn build_meta_tools(stats_enabled: bool) -> Vec<Tool> {
     let mut tools = build_base_tools();
     if stats_enabled {
         tools.push(build_stats_tool());
     }
+    tools.push(build_playbook_tool());
     tools
 }
 
@@ -376,22 +406,24 @@ mod tests {
     // ── build_meta_tools ────────────────────────────────────────────────
 
     #[test]
-    fn build_meta_tools_returns_4_base_tools_without_stats() {
+    fn build_meta_tools_returns_base_plus_playbook_without_stats() {
         let tools = build_meta_tools(false);
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5); // 4 base + 1 playbook
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_list_servers"));
         assert!(names.contains(&"gateway_list_tools"));
         assert!(names.contains(&"gateway_search_tools"));
         assert!(names.contains(&"gateway_invoke"));
+        assert!(names.contains(&"gateway_run_playbook"));
     }
 
     #[test]
-    fn build_meta_tools_returns_5_tools_with_stats() {
+    fn build_meta_tools_returns_all_tools_with_stats() {
         let tools = build_meta_tools(true);
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 6); // 4 base + 1 stats + 1 playbook
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_get_stats"));
+        assert!(names.contains(&"gateway_run_playbook"));
     }
 
     #[test]
