@@ -75,6 +75,7 @@ dotenvy = "0.15"
 
 # File watching (hot-reload)
 notify = "8.0"
+walkdir = "2.5"
 
 # Metrics
 metrics = "0.24"

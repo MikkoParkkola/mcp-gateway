@@ -384,9 +384,9 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
         } => {
             if from_github {
                 println!("📦 Installing {name} from GitHub ({repo})...");
-                let registry = Registry::new("registry");
+                let registry = Registry::new(&output);
                 match registry
-                    .install_from_github(&name, &output, &repo, &branch)
+                    .install_from_github(&name, &repo, &branch)
                     .await
                 {
                     Ok(path) => {
@@ -399,24 +399,16 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
                     }
                 }
             } else {
-                println!("📦 Installing {name} from local registry...");
-                let registry = Registry::new("registry");
-                match registry.install_local(&name, &output) {
-                    Ok(path) => {
-                        println!("✅ Installed to {}", path.display());
-                        ExitCode::SUCCESS
-                    }
-                    Err(e) => {
-                        eprintln!("❌ Installation failed: {e}");
-                        ExitCode::FAILURE
-                    }
-                }
+                // All capabilities are already in the capabilities directory
+                println!("ℹ️  All capabilities are already available in the capabilities directory.");
+                println!("   Use 'cap list' to see available capabilities.");
+                ExitCode::SUCCESS
             }
         }
 
-        CapCommand::Search { query, registry } => {
-            let reg = Registry::new(&registry);
-            match reg.load_index() {
+        CapCommand::Search { query, capabilities } => {
+            let reg = Registry::new(&capabilities);
+            match reg.build_index().await {
                 Ok(index) => {
                     let results = index.search(&query);
                     if results.is_empty() {
@@ -431,22 +423,22 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
                             }
                             println!();
                         }
-                        println!("Install with: mcp-gateway cap install <name>");
+                        println!("All capabilities are already available in the capabilities directory.");
                     }
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    eprintln!("❌ Failed to load registry: {e}");
+                    eprintln!("❌ Failed to build registry index: {e}");
                     ExitCode::FAILURE
                 }
             }
         }
 
-        CapCommand::RegistryList { registry } => {
-            let reg = Registry::new(&registry);
-            match reg.load_index() {
+        CapCommand::RegistryList { capabilities } => {
+            let reg = Registry::new(&capabilities);
+            match reg.build_index().await {
                 Ok(index) => {
-                    println!("Available capabilities in registry ({}):\n", index.capabilities.len());
+                    println!("Available capabilities ({}):\n", index.capabilities.len());
                     for entry in &index.capabilities {
                         let auth = if entry.requires_key { " 🔑" } else { "" };
                         println!("  {} - {}{}", entry.name, entry.description, auth);
@@ -455,11 +447,11 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
                         }
                         println!();
                     }
-                    println!("Install with: mcp-gateway cap install <name>");
+                    println!("All capabilities are available in the capabilities directory.");
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    eprintln!("❌ Failed to load registry: {e}");
+                    eprintln!("❌ Failed to build registry index: {e}");
                     ExitCode::FAILURE
                 }
             }
