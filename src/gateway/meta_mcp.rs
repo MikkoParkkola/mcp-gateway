@@ -1,9 +1,10 @@
-//! Meta-MCP implementation - 4 meta-tools for dynamic discovery
+//! Meta-MCP implementation - meta-tools for dynamic discovery and playbooks
 //!
 //! This module provides the gateway's meta-tools for discovering and invoking
 //! tools across all backends, including:
 //! - MCP backends (stdio, http)
 //! - Capability backends (direct REST API integration)
+//! - Playbooks (multi-step tool chains)
 //!
 //! Pure business logic functions are in [`super::meta_mcp_helpers`]. Async methods
 //! here are thin wrappers that gather data and delegate to those pure functions.
@@ -18,6 +19,7 @@ use tracing::debug;
 use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
+use crate::playbook::{PlaybookEngine, ToolInvoker};
 use crate::protocol::{
     JsonRpcResponse, RequestId, ToolsListResult, negotiate_version,
 };
@@ -50,6 +52,8 @@ pub struct MetaMcp {
     stats: Option<Arc<UsageStats>>,
     /// Search ranker for usage-based ranking
     ranker: Option<Arc<SearchRanker>>,
+    /// Playbook engine for multi-step tool chains
+    playbook_engine: RwLock<PlaybookEngine>,
 }
 
 impl MetaMcp {
@@ -63,6 +67,7 @@ impl MetaMcp {
             default_cache_ttl: Duration::from_secs(60),
             stats: None,
             ranker: None,
+            playbook_engine: RwLock::new(PlaybookEngine::new()),
         }
     }
 
@@ -81,6 +86,7 @@ impl MetaMcp {
             default_cache_ttl: default_ttl,
             stats,
             ranker,
+            playbook_engine: RwLock::new(PlaybookEngine::new()),
         }
     }
 
@@ -131,6 +137,7 @@ impl MetaMcp {
             "gateway_search_tools" => self.search_tools(&arguments).await,
             "gateway_invoke" => self.invoke_tool(&arguments).await,
             "gateway_get_stats" => self.get_stats(&arguments).await,
+            "gateway_run_playbook" => self.run_playbook(&arguments).await,
             _ => Err(Error::json_rpc(
                 -32601,
                 format!("Unknown tool: {tool_name}"),
@@ -381,5 +388,55 @@ impl MetaMcp {
 
         let snapshot = stats.snapshot(total_tools);
         Ok(build_stats_response(&snapshot, price_per_million))
+    }
+
+    /// Set the playbook engine (replaces existing).
+    #[allow(dead_code)]
+    pub fn set_playbook_engine(&self, engine: PlaybookEngine) {
+        *self.playbook_engine.write() = engine;
+    }
+
+    /// Run a playbook by name.
+    async fn run_playbook(&self, args: &Value) -> Result<Value> {
+        let name = extract_required_str(args, "name")?;
+        let arguments = parse_tool_arguments(args)?;
+
+        debug!(playbook = name, "Running playbook");
+
+        // Clone the definition to release the lock before awaiting.
+        let definition = {
+            let engine = self.playbook_engine.read();
+            engine
+                .get(name)
+                .cloned()
+                .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
+        };
+
+        // Create a `MetaMcpInvoker` that delegates to `invoke_tool`.
+        let invoker = MetaMcpInvoker { meta: self };
+
+        // Build a temporary engine with just this definition for execution.
+        let mut temp_engine = PlaybookEngine::new();
+        temp_engine.register(definition);
+        let result = temp_engine.execute(name, arguments, &invoker).await?;
+
+        Ok(serde_json::to_value(&result).unwrap_or(json!(null)))
+    }
+}
+
+/// Bridges `MetaMcp::invoke_tool` to the `ToolInvoker` trait for playbook execution.
+struct MetaMcpInvoker<'a> {
+    meta: &'a MetaMcp,
+}
+
+#[async_trait::async_trait]
+impl ToolInvoker for MetaMcpInvoker<'_> {
+    async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
+        let args = json!({
+            "server": server,
+            "tool": tool,
+            "arguments": arguments
+        });
+        self.meta.invoke_tool(&args).await
     }
 }

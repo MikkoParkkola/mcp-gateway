@@ -30,6 +30,7 @@ use super::response_cache::ResponseCache;
 use super::{CapabilityDefinition, ProviderConfig, RestConfig};
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
+use crate::transform::TransformPipeline;
 use crate::{Error, Result};
 
 /// Executor for capability REST calls
@@ -125,6 +126,17 @@ impl CapabilityExecutor {
 
         // Build and execute request
         let response = self.execute_provider(capability, provider, &params).await?;
+
+        // Apply response transform pipeline if configured
+        let response = {
+            let pipeline = TransformPipeline::compile(&capability.transform);
+            if pipeline.is_noop() {
+                response
+            } else {
+                tracing::debug!(capability = %capability.name, "Applying response transform");
+                pipeline.apply(response)
+            }
+        };
 
         let latency = start_time.elapsed();
         tracing::info!(

@@ -15,6 +15,7 @@ use crate::backend::{Backend, BackendRegistry};
 use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
+use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::stats::UsageStats;
 use crate::{Error, Result};
@@ -177,6 +178,27 @@ impl Gateway {
         } else {
             None
         };
+
+        // Load playbooks if enabled
+        if self.config.playbooks.enabled {
+            let mut engine = PlaybookEngine::new();
+            let mut total_playbooks = 0;
+            for dir in &self.config.playbooks.directories {
+                match engine.load_from_directory(dir) {
+                    Ok(count) => {
+                        total_playbooks += count;
+                        debug!(directory = %dir, count, "Loaded playbooks");
+                    }
+                    Err(e) => {
+                        debug!(directory = %dir, error = %e, "Failed to load playbooks");
+                    }
+                }
+            }
+            if total_playbooks > 0 {
+                info!(playbooks = total_playbooks, "Playbook engine ready");
+            }
+            meta_mcp.set_playbook_engine(engine);
+        }
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&self.backends),

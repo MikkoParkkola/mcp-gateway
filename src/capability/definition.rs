@@ -5,6 +5,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
+use crate::transform::TransformConfig;
+
 /// A capability definition describing how to call a REST API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityDefinition {
@@ -39,6 +41,10 @@ pub struct CapabilityDefinition {
     /// Metadata for categorization and discovery
     #[serde(default)]
     pub metadata: CapabilityMetadata,
+
+    /// Response transform pipeline configuration
+    #[serde(default)]
+    pub transform: TransformConfig,
 }
 
 /// Provider configurations supporting both named and fallback arrays
@@ -392,6 +398,7 @@ mod tests {
             auth: AuthConfig::default(),
             cache: CacheConfig::default(),
             metadata: CapabilityMetadata::default(),
+            transform: TransformConfig::default(),
         };
 
         let tool = cap.to_mcp_tool();

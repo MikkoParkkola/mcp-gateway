@@ -1,0 +1,56 @@
+playbook: "1.0"
+name: research_topic
+description: >
+  Search for a topic, ground the top result, and return a verified summary.
+  Saves 3 round-trips vs calling each tool individually.
+
+inputs:
+  type: object
+  properties:
+    query:
+      type: string
+      description: "Research query"
+    depth:
+      type: string
+      enum: [quick, thorough]
+      default: quick
+  required: [query]
+
+steps:
+  - name: search
+    tool: brave_search
+    server: capabilities
+    arguments:
+      query: "$inputs.query"
+      count: 5
+
+  - name: ground
+    tool: brave_grounding
+    server: capabilities
+    arguments:
+      query: "$search.web.results[0].title"
+    condition: "$search.web.results | length > 0"
+
+  - name: deep_search
+    tool: brave_search
+    server: capabilities
+    arguments:
+      query: "$inputs.query site:$search.web.results[0].url"
+      count: 3
+    condition: "$inputs.depth == 'thorough'"
+
+output:
+  type: object
+  properties:
+    summary:
+      path: "$ground.answer"
+      fallback: "No grounding available"
+    sources:
+      path: "$search.web.results[].url"
+    confidence:
+      path: "$ground.confidence"
+      fallback: 0.0
+
+on_error: continue
+max_retries: 1
+timeout: 60
