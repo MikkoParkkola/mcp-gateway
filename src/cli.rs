@@ -52,6 +52,17 @@ pub enum Command {
     /// Capability management commands
     #[command(subcommand)]
     Cap(CapCommand),
+
+    /// Get gateway statistics
+    Stats {
+        /// Gateway URL
+        #[arg(short, long, default_value = "http://127.0.0.1:39400")]
+        url: String,
+
+        /// Token price per million for cost calculations
+        #[arg(short, long, default_value_t = 15.0)]
+        price: f64,
+    },
 }
 
 /// Capability subcommands
@@ -114,5 +125,46 @@ pub enum CapCommand {
         /// Config file path to write to
         #[arg(long)]
         config_path: Option<PathBuf>,
+    },
+
+    /// Install a capability from the registry
+    Install {
+        /// Capability name
+        #[arg(required = true)]
+        name: String,
+
+        /// Install from GitHub instead of local registry
+        #[arg(long)]
+        from_github: bool,
+
+        /// GitHub repository (owner/repo)
+        #[arg(long, default_value = "MikkoParkkola/mcp-gateway")]
+        repo: String,
+
+        /// GitHub branch
+        #[arg(long, default_value = "main")]
+        branch: String,
+
+        /// Target directory
+        #[arg(short, long, default_value = "capabilities")]
+        output: PathBuf,
+    },
+
+    /// Search available capabilities in registry
+    Search {
+        /// Search query
+        #[arg(required = true)]
+        query: String,
+
+        /// Local registry path
+        #[arg(short, long, default_value = "registry")]
+        registry: PathBuf,
+    },
+
+    /// List all available capabilities in registry
+    RegistryList {
+        /// Local registry path
+        #[arg(short, long, default_value = "registry")]
+        registry: PathBuf,
     },
 }
