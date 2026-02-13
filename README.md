@@ -105,6 +105,60 @@ One flaky MCP server shouldn't take down your entire toolchain.
 | **Graceful Shutdown** | Clean connection teardown, no orphaned processes |
 | **Concurrency Limits** | Prevent backend overload under burst traffic |
 
+### 5. Response Caching
+
+Tool responses are cached with configurable TTLs. Repeated calls return instantly from cache.
+
+```yaml
+# In capability YAML
+cache_ttl: 300  # 5 minutes
+
+# In config.yaml
+cache:
+  enabled: true
+  default_ttl: 60s
+  max_entries: 10000
+```
+
+### 6. Usage Stats & Cost Tracking
+
+Track token savings in real-time. The gateway adds a 5th meta-tool `gateway_get_stats`:
+
+```bash
+mcp-gateway stats --price 15.0
+```
+
+Returns invocations, cache hit rate, tokens saved, estimated cost savings.
+
+### 7. Capability Registry
+
+Install community capabilities with one command:
+
+```bash
+mcp-gateway cap install weather
+mcp-gateway cap search finance
+mcp-gateway cap registry-list
+mcp-gateway cap install stripe --from github  # fetch from GitHub
+```
+
+### 8. Smart Search Ranking
+
+`gateway_search_tools` results are ranked by your usage patterns. Tools you use frequently appear first. Usage persists across restarts in `~/.mcp-gateway/usage.json`.
+
+### 9. Keychain Integration
+
+Store API keys securely in your system keychain instead of env files:
+
+```yaml
+# macOS Keychain
+params:
+  token: "{keychain.finnhub-api-key}"
+
+# Add secret: security add-generic-password -s 'finnhub-api-key' -a 'mcp-gateway' -w 'YOUR_KEY'
+```
+
+Supports macOS Keychain and Linux secret-service. Session-cached for performance.
+
 ## Architecture
 
 ```
@@ -127,6 +181,24 @@ One flaky MCP server shouldn't take down your entire toolchain.
 │  │  (stdio)    │    │   (http)    │    │   (sse)     │         │
 │  └─────────────┘    └─────────────┘    └─────────────┘         │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+## Configuration Reference
+
+### Response Caching
+
+```yaml
+cache:
+  enabled: true          # Enable/disable response cache (default: true)
+  default_ttl: 60s       # Default cache TTL (default: 60s)
+  max_entries: 10000     # Max cached responses (default: 10000)
+```
+
+### Usage Statistics
+
+```yaml
+stats:
+  enabled: true          # Enable stats tracking (default: true)
 ```
 
 ## How It Works

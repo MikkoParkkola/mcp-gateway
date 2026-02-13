@@ -6,13 +6,17 @@
 //! - Capability backends (direct REST API integration)
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::RwLock;
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::backend::BackendRegistry;
+use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
+use crate::ranking::{SearchRanker, SearchResult, json_to_search_result};
+use crate::stats::UsageStats;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, RequestId, ServerCapabilities, Tool,
     ToolsCallResult, ToolsCapability, ToolsListResult, negotiate_version,
@@ -25,14 +29,45 @@ pub struct MetaMcp {
     backends: Arc<BackendRegistry>,
     /// Capability backend (direct REST APIs)
     capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
+    /// Response cache for `gateway_invoke`
+    cache: Option<Arc<ResponseCache>>,
+    /// Default cache TTL
+    default_cache_ttl: Duration,
+    /// Usage statistics
+    stats: Option<Arc<UsageStats>>,
+    /// Search ranker for usage-based ranking
+    ranker: Option<Arc<SearchRanker>>,
 }
 
 impl MetaMcp {
     /// Create a new Meta-MCP handler
+    #[allow(dead_code)]
     pub fn new(backends: Arc<BackendRegistry>) -> Self {
         Self {
             backends,
             capabilities: RwLock::new(None),
+            cache: None,
+            default_cache_ttl: Duration::from_secs(60),
+            stats: None,
+            ranker: None,
+        }
+    }
+
+    /// Create a new Meta-MCP handler with cache, stats, and ranking support
+    pub fn with_features(
+        backends: Arc<BackendRegistry>,
+        cache: Option<Arc<ResponseCache>>,
+        stats: Option<Arc<UsageStats>>,
+        ranker: Option<Arc<SearchRanker>>,
+        default_ttl: Duration,
+    ) -> Self {
+        Self {
+            backends,
+            capabilities: RwLock::new(None),
+            cache,
+            default_cache_ttl: default_ttl,
+            stats,
+            ranker,
         }
     }
 
@@ -47,7 +82,7 @@ impl MetaMcp {
     }
 
     /// Handle initialize request with version negotiation
-    pub fn handle_initialize(&self, id: RequestId, params: Option<&Value>) -> JsonRpcResponse {
+    pub fn handle_initialize(id: RequestId, params: Option<&Value>) -> JsonRpcResponse {
         // Extract client's requested protocol version
         let client_version = params
             .and_then(|p| p.get("protocolVersion"))
@@ -90,7 +125,7 @@ impl MetaMcp {
 
     /// Handle tools/list request
     pub fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
-        let tools = vec![
+        let mut tools = vec![
             Tool {
                 name: "gateway_list_servers".to_string(),
                 title: Some("List Servers".to_string()),
@@ -170,6 +205,28 @@ impl MetaMcp {
             },
         ];
 
+        // Add stats tool if stats are enabled
+        if self.stats.is_some() {
+            tools.push(Tool {
+                name: "gateway_get_stats".to_string(),
+                title: Some("Get Gateway Statistics".to_string()),
+                description: Some("Get usage statistics including invocations, cache hits, token savings, and top tools".to_string()),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "price_per_million": {
+                            "type": "number",
+                            "description": "Token price per million for cost calculations (default 15.0 for Opus 4.6)",
+                            "default": 15.0
+                        }
+                    },
+                    "required": []
+                }),
+                output_schema: None,
+                annotations: None,
+            });
+        }
+
         let result = ToolsListResult {
             tools,
             next_cursor: None,
@@ -186,10 +243,11 @@ impl MetaMcp {
         arguments: Value,
     ) -> JsonRpcResponse {
         let result = match tool_name {
-            "gateway_list_servers" => self.list_servers().await,
+            "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments).await,
             "gateway_search_tools" => self.search_tools(&arguments).await,
             "gateway_invoke" => self.invoke_tool(&arguments).await,
+            "gateway_get_stats" => self.get_stats(&arguments).await,
             _ => Err(Error::json_rpc(
                 -32601,
                 format!("Unknown tool: {tool_name}"),
@@ -212,7 +270,7 @@ impl MetaMcp {
     }
 
     /// List all servers
-    async fn list_servers(&self) -> Result<Value> {
+    fn list_servers(&self) -> Result<Value> {
         let mut servers: Vec<Value> = self
             .backends
             .all()
@@ -284,12 +342,14 @@ impl MetaMcp {
             .ok_or_else(|| Error::json_rpc(-32602, "Missing 'query' parameter"))?
             .to_lowercase();
 
+        #[allow(clippy::cast_possible_truncation)]
         let limit = args
             .get("limit")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(10) as usize;
 
         let mut matches = Vec::new();
+        let mut total_found = 0u64;
 
         // Search capability backend first (faster, no network)
         if let Some(cap) = self.get_capabilities() {
@@ -301,6 +361,7 @@ impl MetaMcp {
                     .is_some_and(|d| d.to_lowercase().contains(&query));
 
                 if name_match || desc_match {
+                    total_found += 1;
                     matches.push(json!({
                         "server": cap.name,
                         "tool": tool.name,
@@ -329,6 +390,7 @@ impl MetaMcp {
                         .is_some_and(|d| d.to_lowercase().contains(&query));
 
                     if name_match || desc_match {
+                        total_found += 1;
                         matches.push(json!({
                             "server": backend.name,
                             "tool": tool.name,
@@ -341,6 +403,36 @@ impl MetaMcp {
                     }
                 }
             }
+        }
+
+        // Record search stats
+        if let Some(ref stats) = self.stats {
+            stats.record_search(total_found);
+        }
+
+        // Apply ranking if enabled
+        if let Some(ref ranker) = self.ranker {
+            // Convert JSON matches to SearchResult structs
+            let search_results: Vec<SearchResult> = matches
+                .iter()
+                .filter_map(json_to_search_result)
+                .collect();
+
+            // Rank them
+            let ranked = ranker.rank(search_results, &query);
+
+            // Convert back to JSON
+            matches = ranked
+                .into_iter()
+                .map(|r| {
+                    json!({
+                        "server": r.server,
+                        "tool": r.tool,
+                        "description": r.description,
+                        "score": r.score
+                    })
+                })
+                .collect();
         }
 
         Ok(json!({
@@ -364,6 +456,26 @@ impl MetaMcp {
 
         let mut arguments = args.get("arguments").cloned().unwrap_or(json!({}));
 
+        // Check cache first (if enabled)
+        if let Some(ref cache) = self.cache {
+            let cache_key = ResponseCache::build_key(server, tool, &arguments);
+            if let Some(cached) = cache.get(&cache_key) {
+                debug!(server = server, tool = tool, "Cache hit");
+                if let Some(ref stats) = self.stats {
+                    stats.record_cache_hit();
+                }
+                return Ok(cached);
+            }
+        }
+
+        // Record invocation and usage for ranking
+        if let Some(ref stats) = self.stats {
+            stats.record_invocation(server, tool);
+        }
+        if let Some(ref ranker) = self.ranker {
+            ranker.record_use(server, tool);
+        }
+
         // Accept OpenAI-style tool arguments passed as a JSON string.
         // This prevents backends (e.g. rmcp-based servers) from crashing on invalid types.
         if let Value::String(raw) = &arguments {
@@ -383,38 +495,108 @@ impl MetaMcp {
         debug!(server = server, tool = tool, "Invoking tool");
 
         // Check if it's a capability
-        if let Some(cap) = self.get_capabilities() {
+        let result = if let Some(cap) = self.get_capabilities() {
             if server == cap.name && cap.has_capability(tool) {
-                let result = cap.call_tool(tool, arguments).await?;
-                return Ok(serde_json::to_value(result)?);
+                let result = cap.call_tool(tool, arguments.clone()).await?;
+                serde_json::to_value(result)?
+            } else {
+                // Otherwise, invoke on MCP backend
+                let backend = self
+                    .backends
+                    .get(server)
+                    .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+
+                let response = backend
+                    .request(
+                        "tools/call",
+                        Some(json!({
+                            "name": tool,
+                            "arguments": arguments
+                        })),
+                    )
+                    .await?;
+
+                // Return the response result directly
+                if let Some(error) = response.error {
+                    return Err(Error::JsonRpc {
+                        code: error.code,
+                        message: error.message,
+                        data: error.data,
+                    });
+                }
+                response.result.unwrap_or(json!(null))
+            }
+        } else {
+            // No capabilities, must be MCP backend
+            let backend = self
+                .backends
+                .get(server)
+                .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+
+            let response = backend
+                .request(
+                    "tools/call",
+                    Some(json!({
+                        "name": tool,
+                        "arguments": arguments
+                    })),
+                )
+                .await?;
+
+            if let Some(error) = response.error {
+                return Err(Error::JsonRpc {
+                    code: error.code,
+                    message: error.message,
+                    data: error.data,
+                });
+            }
+            response.result.unwrap_or(json!(null))
+        };
+
+        // Cache the successful result (if cache enabled)
+        if let Some(ref cache) = self.cache {
+            let cache_key = ResponseCache::build_key(server, tool, &arguments);
+            cache.set(&cache_key, result.clone(), self.default_cache_ttl);
+            debug!(server = server, tool = tool, ttl = ?self.default_cache_ttl, "Cached result");
+        }
+
+        Ok(result)
+    }
+
+    /// Get gateway statistics
+    async fn get_stats(&self, args: &Value) -> Result<Value> {
+        let price_per_million = args
+            .get("price_per_million")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(15.0); // Default: Opus 4.6 pricing
+
+        let stats = self.stats.as_ref().ok_or_else(|| {
+            Error::json_rpc(-32603, "Statistics not enabled for this gateway")
+        })?;
+
+        // Count total tools across all backends
+        let mut total_tools = 0;
+        for backend in self.backends.all() {
+            if let Ok(tools) = backend.get_tools().await {
+                total_tools += tools.len();
             }
         }
-
-        // Otherwise, invoke on MCP backend
-        let backend = self
-            .backends
-            .get(server)
-            .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
-
-        let response = backend
-            .request(
-                "tools/call",
-                Some(json!({
-                    "name": tool,
-                    "arguments": arguments
-                })),
-            )
-            .await?;
-
-        // Return the response result directly
-        if let Some(error) = response.error {
-            Err(Error::JsonRpc {
-                code: error.code,
-                message: error.message,
-                data: error.data,
-            })
-        } else {
-            Ok(response.result.unwrap_or(json!(null)))
+        if let Some(cap) = self.get_capabilities() {
+            total_tools += cap.get_tools().len();
         }
+
+        let snapshot = stats.snapshot(total_tools);
+        let estimated_savings = snapshot.estimated_savings_usd(price_per_million);
+
+        Ok(json!({
+            "invocations": snapshot.invocations,
+            "cache_hits": snapshot.cache_hits,
+            "cache_hit_rate": format!("{:.1}%", snapshot.cache_hit_rate * 100.0),
+            "tools_discovered": snapshot.tools_discovered,
+            "tools_available": snapshot.tools_available,
+            "tokens_saved": snapshot.tokens_saved,
+            "estimated_savings_usd": format!("${:.2}", estimated_savings),
+            "top_tools": snapshot.top_tools
+        }))
     }
 }

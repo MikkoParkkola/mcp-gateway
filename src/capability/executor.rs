@@ -28,6 +28,7 @@ use serde_json::Value;
 
 use super::{CapabilityDefinition, ProviderConfig, RestConfig};
 use crate::oauth::{TokenInfo, TokenStorage};
+use crate::secrets::SecretResolver;
 use crate::{Error, Result};
 
 /// Executor for capability REST calls
@@ -38,6 +39,8 @@ pub struct CapabilityExecutor {
     token_storage: Option<Arc<TokenStorage>>,
     /// Cached OAuth tokens by provider name
     oauth_tokens: RwLock<DashMap<String, TokenInfo>>,
+    /// Secret resolver for keychain integration
+    secret_resolver: Arc<SecretResolver>,
 }
 
 impl CapabilityExecutor {
@@ -56,6 +59,7 @@ impl CapabilityExecutor {
             cache: ResponseCache::new(),
             token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
+            secret_resolver: Arc::new(SecretResolver::new()),
         }
     }
 
@@ -71,6 +75,7 @@ impl CapabilityExecutor {
             cache: ResponseCache::new(),
             token_storage: Some(token_storage),
             oauth_tokens: RwLock::new(DashMap::new()),
+            secret_resolver: Arc::new(SecretResolver::new()),
         }
     }
 
@@ -602,14 +607,8 @@ impl CapabilityExecutor {
             }
         }
 
-        // Substitute {env.VAR} references
-        let env_pattern = regex::Regex::new(r"\{env\.([^}]+)\}").unwrap();
-        let result = env_pattern
-            .replace_all(&result, |caps: &regex::Captures| {
-                let var_name = &caps[1];
-                std::env::var(var_name).unwrap_or_default()
-            })
-            .to_string();
+        // Resolve secrets ({keychain.X} and {env.VAR})
+        result = self.secret_resolver.resolve(&result)?;
 
         Ok(result)
     }

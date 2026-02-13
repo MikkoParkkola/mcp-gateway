@@ -272,7 +272,7 @@ async fn meta_mcp_handler(
 
     // Route to appropriate handler
     let response = match method.as_str() {
-        "initialize" => state.meta_mcp.handle_initialize(id, params.as_ref()),
+        "initialize" => MetaMcp::handle_initialize(id, params.as_ref()),
         "tools/list" => state.meta_mcp.handle_tools_list(id),
         "tools/call" => {
             let tool_name = params
