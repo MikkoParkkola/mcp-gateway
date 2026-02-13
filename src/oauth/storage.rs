@@ -232,6 +232,10 @@ impl TokenStorage {
 mod tests {
     use super::*;
 
+    // =========================================================================
+    // TokenInfo::from_response
+    // =========================================================================
+
     #[test]
     fn test_token_expiry() {
         // Token that expires in 1 hour
@@ -249,5 +253,275 @@ mod tests {
     fn test_token_no_expiry() {
         let token = TokenInfo::from_response("test_token".to_string(), None, None, None, None);
         assert!(!token.is_expired());
+    }
+
+    #[test]
+    fn from_response_sets_default_token_type() {
+        let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
+        assert_eq!(token.token_type, "Bearer");
+    }
+
+    #[test]
+    fn from_response_preserves_custom_token_type() {
+        let token = TokenInfo::from_response(
+            "tok".to_string(),
+            Some("MAC".to_string()),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(token.token_type, "MAC");
+    }
+
+    #[test]
+    fn from_response_stores_refresh_token() {
+        let token = TokenInfo::from_response(
+            "access".to_string(),
+            None,
+            Some("refresh_123".to_string()),
+            None,
+            None,
+        );
+        assert_eq!(token.refresh_token, Some("refresh_123".to_string()));
+    }
+
+    #[test]
+    fn from_response_calculates_expiry() {
+        let token = TokenInfo::from_response("tok".to_string(), None, None, Some(3600), None);
+        assert!(token.expires_at.is_some());
+        // Should be roughly now + 3600
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let diff = token.expires_at.unwrap() - now;
+        assert!(diff >= 3598 && diff <= 3602); // allow 2 sec slack
+    }
+
+    #[test]
+    fn from_response_no_expiry_when_none() {
+        let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
+        assert!(token.expires_at.is_none());
+    }
+
+    #[test]
+    fn from_response_stores_scope() {
+        let token = TokenInfo::from_response(
+            "tok".to_string(),
+            None,
+            None,
+            None,
+            Some("read write".to_string()),
+        );
+        assert_eq!(token.scope, Some("read write".to_string()));
+    }
+
+    // =========================================================================
+    // TokenInfo::is_expired
+    // =========================================================================
+
+    #[test]
+    fn is_expired_with_60_second_buffer() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Token that "expires" in 30 seconds - within 60s buffer, so treated as expired
+        let token = TokenInfo {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            refresh_token: None,
+            expires_at: Some(now + 30),
+            scope: None,
+        };
+        assert!(token.is_expired());
+    }
+
+    #[test]
+    fn is_not_expired_beyond_buffer() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Token expires in 120 seconds - well beyond 60s buffer
+        let token = TokenInfo {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            refresh_token: None,
+            expires_at: Some(now + 120),
+            scope: None,
+        };
+        assert!(!token.is_expired());
+    }
+
+    // =========================================================================
+    // TokenInfo::time_until_expiry
+    // =========================================================================
+
+    #[test]
+    fn time_until_expiry_future_token() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token = TokenInfo {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            refresh_token: None,
+            expires_at: Some(now + 3600),
+            scope: None,
+        };
+        let ttl = token.time_until_expiry().unwrap();
+        assert!(ttl.as_secs() >= 3598 && ttl.as_secs() <= 3601);
+    }
+
+    #[test]
+    fn time_until_expiry_expired_token() {
+        let token = TokenInfo {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            refresh_token: None,
+            expires_at: Some(0), // long expired
+            scope: None,
+        };
+        assert!(token.time_until_expiry().is_none());
+    }
+
+    #[test]
+    fn time_until_expiry_no_expiry() {
+        let token = TokenInfo {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scope: None,
+        };
+        assert!(token.time_until_expiry().is_none());
+    }
+
+    // =========================================================================
+    // TokenInfo serialization roundtrip
+    // =========================================================================
+
+    #[test]
+    fn token_info_serialization_roundtrip() {
+        let original = TokenInfo::from_response(
+            "access_token_xyz".to_string(),
+            Some("Bearer".to_string()),
+            Some("refresh_abc".to_string()),
+            Some(7200),
+            Some("read write".to_string()),
+        );
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: TokenInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.access_token, original.access_token);
+        assert_eq!(restored.token_type, original.token_type);
+        assert_eq!(restored.refresh_token, original.refresh_token);
+        assert_eq!(restored.expires_at, original.expires_at);
+        assert_eq!(restored.scope, original.scope);
+    }
+
+    // =========================================================================
+    // TokenStorage - storage_key
+    // =========================================================================
+
+    #[test]
+    fn storage_key_is_deterministic() {
+        let k1 = TokenStorage::storage_key("backend1", "http://localhost");
+        let k2 = TokenStorage::storage_key("backend1", "http://localhost");
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn storage_key_differs_for_different_inputs() {
+        let k1 = TokenStorage::storage_key("backend1", "http://localhost");
+        let k2 = TokenStorage::storage_key("backend2", "http://localhost");
+        let k3 = TokenStorage::storage_key("backend1", "http://other");
+        assert_ne!(k1, k2);
+        assert_ne!(k1, k3);
+    }
+
+    #[test]
+    fn storage_key_has_expected_length() {
+        let key = TokenStorage::storage_key("test", "http://example.com");
+        assert_eq!(key.len(), 16); // first 16 hex chars of SHA256
+    }
+
+    // =========================================================================
+    // TokenStorage - save/load/delete roundtrip
+    // =========================================================================
+
+    #[test]
+    fn storage_save_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+
+        let token = TokenInfo::from_response(
+            "my_access_token".to_string(),
+            Some("Bearer".to_string()),
+            Some("my_refresh".to_string()),
+            Some(3600),
+            Some("read".to_string()),
+        );
+
+        storage.save("mybackend", "http://localhost:8080", &token).unwrap();
+
+        let loaded = storage.load("mybackend", "http://localhost:8080").unwrap();
+        assert_eq!(loaded.access_token, "my_access_token");
+        assert_eq!(loaded.refresh_token, Some("my_refresh".to_string()));
+    }
+
+    #[test]
+    fn storage_load_nonexistent_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        assert!(storage.load("nonexistent", "http://localhost").is_none());
+    }
+
+    #[test]
+    fn storage_delete_removes_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+
+        let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
+        storage.save("backend", "http://localhost", &token).unwrap();
+        assert!(storage.load("backend", "http://localhost").is_some());
+
+        storage.delete("backend", "http://localhost").unwrap();
+        assert!(storage.load("backend", "http://localhost").is_none());
+    }
+
+    #[test]
+    fn storage_delete_nonexistent_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        // Should not error when deleting non-existent token
+        storage.delete("no_such_backend", "http://localhost").unwrap();
+    }
+
+    #[test]
+    fn storage_overwrite_updates_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+
+        let token1 = TokenInfo::from_response("token_v1".to_string(), None, None, None, None);
+        storage.save("backend", "http://localhost", &token1).unwrap();
+
+        let token2 = TokenInfo::from_response("token_v2".to_string(), None, None, None, None);
+        storage.save("backend", "http://localhost", &token2).unwrap();
+
+        let loaded = storage.load("backend", "http://localhost").unwrap();
+        assert_eq!(loaded.access_token, "token_v2");
+    }
+
+    #[test]
+    fn storage_creates_directory_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("deeply").join("nested").join("oauth");
+        let storage = TokenStorage::new(nested).unwrap();
+
+        let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
+        storage.save("b", "http://localhost", &token).unwrap();
+        assert!(storage.load("b", "http://localhost").is_some());
     }
 }

@@ -232,6 +232,137 @@ impl StdioTransport {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn make_transport(cmd: &str) -> Arc<StdioTransport> {
+        StdioTransport::new(cmd, HashMap::new(), None)
+    }
+
+    // =========================================================================
+    // Construction
+    // =========================================================================
+
+    #[test]
+    fn new_stores_command_and_defaults() {
+        let t = make_transport("node server.js");
+        assert_eq!(t.command, "node server.js");
+        assert!(!t.is_connected());
+        assert!(t.env.is_empty());
+        assert!(t.cwd.is_none());
+    }
+
+    #[test]
+    fn new_with_env_and_cwd() {
+        let mut env = HashMap::new();
+        env.insert("NODE_ENV".to_string(), "test".to_string());
+        let t = StdioTransport::new("node index.js", env, Some("/tmp".to_string()));
+        assert_eq!(t.env.get("NODE_ENV").unwrap(), "test");
+        assert_eq!(t.cwd.as_deref(), Some("/tmp"));
+    }
+
+    // =========================================================================
+    // next_id
+    // =========================================================================
+
+    #[test]
+    fn next_id_increments_sequentially() {
+        let t = make_transport("echo");
+        assert_eq!(t.next_id(), RequestId::Number(1));
+        assert_eq!(t.next_id(), RequestId::Number(2));
+        assert_eq!(t.next_id(), RequestId::Number(3));
+    }
+
+    // =========================================================================
+    // handle_response - valid JSON-RPC responses
+    // =========================================================================
+
+    #[test]
+    fn handle_response_routes_to_pending_request() {
+        let t = make_transport("echo");
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        t.pending.insert("1".to_string(), tx);
+
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#;
+        t.handle_response(json).unwrap();
+
+        let response = rx.try_recv().unwrap();
+        assert!(response.result.is_some());
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn handle_response_string_id() {
+        let t = make_transport("echo");
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        t.pending.insert("req-42".to_string(), tx);
+
+        let json = r#"{"jsonrpc":"2.0","id":"req-42","result":{}}"#;
+        t.handle_response(json).unwrap();
+
+        let response = rx.try_recv().unwrap();
+        assert!(response.result.is_some());
+    }
+
+    #[test]
+    fn handle_response_no_matching_pending() {
+        let t = make_transport("echo");
+        // No pending request registered - should not panic
+        let json = r#"{"jsonrpc":"2.0","id":99,"result":{}}"#;
+        t.handle_response(json).unwrap();
+    }
+
+    #[test]
+    fn handle_response_no_id_notification() {
+        let t = make_transport("echo");
+        // Notifications have no id - should be handled gracefully
+        let json = r#"{"jsonrpc":"2.0","method":"notifications/progress"}"#;
+        t.handle_response(json).unwrap();
+    }
+
+    #[test]
+    fn handle_response_error_response() {
+        let t = make_transport("echo");
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        t.pending.insert("5".to_string(), tx);
+
+        let json = r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32601,"message":"Method not found"}}"#;
+        t.handle_response(json).unwrap();
+
+        let response = rx.try_recv().unwrap();
+        assert!(response.error.is_some());
+        assert_eq!(response.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn handle_response_invalid_json_returns_error() {
+        let t = make_transport("echo");
+        let result = t.handle_response("not valid json");
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // is_connected
+    // =========================================================================
+
+    #[test]
+    fn initially_not_connected() {
+        let t = make_transport("echo");
+        assert!(!t.is_connected());
+    }
+
+    #[test]
+    fn connected_flag_toggles() {
+        let t = make_transport("echo");
+        t.connected.store(true, Ordering::Relaxed);
+        assert!(t.is_connected());
+        t.connected.store(false, Ordering::Relaxed);
+        assert!(!t.is_connected());
+    }
+}
+
 #[async_trait]
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {

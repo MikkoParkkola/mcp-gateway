@@ -198,6 +198,10 @@ pub fn base_url(url: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    // =========================================================================
+    // deserialize_scopes
+    // =========================================================================
+
     #[test]
     fn test_deserialize_scopes_array() {
         let json = r#"{"resource": "http://localhost", "scopes_supported": ["read", "write"]}"#;
@@ -214,6 +218,31 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_scopes_empty_array() {
+        let json = r#"{"resource": "http://localhost", "scopes_supported": []}"#;
+        let meta: ProtectedResourceMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.scopes_supported.is_empty());
+    }
+
+    #[test]
+    fn deserialize_scopes_missing_field() {
+        let json = r#"{"resource": "http://localhost"}"#;
+        let meta: ProtectedResourceMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.scopes_supported.is_empty());
+    }
+
+    #[test]
+    fn deserialize_scopes_single_string() {
+        let json = r#"{"resource": "http://localhost", "scopes_supported": "read"}"#;
+        let meta: ProtectedResourceMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.scopes_supported, vec!["read"]);
+    }
+
+    // =========================================================================
+    // base_url extraction
+    // =========================================================================
+
+    #[test]
     fn test_base_url_extraction() {
         assert_eq!(
             base_url("http://localhost:8080/api/v1").unwrap(),
@@ -223,5 +252,177 @@ mod tests {
             base_url("https://example.com/path").unwrap(),
             "https://example.com"
         );
+    }
+
+    #[test]
+    fn base_url_strips_path_and_query() {
+        assert_eq!(
+            base_url("https://api.example.com/v1/auth?foo=bar").unwrap(),
+            "https://api.example.com"
+        );
+    }
+
+    #[test]
+    fn base_url_preserves_port() {
+        assert_eq!(
+            base_url("http://127.0.0.1:3000/endpoint").unwrap(),
+            "http://127.0.0.1:3000"
+        );
+    }
+
+    #[test]
+    fn base_url_no_port() {
+        assert_eq!(
+            base_url("https://example.com/some/path").unwrap(),
+            "https://example.com"
+        );
+    }
+
+    #[test]
+    fn base_url_invalid_url_returns_error() {
+        assert!(base_url("not a valid url").is_err());
+    }
+
+    #[test]
+    fn base_url_with_trailing_slash() {
+        assert_eq!(
+            base_url("http://localhost:9090/").unwrap(),
+            "http://localhost:9090"
+        );
+    }
+
+    // =========================================================================
+    // AuthorizationServerMetadata - supports_pkce
+    // =========================================================================
+
+    #[test]
+    fn supports_pkce_with_s256() {
+        let meta = AuthorizationServerMetadata {
+            issuer: "https://auth.example.com".to_string(),
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            revocation_endpoint: None,
+            userinfo_endpoint: None,
+            registration_endpoint: None,
+            grant_types_supported: vec![],
+            response_types_supported: vec![],
+            scopes_supported: vec![],
+            token_endpoint_auth_methods_supported: vec![],
+            code_challenge_methods_supported: vec!["S256".to_string()],
+        };
+        assert!(meta.supports_pkce());
+    }
+
+    #[test]
+    fn supports_pkce_without_s256() {
+        let meta = AuthorizationServerMetadata {
+            issuer: "https://auth.example.com".to_string(),
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            revocation_endpoint: None,
+            userinfo_endpoint: None,
+            registration_endpoint: None,
+            grant_types_supported: vec![],
+            response_types_supported: vec![],
+            scopes_supported: vec![],
+            token_endpoint_auth_methods_supported: vec![],
+            code_challenge_methods_supported: vec!["plain".to_string()],
+        };
+        assert!(!meta.supports_pkce());
+    }
+
+    #[test]
+    fn supports_pkce_empty_methods() {
+        let meta = AuthorizationServerMetadata {
+            issuer: "https://auth.example.com".to_string(),
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            revocation_endpoint: None,
+            userinfo_endpoint: None,
+            registration_endpoint: None,
+            grant_types_supported: vec![],
+            response_types_supported: vec![],
+            scopes_supported: vec![],
+            token_endpoint_auth_methods_supported: vec![],
+            code_challenge_methods_supported: vec![],
+        };
+        assert!(!meta.supports_pkce());
+    }
+
+    // =========================================================================
+    // ProtectedResourceMetadata - authorization_server
+    // =========================================================================
+
+    #[test]
+    fn authorization_server_returns_first() {
+        let meta = ProtectedResourceMetadata {
+            resource: "http://localhost".to_string(),
+            authorization_servers: vec![
+                "https://auth1.example.com".to_string(),
+                "https://auth2.example.com".to_string(),
+            ],
+            bearer_methods_supported: vec![],
+            scopes_supported: vec![],
+        };
+        assert_eq!(meta.authorization_server(), Some("https://auth1.example.com"));
+    }
+
+    #[test]
+    fn authorization_server_returns_none_when_empty() {
+        let meta = ProtectedResourceMetadata {
+            resource: "http://localhost".to_string(),
+            authorization_servers: vec![],
+            bearer_methods_supported: vec![],
+            scopes_supported: vec![],
+        };
+        assert_eq!(meta.authorization_server(), None);
+    }
+
+    // =========================================================================
+    // AuthorizationServerMetadata deserialization
+    // =========================================================================
+
+    #[test]
+    fn deserialize_auth_server_metadata_full() {
+        let json = r#"{
+            "issuer": "https://auth.example.com",
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "registration_endpoint": "https://auth.example.com/register",
+            "scopes_supported": ["read", "write"],
+            "code_challenge_methods_supported": ["S256"],
+            "grant_types_supported": ["authorization_code"],
+            "response_types_supported": ["code"]
+        }"#;
+        let meta: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.issuer, "https://auth.example.com");
+        assert_eq!(meta.registration_endpoint, Some("https://auth.example.com/register".to_string()));
+        assert!(meta.supports_pkce());
+        assert_eq!(meta.scopes_supported, vec!["read", "write"]);
+    }
+
+    #[test]
+    fn deserialize_auth_server_metadata_minimal() {
+        let json = r#"{
+            "issuer": "https://auth.example.com",
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token"
+        }"#;
+        let meta: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.registration_endpoint.is_none());
+        assert!(meta.scopes_supported.is_empty());
+        assert!(!meta.supports_pkce());
+    }
+
+    #[test]
+    fn auth_metadata_scopes_from_string() {
+        let json = r#"{
+            "issuer": "https://auth.example.com",
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "scopes_supported": "read write admin"
+        }"#;
+        let meta: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.scopes_supported, vec!["read", "write", "admin"]);
     }
 }

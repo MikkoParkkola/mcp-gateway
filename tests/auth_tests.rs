@@ -6,7 +6,7 @@
 //! - Rate limiting
 //! - Backend access control
 
-use mcp_gateway::config::{ApiKeyConfig, AuthConfig, Config};
+use mcp_gateway::config::{ApiKeyConfig, AuthConfig};
 use mcp_gateway::gateway::auth::{AuthenticatedClient, ResolvedAuthConfig};
 
 /// Test that ResolvedAuthConfig correctly resolves from AuthConfig
