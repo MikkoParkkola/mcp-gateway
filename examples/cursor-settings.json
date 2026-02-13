@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "mcp-gateway": {
+      "url": "http://localhost:39400/mcp"
+    }
+  }
+}

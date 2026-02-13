@@ -12,14 +12,18 @@ env:
 
 jobs:
   check:
+    name: Clippy (pedantic)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-features
+      - run: cargo clippy --all-features -- -D warnings -W clippy::pedantic
 
   test:
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +32,7 @@ jobs:
       - run: cargo test --all-features
 
   fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,35 +40,3 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-features -- -D warnings
-
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-
-  release:
-    needs: [check, test, fmt, clippy, build]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

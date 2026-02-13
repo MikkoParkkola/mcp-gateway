@@ -236,7 +236,7 @@ mod tests {
         let entry = RegistryEntry {
             name: "test_tool".to_string(),
             description: "A test tool".to_string(),
-            path: "registry/test/test_tool.yaml".to_string(),
+            path: "utility/test_tool.yaml".to_string(),
             tags: vec!["test".to_string()],
             requires_key: true,
         };
@@ -256,14 +256,14 @@ mod tests {
                 RegistryEntry {
                     name: "stripe_charges".to_string(),
                     description: "List Stripe charges".to_string(),
-                    path: "registry/finance/stripe_charges.yaml".to_string(),
+                    path: "finance/stripe_charges.yaml".to_string(),
                     tags: vec!["finance".to_string(), "stripe".to_string()],
                     requires_key: true,
                 },
                 RegistryEntry {
                     name: "gmail_send".to_string(),
                     description: "Send email via Gmail".to_string(),
-                    path: "registry/communication/gmail_send.yaml".to_string(),
+                    path: "communication/gmail_send.yaml".to_string(),
                     tags: vec!["email".to_string(), "google".to_string()],
                     requires_key: true,
                 },

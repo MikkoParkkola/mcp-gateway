@@ -1,0 +1,11 @@
+target/
+.git/
+.github/
+.gitignore
+*.md
+docs/
+examples/
+tests/
+homebrew/
+packaging/
+LICENSE

@@ -53,6 +53,17 @@ pub enum Command {
     #[command(subcommand)]
     Cap(CapCommand),
 
+    /// Initialize a new gateway configuration
+    Init {
+        /// Output path for config file
+        #[arg(short, long, default_value = "gateway.yaml")]
+        output: PathBuf,
+
+        /// Include example capabilities
+        #[arg(long, default_value = "true")]
+        with_examples: bool,
+    },
+
     /// Get gateway statistics
     Stats {
         /// Gateway URL
