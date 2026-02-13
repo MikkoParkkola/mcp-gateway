@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 pub mod backend;
+pub mod cache;
 pub mod capability;
 pub mod cli;
 pub mod config;
@@ -33,6 +34,10 @@ pub mod failsafe;
 pub mod gateway;
 pub mod oauth;
 pub mod protocol;
+pub mod ranking;
+pub mod registry;
+pub mod secrets;
+pub mod stats;
 pub mod transport;
 pub mod validator;
 

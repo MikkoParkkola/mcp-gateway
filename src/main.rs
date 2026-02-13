@@ -17,6 +17,7 @@ use mcp_gateway::{
     config::Config,
     discovery::AutoDiscovery,
     gateway::Gateway,
+    registry::Registry,
     setup_tracing,
 };
 
@@ -33,7 +34,92 @@ async fn main() -> ExitCode {
     // Handle subcommands
     match cli.command {
         Some(Command::Cap(cap_cmd)) => run_cap_command(cap_cmd).await,
+        Some(Command::Stats { url, price }) => run_stats_command(&url, price).await,
         Some(Command::Serve) | None => run_server(cli).await,
+    }
+}
+
+/// Run stats command
+async fn run_stats_command(url: &str, price: f64) -> ExitCode {
+    use serde_json::json;
+
+    let client = reqwest::Client::new();
+    let request_body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "gateway_get_stats",
+            "arguments": {
+                "price_per_million": price
+            }
+        }
+    });
+
+    let url = format!("{}/mcp", url.trim_end_matches('/'));
+
+    match client.post(&url).json(&request_body).send().await {
+        Ok(response) => {
+            if !response.status().is_success() {
+                eprintln!("❌ Gateway returned error: {}", response.status());
+                return ExitCode::FAILURE;
+            }
+
+            match response.json::<serde_json::Value>().await {
+                Ok(body) => {
+                    if let Some(result) = body.get("result") {
+                        if let Some(content) = result.get("content") {
+                            if let Some(arr) = content.as_array() {
+                                if let Some(first) = arr.first() {
+                                    if let Some(text) = first.get("text").and_then(|v| v.as_str()) {
+                                        if let Ok(stats) = serde_json::from_str::<serde_json::Value>(text) {
+                                            println!("📊 Gateway Statistics\n");
+                                            println!("Invocations:       {}", stats["invocations"]);
+                                            println!("Cache Hits:        {}", stats["cache_hits"]);
+                                            println!("Cache Hit Rate:    {}", stats["cache_hit_rate"]);
+                                            println!("Tools Discovered:  {}", stats["tools_discovered"]);
+                                            println!("Tools Available:   {}", stats["tools_available"]);
+                                            println!("Tokens Saved:      {}", stats["tokens_saved"].as_u64().unwrap_or(0));
+                                            println!("Estimated Savings: {}", stats["estimated_savings_usd"]);
+
+                                            if let Some(top_tools) = stats["top_tools"].as_array() {
+                                                if !top_tools.is_empty() {
+                                                    println!("\n🏆 Top Tools:");
+                                                    for tool in top_tools {
+                                                        println!("  • {}:{} - {} calls",
+                                                            tool["server"].as_str().unwrap_or(""),
+                                                            tool["tool"].as_str().unwrap_or(""),
+                                                            tool["count"]);
+                                                    }
+                                                }
+                                            }
+                                            return ExitCode::SUCCESS;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(error) = body.get("error") {
+                        eprintln!("❌ Error: {}", error.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown"));
+                        return ExitCode::FAILURE;
+                    }
+
+                    eprintln!("❌ Unexpected response format");
+                    ExitCode::FAILURE
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to parse response: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to connect to gateway: {e}");
+            eprintln!("   Make sure the gateway is running at {url}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -283,6 +369,96 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("❌ Discovery failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        CapCommand::Install {
+            name,
+            from_github,
+            repo,
+            branch,
+            output,
+        } => {
+            if from_github {
+                println!("📦 Installing {name} from GitHub ({repo})...");
+                let registry = Registry::new("registry");
+                match registry
+                    .install_from_github(&name, &output, &repo, &branch)
+                    .await
+                {
+                    Ok(path) => {
+                        println!("✅ Installed to {}", path.display());
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Installation failed: {e}");
+                        ExitCode::FAILURE
+                    }
+                }
+            } else {
+                println!("📦 Installing {name} from local registry...");
+                let registry = Registry::new("registry");
+                match registry.install_local(&name, &output) {
+                    Ok(path) => {
+                        println!("✅ Installed to {}", path.display());
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Installation failed: {e}");
+                        ExitCode::FAILURE
+                    }
+                }
+            }
+        }
+
+        CapCommand::Search { query, registry } => {
+            let reg = Registry::new(&registry);
+            match reg.load_index() {
+                Ok(index) => {
+                    let results = index.search(&query);
+                    if results.is_empty() {
+                        println!("No capabilities found matching '{query}'");
+                    } else {
+                        println!("Found {} capability(ies) matching '{query}':\n", results.len());
+                        for entry in results {
+                            let auth = if entry.requires_key { " 🔑" } else { "" };
+                            println!("  {} - {}{}", entry.name, entry.description, auth);
+                            if !entry.tags.is_empty() {
+                                println!("    Tags: {}", entry.tags.join(", "));
+                            }
+                            println!();
+                        }
+                        println!("Install with: mcp-gateway cap install <name>");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to load registry: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        CapCommand::RegistryList { registry } => {
+            let reg = Registry::new(&registry);
+            match reg.load_index() {
+                Ok(index) => {
+                    println!("Available capabilities in registry ({}):\n", index.capabilities.len());
+                    for entry in &index.capabilities {
+                        let auth = if entry.requires_key { " 🔑" } else { "" };
+                        println!("  {} - {}{}", entry.name, entry.description, auth);
+                        if !entry.tags.is_empty() {
+                            println!("    Tags: {}", entry.tags.join(", "));
+                        }
+                        println!();
+                    }
+                    println!("Install with: mcp-gateway cap install <name>");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to load registry: {e}");
                     ExitCode::FAILURE
                 }
             }

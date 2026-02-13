@@ -283,13 +283,24 @@ pub struct CacheConfig {
     #[serde(default)]
     pub strategy: String,
 
-    /// Time-to-live in seconds
+    /// Time-to-live in seconds (0 = no caching)
     #[serde(default)]
     pub ttl: u64,
 
     /// Cache key template (for custom cache keys)
     #[serde(default)]
     pub key_template: Option<String>,
+}
+
+impl CacheConfig {
+    /// Get TTL as Duration (None if caching disabled)
+    pub fn ttl_duration(&self) -> Option<std::time::Duration> {
+        if self.ttl > 0 {
+            Some(std::time::Duration::from_secs(self.ttl))
+        } else {
+            None
+        }
+    }
 }
 
 /// Capability metadata

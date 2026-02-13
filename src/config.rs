@@ -35,6 +35,31 @@ pub struct Config {
     pub backends: HashMap<String, BackendConfig>,
     /// Capability configuration (direct REST API integration)
     pub capabilities: CapabilityConfig,
+    /// Cache configuration
+    pub cache: CacheConfig,
+}
+
+/// Cache configuration for response caching
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CacheConfig {
+    /// Enable response caching
+    pub enabled: bool,
+    /// Default TTL for cached responses
+    #[serde(with = "humantime_serde")]
+    pub default_ttl: Duration,
+    /// Maximum number of entries before eviction
+    pub max_entries: usize,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_ttl: Duration::from_secs(60),
+            max_entries: 10_000,
+        }
+    }
 }
 
 /// Capability configuration for direct REST API integration

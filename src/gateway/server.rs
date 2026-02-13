@@ -12,8 +12,11 @@ use super::meta_mcp::MetaMcp;
 use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
 use crate::backend::{Backend, BackendRegistry};
+use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
+use crate::ranking::SearchRanker;
+use crate::stats::UsageStats;
 use crate::{Error, Result};
 
 /// MCP Gateway server
@@ -65,8 +68,53 @@ impl Gateway {
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
 
-        // Create app state
-        let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&self.backends)));
+        // Create cache if enabled
+        let cache = if self.config.cache.enabled {
+            let cache = Arc::new(ResponseCache::new());
+            info!(
+                enabled = true,
+                default_ttl = ?self.config.cache.default_ttl,
+                max_entries = self.config.cache.max_entries,
+                "Response cache initialized"
+            );
+            Some(cache)
+        } else {
+            None
+        };
+
+        // Create usage stats (always enabled for now)
+        let stats = Some(Arc::new(UsageStats::new()));
+        if stats.is_some() {
+            info!("Usage statistics tracking enabled");
+        }
+
+        // Create search ranker with persistence
+        let ranker_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".mcp-gateway")
+            .join("usage.json");
+
+        let ranker = Arc::new(SearchRanker::new());
+        if let Some(parent) = ranker_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        if ranker_path.exists() {
+            if let Err(e) = ranker.load(&ranker_path) {
+                warn!(error = %e, "Failed to load search ranker usage data");
+            } else {
+                info!("Loaded search ranking usage data");
+            }
+        }
+        let ranker_for_shutdown = Arc::clone(&ranker);
+
+        // Create app state with cache, stats, and ranking support
+        let meta_mcp = Arc::new(MetaMcp::with_features(
+            Arc::clone(&self.backends),
+            cache,
+            stats,
+            Some(ranker),
+            self.config.cache.default_ttl,
+        ));
 
         // Load capabilities if enabled
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
@@ -261,6 +309,13 @@ impl Gateway {
             .with_graceful_shutdown(shutdown_signal(shutdown_tx))
             .await
             .map_err(|e| Error::Internal(e.to_string()))?;
+
+        // Save search ranker usage data
+        if let Err(e) = ranker_for_shutdown.save(&ranker_path) {
+            warn!(error = %e, "Failed to save search ranker usage data");
+        } else {
+            info!("Saved search ranking usage data");
+        }
 
         // Stop all backends
         info!("Shutting down backends...");
