@@ -1,0 +1,16 @@
+# Minimal MCP Gateway config -- 3 free capabilities, no API keys needed.
+# Usage: mcp-gateway --config gateway-minimal.yaml
+
+server:
+  port: 39400
+
+meta_mcp:
+  enabled: true
+
+capabilities:
+  enabled: true
+  directories:
+    - ./capabilities
+
+# No MCP server backends -- capabilities only.
+backends: {}

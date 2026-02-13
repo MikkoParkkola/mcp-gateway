@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.85-slim AS builder
+FROM rust:1.87-slim AS builder
 
 WORKDIR /app
 
@@ -9,11 +9,11 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy source
+# Copy manifests first for layer caching
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-# Build release
+# Build release binary
 RUN cargo build --release
 
 # Runtime stage
@@ -21,17 +21,14 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN useradd -r -u 1001 gateway
 
 COPY --from=builder /app/target/release/mcp-gateway /usr/local/bin/
 
-# Default port
-EXPOSE 39400
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
-    CMD curl -f http://localhost:39400/health || exit 1
+USER gateway
+EXPOSE 3000
 
 ENTRYPOINT ["mcp-gateway"]
-CMD ["--help"]

@@ -1,0 +1,141 @@
+# Full MCP Gateway configuration -- all options with defaults shown.
+# Copy this file and uncomment/modify sections as needed.
+# Usage: mcp-gateway --config gateway-full.yaml
+
+# Load environment files before config processing.
+# Supports ~ expansion. Files that don't exist are silently skipped.
+# Variables are set into the process environment for {env.VAR} resolution.
+env_files:
+  - ~/.mcp-gateway/.env
+  # - ~/.claude/secrets.env
+
+# --- Server ---
+
+server:
+  host: "127.0.0.1"              # Bind address
+  port: 39400                     # Listen port
+  request_timeout: 30s            # Per-request timeout
+  shutdown_timeout: 30s           # Graceful shutdown timeout
+  max_body_size: 10485760         # Max request body size in bytes (10 MB)
+
+# --- Authentication ---
+
+auth:
+  enabled: false                  # Enable auth (set true for networked deployments)
+
+  # Bearer token for simple auth.
+  # Options: "auto" (random, logged at startup), "env:VAR_NAME", or a literal string.
+  # bearer_token: "auto"
+
+  # API keys for multi-client access with per-client restrictions.
+  # api_keys:
+  #   - key: "env:CLIENT_A_KEY"
+  #     name: "Client A"
+  #     rate_limit: 100           # Requests per minute (0 = unlimited)
+  #     backends: ["tavily"]      # Restrict to specific backends (empty = all)
+  #   - key: "my-literal-key"
+  #     name: "Client B"
+  #     backends: []              # All backends
+
+  # Paths that bypass authentication.
+  public_paths:
+    - /health
+
+# --- Meta-MCP ---
+
+meta_mcp:
+  enabled: true                   # Enable Meta-MCP mode (4 meta-tools)
+  cache_tools: true               # Cache tool lists from backends
+  cache_ttl: 5m                   # Tool cache TTL
+  # Backends to pre-connect and cache on startup.
+  warm_start: []
+  # warm_start:
+  #   - tavily
+
+# --- Streaming ---
+
+streaming:
+  enabled: true                   # Enable SSE streaming for notifications
+  buffer_size: 100                # Notification buffer size per client
+  keep_alive_interval: 15s        # SSE keep-alive interval
+  # Backends to auto-subscribe for notifications.
+  auto_subscribe: []
+
+# --- Failsafes ---
+
+failsafe:
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5          # Failures before circuit opens
+    success_threshold: 3          # Successes in half-open to close
+    reset_timeout: 30s            # Time before half-open retry
+
+  retry:
+    enabled: true
+    max_attempts: 3               # Total attempts (1 original + 2 retries)
+    initial_backoff: 100ms        # First retry delay
+    max_backoff: 10s              # Maximum retry delay
+    multiplier: 2.0               # Backoff multiplier
+
+  rate_limit:
+    enabled: true
+    requests_per_second: 100      # Per-backend RPS
+    burst_size: 50                # Token bucket burst
+
+  health_check:
+    enabled: true
+    interval: 30s                 # Health check interval
+    timeout: 5s                   # Health check timeout
+
+# --- Response Cache ---
+
+cache:
+  enabled: true                   # Enable response caching
+  default_ttl: 60s                # Default cache TTL
+  max_entries: 10000              # Max cached responses before eviction
+
+# --- Capabilities (REST API integration) ---
+
+capabilities:
+  enabled: true                   # Enable capability system
+  name: fulcrum                   # Backend name shown in gateway_list_servers
+  directories:                    # Directories to load capability YAMLs from
+    - ./capabilities
+
+# --- Backends (MCP servers) ---
+
+backends:
+  # Example: stdio backend (spawns a subprocess)
+  # tavily:
+  #   command: "npx -y @anthropic/mcp-server-tavily"
+  #   description: "Web search via Tavily"
+  #   enabled: true
+  #   timeout: 30s
+  #   idle_timeout: 300s          # Hibernate after 5 min idle
+  #   env:
+  #     TAVILY_API_KEY: "${TAVILY_API_KEY}"
+  #   cwd: /tmp                   # Working directory (stdio only)
+
+  # Example: HTTP backend (connects to running server)
+  # context7:
+  #   http_url: "http://localhost:8080/mcp"
+  #   description: "Documentation lookup"
+  #   streamable_http: true       # Use Streamable HTTP (no SSE handshake)
+  #   protocol_version: "2025-03-26"  # Override protocol version
+  #   headers:
+  #     Authorization: "Bearer ${API_TOKEN}"
+
+  # Example: SSE backend
+  # pieces:
+  #   http_url: "http://localhost:39300/sse"
+  #   description: "Pieces LTM"
+
+  # Example: backend with OAuth
+  # google:
+  #   http_url: "https://mcp.googleapis.com/mcp"
+  #   description: "Google services"
+  #   oauth:
+  #     enabled: true
+  #     scopes:
+  #       - "https://www.googleapis.com/auth/gmail.readonly"
+  #     client_id: "env:GOOGLE_CLIENT_ID"
