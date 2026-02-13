@@ -9,6 +9,8 @@
 
 MCP Gateway sits between your AI client and your MCP servers. Instead of loading hundreds of tool definitions into every request, the AI gets 4 meta-tools and discovers the right one on demand -- like searching an app store instead of installing every app.
 
+![demo](demo.gif)
+
 ## Quick Start
 
 ```bash
