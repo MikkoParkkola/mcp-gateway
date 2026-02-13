@@ -1,0 +1,78 @@
+fulcrum: "1.0"
+name: hackernews_item
+description: Get details of a Hacker News story, comment, or user. Use with hackernews_stories to get full story details. Free, no API key required.
+
+schema:
+  input:
+    type: object
+    properties:
+      id:
+        type: integer
+        description: Item ID (story, comment, poll, job)
+        examples:
+          - 8863
+    required:
+      - id
+  output:
+    type: object
+    properties:
+      id:
+        type: integer
+      type:
+        type: string
+        enum: [story, comment, job, poll, pollopt]
+      by:
+        type: string
+        description: Username of author
+      time:
+        type: integer
+        description: Unix timestamp
+      title:
+        type: string
+      url:
+        type: string
+      text:
+        type: string
+        description: HTML content (for comments/text posts)
+      score:
+        type: integer
+      descendants:
+        type: integer
+        description: Comment count
+      kids:
+        type: array
+        items:
+          type: integer
+        description: Comment IDs
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://hacker-news.firebaseio.com
+      path: /v0/item/{id}.json
+      method: GET
+      headers:
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: search
+  tags:
+    - hackernews
+    - tech
+    - news
+    - free
+  cost_category: free
+  execution_time: instant
+  read_only: true
+  docs: https://github.com/HackerNews/API

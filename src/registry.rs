@@ -388,11 +388,11 @@ mod tests {
 
         let index = registry.load_index().expect("Failed to load registry index");
 
-        // Verify all 8 expected capabilities are present
+        // Verify all 29 expected capabilities are present
         assert_eq!(
             index.capabilities.len(),
-            8,
-            "Registry should contain exactly 8 capabilities"
+            29,
+            "Registry should contain exactly 29 capabilities"
         );
 
         // Verify each capability file exists and is valid

@@ -56,6 +56,153 @@
       "path": "productivity/github_create_issue.yaml",
       "tags": ["github", "development", "issues"],
       "requires_key": true
+    },
+    {
+      "name": "nominatim_geocode",
+      "description": "Geocode addresses to coordinates using OpenStreetMap Nominatim (free, no key)",
+      "path": "geo/nominatim_geocode.yaml",
+      "tags": ["geocoding", "maps", "openstreetmap", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "nominatim_reverse",
+      "description": "Reverse geocode coordinates to address using OpenStreetMap Nominatim (free, no key)",
+      "path": "geo/nominatim_reverse.yaml",
+      "tags": ["geocoding", "reverse-geocoding", "maps", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "wikipedia_summary",
+      "description": "Get Wikipedia article summary with extract and thumbnail (free, no key)",
+      "path": "reference/wikipedia_summary.yaml",
+      "tags": ["wikipedia", "encyclopedia", "knowledge", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "open_library_book",
+      "description": "Search books from Open Library - world's largest open book catalog (free, no key)",
+      "path": "reference/open_library_book.yaml",
+      "tags": ["books", "library", "isbn", "literature", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "npm_package",
+      "description": "Get npm package information from npm registry (free, no key)",
+      "path": "developer/npm_package.yaml",
+      "tags": ["npm", "javascript", "nodejs", "packages", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "pypi_package",
+      "description": "Get Python package information from PyPI (free, no key)",
+      "path": "developer/pypi_package.yaml",
+      "tags": ["pypi", "python", "packages", "pip", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "openfoodfacts_product",
+      "description": "Get food product nutrition info from Open Food Facts (free, no key)",
+      "path": "food/openfoodfacts_product.yaml",
+      "tags": ["food", "nutrition", "barcode", "ingredients", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "musicbrainz_search",
+      "description": "Search music metadata from MusicBrainz - open music encyclopedia (free, no key)",
+      "path": "entertainment/musicbrainz_search.yaml",
+      "tags": ["music", "artists", "albums", "musicbrainz", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "timezone_convert",
+      "description": "Convert time between timezones with DST awareness (free, no key)",
+      "path": "reference/timezone_convert.yaml",
+      "tags": ["timezone", "time", "conversion", "utility", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "air_quality",
+      "description": "Get real-time air quality data from OpenAQ (free, no key)",
+      "path": "reference/air_quality.yaml",
+      "tags": ["air-quality", "pollution", "environment", "health", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "sec_edgar_filings",
+      "description": "Get SEC EDGAR company filings - official US government data (free, no key)",
+      "path": "finance/sec_edgar_filings.yaml",
+      "tags": ["sec", "edgar", "filings", "10-k", "insider-trading", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "semantic_scholar",
+      "description": "Search academic papers from Semantic Scholar (free, no key for basic use)",
+      "path": "reference/semantic_scholar.yaml",
+      "tags": ["academic", "research", "papers", "citations", "science", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "prh_company",
+      "description": "Search Finnish companies from PRH - official business registry (free, no key)",
+      "path": "finance/prh_company.yaml",
+      "tags": ["finland", "company", "business-registry", "prh", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "qr_generate",
+      "description": "Generate QR codes using GoQR.me API (free, no key)",
+      "path": "reference/qr_generate.yaml",
+      "tags": ["qr-code", "generator", "image", "barcode", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "recipe_search",
+      "description": "Search recipes by ingredients, cuisine, diet (free tier: 150 req/day with key)",
+      "path": "food/recipe_search.yaml",
+      "tags": ["recipes", "cooking", "food", "ingredients", "diet"],
+      "requires_key": true
+    },
+    {
+      "name": "hackernews_stories",
+      "description": "Get top stories from Hacker News (free, no key)",
+      "path": "search/hackernews_stories.yaml",
+      "tags": ["hackernews", "tech", "news", "startups", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "hackernews_item",
+      "description": "Get details of Hacker News story, comment, or user (free, no key)",
+      "path": "search/hackernews_item.yaml",
+      "tags": ["hackernews", "tech", "news", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "exchangerate_convert",
+      "description": "Convert between currencies - 161 currencies (free tier: 1500 req/month with key)",
+      "path": "finance/exchangerate_convert.yaml",
+      "tags": ["finance", "currency", "exchange-rate", "conversion"],
+      "requires_key": true
+    },
+    {
+      "name": "reddit_search",
+      "description": "Search Reddit posts and comments across subreddits (free, no key)",
+      "path": "search/reddit_search.yaml",
+      "tags": ["search", "reddit", "social", "community", "forums", "free"],
+      "requires_key": false
+    },
+    {
+      "name": "tmdb_search",
+      "description": "Search movies and TV shows from TMDB (free key, easy to get)",
+      "path": "entertainment/tmdb_search.yaml",
+      "tags": ["movies", "tv-shows", "tmdb", "search", "entertainment"],
+      "requires_key": true
+    },
+    {
+      "name": "tmdb_trending",
+      "description": "Get trending movies and TV shows from TMDB (free key, easy to get)",
+      "path": "entertainment/tmdb_trending.yaml",
+      "tags": ["movies", "tv-shows", "tmdb", "trending", "popular", "entertainment"],
+      "requires_key": true
     }
   ]
 }
