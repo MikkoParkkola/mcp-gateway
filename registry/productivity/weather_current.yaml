@@ -1,0 +1,94 @@
+fulcrum: "1.0"
+name: weather_current
+description: Get current weather using Open-Meteo API. Free, no API key required. Supports worldwide locations with high accuracy.
+
+schema:
+  input:
+    type: object
+    properties:
+      latitude:
+        type: number
+        description: Latitude in decimal degrees
+        minimum: -90
+        maximum: 90
+        examples:
+          - 52.52
+      longitude:
+        type: number
+        description: Longitude in decimal degrees
+        minimum: -180
+        maximum: 180
+        examples:
+          - 13.41
+      temperature_unit:
+        type: string
+        description: Temperature unit
+        enum: [celsius, fahrenheit]
+        default: celsius
+      wind_speed_unit:
+        type: string
+        description: Wind speed unit
+        enum: [kmh, mph, ms, kn]
+        default: kmh
+    required:
+      - latitude
+      - longitude
+  output:
+    type: object
+    properties:
+      latitude:
+        type: number
+      longitude:
+        type: number
+      current:
+        type: object
+        properties:
+          time:
+            type: string
+          temperature_2m:
+            type: number
+          relative_humidity_2m:
+            type: number
+          wind_speed_10m:
+            type: number
+          weather_code:
+            type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.open-meteo.com
+      path: /v1/forecast
+      method: GET
+      headers:
+        Accept: "application/json"
+      params:
+        latitude: "{latitude}"
+        longitude: "{longitude}"
+        current: "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code"
+        temperature_unit: "{temperature_unit}"
+        wind_speed_unit: "{wind_speed_unit}"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: productivity
+  tags:
+    - weather
+    - forecast
+    - free
+    - open-meteo
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 10000 req/day
+  docs: https://open-meteo.com/en/docs

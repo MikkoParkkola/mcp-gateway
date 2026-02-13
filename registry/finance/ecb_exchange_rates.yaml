@@ -1,0 +1,63 @@
+fulcrum: "1.0"
+name: ecb_exchange_rates
+description: Get official ECB foreign exchange rates. Free API from European Central Bank with no key required. Daily reference rates against EUR.
+
+schema:
+  input:
+    type: object
+    properties:
+      currency:
+        type: string
+        description: Currency code (ISO 4217) or 'all' for all rates
+        default: "all"
+        examples:
+          - "USD"
+          - "GBP"
+          - "JPY"
+          - "all"
+      date:
+        type: string
+        description: Date in YYYY-MM-DD format (optional, defaults to latest)
+        pattern: '^\d{4}-\d{2}-\d{2}$'
+        examples:
+          - "2024-01-15"
+  output:
+    type: object
+    properties:
+      Cube:
+        type: object
+        description: ECB exchange rate data structure
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://www.ecb.europa.eu
+      path: /stats/eurofxref/eurofxref-daily.xml
+      method: GET
+      headers:
+        Accept: "application/xml"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: finance
+  tags:
+    - finance
+    - forex
+    - currency
+    - ecb
+    - free
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: unlimited
+  docs: https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/

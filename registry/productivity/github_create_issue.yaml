@@ -1,0 +1,101 @@
+fulcrum: "1.0"
+name: github_create_issue
+description: Create a GitHub issue in a repository. Requires GitHub personal access token with repo scope.
+
+schema:
+  input:
+    type: object
+    properties:
+      owner:
+        type: string
+        description: Repository owner (username or organization)
+        examples:
+          - "octocat"
+      repo:
+        type: string
+        description: Repository name
+        examples:
+          - "hello-world"
+      title:
+        type: string
+        description: Issue title
+      body:
+        type: string
+        description: Issue body (Markdown supported)
+      labels:
+        type: array
+        description: Labels to add to the issue
+        items:
+          type: string
+      assignees:
+        type: array
+        description: Usernames to assign
+        items:
+          type: string
+    required:
+      - owner
+      - repo
+      - title
+  output:
+    type: object
+    properties:
+      id:
+        type: integer
+        description: Issue ID
+      number:
+        type: integer
+        description: Issue number
+      html_url:
+        type: string
+        description: URL to the issue
+      state:
+        type: string
+        enum: [open, closed]
+      title:
+        type: string
+      body:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.github.com
+      path: /repos/{owner}/{repo}/issues
+      method: POST
+      headers:
+        Accept: "application/vnd.github+json"
+        Authorization: "Bearer {env.GITHUB_TOKEN}"
+        X-GitHub-Api-Version: "2022-11-28"
+      body:
+        title: "{title}"
+        body: "{body}"
+        labels: "{labels}"
+        assignees: "{assignees}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: bearer
+  key: env:GITHUB_TOKEN
+  description: Create a personal access token at https://github.com/settings/tokens with 'repo' scope
+  header: Authorization
+  prefix: Bearer
+
+metadata:
+  category: productivity
+  tags:
+    - github
+    - development
+    - issues
+    - collaboration
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  rate_limit: 5000 req/hour (authenticated)
+  docs: https://docs.github.com/en/rest/issues/issues#create-an-issue

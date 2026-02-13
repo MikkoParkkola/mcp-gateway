@@ -1,0 +1,84 @@
+fulcrum: "1.0"
+name: stripe_list_charges
+description: List Stripe charges with pagination and filtering. Returns up to 100 charges per request.
+
+schema:
+  input:
+    type: object
+    properties:
+      limit:
+        type: integer
+        description: Number of charges to return (1-100)
+        default: 10
+        minimum: 1
+        maximum: 100
+      customer:
+        type: string
+        description: Only return charges for this customer ID
+      starting_after:
+        type: string
+        description: Cursor for pagination (charge ID)
+      created:
+        type: object
+        description: Filter by creation date range
+        properties:
+          gte:
+            type: integer
+            description: Unix timestamp - greater than or equal
+          lte:
+            type: integer
+            description: Unix timestamp - less than or equal
+  output:
+    type: object
+    properties:
+      object:
+        type: string
+        enum: [list]
+      data:
+        type: array
+        description: Array of charge objects
+      has_more:
+        type: boolean
+        description: Whether more charges are available
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.stripe.com
+      path: /v1/charges
+      method: GET
+      headers:
+        Accept: "application/json"
+        Authorization: "Bearer {keychain.stripe-api-key}"
+      params:
+        limit: "{limit}"
+        customer: "{customer}"
+        starting_after: "{starting_after}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: bearer
+  key: keychain:stripe-api-key
+  description: Get API key from Stripe Dashboard > Developers > API keys
+  header: Authorization
+  prefix: Bearer
+
+metadata:
+  category: finance
+  tags:
+    - finance
+    - stripe
+    - payments
+    - charges
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 100 req/sec
+  docs: https://stripe.com/docs/api/charges/list
