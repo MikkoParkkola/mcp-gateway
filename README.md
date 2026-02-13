@@ -173,6 +173,36 @@ The AI searches for what it needs, invokes it, and moves on. Tool definitions lo
 
 Built in Rust with async I/O (tokio + axum). Benchmarks: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
+## Token Savings
+
+The "95% savings" claim is backed by a reproducible benchmark (`python3 benchmarks/token_savings.py`).
+
+The direct approach registers every backend tool definition in the LLM's system prompt. The meta-MCP approach registers only 3 gateway tools regardless of backend count. Token estimates use a conservative ~3.5 chars/token heuristic.
+
+**Default scenario (5 backends, 20 tools each = 100 tools):**
+
+| Approach | Tools in Prompt | Est. Tokens |
+|----------|-----------------|-------------|
+| Direct (all tools) | 100 | 26,412 |
+| Meta-MCP (gateway) | 3 | 432 |
+
+**Savings: 98.4% (61x fewer tokens)**
+
+**Scaling across configurations:**
+
+| Backends | Total Tools | Direct (tokens) | Gateway (tokens) | Savings |
+|----------|-------------|-----------------|-----------------|---------|
+| 1 | 10 | 2,609 | 432 | 83.4% |
+| 3 | 45 | 11,949 | 432 | 96.4% |
+| 5 | 100 | 26,412 | 432 | 98.4% |
+| 10 | 200 | 52,869 | 432 | 99.2% |
+| 10 | 300 | 80,052 | 432 | 99.5% |
+| 20 | 500 | 132,697 | 432 | 99.7% |
+
+Gateway token count is constant (432 tokens for 3 meta-tools) regardless of how many backends or tools exist. With a typical setup of 5+ backends the savings exceed 98%.
+
+Reproduce locally: `python3 benchmarks/token_savings.py --backends 10 --tools-per-backend 30`
+
 ## Documentation
 
 - [**Quickstart**](docs/QUICKSTART.md) -- Zero to working gateway in 5 minutes
