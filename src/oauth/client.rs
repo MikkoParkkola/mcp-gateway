@@ -72,6 +72,7 @@ struct ClientRegistrationResponse {
 
 impl OAuthClient {
     /// Create a new OAuth client for a backend
+    #[must_use]
     pub fn new(
         http_client: Client,
         backend_name: String,
@@ -94,6 +95,15 @@ impl OAuthClient {
     }
 
     /// Initialize the OAuth client by discovering metadata
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authorization server metadata discovery fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `oauth_base_url` is `None` after metadata discovery, which
+    /// should not occur since both success and error paths set it.
     pub async fn initialize(&mut self) -> Result<()> {
         let base_url = metadata::base_url(&self.resource_url)?;
 
@@ -112,7 +122,7 @@ impl OAuthClient {
 
                 // Use scopes from metadata if not specified
                 if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
-                    self.scopes = meta.scopes_supported.clone();
+                    self.scopes.clone_from(&meta.scopes_supported);
                 }
 
                 self.resource_metadata = Some(meta);
@@ -138,6 +148,10 @@ impl OAuthClient {
     }
 
     /// Get a valid access token, refreshing or re-authorizing as needed
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if token refresh and re-authorization both fail.
     pub async fn get_token(&self) -> Result<String> {
         // Check if we have a valid cached token
         {
@@ -173,6 +187,11 @@ impl OAuthClient {
     }
 
     /// Perform the authorization flow
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any step of the OAuth authorization flow fails
+    /// (callback server, client registration, browser auth, or code exchange).
     pub async fn authorize(&self) -> Result<String> {
         let auth_meta = self
             .auth_metadata

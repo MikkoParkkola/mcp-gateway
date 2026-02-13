@@ -60,7 +60,7 @@ pub struct ResolvedApiKey {
 }
 
 impl ResolvedAuthConfig {
-    /// Create resolved config from AuthConfig
+    /// Create resolved config from `AuthConfig`
     pub fn from_config(config: &AuthConfig) -> Self {
         let bearer_token = config.resolve_bearer_token();
 
@@ -103,11 +103,13 @@ impl ResolvedAuthConfig {
     }
 
     /// Check if a path is public (bypasses auth)
+    #[must_use]
     pub fn is_public_path(&self, path: &str) -> bool {
         self.public_paths.iter().any(|p| path.starts_with(p))
     }
 
     /// Validate a token and return the client info if valid
+    #[must_use]
     pub fn validate_token(&self, token: &str) -> Option<AuthenticatedClient> {
         // Check bearer token first
         if let Some(ref bearer) = self.bearer_token {
@@ -135,6 +137,7 @@ impl ResolvedAuthConfig {
     }
 
     /// Check rate limit for a client. Returns true if allowed, false if rate limited.
+    #[must_use]
     pub fn check_rate_limit(&self, client_name: &str) -> bool {
         if let Some(limiter) = self.rate_limiters.get(client_name) {
             limiter.check().is_ok()
@@ -152,12 +155,13 @@ pub struct AuthenticatedClient {
     pub name: String,
     /// Rate limit (0 = unlimited)
     pub rate_limit: u32,
-    /// Allowed backends (empty or ["*"] = all)
+    /// Allowed backends (empty or `["*"]` = all)
     pub backends: Vec<String>,
 }
 
 impl AuthenticatedClient {
     /// Check if this client can access a backend
+    #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {
         self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
     }
@@ -202,30 +206,27 @@ pub async fn auth_middleware(
                 .or_else(|| v.strip_prefix("bearer "))
         });
 
-    match token {
-        Some(token) => {
-            if let Some(client) = auth_config.validate_token(token) {
-                // Check rate limit
-                if !auth_config.check_rate_limit(&client.name) {
-                    warn!(client = %client.name, path = %path, "Rate limit exceeded");
-                    return rate_limited_response(&client.name);
-                }
+    let Some(token) = token else {
+        warn!(path = %path, "Missing Authorization header");
+        return unauthorized_response(
+            "Missing Authorization header. Use: Authorization: Bearer <token>",
+        );
+    };
 
-                debug!(client = %client.name, path = %path, "Authenticated request");
-                // Inject client info for downstream handlers
-                request.extensions_mut().insert(client);
-                next.run(request).await
-            } else {
-                warn!(path = %path, "Invalid token");
-                unauthorized_response("Invalid token")
-            }
+    if let Some(client) = auth_config.validate_token(token) {
+        // Check rate limit
+        if !auth_config.check_rate_limit(&client.name) {
+            warn!(client = %client.name, path = %path, "Rate limit exceeded");
+            return rate_limited_response(&client.name);
         }
-        None => {
-            warn!(path = %path, "Missing Authorization header");
-            unauthorized_response(
-                "Missing Authorization header. Use: Authorization: Bearer <token>",
-            )
-        }
+
+        debug!(client = %client.name, path = %path, "Authenticated request");
+        // Inject client info for downstream handlers
+        request.extensions_mut().insert(client);
+        next.run(request).await
+    } else {
+        warn!(path = %path, "Invalid token");
+        unauthorized_response("Invalid token")
     }
 }
 

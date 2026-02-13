@@ -66,6 +66,7 @@ impl TokenInfo {
     }
 
     /// Check if the token is expired (with 60 second buffer)
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
             let now = SystemTime::now()
@@ -82,6 +83,7 @@ impl TokenInfo {
     }
 
     /// Time until expiration
+    #[must_use]
     pub fn time_until_expiry(&self) -> Option<Duration> {
         self.expires_at.and_then(|expires_at| {
             let now = SystemTime::now()
@@ -106,6 +108,10 @@ pub struct TokenStorage {
 
 impl TokenStorage {
     /// Create a new token storage with the given base directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage directory cannot be created.
     pub fn new(base_dir: PathBuf) -> Result<Self> {
         // Create directory if it doesn't exist
         if !base_dir.exists() {
@@ -117,6 +123,11 @@ impl TokenStorage {
     }
 
     /// Create token storage in the default location (~/.mcp-gateway/oauth)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the home directory cannot be determined or the
+    /// storage directory cannot be created.
     pub fn default_location() -> Result<Self> {
         let home = dirs::home_dir()
             .ok_or_else(|| Error::Internal("Cannot determine home directory".to_string()))?;
@@ -125,7 +136,7 @@ impl TokenStorage {
     }
 
     /// Generate a storage key for a backend
-    fn storage_key(&self, backend_name: &str, resource_url: &str) -> String {
+    fn storage_key(backend_name: &str, resource_url: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(backend_name.as_bytes());
         hasher.update(b":");
@@ -136,7 +147,7 @@ impl TokenStorage {
 
     /// Get the file path for a backend's tokens
     fn token_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
-        let key = self.storage_key(backend_name, resource_url);
+        let key = Self::storage_key(backend_name, resource_url);
         self.base_dir.join(format!("{key}_tokens.json"))
     }
 
@@ -174,6 +185,10 @@ impl TokenStorage {
     }
 
     /// Save tokens for a backend
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token cannot be serialized or written to disk.
     pub fn save(&self, backend_name: &str, resource_url: &str, token: &TokenInfo) -> Result<()> {
         let path = self.token_path(backend_name, resource_url);
 
@@ -196,6 +211,10 @@ impl TokenStorage {
     }
 
     /// Delete tokens for a backend
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token file exists but cannot be deleted.
     pub fn delete(&self, backend_name: &str, resource_url: &str) -> Result<()> {
         let path = self.token_path(backend_name, resource_url);
 

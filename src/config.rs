@@ -92,7 +92,7 @@ pub struct AuthConfig {
     pub enabled: bool,
 
     /// Bearer token for simple authentication
-    /// Supports: literal value, "env:VAR_NAME", or "auto" (generates random token)
+    /// Supports: literal value, `env:VAR_NAME`, or `auto` (generates random token)
     #[serde(default)]
     pub bearer_token: Option<String>,
 
@@ -100,7 +100,7 @@ pub struct AuthConfig {
     #[serde(default)]
     pub api_keys: Vec<ApiKeyConfig>,
 
-    /// Paths that bypass authentication (default: ["/health"])
+    /// Paths that bypass authentication (default: `["/health"]`)
     #[serde(default = "default_public_paths")]
     pub public_paths: Vec<String>,
 }
@@ -121,7 +121,8 @@ impl Default for AuthConfig {
 }
 
 impl AuthConfig {
-    /// Resolve the bearer token (expand env vars, generate if "auto")
+    /// Resolve the bearer token (expand env vars, generate if `auto`)
+    #[must_use]
     pub fn resolve_bearer_token(&self) -> Option<String> {
         self.bearer_token.as_ref().map(|token| {
             if token == "auto" {
@@ -147,7 +148,7 @@ impl AuthConfig {
 /// API key configuration for multi-client access
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
-    /// The API key value (supports "env:VAR_NAME")
+    /// The API key value (supports `env:VAR_NAME`)
     pub key: String,
 
     /// Human-readable name for this client
@@ -165,6 +166,7 @@ pub struct ApiKeyConfig {
 
 impl ApiKeyConfig {
     /// Resolve the API key (expand env vars)
+    #[must_use]
     pub fn resolve_key(&self) -> String {
         if let Some(var_name) = self.key.strip_prefix("env:") {
             env::var(var_name).unwrap_or_else(|_| self.key.clone())
@@ -174,6 +176,7 @@ impl ApiKeyConfig {
     }
 
     /// Check if this key has access to a backend
+    #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {
         self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
     }
@@ -181,6 +184,10 @@ impl ApiKeyConfig {
 
 impl Config {
     /// Load configuration from file and environment
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file does not exist or cannot be parsed.
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let mut figment = Figment::new();
 
@@ -598,6 +605,10 @@ pub mod humantime_serde {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     /// Serialize Duration to human-readable string (e.g., "30s")
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error if the serializer fails.
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -606,6 +617,10 @@ pub mod humantime_serde {
     }
 
     /// Deserialize human-readable duration string (e.g., "30s", "5m", "100ms")
+    ///
+    /// # Errors
+    ///
+    /// Returns a deserialization error if the string cannot be parsed as a duration.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: Deserializer<'de>,

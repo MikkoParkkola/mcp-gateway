@@ -45,6 +45,10 @@ pub struct CapabilityExecutor {
 
 impl CapabilityExecutor {
     /// Create a new executor
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client cannot be created.
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
@@ -64,6 +68,11 @@ impl CapabilityExecutor {
     }
 
     /// Create executor with custom OAuth token storage
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client cannot be created.
+    #[must_use]
     pub fn with_token_storage(token_storage: Arc<TokenStorage>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
@@ -86,6 +95,10 @@ impl CapabilityExecutor {
     }
 
     /// Execute a capability with the given parameters
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails, the response is invalid, or credentials cannot be resolved.
     #[tracing::instrument(
         skip(self, params),
         fields(
@@ -201,6 +214,7 @@ impl CapabilityExecutor {
     }
 
     /// Build URL with path parameter substitution
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn build_url(&self, config: &RestConfig, params: &Value) -> Result<String> {
         // Use endpoint if set, otherwise combine base_url + path
         let mut url = if config.uses_endpoint() {
@@ -282,7 +296,6 @@ impl CapabilityExecutor {
             .prefix
             .as_deref()
             .unwrap_or(match auth.auth_type.as_str() {
-                "oauth" | "bearer" => "Bearer",
                 "basic" => "Basic",
                 "api_key" => "",
                 _ => "Bearer",
@@ -379,6 +392,7 @@ impl CapabilityExecutor {
     ///
     /// The file should have restrictive permissions (0600).
     /// Credential values are never logged.
+    #[allow(clippy::unused_self)]
     fn fetch_from_file(&self, spec: &str) -> Result<String> {
         // Split on last colon to separate path from field
         let (path, field) = spec.rsplit_once(':').ok_or_else(|| {
@@ -461,6 +475,7 @@ impl CapabilityExecutor {
     /// 1. Check in-memory cache for valid token
     /// 2. Load from disk storage if available
     /// 3. Return error with instructions if not found
+    #[allow(clippy::unused_async)]
     async fn fetch_oauth_token(&self, provider: &str) -> Result<String> {
         // Check in-memory cache first
         {
@@ -504,6 +519,7 @@ impl CapabilityExecutor {
 
     /// Fetch credential from macOS Keychain
     #[cfg(target_os = "macos")]
+    #[allow(clippy::unused_async)]
     async fn fetch_from_keychain(&self, key: &str) -> Result<String> {
         use std::process::Command;
 
@@ -562,6 +578,7 @@ impl CapabilityExecutor {
     }
 
     /// Extract a path from JSON response (simple jq-like)
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn extract_path(&self, value: &Value, path: &str) -> Result<Value> {
         let mut current = value;
 
@@ -634,6 +651,7 @@ impl CapabilityExecutor {
 
     /// Map input parameters to API parameters using `param_map`
     /// e.g., `param_map`: { query: q } maps input "query" to API param "q"
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn map_params(
         &self,
         param_map: &std::collections::HashMap<String, String>,
@@ -694,6 +712,7 @@ impl CapabilityExecutor {
     }
 
     /// Build cache key for a request
+    #[allow(clippy::unused_self)]
     fn build_cache_key(&self, capability: &CapabilityDefinition, params: &Value) -> String {
         let params_hash = {
             let json = serde_json::to_string(params).unwrap_or_default();

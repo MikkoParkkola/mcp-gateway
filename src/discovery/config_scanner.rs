@@ -16,11 +16,16 @@ pub struct ConfigScanner;
 
 impl ConfigScanner {
     /// Create new config scanner
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
 
     /// Scan all known config locations
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a critical scanning operation fails.
     pub async fn scan_all(&self) -> Result<Vec<DiscoveredServer>> {
         let mut servers = Vec::new();
 
@@ -45,7 +50,7 @@ impl ConfigScanner {
         }
 
         // Scan environment variables
-        if let Ok(mut env_servers) = self.scan_environment().await {
+        if let Ok(mut env_servers) = self.scan_environment() {
             servers.append(&mut env_servers);
         }
 
@@ -53,6 +58,10 @@ impl ConfigScanner {
     }
 
     /// Scan Claude Desktop configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file exists but cannot be read or parsed.
     pub async fn scan_claude_desktop(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::claude_desktop_config_path()?;
         if !config_path.exists() {
@@ -66,6 +75,10 @@ impl ConfigScanner {
     }
 
     /// Scan VS Code/Cursor MCP configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a config file exists but cannot be read or parsed.
     pub async fn scan_vscode(&self) -> Result<Vec<DiscoveredServer>> {
         let mut servers = Vec::new();
 
@@ -99,6 +112,10 @@ impl ConfigScanner {
     }
 
     /// Scan Windsurf MCP configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file exists but cannot be read or parsed.
     pub async fn scan_windsurf(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::windsurf_config_path()?;
         if !config_path.exists() {
@@ -112,6 +129,10 @@ impl ConfigScanner {
     }
 
     /// Scan ~/.config/mcp/*.json files
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be read.
     pub async fn scan_mcp_config_dir(&self) -> Result<Vec<DiscoveredServer>> {
         let mcp_dir = Self::mcp_config_dir()?;
         if !mcp_dir.exists() {
@@ -144,7 +165,12 @@ impl ConfigScanner {
     }
 
     /// Scan environment variables for MCP_* patterns
-    pub async fn scan_environment(&self) -> Result<Vec<DiscoveredServer>> {
+    ///
+    /// # Errors
+    ///
+    /// This function currently does not return errors but maintains the `Result`
+    /// type for consistency with other scanning methods.
+    pub fn scan_environment(&self) -> Result<Vec<DiscoveredServer>> {
         let mut servers = Vec::new();
 
         // Look for MCP_SERVER_* environment variables
@@ -201,7 +227,7 @@ impl ConfigScanner {
         // Claude Desktop format: { "mcpServers": { "name": { "command": "...", ... } } }
         if let Some(mcp_servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
             for (name, server_config) in mcp_servers {
-                if let Some(server) = self.parse_server_config(name, server_config, &source, path) {
+                if let Some(server) = Self::parse_server_config(name, server_config, &source, path) {
                     servers.push(server);
                 }
             }
@@ -228,7 +254,7 @@ impl ConfigScanner {
         // VS Code might have MCP config under various keys
         if let Some(mcp_config) = config.get("mcp").and_then(|v| v.as_object()) {
             for (name, server_config) in mcp_config {
-                if let Some(server) = self.parse_server_config(name, server_config, &source, path) {
+                if let Some(server) = Self::parse_server_config(name, server_config, &source, path) {
                     servers.push(server);
                 }
             }
@@ -239,7 +265,6 @@ impl ConfigScanner {
 
     /// Parse individual server config
     fn parse_server_config(
-        &self,
         name: &str,
         config: &Value,
         source: &DiscoverySource,
@@ -270,7 +295,7 @@ impl ConfigScanner {
 
             return Some(DiscoveredServer {
                 name: name.to_string(),
-                description: format!("MCP server from {:?}", source),
+                description: format!("MCP server from {source:?}"),
                 source: source.clone(),
                 transport: TransportConfig::Stdio {
                     command: full_command.clone(),
@@ -290,7 +315,7 @@ impl ConfigScanner {
         if let Some(url) = config.get("url").and_then(|v| v.as_str()) {
             return Some(DiscoveredServer {
                 name: name.to_string(),
-                description: format!("MCP server from {:?}", source),
+                description: format!("MCP server from {source:?}"),
                 source: source.clone(),
                 transport: TransportConfig::Http {
                     http_url: url.to_string(),

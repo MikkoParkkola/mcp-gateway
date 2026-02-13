@@ -49,6 +49,11 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Setup tracing/logging
+///
+/// # Errors
+///
+/// This function currently always succeeds but returns `Result` for
+/// forward compatibility with fallible tracing configurations.
 pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 

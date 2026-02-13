@@ -16,6 +16,7 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 /// Validation rule trait
+#[allow(clippy::unnecessary_literal_bound)]
 pub trait Rule: Send + Sync {
     /// Get rule code (e.g., "AX-001")
     fn code(&self) -> &str;
@@ -27,6 +28,10 @@ pub trait Rule: Send + Sync {
     fn description(&self) -> &str;
 
     /// Check a tool against this rule
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the validation check encounters an internal failure.
     fn check(&self, tool: &Tool) -> Result<ValidationResult>;
 }
 
@@ -45,13 +50,14 @@ impl ValidationRules {
     /// Create default rule set
     #[must_use]
     pub fn new() -> Self {
-        let mut rules: Vec<Box<dyn Rule>> = Vec::new();
-        rules.push(Box::new(OutcomeOrientedRule));
-        rules.push(Box::new(FlatArgumentsRule));
-        rules.push(Box::new(DocumentationQualityRule));
-        rules.push(Box::new(ResponseCurationRule));
-        rules.push(Box::new(NamingDiscoveryRule));
-        rules.push(Box::new(PaginationRule));
+        let rules: Vec<Box<dyn Rule>> = vec![
+            Box::new(OutcomeOrientedRule),
+            Box::new(FlatArgumentsRule),
+            Box::new(DocumentationQualityRule),
+            Box::new(ResponseCurationRule),
+            Box::new(NamingDiscoveryRule),
+            Box::new(PaginationRule),
+        ];
 
         Self { rules }
     }
@@ -69,6 +75,7 @@ impl ValidationRules {
 /// Red flags: CRUD operations, API-wrapper naming
 struct OutcomeOrientedRule;
 
+#[allow(clippy::unnecessary_literal_bound)]
 impl Rule for OutcomeOrientedRule {
     fn code(&self) -> &str {
         "AX-001"
@@ -164,6 +171,7 @@ impl Rule for OutcomeOrientedRule {
 /// Arguments should be primitives or enums, not nested objects
 struct FlatArgumentsRule;
 
+#[allow(clippy::unnecessary_literal_bound)]
 impl Rule for FlatArgumentsRule {
     fn code(&self) -> &str {
         "AX-002"
@@ -217,7 +225,7 @@ impl Rule for FlatArgumentsRule {
             let score = if nesting_count == 0 {
                 1.0
             } else {
-                (1.0 - (nesting_count as f64 * 0.3)).max(0.0)
+                (1.0 - (f64::from(nesting_count) * 0.3)).max(0.0)
             };
 
             let severity = if score < 0.5 {
@@ -244,6 +252,7 @@ impl Rule for FlatArgumentsRule {
 /// Docstrings and error messages are agent context, not just human documentation
 struct DocumentationQualityRule;
 
+#[allow(clippy::unnecessary_literal_bound)]
 impl Rule for DocumentationQualityRule {
     fn code(&self) -> &str {
         "AX-003"
@@ -289,7 +298,7 @@ impl Rule for DocumentationQualityRule {
             let mut missing_desc = 0;
 
             for (name, prop) in props {
-                if !prop.get("description").is_some_and(|d| !d.as_str().unwrap_or("").is_empty()) {
+                if prop.get("description").is_none_or(|d| d.as_str().unwrap_or("").is_empty()) {
                     result.add_issue(format!("Parameter '{name}' missing description"));
                     missing_desc += 1;
                 }
@@ -297,7 +306,7 @@ impl Rule for DocumentationQualityRule {
 
             if missing_desc > 0 {
                 result.add_suggestion("Add descriptions to all parameters with examples");
-                quality_score -= missing_desc as f64 * 0.15;
+                quality_score -= f64::from(missing_desc) * 0.15;
             }
         }
 
@@ -332,6 +341,7 @@ impl Rule for DocumentationQualityRule {
 /// Return only what the agent needs, not full API responses
 struct ResponseCurationRule;
 
+#[allow(clippy::unnecessary_literal_bound)]
 impl Rule for ResponseCurationRule {
     fn code(&self) -> &str {
         "AX-004"
@@ -420,6 +430,7 @@ impl Rule for ResponseCurationRule {
 /// Service-prefixed names for easy discovery in large tool lists
 struct NamingDiscoveryRule;
 
+#[allow(clippy::unnecessary_literal_bound)]
 impl Rule for NamingDiscoveryRule {
     fn code(&self) -> &str {
         "AX-005"
@@ -434,11 +445,12 @@ impl Rule for NamingDiscoveryRule {
     }
 
     fn check(&self, tool: &Tool) -> Result<ValidationResult> {
+        // Check for service prefix pattern (service_action)
+        static SEPARATOR_RE: OnceLock<Regex> = OnceLock::new();
+
         let mut result = ValidationResult::new(self.code(), self.name(), &tool.name);
         let mut discovery_score: f64 = 1.0;
 
-        // Check for service prefix pattern (service_action)
-        static SEPARATOR_RE: OnceLock<Regex> = OnceLock::new();
         let separator_re = SEPARATOR_RE.get_or_init(|| Regex::new(r"[_-]").unwrap());
 
         let parts: Vec<&str> = separator_re.split(&tool.name).collect();
@@ -470,7 +482,7 @@ impl Rule for NamingDiscoveryRule {
         // Check for consistent naming convention
         let has_snake_case = tool.name.contains('_');
         let has_kebab_case = tool.name.contains('-');
-        let has_camel_case = tool.name.chars().any(|c| c.is_uppercase());
+        let has_camel_case = tool.name.chars().any(char::is_uppercase);
 
         let conventions_used = [has_snake_case, has_kebab_case, has_camel_case]
             .iter()
@@ -504,6 +516,7 @@ impl Rule for NamingDiscoveryRule {
 /// Include pagination params and metadata for list operations
 struct PaginationRule;
 
+#[allow(clippy::unnecessary_literal_bound)]
 impl Rule for PaginationRule {
     fn code(&self) -> &str {
         "AX-006"

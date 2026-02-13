@@ -47,6 +47,10 @@ impl CapabilityBackend {
     }
 
     /// Load capabilities from a directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be loaded.
     pub async fn load_from_directory(&self, path: &str) -> Result<usize> {
         let loaded = CapabilityLoader::load_directory(path).await?;
         let count = loaded.len();
@@ -77,6 +81,10 @@ impl CapabilityBackend {
     ///
     /// This is the hot-reload entry point. It re-reads all capability
     /// files from the registered directories and updates the registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reloading fails for all directories.
     pub async fn reload(&self) -> Result<usize> {
         let dirs: Vec<String> = self.directories.read().clone();
 
@@ -139,6 +147,10 @@ impl CapabilityBackend {
     }
 
     /// Execute a capability (call a tool)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the capability is not found or execution fails.
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
 

@@ -53,6 +53,7 @@ impl HealthTracker {
     }
 
     /// Record a successful request
+    #[allow(clippy::cast_possible_truncation)] // millis since epoch fits u64 for centuries
     pub fn record_success(&self, latency: Duration) {
         self.success_count.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.store(0, Ordering::Relaxed);
@@ -75,6 +76,7 @@ impl HealthTracker {
     }
 
     /// Record a failed request
+    #[allow(clippy::cast_possible_truncation)] // millis since epoch fits u64 for centuries
     pub fn record_failure(&self) {
         self.failure_count.fetch_add(1, Ordering::Relaxed);
         let consecutive = self.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
@@ -105,6 +107,7 @@ impl HealthTracker {
 
     /// Get current health metrics
     #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // latency millis fits u64
     pub fn metrics(&self) -> HealthMetrics {
         let latencies = self.latencies.read();
 
@@ -182,6 +185,7 @@ impl LatencyHistogram {
     }
 
     /// Record a latency sample
+    #[allow(clippy::cast_possible_truncation)] // latency millis fits u64
     fn record(&mut self, latency: Duration) {
         let millis = latency.as_millis() as u64;
 
@@ -195,6 +199,11 @@ impl LatencyHistogram {
     }
 
     /// Calculate percentile (0.0 to 1.0)
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     fn percentile(&self, p: f64) -> Option<Duration> {
         if self.samples.is_empty() {
             return None;

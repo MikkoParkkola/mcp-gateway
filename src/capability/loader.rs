@@ -10,18 +10,22 @@ pub struct CapabilityLoader;
 
 impl CapabilityLoader {
     /// Load all capabilities from a directory (recursive)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory does not exist or is not a valid directory.
     pub async fn load_directory(path: &str) -> Result<Vec<CapabilityDefinition>> {
         let path = Path::new(path);
 
         if !path.exists() {
             return Err(Error::Config(format!(
-                "Capabilities directory does not exist: {path:?}"
+                "Capabilities directory does not exist: {}", path.display()
             )));
         }
 
         if !path.is_dir() {
             return Err(Error::Config(format!(
-                "Capabilities path is not a directory: {path:?}"
+                "Capabilities path is not a directory: {}", path.display()
             )));
         }
 
@@ -44,7 +48,7 @@ impl CapabilityLoader {
     ) -> Result<()> {
         let mut entries = tokio::fs::read_dir(dir)
             .await
-            .map_err(|e| Error::Config(format!("Failed to read directory {dir:?}: {e}")))?;
+            .map_err(|e| Error::Config(format!("Failed to read directory {}: {e}", dir.display())))?;
 
         while let Some(entry) = entries
             .next_entry()
@@ -92,6 +96,10 @@ impl CapabilityLoader {
     }
 
     /// Load capabilities from multiple directories
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if all directories fail to load. Individual failures are logged as warnings.
     pub async fn load_directories(paths: &[&str]) -> Result<Vec<CapabilityDefinition>> {
         let mut all_capabilities = Vec::new();
 

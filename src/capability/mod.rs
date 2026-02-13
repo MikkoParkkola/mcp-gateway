@@ -66,6 +66,10 @@ impl CapabilityRegistry {
     }
 
     /// Load capabilities from a directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be read or capabilities fail validation.
     pub async fn load_from_directory(&mut self, path: &str) -> Result<usize> {
         let loaded = CapabilityLoader::load_directory(path).await?;
         let count = loaded.len();
@@ -76,6 +80,7 @@ impl CapabilityRegistry {
     }
 
     /// Get a capability by name
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&CapabilityDefinition> {
         self.capabilities.get(name)
     }
@@ -89,6 +94,10 @@ impl CapabilityRegistry {
     }
 
     /// Execute a capability
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the capability is not found or execution fails.
     pub async fn execute(
         &self,
         name: &str,
@@ -101,11 +110,13 @@ impl CapabilityRegistry {
     }
 
     /// Get capability count
+    #[must_use]
     pub fn len(&self) -> usize {
         self.capabilities.len()
     }
 
     /// Check if registry is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.capabilities.is_empty()
     }

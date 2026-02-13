@@ -31,6 +31,11 @@ pub struct Gateway {
 
 impl Gateway {
     /// Create a new gateway
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if backend registration fails.
+    #[allow(clippy::unused_async)] // async for future initialization needs
     pub async fn new(config: Config) -> Result<Self> {
         let backends = Arc::new(BackendRegistry::new());
 
@@ -54,6 +59,12 @@ impl Gateway {
     }
 
     /// Run the gateway
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server cannot bind to the configured address
+    /// or if an unrecoverable runtime error occurs.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
         let addr = SocketAddr::new(
             self.config
@@ -83,8 +94,8 @@ impl Gateway {
         };
 
         // Create usage stats (always enabled for now)
-        let stats = Some(Arc::new(UsageStats::new()));
-        if stats.is_some() {
+        let usage_stats = Some(Arc::new(UsageStats::new()));
+        if usage_stats.is_some() {
             info!("Usage statistics tracking enabled");
         }
 
@@ -111,7 +122,7 @@ impl Gateway {
         let meta_mcp = Arc::new(MetaMcp::with_features(
             Arc::clone(&self.backends),
             cache,
-            stats,
+            usage_stats,
             Some(ranker),
             self.config.cache.default_ttl,
         ));

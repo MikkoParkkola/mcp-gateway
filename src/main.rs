@@ -124,6 +124,7 @@ async fn run_stats_command(url: &str, price: f64) -> ExitCode {
 }
 
 /// Run capability management commands
+#[allow(clippy::too_many_lines)]
 async fn run_cap_command(cmd: CapCommand) -> ExitCode {
     match cmd {
         CapCommand::Validate { file } => match parse_capability_file(&file).await {
@@ -466,21 +467,27 @@ async fn run_cap_command(cmd: CapCommand) -> ExitCode {
     }
 }
 
+/// Apply CLI overrides to a loaded configuration.
+///
+/// Merges CLI-provided port, host, and meta-mcp settings into `config`.
+fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
+    if let Some(port) = cli.port {
+        config.server.port = port;
+    }
+    if let Some(ref host) = cli.host {
+        config.server.host.clone_from(host);
+    }
+    if cli.no_meta_mcp {
+        config.meta_mcp.enabled = false;
+    }
+}
+
 /// Run the gateway server
 async fn run_server(cli: Cli) -> ExitCode {
     // Load configuration
     let config = match Config::load(cli.config.as_deref()) {
         Ok(mut config) => {
-            // Apply CLI overrides
-            if let Some(port) = cli.port {
-                config.server.port = port;
-            }
-            if let Some(ref host) = cli.host {
-                config.server.host = host.clone();
-            }
-            if cli.no_meta_mcp {
-                config.meta_mcp.enabled = false;
-            }
+            apply_cli_overrides(&mut config, &cli);
             config
         }
         Err(e) => {
@@ -551,4 +558,151 @@ fn write_discovered_to_config(
         .map_err(|e| mcp_gateway::Error::Config(format!("Failed to write config: {e}")))?;
 
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_gateway::cli::Cli;
+    use mcp_gateway::config::Config;
+
+    /// Build a `Cli` struct with optional overrides for testing.
+    fn make_cli(
+        port: Option<u16>,
+        host: Option<String>,
+        no_meta_mcp: bool,
+    ) -> Cli {
+        Cli {
+            config: None,
+            port,
+            host,
+            log_level: "info".to_string(),
+            log_format: None,
+            no_meta_mcp,
+            command: None,
+        }
+    }
+
+    // =====================================================================
+    // apply_cli_overrides
+    // =====================================================================
+
+    #[test]
+    fn apply_cli_overrides_no_overrides_preserves_defaults() {
+        let mut config = Config::default();
+        let cli = make_cli(None, None, false);
+
+        let original_port = config.server.port;
+        let original_host = config.server.host.clone();
+        let original_meta = config.meta_mcp.enabled;
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.server.port, original_port);
+        assert_eq!(config.server.host, original_host);
+        assert_eq!(config.meta_mcp.enabled, original_meta);
+    }
+
+    #[test]
+    fn apply_cli_overrides_port_override() {
+        let mut config = Config::default();
+        let cli = make_cli(Some(9999), None, false);
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.server.port, 9999);
+    }
+
+    #[test]
+    fn apply_cli_overrides_host_override() {
+        let mut config = Config::default();
+        let cli = make_cli(None, Some("0.0.0.0".to_string()), false);
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.server.host, "0.0.0.0");
+    }
+
+    #[test]
+    fn apply_cli_overrides_disable_meta_mcp() {
+        let mut config = Config::default();
+        assert!(config.meta_mcp.enabled); // default is enabled
+
+        let cli = make_cli(None, None, true);
+        apply_cli_overrides(&mut config, &cli);
+
+        assert!(!config.meta_mcp.enabled);
+    }
+
+    #[test]
+    fn apply_cli_overrides_all_at_once() {
+        let mut config = Config::default();
+        let cli = make_cli(Some(8080), Some("192.168.1.1".to_string()), true);
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.server.host, "192.168.1.1");
+        assert!(!config.meta_mcp.enabled);
+    }
+
+    #[test]
+    fn apply_cli_overrides_no_meta_mcp_false_keeps_enabled() {
+        let mut config = Config::default();
+        let cli = make_cli(None, None, false);
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert!(config.meta_mcp.enabled);
+    }
+
+    #[test]
+    fn apply_cli_overrides_port_zero_is_valid() {
+        let mut config = Config::default();
+        let cli = make_cli(Some(0), None, false);
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.server.port, 0);
+    }
+
+    #[test]
+    fn apply_cli_overrides_host_empty_string() {
+        let mut config = Config::default();
+        let cli = make_cli(None, Some(String::new()), false);
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.server.host, "");
+    }
+
+    #[test]
+    fn apply_cli_overrides_preserves_other_config_fields() {
+        let mut config = Config::default();
+        config.backends.insert("test".to_string(), Default::default());
+        config.server.request_timeout = std::time::Duration::from_secs(60);
+
+        let cli = make_cli(Some(3000), None, false);
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.server.port, 3000);
+        assert!(config.backends.contains_key("test"));
+        assert_eq!(
+            config.server.request_timeout,
+            std::time::Duration::from_secs(60)
+        );
+    }
+
+    // =====================================================================
+    // Config::default sanity checks
+    // =====================================================================
+
+    #[test]
+    fn default_config_has_expected_defaults() {
+        let config = Config::default();
+        assert_eq!(config.server.port, 39400);
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert!(config.meta_mcp.enabled);
+        assert!(config.backends.is_empty());
+    }
 }

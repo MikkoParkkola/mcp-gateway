@@ -75,7 +75,7 @@ pub struct ProtectedResourceMetadata {
 }
 
 /// Deserialize scopes that may be either a string or array
-/// Some implementations (like Beeper) incorrectly return "read write" instead of ["read", "write"]
+/// Some implementations (like Beeper) incorrectly return `"read write"` instead of `["read", "write"]`
 fn deserialize_scopes<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -95,6 +95,10 @@ where
 
 impl AuthorizationServerMetadata {
     /// Discover authorization server metadata from a base URL
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metadata endpoint is unreachable or returns invalid data.
     pub async fn discover(client: &Client, base_url: &str) -> Result<Self> {
         let url = format!(
             "{}/.well-known/oauth-authorization-server",
@@ -125,6 +129,7 @@ impl AuthorizationServerMetadata {
     }
 
     /// Check if PKCE is supported (S256 method)
+    #[must_use]
     pub fn supports_pkce(&self) -> bool {
         self.code_challenge_methods_supported
             .contains(&"S256".to_string())
@@ -133,6 +138,10 @@ impl AuthorizationServerMetadata {
 
 impl ProtectedResourceMetadata {
     /// Discover protected resource metadata from a base URL
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the metadata endpoint is unreachable or returns invalid data.
     pub async fn discover(client: &Client, base_url: &str) -> Result<Self> {
         let url = format!(
             "{}/.well-known/oauth-protected-resource",
@@ -178,7 +187,8 @@ pub fn base_url(url: &str) -> Result<String> {
     );
 
     if let Some(port) = parsed.port() {
-        base.push_str(&format!(":{port}"));
+        use std::fmt::Write;
+        let _ = write!(base, ":{port}");
     }
 
     Ok(base)

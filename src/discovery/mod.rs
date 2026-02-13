@@ -66,6 +66,7 @@ pub struct ServerMetadata {
 
 impl DiscoveredServer {
     /// Convert to backend config
+    #[must_use]
     pub fn to_backend_config(&self) -> BackendConfig {
         BackendConfig {
             description: self.description.clone(),
@@ -84,6 +85,7 @@ pub struct AutoDiscovery {
 
 impl AutoDiscovery {
     /// Create new auto-discovery instance
+    #[must_use]
     pub fn new() -> Self {
         Self {
             config_scanner: ConfigScanner::new(),
@@ -92,6 +94,10 @@ impl AutoDiscovery {
     }
 
     /// Discover all MCP servers from all sources
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if both config and process scanning fail entirely.
     pub async fn discover_all(&self) -> Result<Vec<DiscoveredServer>> {
         let mut servers = Vec::new();
 
@@ -125,6 +131,10 @@ impl AutoDiscovery {
     }
 
     /// Discover from specific source
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the specified source scan fails.
     pub async fn discover_from_source(
         &self,
         source: DiscoverySource,
@@ -146,7 +156,7 @@ impl AutoDiscovery {
                 self.process_scanner.scan().await
             }
             DiscoverySource::Environment => {
-                self.config_scanner.scan_environment().await
+                self.config_scanner.scan_environment()
             }
         }
     }

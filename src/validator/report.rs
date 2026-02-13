@@ -1,7 +1,9 @@
 //! Validation reporting structures
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Write;
+
+use serde::{Deserialize, Serialize};
 
 /// Severity level for validation issues
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ impl ValidationResult {
     }
 
     /// Set severity level
+    #[must_use]
     pub fn with_severity(mut self, severity: Severity) -> Self {
         self.severity = severity;
         // Update passed status based on severity (Fail = not passed)
@@ -93,6 +96,7 @@ impl ValidationResult {
     }
 
     /// Set score
+    #[must_use]
     pub fn with_score(mut self, score: f64) -> Self {
         self.score = score.clamp(0.0, 1.0);
         self
@@ -166,8 +170,7 @@ impl ValidationReport {
             } else {
                 match result.severity {
                     Severity::Fail => entry.failed += 1,
-                    Severity::Warn => entry.warnings += 1,
-                    Severity::Info => entry.warnings += 1,
+                    Severity::Warn | Severity::Info => entry.warnings += 1,
                     Severity::Pass => entry.passed += 1,
                 }
             }
@@ -181,8 +184,9 @@ impl ValidationReport {
                 .collect();
 
             if !principle_results.is_empty() {
-                score.avg_score = principle_results.iter().map(|r| r.score).sum::<f64>()
-                    / principle_results.len() as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let len = principle_results.len() as f64;
+                score.avg_score = principle_results.iter().map(|r| r.score).sum::<f64>() / len;
             }
         }
 
@@ -200,6 +204,7 @@ impl ValidationReport {
             })
             .count();
 
+        #[allow(clippy::cast_precision_loss)]
         let pass_rate = if total_checks > 0 {
             passed as f64 / total_checks as f64
         } else {
@@ -207,10 +212,11 @@ impl ValidationReport {
         };
 
         // Calculate overall score (weighted by severity)
-        let overall_score = if !results.is_empty() {
-            results.iter().map(|r| r.score).sum::<f64>() / results.len() as f64
-        } else {
+        #[allow(clippy::cast_precision_loss)]
+        let overall_score = if results.is_empty() {
             0.0
+        } else {
+            results.iter().map(|r| r.score).sum::<f64>() / results.len() as f64
         };
 
         let grade = Self::calculate_grade(overall_score);
@@ -269,45 +275,45 @@ impl ValidationReport {
     }
 
     /// Format as human-readable text
+    ///
+    /// # Panics
+    ///
+    /// Panics if principle scores contain NaN values that cannot be compared.
     #[must_use]
     pub fn format_text(&self) -> String {
         let mut output = String::new();
 
-        output.push_str(&format!(
-            "\n╔══════════════════════════════════════════════════════════════╗\n"
-        ));
-        output.push_str(&format!(
-            "║         MCP Agent-UX Validation Report                      ║\n"
-        ));
-        output.push_str(&format!(
-            "╚══════════════════════════════════════════════════════════════╝\n\n"
-        ));
+        output.push_str(
+            "\n╔══════════════════════════════════════════════════════════════╗\n\
+               ║         MCP Agent-UX Validation Report                      ║\n\
+               ╚══════════════════════════════════════════════════════════════╝\n\n",
+        );
 
-        output.push_str(&format!("Overall Score: {:.1}% ({})\n", self.overall_score * 100.0, self.grade));
-        output.push_str(&format!("Tools Validated: {}\n\n", self.total_tools));
+        let _ = writeln!(output, "Overall Score: {:.1}% ({})", self.overall_score * 100.0, self.grade);
+        let _ = writeln!(output, "Tools Validated: {}\n", self.total_tools);
 
         output.push_str("Summary:\n");
-        output.push_str(&format!("  ✓ Passed:   {}\n", self.summary.passed));
-        output.push_str(&format!("  ✗ Failed:   {}\n", self.summary.failed));
-        output.push_str(&format!("  ⚠ Warnings: {}\n", self.summary.warnings));
-        output.push_str(&format!("  Pass Rate:  {:.1}%\n\n", self.summary.pass_rate * 100.0));
+        let _ = writeln!(output, "  ✓ Passed:   {}", self.summary.passed);
+        let _ = writeln!(output, "  ✗ Failed:   {}", self.summary.failed);
+        let _ = writeln!(output, "  ⚠ Warnings: {}", self.summary.warnings);
+        let _ = writeln!(output, "  Pass Rate:  {:.1}%\n", self.summary.pass_rate * 100.0);
 
         // Failures
         let failures = self.failures();
         if !failures.is_empty() {
-            output.push_str(&format!("╔══════════════════════════════════════════════════════════════╗\n"));
-            output.push_str(&format!("║ FAILURES ({})                                                  \n", failures.len()));
-            output.push_str(&format!("╚══════════════════════════════════════════════════════════════╝\n\n"));
+            output.push_str("╔══════════════════════════════════════════════════════════════╗\n");
+            let _ = writeln!(output, "║ FAILURES ({})                                                  ", failures.len());
+            output.push_str("╚══════════════════════════════════════════════════════════════╝\n\n");
 
             for result in failures {
-                output.push_str(&format!("[{}] {} - {}\n", result.rule_code, result.tool_name, result.rule_name));
+                let _ = writeln!(output, "[{}] {} - {}", result.rule_code, result.tool_name, result.rule_name);
                 for issue in &result.issues {
-                    output.push_str(&format!("  ✗ {}\n", issue));
+                    let _ = writeln!(output, "  ✗ {issue}");
                 }
                 if !result.suggestions.is_empty() {
                     output.push_str("  Suggestions:\n");
                     for suggestion in &result.suggestions {
-                        output.push_str(&format!("    → {}\n", suggestion));
+                        let _ = writeln!(output, "    → {suggestion}");
                     }
                 }
                 output.push('\n');
@@ -317,19 +323,19 @@ impl ValidationReport {
         // Warnings
         let warnings = self.warnings();
         if !warnings.is_empty() {
-            output.push_str(&format!("╔══════════════════════════════════════════════════════════════╗\n"));
-            output.push_str(&format!("║ WARNINGS ({})                                                  \n", warnings.len()));
-            output.push_str(&format!("╚══════════════════════════════════════════════════════════════╝\n\n"));
+            output.push_str("╔══════════════════════════════════════════════════════════════╗\n");
+            let _ = writeln!(output, "║ WARNINGS ({})                                                  ", warnings.len());
+            output.push_str("╚══════════════════════════════════════════════════════════════╝\n\n");
 
             for result in warnings {
-                output.push_str(&format!("[{}] {} - {}\n", result.rule_code, result.tool_name, result.rule_name));
+                let _ = writeln!(output, "[{}] {} - {}", result.rule_code, result.tool_name, result.rule_name);
                 for issue in &result.issues {
-                    output.push_str(&format!("  ⚠ {}\n", issue));
+                    let _ = writeln!(output, "  ⚠ {issue}");
                 }
                 if !result.suggestions.is_empty() {
                     output.push_str("  Suggestions:\n");
                     for suggestion in &result.suggestions {
-                        output.push_str(&format!("    → {}\n", suggestion));
+                        let _ = writeln!(output, "    → {suggestion}");
                     }
                 }
                 output.push('\n');
@@ -337,21 +343,24 @@ impl ValidationReport {
         }
 
         // By Principle
-        output.push_str("╔══════════════════════════════════════════════════════════════╗\n");
-        output.push_str("║ BY PRINCIPLE                                                ║\n");
-        output.push_str("╚══════════════════════════════════════════════════════════════╝\n\n");
+        output.push_str(
+            "╔══════════════════════════════════════════════════════════════╗\n\
+             ║ BY PRINCIPLE                                                ║\n\
+             ╚══════════════════════════════════════════════════════════════╝\n\n",
+        );
 
         let mut principles: Vec<_> = self.by_principle.iter().collect();
         principles.sort_by(|a, b| b.1.avg_score.partial_cmp(&a.1.avg_score).unwrap());
 
         for (principle, score) in principles {
-            output.push_str(&format!(
-                "{:40} {:.1}% ({}/{})\n",
+            let _ = writeln!(
+                output,
+                "{:40} {:.1}% ({}/{})",
                 principle,
                 score.avg_score * 100.0,
                 score.passed,
                 score.passed + score.failed + score.warnings
-            ));
+            );
         }
 
         output

@@ -14,6 +14,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
@@ -64,6 +65,10 @@ pub struct GeneratedCapability {
 
 impl GeneratedCapability {
     /// Write capability to a file in the specified directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created or the file cannot be written.
     pub fn write_to_file(&self, directory: &str) -> Result<()> {
         let dir = Path::new(directory);
         if !dir.exists() {
@@ -191,6 +196,7 @@ struct OpenApiSecurityScheme {
 
 impl OpenApiConverter {
     /// Create a new converter with default settings
+    #[must_use]
     pub fn new() -> Self {
         Self {
             prefix: None,
@@ -203,24 +209,31 @@ impl OpenApiConverter {
     }
 
     /// Set a prefix for generated capability names
+    #[must_use]
     pub fn with_prefix(mut self, prefix: &str) -> Self {
         self.prefix = Some(prefix.to_string());
         self
     }
 
     /// Set default auth configuration for all capabilities
+    #[must_use]
     pub fn with_default_auth(mut self, auth: AuthTemplate) -> Self {
         self.default_auth = Some(auth);
         self
     }
 
     /// Set default cache configuration
+    #[must_use]
     pub fn with_default_cache(mut self, cache: CacheTemplate) -> Self {
         self.default_cache = Some(cache);
         self
     }
 
     /// Convert an `OpenAPI` spec file to capabilities
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or the spec cannot be parsed.
     pub fn convert_file(&self, path: &str) -> Result<Vec<GeneratedCapability>> {
         let content = fs::read_to_string(path)
             .map_err(|e| Error::Config(format!("Failed to read OpenAPI spec: {e}")))?;
@@ -229,6 +242,10 @@ impl OpenApiConverter {
     }
 
     /// Convert an `OpenAPI` spec string to capabilities
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the content cannot be parsed as YAML or JSON.
     pub fn convert_string(&self, content: &str) -> Result<Vec<GeneratedCapability>> {
         // Try YAML first, then JSON
         let spec: OpenApiSpec = serde_yaml::from_str(content)
@@ -239,6 +256,7 @@ impl OpenApiConverter {
     }
 
     /// Convert a parsed `OpenAPI` spec to capabilities
+    #[allow(clippy::unnecessary_wraps)]
     fn convert_spec(&self, spec: &OpenApiSpec) -> Result<Vec<GeneratedCapability>> {
         let version = spec
             .openapi
@@ -278,6 +296,7 @@ impl OpenApiConverter {
     }
 
     /// Convert a single operation to a capability
+    #[allow(clippy::unnecessary_wraps)]
     fn convert_operation(
         &self,
         base_url: &str,
@@ -303,7 +322,7 @@ impl OpenApiConverter {
             .unwrap_or_else(|| format!("{} {}", method.to_uppercase(), path));
 
         // Build input schema from parameters
-        let input_schema = self.build_input_schema(&op.parameters, &op.request_body);
+        let input_schema = self.build_input_schema(&op.parameters, op.request_body.as_ref());
 
         // Build output schema from responses
         let output_schema = self.build_output_schema(&op.responses);
@@ -362,10 +381,11 @@ impl OpenApiConverter {
     }
 
     /// Build input schema from parameters and request body
+    #[allow(clippy::unused_self)]
     fn build_input_schema(
         &self,
         params: &[OpenApiParameter],
-        body: &Option<OpenApiRequestBody>,
+        body: Option<&OpenApiRequestBody>,
     ) -> Value {
         let mut properties = serde_json::Map::new();
         let mut required = Vec::new();
@@ -421,6 +441,7 @@ impl OpenApiConverter {
     }
 
     /// Build output schema from responses
+    #[allow(clippy::unused_self)]
     fn build_output_schema(&self, responses: &HashMap<String, OpenApiResponse>) -> Value {
         // Look for 200 or 2xx response
         let response = responses
@@ -470,53 +491,49 @@ impl OpenApiConverter {
         let mut yaml = String::new();
 
         // Header comment
-        yaml.push_str(&format!(
-            "# Auto-generated from OpenAPI spec\n# {}\n\n",
+        let _ = writeln!(
+            yaml,
+            "# Auto-generated from OpenAPI spec\n# {}\n",
             description.lines().next().unwrap_or(name)
-        ));
+        );
 
         // Basic info
         yaml.push_str("fulcrum: \"1.0\"\n");
-        yaml.push_str(&format!("name: {name}\n"));
-        yaml.push_str(&format!(
-            "description: {}\n\n",
+        let _ = writeln!(yaml, "name: {name}");
+        let _ = writeln!(
+            yaml,
+            "description: {}\n",
             serde_yaml::to_string(&description).unwrap_or_else(|_| format!("\"{description}\""))
-        ));
+        );
 
         // Schema
-        yaml.push_str("schema:\n");
-        yaml.push_str("  input:\n");
+        yaml.push_str("schema:\n  input:\n");
         for line in serde_yaml::to_string(input_schema)
             .unwrap_or_default()
             .lines()
         {
-            yaml.push_str(&format!("    {line}\n"));
+            let _ = writeln!(yaml, "    {line}");
         }
         yaml.push_str("  output:\n");
         for line in serde_yaml::to_string(output_schema)
             .unwrap_or_default()
             .lines()
         {
-            yaml.push_str(&format!("    {line}\n"));
+            let _ = writeln!(yaml, "    {line}");
         }
         yaml.push('\n');
 
         // Provider
-        yaml.push_str("providers:\n");
-        yaml.push_str("  primary:\n");
-        yaml.push_str("    service: rest\n");
-        yaml.push_str("    cost_per_call: 0\n");
-        yaml.push_str("    timeout: 30\n");
-        yaml.push_str("    config:\n");
-        yaml.push_str(&format!("      base_url: {base_url}\n"));
-        yaml.push_str(&format!("      path: {path}\n"));
-        yaml.push_str(&format!("      method: {}\n", method.to_uppercase()));
+        yaml.push_str("providers:\n  primary:\n    service: rest\n    cost_per_call: 0\n    timeout: 30\n    config:\n");
+        let _ = writeln!(yaml, "      base_url: {base_url}");
+        let _ = writeln!(yaml, "      path: {path}");
+        let _ = writeln!(yaml, "      method: {}", method.to_uppercase());
 
         // Headers
         if !header_params.is_empty() {
             yaml.push_str("      headers:\n");
             for param in &header_params {
-                yaml.push_str(&format!("        {}: \"{{{}}}\"\n", param.name, param.name));
+                let _ = writeln!(yaml, "        {}: \"{{{}}}\"", param.name, param.name);
             }
         }
 
@@ -524,15 +541,13 @@ impl OpenApiConverter {
         if !query_params.is_empty() {
             yaml.push_str("      params:\n");
             for param in &query_params {
-                yaml.push_str(&format!("        {}: \"{{{}}}\"\n", param.name, param.name));
+                let _ = writeln!(yaml, "        {}: \"{{{}}}\"", param.name, param.name);
             }
         }
 
         // Body placeholder for POST/PUT
         if has_body {
-            yaml.push_str("      body:\n");
-            yaml.push_str("        # Add body template with {param} substitutions\n");
-            yaml.push_str("        {}\n");
+            yaml.push_str("      body:\n        # Add body template with {param} substitutions\n        {}\n");
         }
 
         yaml.push('\n');
@@ -540,8 +555,8 @@ impl OpenApiConverter {
         // Cache
         if let Some(ref cache) = self.default_cache {
             yaml.push_str("cache:\n");
-            yaml.push_str(&format!("  strategy: {}\n", cache.strategy));
-            yaml.push_str(&format!("  ttl: {}\n\n", cache.ttl));
+            let _ = writeln!(yaml, "  strategy: {}", cache.strategy);
+            let _ = writeln!(yaml, "  ttl: {}\n", cache.ttl);
         }
 
         // Auth
@@ -549,13 +564,11 @@ impl OpenApiConverter {
         if auth_required {
             yaml.push_str("  required: true\n");
             if let Some(ref auth) = self.default_auth {
-                yaml.push_str(&format!("  type: {}\n", auth.auth_type));
-                yaml.push_str(&format!("  key: {}\n", auth.key));
-                yaml.push_str(&format!("  description: \"{}\"\n", auth.description));
+                let _ = writeln!(yaml, "  type: {}", auth.auth_type);
+                let _ = writeln!(yaml, "  key: {}", auth.key);
+                let _ = writeln!(yaml, "  description: \"{}\"", auth.description);
             } else {
-                yaml.push_str("  type: bearer\n");
-                yaml.push_str("  key: env:API_TOKEN\n");
-                yaml.push_str("  description: \"Set API_TOKEN environment variable\"\n");
+                yaml.push_str("  type: bearer\n  key: env:API_TOKEN\n  description: \"Set API_TOKEN environment variable\"\n");
             }
         } else {
             yaml.push_str("  required: false\n");
@@ -563,13 +576,9 @@ impl OpenApiConverter {
         yaml.push('\n');
 
         // Metadata
-        yaml.push_str("metadata:\n");
-        yaml.push_str("  category: api\n");
-        yaml.push_str("  tags: [openapi, generated]\n");
-        yaml.push_str("  cost_category: unknown\n");
-        yaml.push_str("  execution_time: medium\n");
+        yaml.push_str("metadata:\n  category: api\n  tags: [openapi, generated]\n  cost_category: unknown\n  execution_time: medium\n");
         let read_only = method.eq_ignore_ascii_case("get") || method.eq_ignore_ascii_case("head");
-        yaml.push_str(&format!("  read_only: {read_only}\n"));
+        let _ = writeln!(yaml, "  read_only: {read_only}");
 
         yaml
     }

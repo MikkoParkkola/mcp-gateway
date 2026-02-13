@@ -29,6 +29,7 @@ struct ProcessPattern {
 
 impl ProcessScanner {
     /// Create new process scanner
+    #[must_use]
     pub fn new() -> Self {
         Self {
             patterns: Self::default_patterns(),
@@ -66,6 +67,10 @@ impl ProcessScanner {
     }
 
     /// Scan for running MCP server processes
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform process listing command fails.
     pub async fn scan(&self) -> Result<Vec<DiscoveredServer>> {
         let mut found_names = HashSet::new();
 
@@ -100,7 +105,7 @@ impl ProcessScanner {
             .map_err(|e| Error::Internal(format!("Failed to run ps: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        self.parse_ps_output(&stdout)
+        Ok(self.parse_ps_output(&stdout))
     }
 
     /// Scan processes on Linux using ps
@@ -115,7 +120,7 @@ impl ProcessScanner {
             .map_err(|e| Error::Internal(format!("Failed to run ps: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        self.parse_ps_output(&stdout)
+        Ok(self.parse_ps_output(&stdout))
     }
 
     /// Scan processes on Windows
@@ -134,7 +139,7 @@ impl ProcessScanner {
     }
 
     /// Parse ps output (macOS/Linux)
-    fn parse_ps_output(&self, output: &str) -> Result<Vec<DiscoveredServer>> {
+    fn parse_ps_output(&self, output: &str) -> Vec<DiscoveredServer> {
         let mut servers = Vec::new();
 
         for line in output.lines().skip(1) {
@@ -196,7 +201,7 @@ impl ProcessScanner {
             }
         }
 
-        Ok(servers)
+        servers
     }
 
     /// Parse wmic output (Windows)

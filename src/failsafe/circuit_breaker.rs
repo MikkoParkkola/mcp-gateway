@@ -56,6 +56,11 @@ impl CircuitBreaker {
     }
 
     /// Check if requests can proceed
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Instant::now()` cannot be subtracted by the stored duration,
+    /// which should not occur under normal operation.
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn can_proceed(&self) -> bool {
         if !self.enabled {
@@ -72,6 +77,7 @@ impl CircuitBreaker {
             CircuitState::Open => {
                 // Check if reset timeout has passed
                 let last_change = self.last_state_change.load(Ordering::Relaxed);
+                #[allow(clippy::cast_possible_truncation)]
                 let now = Instant::now()
                     .duration_since(
                         Instant::now()
@@ -80,7 +86,9 @@ impl CircuitBreaker {
                     )
                     .as_millis() as u64;
 
-                if now >= self.reset_timeout.as_millis() as u64 {
+                #[allow(clippy::cast_possible_truncation)]
+                let timeout_ms = self.reset_timeout.as_millis() as u64;
+                if now >= timeout_ms {
                     tracing::debug!("Reset timeout elapsed, transitioning to half-open");
                     self.transition_to(CircuitState::HalfOpen);
                     true
@@ -167,13 +175,13 @@ impl CircuitBreaker {
         }
 
         *state = new_state;
-        self.last_state_change.store(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            Ordering::Relaxed,
-        );
+        #[allow(clippy::cast_possible_truncation)] // millis since epoch fits u64 for centuries
+        let epoch_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.last_state_change
+            .store(epoch_millis, Ordering::Relaxed);
 
         match new_state {
             CircuitState::Closed => {

@@ -4,16 +4,24 @@ use super::CapabilityDefinition;
 use crate::{Error, Result};
 
 /// Parse a capability definition from YAML content
+///
+/// # Errors
+///
+/// Returns an error if the YAML content cannot be parsed into a capability definition.
 pub fn parse_capability(content: &str) -> Result<CapabilityDefinition> {
     serde_yaml::from_str(content)
         .map_err(|e| Error::Config(format!("Failed to parse capability YAML: {e}")))
 }
 
 /// Parse a capability definition from a file
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or the content is not valid YAML.
 pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityDefinition> {
     let content = tokio::fs::read_to_string(path)
         .await
-        .map_err(|e| Error::Config(format!("Failed to read capability file {path:?}: {e}")))?;
+        .map_err(|e| Error::Config(format!("Failed to read capability file {}: {e}", path.display())))?;
 
     let mut capability = parse_capability(&content)?;
 
@@ -28,6 +36,10 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
 }
 
 /// Validate a capability definition
+///
+/// # Errors
+///
+/// Returns an error if the capability definition is invalid (missing name, no providers, etc.).
 pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
     // Name is required
     if capability.name.is_empty() {

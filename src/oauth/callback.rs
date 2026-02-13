@@ -163,9 +163,7 @@ async fn handle_callback(
     }
 
     // Extract code
-    let code = if let Some(c) = params.code {
-        c
-    } else {
+    let Some(code) = params.code else {
         let result = Err(Error::Internal(
             "No authorization code received".to_string(),
         ));

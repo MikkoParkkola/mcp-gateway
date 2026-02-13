@@ -48,7 +48,7 @@ pub struct HttpTransport {
     streamable_http: bool,
     /// OAuth client for authenticated backends (protected by async mutex for token refresh)
     oauth_client: Option<TokioMutex<OAuthClient>>,
-    /// Protocol version override (if None, uses PROTOCOL_VERSION with fallback)
+    /// Protocol version override (if `None`, uses `PROTOCOL_VERSION` with fallback)
     protocol_version: RwLock<Option<String>>,
 }
 
@@ -57,6 +57,10 @@ impl HttpTransport {
     ///
     /// If `streamable_http` is true, uses direct POST without SSE handshake.
     /// Otherwise uses SSE protocol (GET for endpoint, POST for messages).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be built.
     pub fn new(
         url: &str,
         headers: HashMap<String, String>,
@@ -67,6 +71,10 @@ impl HttpTransport {
     }
 
     /// Create a new HTTP transport with optional OAuth client and protocol version
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be built.
     pub fn new_with_oauth(
         url: &str,
         headers: HashMap<String, String>,
@@ -105,6 +113,11 @@ impl HttpTransport {
     /// For SSE mode: establishes SSE handshake to get message endpoint
     /// For Streamable HTTP: uses URL directly (trailing slash only for localhost/Starlette)
     /// For OAuth-enabled backends: initializes OAuth client and obtains token first
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if OAuth authorization fails, SSE handshake fails,
+    /// or protocol version negotiation is unsuccessful.
     pub async fn initialize(&self) -> Result<()> {
         // Initialize OAuth client if configured
         if let Some(ref oauth_mutex) = self.oauth_client {
@@ -202,10 +215,10 @@ impl HttpTransport {
                     // Success with negotiated version
                     info!(url = %self.base_url, version = %negotiated_version, "Successfully negotiated protocol version");
                 } else {
-                    return Err(Error::Protocol(format!("Protocol version negotiation failed: {}", error_msg)));
+                    return Err(Error::Protocol(format!("Protocol version negotiation failed: {error_msg}")));
                 }
             } else {
-                return Err(Error::Protocol(format!("Initialize failed: {:?}", error)));
+                return Err(Error::Protocol(format!("Initialize failed: {error:?}")));
             }
         }
 
@@ -231,6 +244,7 @@ impl HttpTransport {
 
     /// Negotiate protocol version from error message
     /// Parse "supported versions: X, Y, Z" and find best match
+    #[allow(clippy::unused_async)] // async for future network-based negotiation
     async fn negotiate_protocol_version(&self, error_msg: &str) -> Option<String> {
         // Try to extract supported versions from error message
         // Example: "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"
@@ -261,6 +275,7 @@ impl HttpTransport {
     }
 
     /// Parse supported versions from error message
+    #[allow(clippy::unused_self)] // method on self for logical grouping
     fn parse_supported_versions(&self, error_msg: &str) -> Option<Vec<String>> {
         // Look for pattern: "supported versions: X, Y, Z" or "supported: X, Y, Z"
         let patterns = [
@@ -527,6 +542,7 @@ impl HttpTransport {
     }
 
     /// Get next request ID
+    #[allow(clippy::cast_possible_wrap)] // request IDs won't exceed i64::MAX
     fn next_id(&self) -> RequestId {
         RequestId::Number(self.request_id.fetch_add(1, Ordering::Relaxed) as i64)
     }

@@ -52,16 +52,19 @@ pub struct ProvidersConfig {
 
 impl ProvidersConfig {
     /// Check if empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.named.is_empty() && self.fallback.is_empty()
     }
 
     /// Check if contains a key
+    #[must_use]
     pub fn contains_key(&self, key: &str) -> bool {
         self.named.contains_key(key)
     }
 
     /// Get a named provider
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&ProviderConfig> {
         self.named.get(key)
     }
@@ -215,6 +218,7 @@ pub struct RestConfig {
 
 impl RestConfig {
     /// Get the effective base URL (from endpoint or `base_url`)
+    #[must_use]
     pub fn effective_base_url(&self) -> &str {
         if self.endpoint.is_empty() {
             &self.base_url
@@ -225,6 +229,7 @@ impl RestConfig {
     }
 
     /// Check if this uses endpoint style (full URL with path params)
+    #[must_use]
     pub fn uses_endpoint(&self) -> bool {
         !self.endpoint.is_empty()
     }
@@ -294,6 +299,7 @@ pub struct CacheConfig {
 
 impl CacheConfig {
     /// Get TTL as Duration (None if caching disabled)
+    #[must_use]
     pub fn ttl_duration(&self) -> Option<std::time::Duration> {
         if self.ttl > 0 {
             Some(std::time::Duration::from_secs(self.ttl))
@@ -329,6 +335,7 @@ pub struct CapabilityMetadata {
 
 impl CapabilityDefinition {
     /// Convert to MCP tool format
+    #[must_use]
     pub fn to_mcp_tool(&self) -> crate::protocol::Tool {
         crate::protocol::Tool {
             name: self.name.clone(),
@@ -345,16 +352,19 @@ impl CapabilityDefinition {
     }
 
     /// Get the primary provider
+    #[must_use]
     pub fn primary_provider(&self) -> Option<&ProviderConfig> {
         self.providers.get("primary")
     }
 
     /// Get all fallback providers
+    #[must_use]
     pub fn fallback_providers(&self) -> &[ProviderConfig] {
         &self.providers.fallback
     }
 
     /// Check if caching is enabled
+    #[must_use]
     pub fn is_cacheable(&self) -> bool {
         self.cache.ttl > 0 && !self.cache.strategy.is_empty() && self.cache.strategy != "none"
     }

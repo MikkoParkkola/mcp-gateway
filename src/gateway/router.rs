@@ -275,16 +275,7 @@ async fn meta_mcp_handler(
         "initialize" => MetaMcp::handle_initialize(id, params.as_ref()),
         "tools/list" => state.meta_mcp.handle_tools_list(id),
         "tools/call" => {
-            let tool_name = params
-                .as_ref()
-                .and_then(|p| p.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let arguments = params
-                .as_ref()
-                .and_then(|p| p.get("arguments"))
-                .cloned()
-                .unwrap_or(json!({}));
+            let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
             state
                 .meta_mcp
                 .handle_tools_call(id, tool_name, arguments)
@@ -359,18 +350,15 @@ async fn backend_handler(
     };
 
     // Find backend
-    let backend = match state.backends.get(&name) {
-        Some(b) => b,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32001, "message": format!("Backend not found: {name}")},
-                    "id": null
-                })),
-            );
-        }
+    let Some(backend) = state.backends.get(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32001, "message": format!("Backend not found: {name}")},
+                "id": null
+            })),
+        );
     };
 
     // Parse request
@@ -413,8 +401,47 @@ async fn backend_handler(
     }
 }
 
+/// Extract a `RequestId` from a JSON value.
+///
+/// Supports string and integer ID values per JSON-RPC 2.0 spec.
+/// Returns `None` if the value is not a recognised ID type.
+fn extract_request_id(value: &Value) -> Option<RequestId> {
+    if value.is_string() {
+        Some(RequestId::String(value.as_str().unwrap().to_string()))
+    } else if value.is_i64() {
+        Some(RequestId::Number(value.as_i64().unwrap()))
+    } else if value.is_u64() {
+        #[allow(clippy::cast_possible_wrap)]
+        Some(RequestId::Number(value.as_u64().unwrap() as i64))
+    } else {
+        None
+    }
+}
+
+/// Check whether a method name represents a notification (no response expected).
+fn is_notification_method(method: &str) -> bool {
+    method.starts_with("notifications/")
+}
+
+/// Extract the `tools/call` parameters (tool name and arguments) from request params.
+///
+/// Returns `("", {})` when the expected fields are absent so callers never
+/// need to deal with `Option`.
+fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value) {
+    let tool_name = params
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let arguments = params
+        .and_then(|p| p.get("arguments"))
+        .cloned()
+        .unwrap_or(json!({}));
+    (tool_name, arguments)
+}
+
 /// Parse JSON-RPC request or notification
 /// Returns (Option<RequestId>, method, params) - id is None for notifications
+#[allow(clippy::result_large_err)] // JsonRpcResponse used directly as HTTP error body
 fn parse_request(
     value: &Value,
 ) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
@@ -429,17 +456,7 @@ fn parse_request(
     }
 
     // Get ID (required for requests, missing for notifications)
-    let id = value.get("id").and_then(|v| {
-        if v.is_string() {
-            Some(RequestId::String(v.as_str().unwrap().to_string()))
-        } else if v.is_i64() {
-            Some(RequestId::Number(v.as_i64().unwrap()))
-        } else if v.is_u64() {
-            Some(RequestId::Number(v.as_u64().unwrap() as i64))
-        } else {
-            None
-        }
-    });
+    let id = value.get("id").and_then(extract_request_id);
 
     // Get method
     let method = value
@@ -452,9 +469,291 @@ fn parse_request(
 
     // For notifications (methods starting with "notifications/"), id is optional
     // For requests, id is required
-    if !method.starts_with("notifications/") && id.is_none() {
+    if !is_notification_method(method) && id.is_none() {
         return Err(JsonRpcResponse::error(None, -32600, "Missing id"));
     }
 
     Ok((id, method.to_string(), params))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    // =====================================================================
+    // extract_request_id
+    // =====================================================================
+
+    #[test]
+    fn extract_request_id_string_value() {
+        let val = json!("abc-123");
+        let id = extract_request_id(&val).unwrap();
+        assert_eq!(id, RequestId::String("abc-123".to_string()));
+    }
+
+    #[test]
+    fn extract_request_id_positive_integer() {
+        let val = json!(42);
+        let id = extract_request_id(&val).unwrap();
+        assert_eq!(id, RequestId::Number(42));
+    }
+
+    #[test]
+    fn extract_request_id_negative_integer() {
+        let val = json!(-1);
+        let id = extract_request_id(&val).unwrap();
+        assert_eq!(id, RequestId::Number(-1));
+    }
+
+    #[test]
+    fn extract_request_id_zero() {
+        let val = json!(0);
+        let id = extract_request_id(&val).unwrap();
+        assert_eq!(id, RequestId::Number(0));
+    }
+
+    #[test]
+    fn extract_request_id_null_returns_none() {
+        let val = json!(null);
+        assert!(extract_request_id(&val).is_none());
+    }
+
+    #[test]
+    fn extract_request_id_bool_returns_none() {
+        let val = json!(true);
+        assert!(extract_request_id(&val).is_none());
+    }
+
+    #[test]
+    fn extract_request_id_float_returns_none() {
+        let val = json!(3.14);
+        assert!(extract_request_id(&val).is_none());
+    }
+
+    #[test]
+    fn extract_request_id_array_returns_none() {
+        let val = json!([1, 2]);
+        assert!(extract_request_id(&val).is_none());
+    }
+
+    #[test]
+    fn extract_request_id_object_returns_none() {
+        let val = json!({"id": 1});
+        assert!(extract_request_id(&val).is_none());
+    }
+
+    // =====================================================================
+    // is_notification_method
+    // =====================================================================
+
+    #[test]
+    fn notification_method_recognized() {
+        assert!(is_notification_method("notifications/initialized"));
+        assert!(is_notification_method("notifications/cancelled"));
+        assert!(is_notification_method("notifications/"));
+    }
+
+    #[test]
+    fn regular_method_not_notification() {
+        assert!(!is_notification_method("initialize"));
+        assert!(!is_notification_method("tools/list"));
+        assert!(!is_notification_method("tools/call"));
+        assert!(!is_notification_method("ping"));
+        assert!(!is_notification_method(""));
+    }
+
+    // =====================================================================
+    // extract_tools_call_params
+    // =====================================================================
+
+    #[test]
+    fn extract_tools_call_params_full() {
+        let params = json!({"name": "my_tool", "arguments": {"key": "value"}});
+        let (name, args) = extract_tools_call_params(Some(&params));
+        assert_eq!(name, "my_tool");
+        assert_eq!(args, json!({"key": "value"}));
+    }
+
+    #[test]
+    fn extract_tools_call_params_missing_name() {
+        let params = json!({"arguments": {"key": "value"}});
+        let (name, args) = extract_tools_call_params(Some(&params));
+        assert_eq!(name, "");
+        assert_eq!(args, json!({"key": "value"}));
+    }
+
+    #[test]
+    fn extract_tools_call_params_missing_arguments() {
+        let params = json!({"name": "my_tool"});
+        let (name, args) = extract_tools_call_params(Some(&params));
+        assert_eq!(name, "my_tool");
+        assert_eq!(args, json!({}));
+    }
+
+    #[test]
+    fn extract_tools_call_params_none_input() {
+        let (name, args) = extract_tools_call_params(None);
+        assert_eq!(name, "");
+        assert_eq!(args, json!({}));
+    }
+
+    #[test]
+    fn extract_tools_call_params_empty_object() {
+        let params = json!({});
+        let (name, args) = extract_tools_call_params(Some(&params));
+        assert_eq!(name, "");
+        assert_eq!(args, json!({}));
+    }
+
+    // =====================================================================
+    // parse_request - valid requests
+    // =====================================================================
+
+    #[test]
+    fn parse_request_valid_with_string_id() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "method": "tools/list"
+        });
+        let (id, method, params) = parse_request(&req).unwrap();
+        assert_eq!(id, Some(RequestId::String("req-1".to_string())));
+        assert_eq!(method, "tools/list");
+        assert!(params.is_none());
+    }
+
+    #[test]
+    fn parse_request_valid_with_numeric_id() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "ping"
+        });
+        let (id, method, params) = parse_request(&req).unwrap();
+        assert_eq!(id, Some(RequestId::Number(42)));
+        assert_eq!(method, "ping");
+        assert!(params.is_none());
+    }
+
+    #[test]
+    fn parse_request_valid_with_params() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "my_tool", "arguments": {"q": "test"}}
+        });
+        let (id, method, params) = parse_request(&req).unwrap();
+        assert_eq!(id, Some(RequestId::Number(1)));
+        assert_eq!(method, "tools/call");
+        assert!(params.is_some());
+        let p = params.unwrap();
+        assert_eq!(p["name"], "my_tool");
+    }
+
+    #[test]
+    fn parse_request_notification_without_id() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+        let (id, method, _params) = parse_request(&req).unwrap();
+        assert!(id.is_none());
+        assert_eq!(method, "notifications/initialized");
+    }
+
+    #[test]
+    fn parse_request_notification_with_id_accepted() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "notifications/cancelled"
+        });
+        let (id, method, _params) = parse_request(&req).unwrap();
+        assert_eq!(id, Some(RequestId::Number(99)));
+        assert_eq!(method, "notifications/cancelled");
+    }
+
+    // =====================================================================
+    // parse_request - error cases
+    // =====================================================================
+
+    #[test]
+    fn parse_request_missing_jsonrpc_field() {
+        let req = json!({"id": 1, "method": "ping"});
+        let err = parse_request(&req).unwrap_err();
+        assert!(err.error.is_some());
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+        assert!(err.error.as_ref().unwrap().message.contains("JSON-RPC version"));
+    }
+
+    #[test]
+    fn parse_request_wrong_jsonrpc_version() {
+        let req = json!({"jsonrpc": "1.0", "id": 1, "method": "ping"});
+        let err = parse_request(&req).unwrap_err();
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+    }
+
+    #[test]
+    fn parse_request_missing_method() {
+        let req = json!({"jsonrpc": "2.0", "id": 1});
+        let err = parse_request(&req).unwrap_err();
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+        assert!(err.error.as_ref().unwrap().message.contains("method"));
+    }
+
+    #[test]
+    fn parse_request_non_notification_without_id() {
+        let req = json!({"jsonrpc": "2.0", "method": "tools/list"});
+        let err = parse_request(&req).unwrap_err();
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+        assert!(err.error.as_ref().unwrap().message.contains("id"));
+    }
+
+    #[test]
+    fn parse_request_null_jsonrpc() {
+        let req = json!({"jsonrpc": null, "id": 1, "method": "ping"});
+        let err = parse_request(&req).unwrap_err();
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+    }
+
+    #[test]
+    fn parse_request_numeric_jsonrpc() {
+        let req = json!({"jsonrpc": 2, "id": 1, "method": "ping"});
+        let err = parse_request(&req).unwrap_err();
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+    }
+
+    #[test]
+    fn parse_request_method_is_not_string() {
+        let req = json!({"jsonrpc": "2.0", "id": 1, "method": 123});
+        let err = parse_request(&req).unwrap_err();
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+    }
+
+    #[test]
+    fn parse_request_empty_object() {
+        let req = json!({});
+        let err = parse_request(&req).unwrap_err();
+        assert_eq!(err.error.as_ref().unwrap().code, -32600);
+    }
+
+    #[test]
+    fn parse_request_initialize_method() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": "init-1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1.0"}
+            }
+        });
+        let (id, method, params) = parse_request(&req).unwrap();
+        assert_eq!(id, Some(RequestId::String("init-1".to_string())));
+        assert_eq!(method, "initialize");
+        assert!(params.is_some());
+    }
 }

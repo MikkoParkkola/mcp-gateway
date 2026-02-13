@@ -70,6 +70,7 @@ pub struct NotificationMultiplexer {
 
 impl NotificationMultiplexer {
     /// Create a new notification multiplexer
+    #[must_use]
     pub fn new(backends: Arc<BackendRegistry>, config: StreamingConfig) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
@@ -143,6 +144,7 @@ impl NotificationMultiplexer {
     }
 
     /// Broadcast a notification to all sessions
+    #[allow(clippy::needless_pass_by_value)] // public API: caller may have owned value
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
@@ -159,6 +161,11 @@ impl NotificationMultiplexer {
     }
 
     /// Subscribe a session to a backend's notifications
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend is not found in the registry.
+    #[allow(clippy::unused_async)] // async for future streaming implementation
     pub async fn subscribe_backend(&self, session_id: &str, backend_name: &str) -> Result<()> {
         // Verify backend exists
         let _backend = self
@@ -202,6 +209,7 @@ impl NotificationMultiplexer {
 /// Create SSE response for GET /mcp
 ///
 /// Takes owned data to satisfy Rust 2024 lifetime capture rules for `impl Stream`.
+#[allow(clippy::needless_pass_by_value)] // owned values required for stream lifetime
 pub fn create_sse_response(
     multiplexer: Arc<NotificationMultiplexer>,
     session_id: String,

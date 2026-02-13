@@ -53,6 +53,10 @@ impl StdioTransport {
     }
 
     /// Start the subprocess
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
         let parts: Vec<&str> = self.command.split_whitespace().collect();
         if parts.is_empty() {
@@ -222,6 +226,7 @@ impl StdioTransport {
     }
 
     /// Get next request ID
+    #[allow(clippy::cast_possible_wrap)] // request IDs won't exceed i64::MAX
     fn next_id(&self) -> RequestId {
         RequestId::Number(self.request_id.fetch_add(1, Ordering::Relaxed) as i64)
     }

@@ -26,6 +26,10 @@ impl CapabilityWatcher {
     ///
     /// This spawns a background task that watches for file changes and
     /// triggers `backend.reload()` when changes are detected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file watcher cannot be created.
     pub fn start(
         backend: Arc<CapabilityBackend>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,

@@ -54,6 +54,11 @@ impl RetryPolicy {
 }
 
 /// Execute a future with retry logic
+///
+/// # Errors
+///
+/// Returns the last error from `f` if all retry attempts are exhausted or
+/// the error is not retryable.
 pub async fn with_retry<F, Fut, T>(policy: &RetryPolicy, name: &str, mut f: F) -> Result<T, Error>
 where
     F: FnMut() -> Fut,

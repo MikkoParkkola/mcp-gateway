@@ -67,6 +67,10 @@ impl Backend {
     }
 
     /// Ensure backend is started
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to start.
     pub async fn ensure_started(&self) -> Result<()> {
         // Update last used
         self.last_used.store(
@@ -90,6 +94,10 @@ impl Backend {
     }
 
     /// Start the backend
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to connect or initialize.
     pub async fn start(&self) -> Result<()> {
         info!(backend = %self.name, "Starting backend");
 
@@ -163,6 +171,10 @@ impl Backend {
     }
 
     /// Stop the backend
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to close cleanly.
     pub async fn stop(&self) -> Result<()> {
         info!(backend = %self.name, "Stopping backend");
 
@@ -183,6 +195,10 @@ impl Backend {
     }
 
     /// Get cached tools (or fetch if needed)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools(&self) -> Result<Vec<Tool>> {
         // Check cache
         {
@@ -238,6 +254,11 @@ impl Backend {
     }
 
     /// Send a request to the backend
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend is unavailable, the concurrency limit
+    /// is reached, or the request itself fails after retries.
     #[tracing::instrument(
         skip(self, params),
         fields(
