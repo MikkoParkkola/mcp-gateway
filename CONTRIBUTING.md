@@ -26,14 +26,16 @@ cargo run -- --config examples/servers.yaml
 
 ## Code Standards
 
-- Run `cargo fmt` before committing
-- Run `cargo clippy` and fix all warnings
-- Add tests for new functionality
-- Update documentation for API changes
+- **Edition**: Rust 2024 (edition = "2024"), minimum `rustc` 1.85
+- **Formatting**: Run `cargo fmt` before committing
+- **Linting**: Run `cargo clippy -- -W clippy::pedantic` and fix all warnings (pedantic is enforced in CI)
+- **Safety**: `unsafe` code is forbidden (`#[forbid(unsafe_code)]` in `Cargo.toml`)
+- **Tests**: Add tests for new functionality. Current: 446 tests, 0 allowed to regress.
+- **Docs**: Update documentation for API changes
 
 ## Pull Request Process
 
-1. Ensure CI passes (fmt, clippy, test, build)
+1. Ensure CI passes: `cargo fmt --check && cargo clippy -- -W clippy::pedantic && cargo test`
 2. Update README.md if adding features
 3. Add entry to CHANGELOG.md
 4. Request review
