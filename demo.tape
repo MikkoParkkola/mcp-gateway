@@ -2,21 +2,19 @@ Output demo.gif
 
 Set Shell "bash"
 Set FontSize 14
-Set Width 900
-Set Height 500
+Set Width 920
+Set Height 520
 Set Theme "Catppuccin Mocha"
 Set Padding 20
-Set TypingSpeed 40ms
+Set TypingSpeed 30ms
+Set WindowBar Colorful
+Set WindowBarSize 40
 
-Type "# MCP Gateway — Single port, all your MCP servers"
+Type `# MCP Gateway — validate your tool definitions`
 Enter
-Sleep 500ms
+Sleep 800ms
 
-Type "# Let's validate our capability definitions"
-Enter
-Sleep 500ms
-
-Type "mcp-gateway validate capabilities/examples/"
+Type `/tmp/mcp-gateway-bin validate capabilities/examples/weather.yaml`
 Enter
 Sleep 3s
 
@@ -24,18 +22,12 @@ Type ""
 Enter
 Sleep 500ms
 
-Type "# 9 agent-UX rules checked. Now let's see token savings:"
+Type `# Now measure token savings with Meta-MCP:`
 Enter
-Sleep 500ms
+Sleep 800ms
 
-Type "python3 benchmarks/token_savings.py --backends 5 --tools-per-backend 20"
+Type `python3 benchmarks/token_savings.py`
 Enter
-Sleep 3s
+Sleep 4s
 
-Type ""
-Enter
-Sleep 500ms
-
-Type "# 98% fewer tokens. One gateway, all your tools."
-Enter
 Sleep 2s
