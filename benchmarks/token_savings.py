@@ -177,32 +177,39 @@ def run_benchmark(n_backends: int, tools_per_backend: int) -> None:
     savings_pct = (1 - gateway_tokens / direct_tokens) * 100
     ratio = direct_tokens / gateway_tokens
 
-    print(textwrap.dedent(f"""\
-    ╔══════════════════════════════════════════════════════════════════╗
-    ║              MCP Gateway — Token Savings Benchmark              ║
-    ╠══════════════════════════════════════════════════════════════════╣
-    ║                                                                  ║
-    ║  Configuration                                                   ║
-    ║  ─────────────                                                   ║
-    ║   Backends:          {n_backends:>4}                                       ║
-    ║   Tools per backend: {tools_per_backend:>4}                                       ║
-    ║   Total tools:       {total_tools:>4}                                       ║
-    ║                                                                  ║
-    ╠══════════════════════════════════════════════════════════════════╣
-    ║                                                                  ║
-    ║  Approach            Tools in Prompt    Est. Tokens              ║
-    ║  ────────            ───────────────    ───────────              ║
-    ║  Direct (all tools)  {total_tools:>15,}    {direct_tokens:>11,}              ║
-    ║  Meta-MCP (gateway)  {3:>15,}    {gateway_tokens:>11,}              ║
-    ║                                                                  ║
-    ╠══════════════════════════════════════════════════════════════════╣
-    ║                                                                  ║
-    ║  Token savings:      {savings_pct:>5.1f}%                                   ║
-    ║  Reduction ratio:    {ratio:>5.0f}x fewer tokens                          ║
-    ║  Tokens saved:       {direct_tokens - gateway_tokens:>11,}                          ║
-    ║                                                                  ║
-    ╚══════════════════════════════════════════════════════════════════╝
-    """))
+    w = 64  # inner width between ║ borders
+
+    def row(text: str = "") -> str:
+        return f"║ {text:<{w}} ║"
+
+    def sep(left: str, fill: str, right: str) -> str:
+        return f"{left}{fill * (w + 2)}{right}"
+
+    print(sep("╔", "═", "╗"))
+    print(row("MCP Gateway — Token Savings Benchmark".center(w)))
+    print(sep("╠", "═", "╣"))
+    print(row())
+    print(row("Configuration"))
+    print(row("─────────────"))
+    print(row(f"  Backends:          {n_backends:>4}"))
+    print(row(f"  Tools per backend: {tools_per_backend:>4}"))
+    print(row(f"  Total tools:       {total_tools:>4}"))
+    print(row())
+    print(sep("╠", "═", "╣"))
+    print(row())
+    print(row("Approach              Tools in Prompt    Est. Tokens"))
+    print(row("────────              ───────────────    ───────────"))
+    print(row(f"Direct (all tools)    {total_tools:>15,}    {direct_tokens:>11,}"))
+    print(row(f"Meta-MCP (gateway)    {3:>15,}    {gateway_tokens:>11,}"))
+    print(row())
+    print(sep("╠", "═", "╣"))
+    print(row())
+    print(row(f"Token savings:        {savings_pct:>5.1f}%"))
+    print(row(f"Reduction ratio:      {ratio:>5.0f}× fewer tokens"))
+    print(row(f"Tokens saved:         {direct_tokens - gateway_tokens:>11,}"))
+    print(row())
+    print(sep("╚", "═", "╝"))
+    print()
 
     # Scaling table
     print("  Scaling comparison:")
