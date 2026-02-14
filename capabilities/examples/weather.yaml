@@ -8,8 +8,8 @@
 # NEVER put actual API keys in YAML files.
 
 fulcrum: "1.0"
-name: weather
-description: Get current weather for a location using Open-Meteo API (free, no API key required)
+name: check_weather
+description: Check current weather conditions for a location using Open-Meteo API (free, no API key required)
 
 schema:
   input:

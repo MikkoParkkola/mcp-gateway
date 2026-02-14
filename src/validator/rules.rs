@@ -134,7 +134,7 @@ impl Rule for OutcomeOrientedRule {
 
         // Positive patterns: outcome verbs
         let outcome_verbs = [
-            "find", "search", "analyze", "summarize",
+            "check", "find", "search", "analyze", "summarize",
             "extract", "generate", "transform", "validate",
             "calculate", "compare", "discover", "identify",
         ];
