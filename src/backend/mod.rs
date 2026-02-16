@@ -329,6 +329,17 @@ impl Backend {
         result
     }
 
+    /// Return the HTTP URL if this backend uses an HTTP-based transport.
+    ///
+    /// Returns `None` for stdio backends.
+    #[must_use]
+    pub fn transport_url(&self) -> Option<&str> {
+        match &self.config.transport {
+            TransportConfig::Http { http_url, .. } => Some(http_url.as_str()),
+            TransportConfig::Stdio { .. } => None,
+        }
+    }
+
     /// Get backend status
     pub fn status(&self) -> BackendStatus {
         BackendStatus {

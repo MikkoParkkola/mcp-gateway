@@ -11,12 +11,14 @@ use dashmap::DashMap;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// Thread-safe response cache with TTL expiry
+/// Thread-safe response cache with TTL expiry and max-size eviction
 pub struct ResponseCache {
     /// Cache entries keyed by `server:tool:args_hash`
     entries: DashMap<String, CachedResponse>,
     /// Cache statistics
     stats: CacheStats,
+    /// Maximum number of entries before eviction (0 = unlimited)
+    max_entries: usize,
 }
 
 /// A cached response with TTL metadata
@@ -86,12 +88,26 @@ impl CacheStats {
 }
 
 impl ResponseCache {
-    /// Create a new empty cache
+    /// Create a new empty cache with no size limit
     #[must_use]
     pub fn new() -> Self {
         Self {
             entries: DashMap::new(),
             stats: CacheStats::new(),
+            max_entries: 0,
+        }
+    }
+
+    /// Create a new cache with a maximum entry count.
+    ///
+    /// When the cache exceeds `max_entries`, the oldest expired entries
+    /// are evicted first, then the oldest entries by insertion time.
+    #[must_use]
+    pub fn with_max_entries(max_entries: usize) -> Self {
+        Self {
+            entries: DashMap::new(),
+            stats: CacheStats::new(),
+            max_entries,
         }
     }
 
@@ -120,7 +136,11 @@ impl ResponseCache {
         }
     }
 
-    /// Store a value in the cache with the given TTL
+    /// Store a value in the cache with the given TTL.
+    ///
+    /// When `max_entries` is set and the cache is full, expired entries
+    /// are evicted first. If still over capacity, the oldest entry
+    /// (by insertion time) is evicted.
     ///
     /// # Arguments
     ///
@@ -128,12 +148,41 @@ impl ResponseCache {
     /// * `value` - JSON value to cache
     /// * `ttl` - Time-to-live duration
     pub fn set(&self, key: &str, value: Value, ttl: Duration) {
+        // Enforce max_entries before inserting
+        if self.max_entries > 0 && self.entries.len() >= self.max_entries {
+            self.enforce_max_entries();
+        }
+
         let entry = CachedResponse {
             value,
             cached_at: Instant::now(),
             ttl,
         };
         self.entries.insert(key.to_string(), entry);
+    }
+
+    /// Enforce the maximum entry limit by evicting expired then oldest entries.
+    fn enforce_max_entries(&self) {
+        // First pass: evict expired entries
+        self.evict_expired();
+
+        // If still over limit, evict oldest by insertion time
+        while self.entries.len() >= self.max_entries {
+            let oldest_key = self
+                .entries
+                .iter()
+                .min_by_key(|entry| entry.value().cached_at)
+                .map(|entry| entry.key().clone());
+
+            if let Some(key) = oldest_key {
+                self.entries.remove(&key);
+                self.stats
+                    .evictions
+                    .fetch_add(1, Ordering::Relaxed);
+            } else {
+                break;
+            }
+        }
     }
 
     /// Get cache statistics
@@ -378,6 +427,76 @@ mod tests {
 
         assert_eq!(key1, key2);
         assert!(key1.starts_with("server:tool:"));
+    }
+
+    // ── max_entries eviction ──────────────────────────────────────────
+
+    #[test]
+    fn test_max_entries_evicts_oldest() {
+        let cache = ResponseCache::with_max_entries(3);
+
+        cache.set("key1", json!(1), Duration::from_secs(60));
+        std::thread::sleep(Duration::from_millis(1));
+        cache.set("key2", json!(2), Duration::from_secs(60));
+        std::thread::sleep(Duration::from_millis(1));
+        cache.set("key3", json!(3), Duration::from_secs(60));
+
+        assert_eq!(cache.stats().size, 3);
+
+        // Adding a 4th should evict key1 (oldest)
+        cache.set("key4", json!(4), Duration::from_secs(60));
+
+        assert_eq!(cache.stats().size, 3);
+        assert_eq!(cache.get("key1"), None); // evicted
+        assert_eq!(cache.get("key2"), Some(json!(2)));
+        assert_eq!(cache.get("key3"), Some(json!(3)));
+        assert_eq!(cache.get("key4"), Some(json!(4)));
+    }
+
+    #[test]
+    fn test_max_entries_evicts_expired_first() {
+        let cache = ResponseCache::with_max_entries(3);
+
+        // key1 with very short TTL
+        cache.set("key1", json!(1), Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(5));
+        cache.set("key2", json!(2), Duration::from_secs(60));
+        cache.set("key3", json!(3), Duration::from_secs(60));
+
+        // key1 should be expired now, so adding key4 should evict key1 (expired)
+        cache.set("key4", json!(4), Duration::from_secs(60));
+
+        assert_eq!(cache.stats().size, 3);
+        assert_eq!(cache.get("key2"), Some(json!(2))); // still alive
+        assert_eq!(cache.get("key3"), Some(json!(3))); // still alive
+        assert_eq!(cache.get("key4"), Some(json!(4))); // new
+    }
+
+    #[test]
+    fn test_max_entries_zero_means_unlimited() {
+        let cache = ResponseCache::new();
+        for i in 0..100 {
+            cache.set(&format!("key{i}"), json!(i), Duration::from_secs(60));
+        }
+        assert_eq!(cache.stats().size, 100);
+    }
+
+    #[test]
+    fn test_max_entries_one() {
+        let cache = ResponseCache::with_max_entries(1);
+        cache.set("key1", json!(1), Duration::from_secs(60));
+        cache.set("key2", json!(2), Duration::from_secs(60));
+
+        assert_eq!(cache.stats().size, 1);
+        assert_eq!(cache.get("key1"), None);
+        assert_eq!(cache.get("key2"), Some(json!(2)));
+    }
+
+    #[test]
+    fn test_with_max_entries_constructor() {
+        let cache = ResponseCache::with_max_entries(50);
+        assert_eq!(cache.stats().size, 0);
+        assert_eq!(cache.stats().hits, 0);
     }
 
     #[test]

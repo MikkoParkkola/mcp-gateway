@@ -38,6 +38,7 @@ pub mod protocol;
 pub mod ranking;
 pub mod registry;
 pub mod secrets;
+pub mod security;
 pub mod stats;
 pub mod transform;
 pub mod transport;

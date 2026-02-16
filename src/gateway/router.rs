@@ -20,6 +20,7 @@ use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::{ToolPolicy, sanitize_json_value, validate_url_not_ssrf};
 
 /// Shared application state
 pub struct AppState {
@@ -35,6 +36,16 @@ pub struct AppState {
     pub streaming_config: StreamingConfig,
     /// Authentication configuration
     pub auth_config: Arc<ResolvedAuthConfig>,
+    /// Tool access policy
+    pub tool_policy: Arc<ToolPolicy>,
+    /// Whether input sanitization is enabled
+    pub sanitize_input: bool,
+    /// Whether SSRF protection is enabled for outbound URLs
+    pub ssrf_protection: bool,
+    /// In-flight request tracker for graceful drain.
+    /// Each in-flight request holds a permit; shutdown waits for all permits
+    /// to be returned.
+    pub inflight: Arc<tokio::sync::Semaphore>,
 }
 
 /// Create the router
@@ -191,15 +202,38 @@ async fn sse_deprecated_handler() -> impl IntoResponse {
 }
 
 /// Health check handler
-async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+///
+/// For unauthenticated (public) clients, backend details are redacted
+/// to avoid leaking internal topology. Only authenticated admin clients
+/// see full backend names and circuit breaker state.
+async fn health_handler(
+    State(state): State<Arc<AppState>>,
+    request: axum::http::Request<axum::body::Body>,
+) -> impl IntoResponse {
     let statuses = state.backends.statuses();
-
     let healthy = statuses.values().all(|s| s.circuit_state != "Open");
+
+    // Check if the caller is an authenticated (non-public) client
+    let is_admin = request
+        .extensions()
+        .get::<AuthenticatedClient>()
+        .is_some_and(|c| c.name != "public" && c.name != "anonymous");
+
+    let backends_json = if is_admin {
+        // Full details for authenticated clients
+        serde_json::to_value(&statuses).unwrap_or(json!({}))
+    } else {
+        // Redacted: only count and overall health, no names/paths
+        json!({
+            "count": statuses.len(),
+            "all_healthy": healthy
+        })
+    };
 
     let response = json!({
         "status": if healthy { "healthy" } else { "degraded" },
         "version": env!("CARGO_PKG_VERSION"),
-        "backends": statuses
+        "backends": backends_json
     });
 
     if healthy {
@@ -210,11 +244,15 @@ async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 /// Meta-MCP handler (POST /mcp)
+#[allow(clippy::too_many_lines)]
 async fn meta_mcp_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> impl IntoResponse {
+    // Track in-flight request for graceful drain
+    let _inflight_permit = state.inflight.acquire().await;
+
     if !state.meta_mcp_enabled {
         return (
             StatusCode::FORBIDDEN,
@@ -240,6 +278,24 @@ async fn meta_mcp_handler(
     let (session_id, _rx) = state
         .multiplexer
         .get_or_create_session(existing_session_id.as_deref());
+
+    // Optionally sanitize input
+    let request = if state.sanitize_input {
+        match sanitize_json_value(&request) {
+            Ok(sanitized) => sanitized,
+            Err(e) => {
+                let response = JsonRpcResponse::error(None, -32600, e.to_string());
+                let mut resp = Json(serde_json::to_value(response).unwrap()).into_response();
+                resp.headers_mut().insert(
+                    axum::http::header::HeaderName::from_static("mcp-session-id"),
+                    session_id.parse().unwrap(),
+                );
+                return (StatusCode::BAD_REQUEST, resp).into_response();
+            }
+        }
+    } else {
+        request
+    };
 
     // Parse request
     let (id, method, params) = match parse_request(&request) {
@@ -276,6 +332,59 @@ async fn meta_mcp_handler(
         "tools/list" => state.meta_mcp.handle_tools_list(id),
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+
+            // Apply tool policy check and SSRF validation for gateway_invoke calls
+            if tool_name == "gateway_invoke" {
+                if let Some(ref args) = params {
+                    let server = args.get("arguments")
+                        .and_then(|a| a.get("server"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let tool = args.get("arguments")
+                        .and_then(|a| a.get("tool"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !server.is_empty() && !tool.is_empty() {
+                        if let Err(e) = state.tool_policy.check(server, tool) {
+                            let resp = JsonRpcResponse::error(
+                                Some(id),
+                                -32600,
+                                e.to_string(),
+                            );
+                            let mut response = Json(serde_json::to_value(resp).unwrap())
+                                .into_response();
+                            response.headers_mut().insert(
+                                axum::http::header::HeaderName::from_static("mcp-session-id"),
+                                session_id.parse().unwrap(),
+                            );
+                            return (StatusCode::FORBIDDEN, response).into_response();
+                        }
+                    }
+
+                    // SSRF protection: validate backend URL before proxying
+                    if state.ssrf_protection && !server.is_empty() {
+                        if let Some(backend) = state.backends.get(server) {
+                            if let Some(url) = backend.transport_url() {
+                                if let Err(e) = validate_url_not_ssrf(url) {
+                                    let resp = JsonRpcResponse::error(
+                                        Some(id),
+                                        -32600,
+                                        e.to_string(),
+                                    );
+                                    let mut response = Json(serde_json::to_value(resp).unwrap())
+                                        .into_response();
+                                    response.headers_mut().insert(
+                                        axum::http::header::HeaderName::from_static("mcp-session-id"),
+                                        session_id.parse().unwrap(),
+                                    );
+                                    return (StatusCode::FORBIDDEN, response).into_response();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             state
                 .meta_mcp
                 .handle_tools_call(id, tool_name, arguments)
@@ -300,6 +409,9 @@ async fn backend_handler(
     Path(name): Path<String>,
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
+    // Track in-flight request for graceful drain
+    let _inflight_permit = state.inflight.acquire().await;
+
     // Extract authenticated client from extensions (injected by auth middleware)
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
 

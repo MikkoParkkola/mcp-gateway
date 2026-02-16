@@ -13,6 +13,7 @@ use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
 use crate::backend::{Backend, BackendRegistry};
 use crate::cache::ResponseCache;
+use crate::security::ToolPolicy;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
 use crate::playbook::PlaybookEngine;
@@ -80,9 +81,13 @@ impl Gateway {
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
 
-        // Create cache if enabled
+        // Create cache if enabled (with bounded max-size eviction)
         let cache = if self.config.cache.enabled {
-            let cache = Arc::new(ResponseCache::new());
+            let cache = if self.config.cache.max_entries > 0 {
+                Arc::new(ResponseCache::with_max_entries(self.config.cache.max_entries))
+            } else {
+                Arc::new(ResponseCache::new())
+            };
             info!(
                 enabled = true,
                 default_ttl = ?self.config.cache.default_ttl,
@@ -93,6 +98,12 @@ impl Gateway {
         } else {
             None
         };
+
+        // Compile tool policy
+        let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
+        if self.config.security.tool_policy.enabled {
+            info!("Tool security policy enabled");
+        }
 
         // Create usage stats (always enabled for now)
         let usage_stats = Some(Arc::new(UsageStats::new()));
@@ -205,6 +216,11 @@ impl Gateway {
             self.config.streaming.clone(),
         ));
         let auth_config = Arc::new(ResolvedAuthConfig::from_config(&self.config.auth));
+
+        // In-flight request tracker: large initial permits, drain waits for
+        // all permits to be returned (i.e., all in-flight requests complete).
+        let inflight = Arc::new(tokio::sync::Semaphore::new(10_000));
+
         let state = Arc::new(AppState {
             backends: Arc::clone(&self.backends),
             meta_mcp,
@@ -212,6 +228,10 @@ impl Gateway {
             multiplexer,
             streaming_config: self.config.streaming.clone(),
             auth_config,
+            tool_policy,
+            sanitize_input: self.config.security.sanitize_input,
+            ssrf_protection: self.config.security.ssrf_protection,
+            inflight: Arc::clone(&inflight),
         });
 
         // Create router
@@ -348,6 +368,35 @@ impl Gateway {
             warn!(error = %e, "Failed to save search ranker usage data");
         } else {
             info!("Saved search ranking usage data");
+        }
+
+        // Graceful drain: wait for in-flight requests to complete.
+        // The semaphore has 10,000 permits; each in-flight request holds one.
+        // We try to acquire all 10,000 (meaning all requests finished) with a timeout.
+        let drain_timeout = self.config.server.shutdown_timeout;
+        info!(timeout = ?drain_timeout, "Draining in-flight requests...");
+
+        let drain_result = tokio::time::timeout(
+            drain_timeout,
+            inflight.acquire_many(10_000),
+        )
+        .await;
+
+        match drain_result {
+            Ok(Ok(_permits)) => {
+                info!("All in-flight requests completed");
+            }
+            Ok(Err(_)) => {
+                warn!("Inflight semaphore closed unexpectedly during drain");
+            }
+            Err(_) => {
+                let available = inflight.available_permits();
+                let remaining = 10_000_usize.saturating_sub(available);
+                warn!(
+                    remaining_requests = remaining,
+                    "Drain timeout reached, proceeding with shutdown"
+                );
+            }
         }
 
         // Stop all backends

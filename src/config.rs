@@ -9,6 +9,7 @@ use figment::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::security::policy::ToolPolicyConfig;
 use crate::{Error, Result};
 
 /// Main configuration
@@ -39,6 +40,8 @@ pub struct Config {
     pub cache: CacheConfig,
     /// Playbook configuration
     pub playbooks: PlaybooksConfig,
+    /// Security policy configuration
+    pub security: SecurityConfig,
 }
 
 /// Cache configuration for response caching
@@ -79,6 +82,28 @@ impl Default for PlaybooksConfig {
         Self {
             enabled: false,
             directories: vec!["playbooks".to_string()],
+        }
+    }
+}
+
+/// Security configuration for the gateway
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecurityConfig {
+    /// Enable input sanitization (null byte rejection, control char stripping, NFC)
+    pub sanitize_input: bool,
+    /// Enable SSRF protection for outbound URLs
+    pub ssrf_protection: bool,
+    /// Tool allow/deny policy
+    pub tool_policy: ToolPolicyConfig,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            sanitize_input: true,
+            ssrf_protection: true,
+            tool_policy: ToolPolicyConfig::default(),
         }
     }
 }
