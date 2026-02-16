@@ -1,0 +1,92 @@
+# Example: Per-Client Tool Scopes
+#
+# This example demonstrates how to configure per-client tool access control
+# using allowed_tools and denied_tools fields in API key configurations.
+#
+# Use cases:
+# - Restrict frontend apps to read-only operations
+# - Prevent bots from accessing dangerous tools
+# - Create per-client security boundaries
+
+server:
+  host: "127.0.0.1"
+  port: 39400
+
+auth:
+  enabled: true
+
+  # API keys with different tool access levels
+  api_keys:
+    # Frontend app: Only search and read operations
+    - key: "env:FRONTEND_API_KEY"
+      name: "Frontend App"
+      rate_limit: 100
+      # Allowlist: ONLY these tools are accessible (deny all others)
+      allowed_tools:
+        - "search_*"        # All search tools (search_web, search_local, etc.)
+        - "read_*"          # All read tools (read_file, read_database, etc.)
+        - "list_*"          # All list tools (list_directory, list_tables, etc.)
+        - "tavily:*"        # All tools on tavily server (qualified name)
+      # Note: When allowlist is set, it acts as a whitelist
+
+    # Admin key: Full access (minus global policy blocks)
+    - key: "env:ADMIN_API_KEY"
+      name: "Admin"
+      rate_limit: 0
+      # No restrictions = full access (falls back to global policy)
+
+    # Restricted bot: No filesystem or execution tools
+    - key: "env:BOT_API_KEY"
+      name: "Bot"
+      rate_limit: 50
+      # Denylist: These tools are blocked (allow all others)
+      denied_tools:
+        - "filesystem_*"    # Block all filesystem tools
+        - "exec_*"          # Block all execution tools
+        - "write_*"         # Block all write tools
+        - "delete_*"        # Block all delete tools
+      # Note: Denylist is applied ON TOP of global policy denies
+
+    # Complex example: Allowlist + Denylist combination
+    - key: "env:DATA_READER_KEY"
+      name: "Data Reader"
+      rate_limit: 200
+      allowed_tools:
+        - "database_*"      # Allow all database tools
+        - "filesystem_*"    # Allow all filesystem tools
+      denied_tools:
+        - "database_write"  # But block writes
+        - "database_delete" # And deletes
+        - "filesystem_write"
+        - "filesystem_delete"
+      # Result: Can read from database and filesystem, but cannot write/delete
+
+# Global tool policy (applies to ALL clients)
+security:
+  tool_policy:
+    enabled: true
+    default_action: allow
+    # Default dangerous tools are always blocked unless explicitly allowed
+    use_default_deny: true
+    # Example: Allow write_file for specific clients
+    # (uncomment to override default deny)
+    # allow:
+    #   - "write_file"
+
+# Pattern matching rules:
+# - "exact_name"        → Exact match only
+# - "prefix_*"          → Matches prefix_anything
+# - "server:tool"       → Qualified name (server-specific)
+# - "server:*"          → All tools on specific server
+#
+# Precedence rules:
+# 1. Global policy denies (always enforced)
+# 2. Per-client allowlist (if set, ONLY these tools allowed)
+# 3. Per-client denylist (if set, these tools blocked)
+# 4. Global policy default action (if no matches)
+#
+# Security best practices:
+# - Use allowlists for untrusted clients (frontend apps, bots)
+# - Use denylists for additional restrictions on trusted clients
+# - Always keep global policy enabled with use_default_deny: true
+# - Use qualified names (server:tool) for fine-grained control

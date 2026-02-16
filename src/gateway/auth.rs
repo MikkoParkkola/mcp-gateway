@@ -57,6 +57,10 @@ pub struct ResolvedApiKey {
     pub rate_limit: u32,
     /// Allowed backends
     pub backends: Vec<String>,
+    /// Allowed tools (allowlist if Some)
+    pub allowed_tools: Option<Vec<String>>,
+    /// Denied tools (blocklist if Some)
+    pub denied_tools: Option<Vec<String>>,
 }
 
 impl ResolvedAuthConfig {
@@ -79,6 +83,8 @@ impl ResolvedAuthConfig {
                 name: k.name.clone(),
                 rate_limit: k.rate_limit,
                 backends: k.backends.clone(),
+                allowed_tools: k.allowed_tools.clone(),
+                denied_tools: k.denied_tools.clone(),
             })
             .collect();
 
@@ -118,6 +124,8 @@ impl ResolvedAuthConfig {
                     name: "bearer".to_string(),
                     rate_limit: 0,
                     backends: vec!["*".to_string()],
+                    allowed_tools: None,
+                    denied_tools: None,
                 });
             }
         }
@@ -129,6 +137,8 @@ impl ResolvedAuthConfig {
                     name: key.name.clone(),
                     rate_limit: key.rate_limit,
                     backends: key.backends.clone(),
+                    allowed_tools: key.allowed_tools.clone(),
+                    denied_tools: key.denied_tools.clone(),
                 });
             }
         }
@@ -157,6 +167,10 @@ pub struct AuthenticatedClient {
     pub rate_limit: u32,
     /// Allowed backends (empty or `["*"]` = all)
     pub backends: Vec<String>,
+    /// Allowed tools (allowlist if Some). Supports glob patterns.
+    pub allowed_tools: Option<Vec<String>>,
+    /// Denied tools (blocklist if Some). Supports glob patterns.
+    pub denied_tools: Option<Vec<String>>,
 }
 
 impl AuthenticatedClient {
@@ -164,6 +178,54 @@ impl AuthenticatedClient {
     #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {
         self.backends.is_empty() || self.backends.iter().any(|b| b == "*" || b == backend)
+    }
+
+    /// Check if this client can access a tool (per-client scope).
+    ///
+    /// Logic:
+    /// - If `allowed_tools` is Some, only tools matching the allowlist are permitted.
+    /// - If `denied_tools` is Some, tools matching the denylist are blocked.
+    /// - If both are None, fall back to global policy (caller's responsibility).
+    ///
+    /// Returns `Ok(())` if allowed, `Err(message)` if denied.
+    pub fn check_tool_scope(&self, server: &str, tool: &str) -> Result<(), String> {
+        let qualified = format!("{server}:{tool}");
+
+        // If allowlist is set, ONLY tools in the list are permitted
+        if let Some(ref allowed) = self.allowed_tools {
+            if !Self::matches_any_pattern(allowed, tool, &qualified) {
+                return Err(format!(
+                    "Tool '{tool}' on server '{server}' is not in the allowlist for client '{}'",
+                    self.name
+                ));
+            }
+        }
+
+        // If denylist is set, tools in the list are blocked
+        if let Some(ref denied) = self.denied_tools {
+            if Self::matches_any_pattern(denied, tool, &qualified) {
+                return Err(format!(
+                    "Tool '{tool}' on server '{server}' is blocked by client '{}' policy",
+                    self.name
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if a tool name matches any pattern in the list.
+    /// Supports exact match and glob suffix patterns (e.g., `"search_*"`).
+    fn matches_any_pattern(patterns: &[String], tool: &str, qualified: &str) -> bool {
+        patterns.iter().any(|pattern| {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                // Glob pattern: check prefix match on both tool and qualified name
+                tool.starts_with(prefix) || qualified.starts_with(prefix)
+            } else {
+                // Exact match on both tool and qualified name
+                tool == pattern || qualified == pattern
+            }
+        })
     }
 }
 
@@ -179,6 +241,8 @@ pub async fn auth_middleware(
             name: "anonymous".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
         });
         return next.run(request).await;
     }
@@ -192,6 +256,8 @@ pub async fn auth_middleware(
             name: "public".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
         });
         return next.run(request).await;
     }
@@ -295,7 +361,9 @@ mod tests {
             rate_limiters: DashMap::new(),
         };
 
-        assert!(config.validate_token("secret123").is_some());
+        let client = config.validate_token("secret123");
+        assert!(client.is_some());
+        assert_eq!(client.unwrap().name, "bearer");
         assert!(config.validate_token("wrong").is_none());
     }
 
@@ -310,12 +378,16 @@ mod tests {
                     name: "Client A".to_string(),
                     rate_limit: 100,
                     backends: vec!["tavily".to_string()],
+                    allowed_tools: None,
+                    denied_tools: None,
                 },
                 ResolvedApiKey {
                     key: "key2".to_string(),
                     name: "Client B".to_string(),
                     rate_limit: 0,
                     backends: vec![],
+                    allowed_tools: None,
+                    denied_tools: None,
                 },
             ],
             public_paths: vec![],
@@ -364,18 +436,24 @@ mod tests {
             name: "restricted".to_string(),
             rate_limit: 0,
             backends: vec!["tavily".to_string(), "brave".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
         };
 
         let client_unrestricted = AuthenticatedClient {
             name: "unrestricted".to_string(),
             rate_limit: 0,
             backends: vec![], // empty = all access
+            allowed_tools: None,
+            denied_tools: None,
         };
 
         let client_wildcard = AuthenticatedClient {
             name: "wildcard".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
         };
 
         // Restricted client
@@ -388,5 +466,194 @@ mod tests {
 
         // Wildcard client
         assert!(client_wildcard.can_access_backend("anything"));
+    }
+
+    // ── Tool scope tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_tool_scope_no_restrictions() {
+        let client = AuthenticatedClient {
+            name: "unrestricted".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: None,
+            denied_tools: None,
+        };
+
+        // No restrictions = all tools allowed (fallback to global policy)
+        assert!(client.check_tool_scope("server", "any_tool").is_ok());
+        assert!(client.check_tool_scope("server", "write_file").is_ok());
+    }
+
+    #[test]
+    fn test_tool_scope_allowlist_exact_match() {
+        let client = AuthenticatedClient {
+            name: "restricted".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: Some(vec![
+                "search_web".to_string(),
+                "read_file".to_string(),
+            ]),
+            denied_tools: None,
+        };
+
+        // Tools in allowlist
+        assert!(client.check_tool_scope("server", "search_web").is_ok());
+        assert!(client.check_tool_scope("server", "read_file").is_ok());
+
+        // Tools NOT in allowlist
+        assert!(client.check_tool_scope("server", "write_file").is_err());
+        assert!(client.check_tool_scope("server", "delete_file").is_err());
+    }
+
+    #[test]
+    fn test_tool_scope_allowlist_glob_pattern() {
+        let client = AuthenticatedClient {
+            name: "search_only".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: Some(vec![
+                "search_*".to_string(),
+                "read_*".to_string(),
+            ]),
+            denied_tools: None,
+        };
+
+        // Tools matching glob patterns
+        assert!(client.check_tool_scope("server", "search_web").is_ok());
+        assert!(client.check_tool_scope("server", "search_local").is_ok());
+        assert!(client.check_tool_scope("server", "read_file").is_ok());
+        assert!(client.check_tool_scope("server", "read_database").is_ok());
+
+        // Tools NOT matching glob patterns
+        assert!(client.check_tool_scope("server", "write_file").is_err());
+        assert!(client.check_tool_scope("server", "execute_command").is_err());
+    }
+
+    #[test]
+    fn test_tool_scope_denylist_exact_match() {
+        let client = AuthenticatedClient {
+            name: "no_writes".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: None,
+            denied_tools: Some(vec![
+                "write_file".to_string(),
+                "delete_file".to_string(),
+            ]),
+        };
+
+        // Tools in denylist
+        assert!(client.check_tool_scope("server", "write_file").is_err());
+        assert!(client.check_tool_scope("server", "delete_file").is_err());
+
+        // Tools NOT in denylist
+        assert!(client.check_tool_scope("server", "read_file").is_ok());
+        assert!(client.check_tool_scope("server", "search_web").is_ok());
+    }
+
+    #[test]
+    fn test_tool_scope_denylist_glob_pattern() {
+        let client = AuthenticatedClient {
+            name: "no_filesystem".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: None,
+            denied_tools: Some(vec![
+                "filesystem_*".to_string(),
+                "exec_*".to_string(),
+            ]),
+        };
+
+        // Tools matching deny glob patterns
+        assert!(client.check_tool_scope("server", "filesystem_read").is_err());
+        assert!(client.check_tool_scope("server", "filesystem_write").is_err());
+        assert!(client.check_tool_scope("server", "exec_command").is_err());
+        assert!(client.check_tool_scope("server", "exec_shell").is_err());
+
+        // Tools NOT matching deny patterns
+        assert!(client.check_tool_scope("server", "search_web").is_ok());
+        assert!(client.check_tool_scope("server", "database_query").is_ok());
+    }
+
+    #[test]
+    fn test_tool_scope_qualified_name_match() {
+        let client = AuthenticatedClient {
+            name: "specific_server".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: Some(vec![
+                "filesystem:read_file".to_string(),
+                "search_*".to_string(),
+            ]),
+            denied_tools: None,
+        };
+
+        // Qualified match: only filesystem:read_file allowed, not other servers
+        assert!(client.check_tool_scope("filesystem", "read_file").is_ok());
+        assert!(client.check_tool_scope("other", "read_file").is_err());
+
+        // Glob still matches across all servers
+        assert!(client.check_tool_scope("any_server", "search_web").is_ok());
+    }
+
+    #[test]
+    fn test_tool_scope_both_allow_and_deny() {
+        let client = AuthenticatedClient {
+            name: "complex".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: Some(vec![
+                "filesystem_*".to_string(),
+                "search_*".to_string(),
+            ]),
+            denied_tools: Some(vec![
+                "filesystem_write".to_string(),
+                "filesystem_delete".to_string(),
+            ]),
+        };
+
+        // In allowlist and NOT in denylist
+        assert!(client.check_tool_scope("server", "filesystem_read").is_ok());
+        assert!(client.check_tool_scope("server", "search_web").is_ok());
+
+        // In allowlist BUT in denylist (denylist wins)
+        assert!(client.check_tool_scope("server", "filesystem_write").is_err());
+        assert!(client.check_tool_scope("server", "filesystem_delete").is_err());
+
+        // NOT in allowlist
+        assert!(client.check_tool_scope("server", "execute_command").is_err());
+    }
+
+    #[test]
+    fn test_tool_scope_error_messages() {
+        let client_allow = AuthenticatedClient {
+            name: "frontend".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: Some(vec!["search_*".to_string()]),
+            denied_tools: None,
+        };
+
+        let err = client_allow.check_tool_scope("server", "write_file").unwrap_err();
+        assert!(err.contains("write_file"));
+        assert!(err.contains("server"));
+        assert!(err.contains("allowlist"));
+        assert!(err.contains("frontend"));
+
+        let client_deny = AuthenticatedClient {
+            name: "restricted_bot".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: None,
+            denied_tools: Some(vec!["exec_*".to_string()]),
+        };
+
+        let err = client_deny.check_tool_scope("server", "exec_command").unwrap_err();
+        assert!(err.contains("exec_command"));
+        assert!(err.contains("server"));
+        assert!(err.contains("blocked"));
+        assert!(err.contains("restricted_bot"));
     }
 }

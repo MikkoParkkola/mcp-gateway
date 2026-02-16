@@ -235,6 +235,62 @@ auth:
 curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:39400/mcp
 ```
 
+### Per-Client Tool Scopes
+
+Control which tools each API key can access using `allowed_tools` (allowlist) and `denied_tools` (blocklist):
+
+```yaml
+auth:
+  enabled: true
+  api_keys:
+    # Frontend app: Only search and read operations
+    - key: "env:FRONTEND_KEY"
+      name: "Frontend App"
+      allowed_tools:
+        - "search_*"        # All search tools
+        - "read_*"          # All read tools
+        - "tavily:*"        # All tools on tavily server
+      # When allowed_tools is set, ONLY these tools are accessible
+
+    # Bot: No filesystem or execution tools
+    - key: "env:BOT_KEY"
+      name: "Bot"
+      denied_tools:
+        - "filesystem_*"    # Block all filesystem tools
+        - "exec_*"          # Block all execution tools
+      # When denied_tools is set, these are blocked ON TOP of global policy
+
+    # Data reader: Complex restrictions
+    - key: "env:READER_KEY"
+      name: "Data Reader"
+      allowed_tools:
+        - "database_*"
+        - "filesystem_*"
+      denied_tools:
+        - "database_write"  # But no writes
+        - "database_delete" # Or deletes
+```
+
+**Pattern Matching:**
+- `"exact_name"` - Exact match only
+- `"prefix_*"` - Glob pattern (matches anything starting with prefix)
+- `"server:tool"` - Qualified name (server-specific)
+- `"server:*"` - All tools on specific server
+
+**Precedence Rules:**
+1. Global tool policy denies (always enforced)
+2. Per-client `allowed_tools` (if set, ONLY these tools allowed)
+3. Per-client `denied_tools` (if set, these tools blocked)
+4. Global policy default action
+
+**Security Best Practices:**
+- Use allowlists for untrusted clients (frontend apps, bots)
+- Use denylists for additional restrictions on trusted clients
+- Always keep global policy enabled (`security.tool_policy.enabled: true`)
+- Use qualified names (`server:tool`) for fine-grained control
+
+See [`examples/per-client-tool-scopes.yaml`](examples/per-client-tool-scopes.yaml) for complete examples.
+
 ### Protocol Support
 
 - **MCP Version**: 2025-11-25 (latest)

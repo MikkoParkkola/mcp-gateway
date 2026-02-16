@@ -247,9 +247,42 @@ async fn health_handler(
 #[allow(clippy::too_many_lines)]
 async fn meta_mcp_handler(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<Value>,
+    http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
+    // Extract headers and authenticated client from request
+    let headers = http_request.headers().clone();
+    let client = http_request.extensions().get::<AuthenticatedClient>().cloned();
+
+    // Parse JSON body
+    let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": format!("Failed to read body: {e}")},
+                    "id": null
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let request: Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": format!("Invalid JSON: {e}")},
+                    "id": null
+                })),
+            )
+                .into_response();
+        }
+    };
     // Track in-flight request for graceful drain
     let _inflight_permit = state.inflight.acquire().await;
 
@@ -345,6 +378,7 @@ async fn meta_mcp_handler(
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     if !server.is_empty() && !tool.is_empty() {
+                        // Global policy check
                         if let Err(e) = state.tool_policy.check(server, tool) {
                             let resp = JsonRpcResponse::error(
                                 Some(id),
@@ -358,6 +392,24 @@ async fn meta_mcp_handler(
                                 session_id.parse().unwrap(),
                             );
                             return (StatusCode::FORBIDDEN, response).into_response();
+                        }
+
+                        // Per-client tool scope check
+                        if let Some(ref c) = client {
+                            if let Err(e) = c.check_tool_scope(server, tool) {
+                                let resp = JsonRpcResponse::error(
+                                    Some(id),
+                                    -32600,
+                                    e,
+                                );
+                                let mut response = Json(serde_json::to_value(resp).unwrap())
+                                    .into_response();
+                                response.headers_mut().insert(
+                                    axum::http::header::HeaderName::from_static("mcp-session-id"),
+                                    session_id.parse().unwrap(),
+                                );
+                                return (StatusCode::FORBIDDEN, response).into_response();
+                            }
                         }
                     }
 

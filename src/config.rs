@@ -208,6 +208,18 @@ pub struct ApiKeyConfig {
     /// Allowed backends (empty = all backends)
     #[serde(default)]
     pub backends: Vec<String>,
+
+    /// Allowed tools (if Some, ONLY these tools are accessible).
+    /// Supports glob patterns (e.g., `"search_*"` matches `search_web`, `search_local`).
+    /// If set, this acts as an allowlist (deny all except listed).
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+
+    /// Denied tools (if Some, these tools are blocked on top of global policy).
+    /// Supports glob patterns (e.g., `"filesystem_*"` matches `filesystem_read`, `filesystem_write`).
+    /// If set, this acts as a blocklist (allow all except listed + global denies).
+    #[serde(default)]
+    pub denied_tools: Option<Vec<String>>,
 }
 
 impl ApiKeyConfig {
