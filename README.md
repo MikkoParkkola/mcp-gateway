@@ -29,6 +29,16 @@ MCP Gateway removes that tradeoff entirely.
 | **Changing MCP config** | Restart AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
+### Why not...
+
+| Alternative | What it does | Why MCP Gateway is different |
+|---|---|---|
+| **Direct MCP connections** | Each server connected individually | Every tool definition loaded every request. 100 tools = 15K tokens burned. Gateway: 4 tools, always. |
+| **Claude's ToolSearch** | Built-in deferred tool loading | Only works with tools already configured. Gateway adds unlimited backends + REST APIs without MCP servers. |
+| **Archestra** | Cloud-hosted MCP registry | Requires cloud account, sends data to third party. Gateway is local-only, zero external dependencies. |
+| **Kong / Portkey** | General API gateways | Not MCP-aware. No meta-tool discovery, no tool search, no capability YAML system. |
+| **Building fewer MCP servers** | Reduce tool count manually | You lose capabilities. Gateway lets you keep everything and pay the token cost of 4. |
+
 ## Key Benefits
 
 ### 1. Unlimited Tools, Minimal Tokens
