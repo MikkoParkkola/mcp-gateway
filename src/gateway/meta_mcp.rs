@@ -14,14 +14,16 @@ use std::time::Duration;
 
 use parking_lot::RwLock;
 use serde_json::{Value, json};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::playbook::{PlaybookEngine, ToolInvoker};
 use crate::protocol::{
-    JsonRpcResponse, RequestId, ToolsListResult, negotiate_version,
+    JsonRpcResponse, LoggingLevel, LoggingSetLevelParams, Prompt, PromptsListResult, RequestId,
+    Resource, ResourceTemplate, ResourcesListResult, ResourcesTemplatesListResult, ToolsListResult,
+    negotiate_version,
 };
 use crate::ranking::{SearchRanker, json_to_search_result};
 use crate::stats::UsageStats;
@@ -29,9 +31,9 @@ use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
     build_initialize_result, build_match_json, build_meta_tools, build_search_response,
-    build_stats_response, extract_client_version, extract_price_per_million,
-    extract_required_str, extract_search_limit, parse_tool_arguments, ranked_results_to_json,
-    tool_matches_query, wrap_tool_success,
+    build_stats_response, extract_client_version, extract_price_per_million, extract_required_str,
+    extract_search_limit, parse_tool_arguments, ranked_results_to_json, tool_matches_query,
+    wrap_tool_success,
 };
 
 // ============================================================================
@@ -54,6 +56,8 @@ pub struct MetaMcp {
     ranker: Option<Arc<SearchRanker>>,
     /// Playbook engine for multi-step tool chains
     playbook_engine: RwLock<PlaybookEngine>,
+    /// Current logging level (gateway-wide, forwarded to backends)
+    log_level: RwLock<LoggingLevel>,
 }
 
 impl MetaMcp {
@@ -68,6 +72,7 @@ impl MetaMcp {
             stats: None,
             ranker: None,
             playbook_engine: RwLock::new(PlaybookEngine::new()),
+            log_level: RwLock::new(LoggingLevel::default()),
         }
     }
 
@@ -87,6 +92,7 @@ impl MetaMcp {
             stats,
             ranker,
             playbook_engine: RwLock::new(PlaybookEngine::new()),
+            log_level: RwLock::new(LoggingLevel::default()),
         }
     }
 
@@ -259,10 +265,7 @@ impl MetaMcp {
 
         // Apply ranking if enabled
         if let Some(ref ranker) = self.ranker {
-            let search_results: Vec<_> = matches
-                .iter()
-                .filter_map(json_to_search_result)
-                .collect();
+            let search_results: Vec<_> = matches.iter().filter_map(json_to_search_result).collect();
             let ranked = ranker.rank(search_results, &query);
             matches = ranked_results_to_json(ranked);
         }
@@ -371,9 +374,10 @@ impl MetaMcp {
     async fn get_stats(&self, args: &Value) -> Result<Value> {
         let price_per_million = extract_price_per_million(args);
 
-        let stats = self.stats.as_ref().ok_or_else(|| {
-            Error::json_rpc(-32603, "Statistics not enabled for this gateway")
-        })?;
+        let stats = self
+            .stats
+            .as_ref()
+            .ok_or_else(|| Error::json_rpc(-32603, "Statistics not enabled for this gateway"))?;
 
         // Count total tools across all backends
         let mut total_tools = 0;
@@ -421,6 +425,343 @@ impl MetaMcp {
         let result = temp_engine.execute(name, arguments, &invoker).await?;
 
         Ok(serde_json::to_value(&result).unwrap_or(json!(null)))
+    }
+
+    // ========================================================================
+    // Resources handlers
+    // ========================================================================
+
+    /// Handle `resources/list` -- aggregate resources from all backends.
+    ///
+    /// Builds a URI routing map so that `resources/read` can determine which
+    /// backend owns a given resource URI.
+    pub async fn handle_resources_list(
+        &self,
+        id: RequestId,
+        _params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let mut all_resources: Vec<Resource> = Vec::new();
+
+        for backend in self.backends.all() {
+            match backend.get_resources().await {
+                Ok(resources) => {
+                    all_resources.extend(resources);
+                }
+                Err(e) => {
+                    warn!(
+                        backend = %backend.name,
+                        error = %e,
+                        "Failed to fetch resources from backend"
+                    );
+                }
+            }
+        }
+
+        let result = ResourcesListResult {
+            resources: all_resources,
+            next_cursor: None,
+        };
+        JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle `resources/read` -- route to the backend that owns the URI.
+    ///
+    /// Iterates all backends' cached resources to find the owner, then forwards
+    /// the read request to that backend.
+    pub async fn handle_resources_read(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let Some(uri) = params.and_then(|p| p.get("uri")).and_then(Value::as_str) else {
+            return JsonRpcResponse::error(Some(id), -32602, "Missing 'uri' parameter");
+        };
+
+        // Find which backend owns this resource URI
+        let Some(backend) = self.find_resource_owner(uri).await else {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32002,
+                format!("No backend found for resource URI: {uri}"),
+            );
+        };
+
+        match backend
+            .request("resources/read", Some(json!({ "uri": uri })))
+            .await
+        {
+            Ok(resp) => {
+                if let Some(error) = resp.error {
+                    JsonRpcResponse::error(Some(id), error.code, error.message)
+                } else {
+                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({"contents": []})))
+                }
+            }
+            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+        }
+    }
+
+    /// Handle `resources/templates/list` -- aggregate templates from all backends.
+    pub async fn handle_resources_templates_list(
+        &self,
+        id: RequestId,
+        _params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let mut all_templates: Vec<ResourceTemplate> = Vec::new();
+
+        for backend in self.backends.all() {
+            match backend.get_resource_templates().await {
+                Ok(templates) => {
+                    all_templates.extend(templates);
+                }
+                Err(e) => {
+                    warn!(
+                        backend = %backend.name,
+                        error = %e,
+                        "Failed to fetch resource templates from backend"
+                    );
+                }
+            }
+        }
+
+        let result = ResourcesTemplatesListResult {
+            resource_templates: all_templates,
+            next_cursor: None,
+        };
+        JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle `resources/subscribe` -- route to the backend that owns the URI.
+    pub async fn handle_resources_subscribe(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let Some(uri) = params.and_then(|p| p.get("uri")).and_then(Value::as_str) else {
+            return JsonRpcResponse::error(Some(id), -32602, "Missing 'uri' parameter");
+        };
+
+        let Some(backend) = self.find_resource_owner(uri).await else {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32002,
+                format!("No backend found for resource URI: {uri}"),
+            );
+        };
+
+        match backend
+            .request("resources/subscribe", Some(json!({ "uri": uri })))
+            .await
+        {
+            Ok(resp) => {
+                if let Some(error) = resp.error {
+                    JsonRpcResponse::error(Some(id), error.code, error.message)
+                } else {
+                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({})))
+                }
+            }
+            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+        }
+    }
+
+    /// Handle `resources/unsubscribe` -- route to the backend that owns the URI.
+    pub async fn handle_resources_unsubscribe(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let Some(uri) = params.and_then(|p| p.get("uri")).and_then(Value::as_str) else {
+            return JsonRpcResponse::error(Some(id), -32602, "Missing 'uri' parameter");
+        };
+
+        let Some(backend) = self.find_resource_owner(uri).await else {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32002,
+                format!("No backend found for resource URI: {uri}"),
+            );
+        };
+
+        match backend
+            .request("resources/unsubscribe", Some(json!({ "uri": uri })))
+            .await
+        {
+            Ok(resp) => {
+                if let Some(error) = resp.error {
+                    JsonRpcResponse::error(Some(id), error.code, error.message)
+                } else {
+                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({})))
+                }
+            }
+            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+        }
+    }
+
+    // ========================================================================
+    // Prompts handlers
+    // ========================================================================
+
+    /// Handle `prompts/list` -- aggregate prompts from all backends.
+    ///
+    /// Prefixes each prompt name with `"backend_name/"` so that `prompts/get`
+    /// can route back to the correct backend.
+    pub async fn handle_prompts_list(
+        &self,
+        id: RequestId,
+        _params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let mut all_prompts: Vec<Prompt> = Vec::new();
+
+        for backend in self.backends.all() {
+            match backend.get_prompts().await {
+                Ok(prompts) => {
+                    for mut prompt in prompts {
+                        prompt.name = format!("{}/{}", backend.name, prompt.name);
+                        all_prompts.push(prompt);
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        backend = %backend.name,
+                        error = %e,
+                        "Failed to fetch prompts from backend"
+                    );
+                }
+            }
+        }
+
+        let result = PromptsListResult {
+            prompts: all_prompts,
+            next_cursor: None,
+        };
+        JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+    }
+
+    /// Handle `prompts/get` -- route to the correct backend based on name prefix.
+    ///
+    /// Prompt names are namespaced as `"backend_name/original_prompt_name"`.
+    /// Splits on the first `/` to recover the backend name and original name.
+    pub async fn handle_prompts_get(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let Some(name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
+            return JsonRpcResponse::error(Some(id), -32602, "Missing 'name' parameter");
+        };
+
+        // Parse "backend_name/prompt_name"
+        let Some((backend_name, original_name)) = name.split_once('/') else {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32602,
+                format!(
+                    "Invalid prompt name format: '{name}'. Expected 'backend_name/prompt_name'"
+                ),
+            );
+        };
+
+        let Some(backend) = self.backends.get(backend_name) else {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32001,
+                format!("Backend not found: {backend_name}"),
+            );
+        };
+
+        // Build forwarded params with original (un-prefixed) prompt name
+        let mut forward_params = json!({ "name": original_name });
+        if let Some(arguments) = params.and_then(|p| p.get("arguments")) {
+            forward_params["arguments"] = arguments.clone();
+        }
+
+        match backend.request("prompts/get", Some(forward_params)).await {
+            Ok(resp) => {
+                if let Some(error) = resp.error {
+                    JsonRpcResponse::error(Some(id), error.code, error.message)
+                } else {
+                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({"messages": []})))
+                }
+            }
+            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+        }
+    }
+
+    // ========================================================================
+    // Logging handler
+    // ========================================================================
+
+    /// Handle `logging/setLevel` -- store level and broadcast to all backends.
+    ///
+    /// Updates the gateway-wide log level and forwards the request to every
+    /// running backend. Backends that fail to accept the level are logged
+    /// but do not cause the overall request to fail.
+    pub async fn handle_logging_set_level(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+    ) -> JsonRpcResponse {
+        let level_params: LoggingSetLevelParams =
+            match params.map(|p| serde_json::from_value::<LoggingSetLevelParams>(p.clone())) {
+                Some(Ok(p)) => p,
+                Some(Err(e)) => {
+                    return JsonRpcResponse::error(
+                        Some(id),
+                        -32602,
+                        format!("Invalid logging/setLevel params: {e}"),
+                    );
+                }
+                None => {
+                    return JsonRpcResponse::error(
+                        Some(id),
+                        -32602,
+                        "Missing params for logging/setLevel",
+                    );
+                }
+            };
+
+        // Store the gateway-wide level
+        *self.log_level.write() = level_params.level;
+        debug!(level = ?level_params.level, "Logging level updated");
+
+        // Broadcast to all backends (best-effort)
+        let forward_params = serde_json::to_value(&level_params).unwrap_or(json!({}));
+        for backend in self.backends.all() {
+            if let Err(e) = backend
+                .request("logging/setLevel", Some(forward_params.clone()))
+                .await
+            {
+                warn!(
+                    backend = %backend.name,
+                    error = %e,
+                    "Failed to forward logging/setLevel to backend"
+                );
+            }
+        }
+
+        JsonRpcResponse::success(id, json!({}))
+    }
+
+    /// Get the current gateway-wide logging level.
+    #[must_use]
+    pub fn current_log_level(&self) -> LoggingLevel {
+        *self.log_level.read()
+    }
+
+    // ========================================================================
+    // Internal helpers
+    // ========================================================================
+
+    /// Find which backend owns a given resource URI by checking cached resources.
+    async fn find_resource_owner(&self, uri: &str) -> Option<Arc<crate::backend::Backend>> {
+        for backend in self.backends.all() {
+            if let Ok(resources) = backend.get_resources().await {
+                if resources.iter().any(|r| r.uri == uri) {
+                    return Some(backend);
+                }
+            }
+        }
+        None
     }
 }
 

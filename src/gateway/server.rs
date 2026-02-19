@@ -11,13 +11,14 @@ use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::MetaMcp;
 use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
+use super::webhooks::WebhookRegistry;
 use crate::backend::{Backend, BackendRegistry};
 use crate::cache::ResponseCache;
-use crate::security::ToolPolicy;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
+use crate::security::ToolPolicy;
 use crate::stats::UsageStats;
 use crate::{Error, Result};
 
@@ -84,7 +85,9 @@ impl Gateway {
         // Create cache if enabled (with bounded max-size eviction)
         let cache = if self.config.cache.enabled {
             let cache = if self.config.cache.max_entries > 0 {
-                Arc::new(ResponseCache::with_max_entries(self.config.cache.max_entries))
+                Arc::new(ResponseCache::with_max_entries(
+                    self.config.cache.max_entries,
+                ))
             } else {
                 Arc::new(ResponseCache::new())
             };
@@ -139,6 +142,11 @@ impl Gateway {
             self.config.cache.default_ttl,
         ));
 
+        // Create webhook registry
+        let webhook_registry = Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
+            self.config.webhooks.clone(),
+        )));
+
         // Load capabilities if enabled
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
             let executor = Arc::new(CapabilityExecutor::new());
@@ -153,6 +161,15 @@ impl Gateway {
                     Ok(count) => {
                         total_caps += count;
                         debug!(directory = %dir, count = count, "Loaded capabilities");
+
+                        // Register webhooks from capabilities
+                        if self.config.webhooks.enabled {
+                            for cap in cap_backend.list_capabilities() {
+                                if !cap.webhooks.is_empty() {
+                                    webhook_registry.write().register_capability(&cap);
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         // Don't fail startup if capability dir doesn't exist
@@ -225,7 +242,7 @@ impl Gateway {
             backends: Arc::clone(&self.backends),
             meta_mcp,
             meta_mcp_enabled: self.config.meta_mcp.enabled,
-            multiplexer,
+            multiplexer: Arc::clone(&multiplexer),
             streaming_config: self.config.streaming.clone(),
             auth_config,
             tool_policy,
@@ -235,7 +252,20 @@ impl Gateway {
         });
 
         // Create router
-        let app = create_router(state);
+        let mut app = create_router(state);
+
+        // Add webhook routes if enabled
+        if self.config.webhooks.enabled {
+            let webhook_routes = webhook_registry
+                .read()
+                .create_routes(Arc::clone(&multiplexer));
+            app = app.merge(webhook_routes);
+            info!(
+                enabled = true,
+                base_path = %self.config.webhooks.base_path,
+                "Webhook receiver enabled"
+            );
+        }
 
         // Bind listener
         let listener = TcpListener::bind(addr).await?;
@@ -376,11 +406,7 @@ impl Gateway {
         let drain_timeout = self.config.server.shutdown_timeout;
         info!(timeout = ?drain_timeout, "Draining in-flight requests...");
 
-        let drain_result = tokio::time::timeout(
-            drain_timeout,
-            inflight.acquire_many(10_000),
-        )
-        .await;
+        let drain_result = tokio::time::timeout(drain_timeout, inflight.acquire_many(10_000)).await;
 
         match drain_result {
             Ok(Ok(_permits)) => {
