@@ -251,7 +251,10 @@ async fn meta_mcp_handler(
 ) -> impl IntoResponse {
     // Extract headers and authenticated client from request
     let headers = http_request.headers().clone();
-    let client = http_request.extensions().get::<AuthenticatedClient>().cloned();
+    let client = http_request
+        .extensions()
+        .get::<AuthenticatedClient>()
+        .cloned();
 
     // Parse JSON body
     let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
@@ -369,24 +372,22 @@ async fn meta_mcp_handler(
             // Apply tool policy check and SSRF validation for gateway_invoke calls
             if tool_name == "gateway_invoke" {
                 if let Some(ref args) = params {
-                    let server = args.get("arguments")
+                    let server = args
+                        .get("arguments")
                         .and_then(|a| a.get("server"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let tool = args.get("arguments")
+                    let tool = args
+                        .get("arguments")
                         .and_then(|a| a.get("tool"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     if !server.is_empty() && !tool.is_empty() {
                         // Global policy check
                         if let Err(e) = state.tool_policy.check(server, tool) {
-                            let resp = JsonRpcResponse::error(
-                                Some(id),
-                                -32600,
-                                e.to_string(),
-                            );
-                            let mut response = Json(serde_json::to_value(resp).unwrap())
-                                .into_response();
+                            let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
+                            let mut response =
+                                Json(serde_json::to_value(resp).unwrap()).into_response();
                             response.headers_mut().insert(
                                 axum::http::header::HeaderName::from_static("mcp-session-id"),
                                 session_id.parse().unwrap(),
@@ -397,13 +398,9 @@ async fn meta_mcp_handler(
                         // Per-client tool scope check
                         if let Some(ref c) = client {
                             if let Err(e) = c.check_tool_scope(server, tool) {
-                                let resp = JsonRpcResponse::error(
-                                    Some(id),
-                                    -32600,
-                                    e,
-                                );
-                                let mut response = Json(serde_json::to_value(resp).unwrap())
-                                    .into_response();
+                                let resp = JsonRpcResponse::error(Some(id), -32600, e);
+                                let mut response =
+                                    Json(serde_json::to_value(resp).unwrap()).into_response();
                                 response.headers_mut().insert(
                                     axum::http::header::HeaderName::from_static("mcp-session-id"),
                                     session_id.parse().unwrap(),
@@ -418,15 +415,14 @@ async fn meta_mcp_handler(
                         if let Some(backend) = state.backends.get(server) {
                             if let Some(url) = backend.transport_url() {
                                 if let Err(e) = validate_url_not_ssrf(url) {
-                                    let resp = JsonRpcResponse::error(
-                                        Some(id),
-                                        -32600,
-                                        e.to_string(),
-                                    );
-                                    let mut response = Json(serde_json::to_value(resp).unwrap())
-                                        .into_response();
+                                    let resp =
+                                        JsonRpcResponse::error(Some(id), -32600, e.to_string());
+                                    let mut response =
+                                        Json(serde_json::to_value(resp).unwrap()).into_response();
                                     response.headers_mut().insert(
-                                        axum::http::header::HeaderName::from_static("mcp-session-id"),
+                                        axum::http::header::HeaderName::from_static(
+                                            "mcp-session-id",
+                                        ),
                                         session_id.parse().unwrap(),
                                     );
                                     return (StatusCode::FORBIDDEN, response).into_response();
@@ -442,6 +438,55 @@ async fn meta_mcp_handler(
                 .handle_tools_call(id, tool_name, arguments)
                 .await
         }
+        // Resources
+        "resources/list" => {
+            state
+                .meta_mcp
+                .handle_resources_list(id, params.as_ref())
+                .await
+        }
+        "resources/read" => {
+            state
+                .meta_mcp
+                .handle_resources_read(id, params.as_ref())
+                .await
+        }
+        "resources/templates/list" => {
+            state
+                .meta_mcp
+                .handle_resources_templates_list(id, params.as_ref())
+                .await
+        }
+        "resources/subscribe" => {
+            state
+                .meta_mcp
+                .handle_resources_subscribe(id, params.as_ref())
+                .await
+        }
+        "resources/unsubscribe" => {
+            state
+                .meta_mcp
+                .handle_resources_unsubscribe(id, params.as_ref())
+                .await
+        }
+
+        // Prompts
+        "prompts/list" => {
+            state
+                .meta_mcp
+                .handle_prompts_list(id, params.as_ref())
+                .await
+        }
+        "prompts/get" => state.meta_mcp.handle_prompts_get(id, params.as_ref()).await,
+
+        // Logging
+        "logging/setLevel" => {
+            state
+                .meta_mcp
+                .handle_logging_set_level(id, params.as_ref())
+                .await
+        }
+
         "ping" => JsonRpcResponse::success(id, json!({})),
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
@@ -849,7 +894,13 @@ mod tests {
         let err = parse_request(&req).unwrap_err();
         assert!(err.error.is_some());
         assert_eq!(err.error.as_ref().unwrap().code, -32600);
-        assert!(err.error.as_ref().unwrap().message.contains("JSON-RPC version"));
+        assert!(
+            err.error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("JSON-RPC version")
+        );
     }
 
     #[test]

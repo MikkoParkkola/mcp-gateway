@@ -15,7 +15,10 @@ use tracing::{debug, info, warn};
 use crate::config::{BackendConfig, TransportConfig};
 use crate::failsafe::{Failsafe, with_retry};
 use crate::oauth::{OAuthClient, TokenStorage};
-use crate::protocol::{JsonRpcResponse, Tool, ToolsListResult};
+use crate::protocol::{
+    JsonRpcResponse, Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
+    ResourcesTemplatesListResult, Tool, ToolsListResult,
+};
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
 
@@ -31,8 +34,20 @@ pub struct Backend {
     failsafe: Failsafe,
     /// Cached tools
     tools_cache: RwLock<Option<Vec<Tool>>>,
-    /// Cache timestamp
+    /// Cached resources
+    resources_cache: RwLock<Option<Vec<Resource>>>,
+    /// Cached resource templates
+    resource_templates_cache: RwLock<Option<Vec<ResourceTemplate>>>,
+    /// Cached prompts
+    prompts_cache: RwLock<Option<Vec<Prompt>>>,
+    /// Cache timestamp (tools)
     cache_time: RwLock<Option<Instant>>,
+    /// Cache timestamp (resources)
+    resources_cache_time: RwLock<Option<Instant>>,
+    /// Cache timestamp (resource templates)
+    resource_templates_cache_time: RwLock<Option<Instant>>,
+    /// Cache timestamp (prompts)
+    prompts_cache_time: RwLock<Option<Instant>>,
     /// Cache TTL
     cache_ttl: Duration,
     /// Last used timestamp
@@ -58,7 +73,13 @@ impl Backend {
             transport: RwLock::new(None),
             failsafe: Failsafe::new(name, failsafe_config),
             tools_cache: RwLock::new(None),
+            resources_cache: RwLock::new(None),
+            resource_templates_cache: RwLock::new(None),
+            prompts_cache: RwLock::new(None),
             cache_time: RwLock::new(None),
+            resources_cache_time: RwLock::new(None),
+            resource_templates_cache_time: RwLock::new(None),
+            prompts_cache_time: RwLock::new(None),
             cache_ttl,
             last_used: AtomicU64::new(0),
             semaphore: Semaphore::new(100), // Max concurrent requests
@@ -236,6 +257,116 @@ impl Backend {
         Ok(vec![])
     }
 
+    /// Get cached resources (or fetch if needed)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the resources request fails.
+    pub async fn get_resources(&self) -> Result<Vec<Resource>> {
+        {
+            let cache = self.resources_cache.read();
+            let cache_time = self.resources_cache_time.read();
+
+            if let (Some(resources), Some(time)) = (cache.as_ref(), cache_time.as_ref()) {
+                if time.elapsed() < self.cache_ttl {
+                    return Ok(resources.clone());
+                }
+            }
+        }
+
+        self.ensure_started().await?;
+
+        let response = self.request_internal("resources/list", None).await?;
+
+        if let Some(result) = response.result {
+            let list_result: ResourcesListResult = serde_json::from_value(result)?;
+            let resources = list_result.resources;
+
+            *self.resources_cache.write() = Some(resources.clone());
+            *self.resources_cache_time.write() = Some(Instant::now());
+
+            debug!(backend = %self.name, count = resources.len(), "Resources cached");
+
+            return Ok(resources);
+        }
+
+        Ok(vec![])
+    }
+
+    /// Get cached resource templates (or fetch if needed)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the templates request fails.
+    pub async fn get_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
+        {
+            let cache = self.resource_templates_cache.read();
+            let cache_time = self.resource_templates_cache_time.read();
+
+            if let (Some(templates), Some(time)) = (cache.as_ref(), cache_time.as_ref()) {
+                if time.elapsed() < self.cache_ttl {
+                    return Ok(templates.clone());
+                }
+            }
+        }
+
+        self.ensure_started().await?;
+
+        let response = self
+            .request_internal("resources/templates/list", None)
+            .await?;
+
+        if let Some(result) = response.result {
+            let list_result: ResourcesTemplatesListResult = serde_json::from_value(result)?;
+            let templates = list_result.resource_templates;
+
+            *self.resource_templates_cache.write() = Some(templates.clone());
+            *self.resource_templates_cache_time.write() = Some(Instant::now());
+
+            debug!(backend = %self.name, count = templates.len(), "Resource templates cached");
+
+            return Ok(templates);
+        }
+
+        Ok(vec![])
+    }
+
+    /// Get cached prompts (or fetch if needed)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the prompts request fails.
+    pub async fn get_prompts(&self) -> Result<Vec<Prompt>> {
+        {
+            let cache = self.prompts_cache.read();
+            let cache_time = self.prompts_cache_time.read();
+
+            if let (Some(prompts), Some(time)) = (cache.as_ref(), cache_time.as_ref()) {
+                if time.elapsed() < self.cache_ttl {
+                    return Ok(prompts.clone());
+                }
+            }
+        }
+
+        self.ensure_started().await?;
+
+        let response = self.request_internal("prompts/list", None).await?;
+
+        if let Some(result) = response.result {
+            let list_result: PromptsListResult = serde_json::from_value(result)?;
+            let prompts = list_result.prompts;
+
+            *self.prompts_cache.write() = Some(prompts.clone());
+            *self.prompts_cache_time.write() = Some(Instant::now());
+
+            debug!(backend = %self.name, count = prompts.len(), "Prompts cached");
+
+            return Ok(prompts);
+        }
+
+        Ok(vec![])
+    }
+
     /// Internal request without `ensure_started` (to avoid recursion)
     async fn request_internal(
         &self,
@@ -277,14 +408,10 @@ impl Backend {
         }
 
         // Acquire semaphore
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|_| {
-                tracing::warn!("Concurrency limit reached");
-                Error::BackendUnavailable("Concurrency limit reached".to_string())
-            })?;
+        let _permit = self.semaphore.acquire().await.map_err(|_| {
+            tracing::warn!("Concurrency limit reached");
+            Error::BackendUnavailable("Concurrency limit reached".to_string())
+        })?;
 
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
@@ -317,7 +444,10 @@ impl Backend {
         // Record success/failure with metrics
         match &result {
             Ok(_) => {
-                tracing::info!(latency_ms = latency.as_millis(), "Request completed successfully");
+                tracing::info!(
+                    latency_ms = latency.as_millis(),
+                    "Request completed successfully"
+                );
                 self.failsafe.record_success(latency);
             }
             Err(e) => {

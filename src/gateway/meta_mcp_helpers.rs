@@ -5,8 +5,8 @@
 use serde_json::{Value, json};
 
 use crate::protocol::{
-    Content, Info, InitializeResult, JsonRpcResponse, RequestId, ServerCapabilities, Tool,
-    ToolsCallResult, ToolsCapability,
+    Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
+    ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
 };
 use crate::ranking::SearchResult;
 use crate::stats::StatsSnapshot;
@@ -32,6 +32,12 @@ pub(crate) fn build_initialize_result(negotiated_version: &str) -> InitializeRes
         protocol_version: negotiated_version.to_string(),
         capabilities: ServerCapabilities {
             tools: Some(ToolsCapability { list_changed: true }),
+            resources: Some(ResourcesCapability {
+                subscribe: true,
+                list_changed: true,
+            }),
+            prompts: Some(PromptsCapability { list_changed: true }),
+            logging: Some(std::collections::HashMap::new()),
             ..Default::default()
         },
         server_info: Info {
@@ -252,9 +258,7 @@ pub(crate) fn build_search_response(query: &str, matches: &[Value]) -> Value {
 /// Extract the search limit from arguments, defaulting to 10.
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn extract_search_limit(args: &Value) -> usize {
-    args.get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(10) as usize
+    args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize
 }
 
 /// Extract a required string parameter from JSON arguments.
@@ -385,6 +389,36 @@ mod tests {
         let result = build_initialize_result("2024-11-05");
         assert!(result.capabilities.tools.is_some());
         assert!(result.capabilities.tools.unwrap().list_changed);
+    }
+
+    #[test]
+    fn build_initialize_result_has_resources_capability() {
+        let result = build_initialize_result("2025-11-25");
+        let resources = result.capabilities.resources.unwrap();
+        assert!(resources.subscribe);
+        assert!(resources.list_changed);
+    }
+
+    #[test]
+    fn build_initialize_result_has_prompts_capability() {
+        let result = build_initialize_result("2025-11-25");
+        let prompts = result.capabilities.prompts.unwrap();
+        assert!(prompts.list_changed);
+    }
+
+    #[test]
+    fn build_initialize_result_has_logging_capability() {
+        let result = build_initialize_result("2025-11-25");
+        assert!(result.capabilities.logging.is_some());
+    }
+
+    #[test]
+    fn build_initialize_result_advertises_four_capabilities() {
+        let result = build_initialize_result("2025-11-25");
+        assert!(result.capabilities.tools.is_some(), "missing tools");
+        assert!(result.capabilities.resources.is_some(), "missing resources");
+        assert!(result.capabilities.prompts.is_some(), "missing prompts");
+        assert!(result.capabilities.logging.is_some(), "missing logging");
     }
 
     #[test]
@@ -756,8 +790,7 @@ mod tests {
         assert!(response.error.is_none());
         assert!(response.result.is_some());
 
-        let result: ToolsCallResult =
-            serde_json::from_value(response.result.unwrap()).unwrap();
+        let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
         assert!(!result.is_error);
         assert_eq!(result.content.len(), 1);
     }
@@ -768,8 +801,7 @@ mod tests {
         let content = json!({"key": "value"});
         let response = wrap_tool_success(id, &content);
 
-        let result: ToolsCallResult =
-            serde_json::from_value(response.result.unwrap()).unwrap();
+        let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
         if let Content::Text { text, .. } = &result.content[0] {
             // Pretty-printed JSON contains newlines
             assert!(text.contains('\n'));

@@ -3,10 +3,14 @@
 pub mod auth;
 mod meta_mcp;
 mod meta_mcp_helpers;
+pub mod proxy;
 mod router;
 mod server;
 pub mod streaming;
+pub mod webhooks;
 
 pub use auth::{ResolvedAuthConfig, auth_middleware};
+pub use proxy::ProxyManager;
 pub use server::Gateway;
 pub use streaming::{NotificationMultiplexer, TaggedNotification};
+pub use webhooks::WebhookRegistry;
