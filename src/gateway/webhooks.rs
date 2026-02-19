@@ -131,10 +131,11 @@ async fn webhook_handler(
     };
     let request_id = uuid::Uuid::new_v4().to_string();
 
-    debug!(
+    info!(
         request_id = %request_id,
         capability = %state.capability_name,
         webhook = %state.webhook_name,
+        body_len = body.len(),
         "Received webhook"
     );
 
