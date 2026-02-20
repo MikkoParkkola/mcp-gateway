@@ -517,23 +517,16 @@ async fn meta_mcp_handler(
         "ping" => JsonRpcResponse::success(id, json!({})),
 
         "sampling/createMessage" => {
-            let Some(sid) = state.proxy_manager.first_session_id() else {
-                return build_response(
-                    JsonRpcResponse::error(Some(id), -32002, "No sampling-capable client connected"),
-                    &session_id,
-                    StatusCode::OK,
-                );
-            };
-
             let sampling_params = match parse_sampling_params(id.clone(), params, &session_id) {
                 Ok(p) => p,
                 Err(resp) => return resp,
             };
 
+            // Broadcast to all sessions — first responder wins.
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_sampling_with_response(&sid, &sampling_params, timeout)
+                .forward_sampling_with_response("broadcast", &sampling_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
@@ -542,14 +535,6 @@ async fn meta_mcp_handler(
         }
 
         "elicitation/create" => {
-            let Some(sid) = state.proxy_manager.first_session_id() else {
-                return build_response(
-                    JsonRpcResponse::error(Some(id), -32002, "No elicitation-capable client connected"),
-                    &session_id,
-                    StatusCode::OK,
-                );
-            };
-
             let elicitation_params: ElicitationCreateParams = match params {
                 Some(p) => match serde_json::from_value(p) {
                     Ok(ep) => ep,
@@ -570,10 +555,11 @@ async fn meta_mcp_handler(
                 }
             };
 
+            // Broadcast to all sessions — first responder wins.
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_elicitation_with_response(&sid, &elicitation_params, timeout)
+                .forward_elicitation_with_response("broadcast", &elicitation_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
