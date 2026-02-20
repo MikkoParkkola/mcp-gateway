@@ -190,68 +190,113 @@ impl MetaMcp {
         Ok(json!({ "servers": servers }))
     }
 
-    /// List tools from a specific server
+    /// List tools from a specific server, or ALL tools if server is omitted.
     async fn list_tools(&self, args: &Value) -> Result<Value> {
-        let server = extract_required_str(args, "server")?;
+        // If server is specified, return tools from that single backend (existing behavior)
+        if let Some(server) = args.get("server").and_then(Value::as_str) {
+            // Check if it's the capability backend
+            if let Some(cap) = self.get_capabilities() {
+                if server == cap.name {
+                    let tools = cap.get_tools();
+                    return Ok(json!({
+                        "server": server,
+                        "tools": tools
+                    }));
+                }
+            }
 
-        // Check if it's the capability backend
+            // Otherwise, look in MCP backends
+            let backend = self
+                .backends
+                .get(server)
+                .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+
+            let tools = backend.get_tools().await?;
+
+            return Ok(json!({
+                "server": server,
+                "tools": tools
+            }));
+        }
+
+        // No server specified: aggregate ALL tools (fast — tools are prefetched at startup)
+        let mut all_tools: Vec<Value> = Vec::new();
+
+        // Capability tools (instant, in memory)
         if let Some(cap) = self.get_capabilities() {
-            if server == cap.name {
-                let tools = cap.get_tools();
-                return Ok(json!({
-                    "server": server,
-                    "tools": tools
+            for tool in cap.get_tools() {
+                all_tools.push(json!({
+                    "server": cap.name,
+                    "name": tool.name,
+                    "description": tool.description.as_deref().unwrap_or("")
                 }));
             }
         }
 
-        // Otherwise, look in MCP backends
-        let backend = self
-            .backends
-            .get(server)
-            .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
-
-        let tools = backend.get_tools().await?;
+        // MCP backend tools (only from cached/warm-started backends — no blocking starts)
+        for backend in self.backends.all() {
+            if !backend.has_cached_tools() {
+                continue;
+            }
+            if let Ok(tools) = backend.get_tools().await {
+                for tool in tools {
+                    all_tools.push(json!({
+                        "server": backend.name,
+                        "name": tool.name,
+                        "description": tool.description.as_deref().unwrap_or("")
+                    }));
+                }
+            }
+        }
 
         Ok(json!({
-            "server": server,
-            "tools": tools
+            "tools": all_tools,
+            "total": all_tools.len()
         }))
     }
 
-    /// Search tools across all backends
+    /// Search tools across all backends.
+    ///
+    /// Capability tools are searched exhaustively (fast, local) to get an
+    /// accurate `total_available`. MCP backends use early-exit once the
+    /// limit is reached to avoid slow network calls.
     async fn search_tools(&self, args: &Value) -> Result<Value> {
         let query = extract_required_str(args, "query")?.to_lowercase();
         let limit = extract_search_limit(args);
 
         let mut matches = Vec::new();
-        let mut total_found = 0u64;
+        let mut total_found: usize = 0;
 
-        // Search capability backend first (faster, no network)
+        // Search capability backend exhaustively (fast, no network)
+        // Count ALL matches for accurate total, collect up to limit
         if let Some(cap) = self.get_capabilities() {
             for tool in cap.get_tools() {
                 if tool_matches_query(&tool, &query) {
                     total_found += 1;
-                    matches.push(build_match_json(&cap.name, &tool));
-                    if matches.len() >= limit {
-                        break;
+                    if matches.len() < limit {
+                        matches.push(build_match_json(&cap.name, &tool));
                     }
                 }
             }
         }
 
-        // Then search MCP backends
+        // Then search MCP backends that have cached tools (fast, no blocking starts).
+        // Backends without cached tools are skipped — use gateway_list_tools(server=X)
+        // to force-start a specific backend.
         for backend in self.backends.all() {
             if matches.len() >= limit {
                 break;
+            }
+            // Only query backends with cached tools to avoid blocking on unstarted backends
+            if !backend.has_cached_tools() {
+                continue;
             }
             if let Ok(tools) = backend.get_tools().await {
                 for tool in tools {
                     if tool_matches_query(&tool, &query) {
                         total_found += 1;
-                        matches.push(build_match_json(&backend.name, &tool));
-                        if matches.len() >= limit {
-                            break;
+                        if matches.len() < limit {
+                            matches.push(build_match_json(&backend.name, &tool));
                         }
                     }
                 }
@@ -260,7 +305,8 @@ impl MetaMcp {
 
         // Record search stats
         if let Some(ref stats) = self.stats {
-            stats.record_search(total_found);
+            #[allow(clippy::cast_possible_truncation)]
+            stats.record_search(total_found as u64);
         }
 
         // Apply ranking if enabled
@@ -270,7 +316,7 @@ impl MetaMcp {
             matches = ranked_results_to_json(ranked);
         }
 
-        Ok(build_search_response(&query, &matches))
+        Ok(build_search_response(&query, &matches, total_found))
     }
 
     /// Invoke a tool on a backend
@@ -744,6 +790,7 @@ impl MetaMcp {
 
     /// Get the current gateway-wide logging level.
     #[must_use]
+    #[allow(dead_code)]
     pub fn current_log_level(&self) -> LoggingLevel {
         *self.log_level.read()
     }

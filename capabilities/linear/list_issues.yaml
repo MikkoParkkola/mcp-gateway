@@ -9,15 +9,31 @@ schema:
       teamKey:
         type: string
         description: "Team key (e.g., MIK)"
+      first:
+        type: integer
+        description: "Number of issues to return (default 50, max 250)"
+        default: 50
+      after:
+        type: string
+        description: "Cursor for pagination (from pageInfo.endCursor)"
+      state:
+        type: string
+        description: "Filter by state type: backlog, unstarted, started, completed, canceled"
     required: [teamKey]
   output:
     type: object
+
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
 
 providers:
   primary:
     service: rest
     cost_per_call: 0
-    timeout: 15
+    timeout: 30
     config:
       base_url: https://api.linear.app
       path: /graphql
@@ -26,9 +42,9 @@ providers:
         Content-Type: "application/json"
       body:
         query: >
-          query ListIssues($teamKey: String!) {
+          query ListIssues($teamKey: String!, $first: Int, $after: String) {
             team(id: $teamKey) {
-              issues(first: 50, orderBy: updatedAt) {
+              issues(first: $first, after: $after, orderBy: updatedAt) {
                 nodes {
                   id identifier title priority priorityLabel
                   state { name type color }
@@ -44,6 +60,8 @@ providers:
           }
         variables:
           teamKey: "{teamKey}"
+          first: "{first|50}"
+          after: "{after|}"
 
 cache:
   strategy: exact

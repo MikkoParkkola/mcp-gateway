@@ -18,6 +18,12 @@ schema:
       displayName:
         type: string
 
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
+
 providers:
   primary:
     service: rest

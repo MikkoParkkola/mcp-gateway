@@ -9,6 +9,13 @@ schema:
       query:
         type: string
         description: "Search query string (searches title, description, comments)"
+      first:
+        type: integer
+        description: "Number of results to return (default 50, max 250)"
+        default: 50
+      after:
+        type: string
+        description: "Cursor for pagination (from pageInfo.endCursor)"
     required: [query]
   output:
     type: object
@@ -16,6 +23,12 @@ schema:
       issues:
         type: array
         description: Matching issues
+
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
 
 providers:
   primary:
@@ -30,8 +43,8 @@ providers:
         Content-Type: "application/json"
       body:
         query: >
-          query SearchIssues($term: String!) {
-            searchIssues(term: $term, first: 50, includeArchived: false) {
+          query SearchIssues($term: String!, $first: Int, $after: String) {
+            searchIssues(term: $term, first: $first, after: $after, includeArchived: false) {
               nodes {
                 id identifier title description priority priorityLabel
                 state { id name type color }
@@ -47,6 +60,8 @@ providers:
           }
         variables:
           term: "{query}"
+          first: "{first|50}"
+          after: "{after|}"
 
 cache:
   strategy: exact

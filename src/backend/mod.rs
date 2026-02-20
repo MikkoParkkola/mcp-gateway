@@ -217,6 +217,20 @@ impl Backend {
 
     /// Get cached tools (or fetch if needed)
     ///
+    /// Check if this backend has cached tools (non-blocking).
+    ///
+    /// Returns `true` if tools are cached and the cache hasn't expired.
+    /// Used by `search_tools` to skip unstarted backends.
+    #[must_use]
+    pub fn has_cached_tools(&self) -> bool {
+        let cache = self.tools_cache.read();
+        let cache_time = self.cache_time.read();
+        matches!(
+            (cache.as_ref(), cache_time.as_ref()),
+            (Some(_), Some(time)) if time.elapsed() < self.cache_ttl
+        )
+    }
+
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
