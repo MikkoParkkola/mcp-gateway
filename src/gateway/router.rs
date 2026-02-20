@@ -20,7 +20,7 @@ use super::proxy::ProxyManager;
 use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
-use crate::protocol::{JsonRpcResponse, RequestId, SamplingCreateMessageParams};
+use crate::protocol::{ElicitationCreateParams, JsonRpcResponse, RequestId, SamplingCreateMessageParams};
 use crate::security::{ToolPolicy, sanitize_json_value, validate_url_not_ssrf};
 
 /// Shared application state
@@ -343,12 +343,12 @@ async fn meta_mcp_handler(
         && (request.get("result").is_some() || request.get("error").is_some())
     {
         if let Some(resp_id) = request.get("id").and_then(|v| v.as_str()) {
-            if resp_id.starts_with("sampling-") {
+            if resp_id.starts_with("sampling-") || resp_id.starts_with("elicitation-") {
                 let resolved = state.proxy_manager.resolve_pending(resp_id, request.clone());
                 if resolved {
-                    debug!(id = %resp_id, "Routed sampling response to caller");
+                    debug!(id = %resp_id, "Routed proxy response to caller");
                 } else {
-                    warn!(id = %resp_id, "No pending sampling request for response");
+                    warn!(id = %resp_id, "No pending request for response");
                 }
                 let mut resp = Json(json!({})).into_response();
                 resp.headers_mut().insert(
@@ -534,6 +534,46 @@ async fn meta_mcp_handler(
             match state
                 .proxy_manager
                 .forward_sampling_with_response(&sid, &sampling_params, timeout)
+                .await
+            {
+                Ok(result) => JsonRpcResponse::success(id, result),
+                Err(e) => JsonRpcResponse::error(Some(id), -32002, e.to_string()),
+            }
+        }
+
+        "elicitation/create" => {
+            let Some(sid) = state.proxy_manager.first_session_id() else {
+                return build_response(
+                    JsonRpcResponse::error(Some(id), -32002, "No elicitation-capable client connected"),
+                    &session_id,
+                    StatusCode::OK,
+                );
+            };
+
+            let elicitation_params: ElicitationCreateParams = match params {
+                Some(p) => match serde_json::from_value(p) {
+                    Ok(ep) => ep,
+                    Err(e) => {
+                        return build_response(
+                            JsonRpcResponse::error(Some(id), -32602, format!("Invalid elicitation params: {e}")),
+                            &session_id,
+                            StatusCode::OK,
+                        );
+                    }
+                },
+                None => {
+                    return build_response(
+                        JsonRpcResponse::error(Some(id), -32602, "Missing elicitation params"),
+                        &session_id,
+                        StatusCode::OK,
+                    );
+                }
+            };
+
+            let timeout = std::time::Duration::from_secs(120);
+            match state
+                .proxy_manager
+                .forward_elicitation_with_response(&sid, &elicitation_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),

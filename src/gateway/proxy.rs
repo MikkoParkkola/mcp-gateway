@@ -196,13 +196,67 @@ impl ProxyManager {
     }
 
     // ========================================================================
-    // Elicitation proxying
+    // Elicitation request-response flow
     // ========================================================================
 
-    /// Forward an `elicitation/create` request to connected clients.
+    /// Forward an `elicitation/create` request and wait for the client response.
     ///
-    /// In v1, this sends the elicitation request as a notification over SSE.
-    /// The client is expected to POST back with the response.
+    /// Same bidirectional pattern as [`Self::forward_sampling_with_response`].
+    pub async fn forward_elicitation_with_response(
+        &self,
+        session_id: &str,
+        params: &ElicitationCreateParams,
+        timeout: Duration,
+    ) -> Result<Value, SamplingError> {
+        let id = format!("elicitation-{}", Uuid::new_v4());
+
+        let rx = self.register_pending(id.clone());
+
+        let data = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "elicitation/create",
+            "params": serde_json::to_value(params).unwrap_or(json!({}))
+        });
+
+        let notification = TaggedNotification {
+            source: "gateway".to_string(),
+            event_type: "elicitation_request".to_string(),
+            data,
+            event_id: Some(self.multiplexer.next_event_id()),
+        };
+
+        let sent = self.multiplexer.send_to_session(session_id, notification);
+        if !sent {
+            self.cancel_pending(&id);
+            warn!(session_id = %session_id, %id, "Failed to forward elicitation/create");
+            return Err(SamplingError::SendFailed);
+        }
+
+        debug!(session_id = %session_id, %id, "Awaiting elicitation response from client");
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => {
+                debug!(%id, "Received elicitation response from client");
+                Ok(response)
+            }
+            Ok(Err(_recv_err)) => {
+                self.cancel_pending(&id);
+                Err(SamplingError::Cancelled)
+            }
+            Err(_timeout) => {
+                self.cancel_pending(&id);
+                warn!(%id, timeout = ?timeout, "Elicitation request timed out");
+                Err(SamplingError::Timeout(timeout))
+            }
+        }
+    }
+
+    // ========================================================================
+    // Elicitation proxying (fire-and-forget, kept for backward compat)
+    // ========================================================================
+
+    /// Forward an `elicitation/create` request to connected clients (fire-and-forget).
     pub fn forward_elicitation(&self, session_id: &str, params: &ElicitationCreateParams) -> bool {
         let data = json!({
             "jsonrpc": "2.0",
