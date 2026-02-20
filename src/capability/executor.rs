@@ -417,7 +417,8 @@ impl CapabilityExecutor {
 
         if field.is_empty() {
             return Err(Error::Config(
-                "Empty field name in file credential. Expected: file:/path/to/file.json:field_name".to_string()
+                "Empty field name in file credential. Expected: file:/path/to/file.json:field_name"
+                    .to_string(),
             ));
         }
 
@@ -428,7 +429,7 @@ impl CapabilityExecutor {
                 None => {
                     return Err(Error::Config(
                         "Cannot expand ~ in file credential path: HOME not set".to_string(),
-                    ))
+                    ));
                 }
             }
         } else {
@@ -696,6 +697,26 @@ impl CapabilityExecutor {
     fn substitute_value(&self, template: &Value, params: &Value) -> Result<Value> {
         match template {
             Value::String(s) => {
+                // Pure placeholder like "{priority}" — return the original typed value
+                // This preserves integers, booleans, arrays, nulls instead of stringifying
+                let trimmed = s.trim();
+                if trimmed.starts_with('{')
+                    && trimmed.ends_with('}')
+                    && !trimmed.contains(' ')
+                    && trimmed.matches('{').count() == 1
+                    && !trimmed.starts_with("{env.")
+                    && !trimmed.starts_with("{keychain.")
+                {
+                    let key = &trimmed[1..trimmed.len() - 1];
+                    if let Some(value) = params.as_object().and_then(|m| m.get(key)) {
+                        if !value.is_null() {
+                            return Ok(value.clone());
+                        }
+                        // Null values: skip (will be filtered out or handled downstream)
+                        return Ok(Value::Null);
+                    }
+                }
+
                 let substituted = self.substitute_string(s, params)?;
                 // Try to parse as JSON if it looks like JSON
                 if (substituted.starts_with('{') && substituted.ends_with('}'))
@@ -709,7 +730,19 @@ impl CapabilityExecutor {
             Value::Object(map) => {
                 let mut result = serde_json::Map::new();
                 for (k, v) in map {
-                    result.insert(k.clone(), self.substitute_value(v, params)?);
+                    let substituted = self.substitute_value(v, params)?;
+                    // Skip null values and unresolved placeholders to keep request clean
+                    // (prevents sending null for optional params not provided by caller)
+                    if substituted.is_null() {
+                        continue;
+                    }
+                    if let Value::String(ref s) = substituted {
+                        if s.starts_with('{') && s.ends_with('}') && !s.contains(' ') {
+                            // Unresolved placeholder — param not provided, skip
+                            continue;
+                        }
+                    }
+                    result.insert(k.clone(), substituted);
                 }
                 Ok(Value::Object(result))
             }
