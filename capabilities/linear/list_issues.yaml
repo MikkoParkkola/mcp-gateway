@@ -60,8 +60,8 @@ providers:
           }
         variables:
           teamKey: "{teamKey}"
-          first: "{first|50}"
-          after: "{after|}"
+          first: "{first}"
+          after: "{after}"
 
 cache:
   strategy: exact
