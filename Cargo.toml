@@ -70,6 +70,8 @@ base64 = "0.22"
 rand = "0.9"
 dirs = "6.0"
 open = "5.3"
+hmac = "0.12"
+hex = "0.4"
 
 # Environment file loading
 dotenvy = "0.15"
