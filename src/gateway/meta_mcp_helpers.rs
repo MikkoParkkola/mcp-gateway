@@ -76,16 +76,19 @@ fn build_base_tools() -> Vec<Tool> {
         Tool {
             name: "gateway_list_tools".to_string(),
             title: Some("List Tools".to_string()),
-            description: Some("List all tools from a specific backend server".to_string()),
+            description: Some(
+                "List tools from a backend server. Omit server to list ALL tools across all backends."
+                    .to_string(),
+            ),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "server": {
                         "type": "string",
-                        "description": "Name of the backend server"
+                        "description": "Name of backend server. Omit to list ALL tools across all backends."
                     }
                 },
-                "required": ["server"]
+                "required": []
             }),
             output_schema: None,
             annotations: None,
@@ -247,11 +250,15 @@ pub(crate) fn ranked_results_to_json(ranked: Vec<SearchResult>) -> Vec<Value> {
 }
 
 /// Build the final search response JSON.
-pub(crate) fn build_search_response(query: &str, matches: &[Value]) -> Value {
+///
+/// `total_found` is the number of matches across ALL backends (before truncation).
+/// `matches` may be truncated to the requested limit.
+pub(crate) fn build_search_response(query: &str, matches: &[Value], total_found: usize) -> Value {
     json!({
         "query": query,
         "matches": matches,
-        "total": matches.len()
+        "total": matches.len(),
+        "total_available": total_found
     })
 }
 
@@ -588,17 +595,27 @@ mod tests {
     #[test]
     fn build_search_response_structure() {
         let matches = vec![json!({"tool": "a"}), json!({"tool": "b"})];
-        let resp = build_search_response("test", &matches);
+        let resp = build_search_response("test", &matches, 2);
         assert_eq!(resp["query"], "test");
         assert_eq!(resp["total"], 2);
+        assert_eq!(resp["total_available"], 2);
         assert_eq!(resp["matches"].as_array().unwrap().len(), 2);
     }
 
     #[test]
     fn build_search_response_empty_matches() {
-        let resp = build_search_response("nothing", &[]);
+        let resp = build_search_response("nothing", &[], 0);
         assert_eq!(resp["total"], 0);
+        assert_eq!(resp["total_available"], 0);
         assert!(resp["matches"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn build_search_response_total_available_exceeds_returned() {
+        let matches = vec![json!({"tool": "a"})];
+        let resp = build_search_response("test", &matches, 5);
+        assert_eq!(resp["total"], 1);
+        assert_eq!(resp["total_available"], 5);
     }
 
     // ── extract_search_limit ────────────────────────────────────────────

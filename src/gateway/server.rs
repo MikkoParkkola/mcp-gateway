@@ -315,20 +315,43 @@ impl Gateway {
         }
         info!("============================================================");
 
-        // Warm-start specified backends
-        if !self.config.meta_mcp.warm_start.is_empty() {
-            info!(
-                "Warm-starting backends: {:?}",
-                self.config.meta_mcp.warm_start
-            );
+        // Warm-start backends: connect + prefetch tools into cache
+        // If warm_start list is empty, warm ALL backends (makes list/search fast)
+        {
+            let warm_start_list = if self.config.meta_mcp.warm_start.is_empty() {
+                let all_names: Vec<String> =
+                    self.backends.all().iter().map(|b| b.name.clone()).collect();
+                info!("Warm-starting ALL {} backends (tool prefetch)", all_names.len());
+                all_names
+            } else {
+                info!(
+                    "Warm-starting backends: {:?}",
+                    self.config.meta_mcp.warm_start
+                );
+                self.config.meta_mcp.warm_start.clone()
+            };
+
             let backends_clone = Arc::clone(&self.backends);
-            let warm_start_list = self.config.meta_mcp.warm_start.clone();
 
             tokio::spawn(async move {
                 for name in warm_start_list {
                     if let Some(backend) = backends_clone.get(&name) {
                         match backend.start().await {
-                            Ok(()) => info!(backend = %name, "Warm-started successfully"),
+                            Ok(()) => {
+                                // Prefetch tools into cache after successful start
+                                match backend.get_tools().await {
+                                    Ok(tools) => info!(
+                                        backend = %name,
+                                        tools = tools.len(),
+                                        "Warm-started + tools cached"
+                                    ),
+                                    Err(e) => warn!(
+                                        backend = %name,
+                                        error = %e,
+                                        "Warm-started but tool prefetch failed"
+                                    ),
+                                }
+                            }
                             Err(e) => warn!(backend = %name, error = %e, "Warm-start failed"),
                         }
                     } else {
