@@ -1,0 +1,37 @@
+fulcrum: "1.0"
+name: linear_comment_integration
+description: Linear comment webhook for real-time comment notifications
+
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+
+providers: {}
+
+webhooks:
+  comment_event:
+    path: /linear/comments
+    method: POST
+    secret: "{env.LINEAR_WEBHOOK_SECRET}"
+    signature_header: "Linear-Signature"
+    transform:
+      event_type: "linear.comment.{action}"
+      data:
+        id: "{data.id}"
+        body: "{data.body}"
+        issueId: "{data.issue.id}"
+        issueIdentifier: "{data.issue.identifier}"
+        issueTitle: "{data.issue.title}"
+        userId: "{data.user.id}"
+        userName: "{data.user.name}"
+    notify: true
+
+metadata:
+  category: integration
+  tags: [linear, webhook, comments, notifications]
+  cost_category: free
+  execution_time: instant
+  read_only: false

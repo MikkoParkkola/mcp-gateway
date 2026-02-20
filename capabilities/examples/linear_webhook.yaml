@@ -1,0 +1,70 @@
+# Example: Linear webhook receiver
+#
+# This capability receives webhook events from Linear and converts them
+# to MCP notifications that are pushed to connected clients via SSE.
+#
+# Setup in Linear:
+#   1. Go to Settings → API → Webhooks
+#   2. Create a new webhook pointing to: http://your-gateway:port/webhooks/linear/issues
+#   3. Set the signing secret in your environment: export LINEAR_WEBHOOK_SECRET="your_secret"
+#   4. Select events: Issue created, Issue updated, Issue deleted
+#
+# The gateway will validate the signature and push notifications to all connected MCP clients.
+
+fulcrum: "1.0"
+name: linear_integration
+description: Linear webhook integration for real-time issue updates
+
+# This capability doesn't expose any tools (it only receives webhooks)
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+
+# No providers needed - this is webhook-only
+providers: {}
+
+# Webhook definitions
+webhooks:
+  issue_updated:
+    # Path for this webhook (full URL will be /webhooks/linear/issues)
+    path: /linear/issues
+    method: POST
+
+    # Secret for HMAC signature validation (Linear uses HMAC-SHA256)
+    # Supports: {env.VAR}, keychain:name, or literal value
+    secret: "{env.LINEAR_WEBHOOK_SECRET}"
+
+    # Header containing the signature
+    signature_header: "Linear-Signature"
+
+    # Transform the webhook payload into an MCP notification
+    transform:
+      # Event type template - extracts {action} from payload
+      event_type: "linear.issue.{action}"
+
+      # Extract specific fields from the webhook payload
+      data:
+        id: "{data.id}"
+        identifier: "{data.identifier}"
+        title: "{data.title}"
+        state: "{data.state.name}"
+        assignee: "{data.assignee.name}"
+        assigneeId: "{data.assignee.id}"
+        priority: "{data.priority}"
+        priorityLabel: "{data.priorityLabel}"
+        creatorName: "{data.creator.name}"
+        team: "{data.team.name}"
+        url: "{data.url}"
+
+    # Send as MCP notification to all connected clients
+    notify: true
+
+metadata:
+  category: integration
+  tags: [linear, webhook, notifications]
+  cost_category: free
+  execution_time: instant
+  read_only: false
