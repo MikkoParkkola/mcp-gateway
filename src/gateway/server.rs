@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 
 use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::MetaMcp;
+use super::proxy::ProxyManager;
 use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
@@ -232,6 +233,7 @@ impl Gateway {
             Arc::clone(&self.backends),
             self.config.streaming.clone(),
         ));
+        let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let auth_config = Arc::new(ResolvedAuthConfig::from_config(&self.config.auth));
 
         // In-flight request tracker: large initial permits, drain waits for
@@ -243,6 +245,7 @@ impl Gateway {
             meta_mcp,
             meta_mcp_enabled: self.config.meta_mcp.enabled,
             multiplexer: Arc::clone(&multiplexer),
+            proxy_manager,
             streaming_config: self.config.streaming.clone(),
             auth_config,
             tool_policy,

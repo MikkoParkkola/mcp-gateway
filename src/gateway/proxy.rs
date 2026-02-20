@@ -15,15 +15,41 @@
 //! request-response proxying (where the gateway matches client responses back
 //! to the originating backend) can be added later.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::RwLock;
-use serde_json::json;
+use serde_json::{Value, json};
+use thiserror::Error;
+use tokio::sync::oneshot;
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 use crate::protocol::{ElicitationCreateParams, Root, SamplingCreateMessageParams};
 
 use super::streaming::{NotificationMultiplexer, TaggedNotification};
+
+// ============================================================================
+// Sampling error types
+// ============================================================================
+
+/// Errors that can occur during a `sampling/createMessage` request-response cycle.
+#[derive(Debug, Error)]
+pub enum SamplingError {
+    /// No sampling-capable client is connected.
+    #[error("No sampling-capable client connected")]
+    NoSession,
+    /// The gateway failed to deliver the request to the client over SSE.
+    #[error("Failed to send sampling request to client")]
+    SendFailed,
+    /// The client did not respond within the configured timeout.
+    #[error("Sampling request timed out after {0:?}")]
+    Timeout(Duration),
+    /// The pending request was cancelled before it received a response.
+    #[error("Sampling request was cancelled")]
+    Cancelled,
+}
 
 // ============================================================================
 // Proxy Manager
@@ -38,6 +64,11 @@ pub struct ProxyManager {
     multiplexer: Arc<NotificationMultiplexer>,
     /// Cached roots from the most recent `roots/list` response
     cached_roots: RwLock<Vec<Root>>,
+    /// In-flight `sampling/createMessage` requests awaiting client responses.
+    ///
+    /// Key: generated request ID (e.g. `"sampling-<uuid>"`).
+    /// Value: oneshot sender that delivers the client's response body.
+    pending_sampling: RwLock<HashMap<String, oneshot::Sender<Value>>>,
 }
 
 impl ProxyManager {
@@ -47,6 +78,120 @@ impl ProxyManager {
         Self {
             multiplexer,
             cached_roots: RwLock::new(Vec::new()),
+            pending_sampling: RwLock::new(HashMap::new()),
+        }
+    }
+
+    // ========================================================================
+    // Pending-request map helpers
+    // ========================================================================
+
+    /// Register a pending sampling request and return its response receiver.
+    ///
+    /// Stores the sender side internally; the caller awaits the returned
+    /// receiver to obtain the client's response when it arrives via
+    /// [`Self::resolve_pending`].
+    pub fn register_pending(&self, id: String) -> oneshot::Receiver<Value> {
+        let (tx, rx) = oneshot::channel();
+        self.pending_sampling.write().insert(id, tx);
+        rx
+    }
+
+    /// Deliver a client response to the caller waiting on `id`.
+    ///
+    /// Returns `true` if the ID was found and the response was dispatched,
+    /// `false` if no caller is waiting for this ID (already timed out or
+    /// unknown).
+    pub fn resolve_pending(&self, id: &str, response: Value) -> bool {
+        let tx = self.pending_sampling.write().remove(id);
+        match tx {
+            Some(sender) => {
+                // If the receiver has already been dropped (timeout), send fails silently.
+                let _ = sender.send(response);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Remove a pending sampling request without delivering a response.
+    ///
+    /// Called on timeout to clean up the map entry.
+    pub fn cancel_pending(&self, id: &str) {
+        self.pending_sampling.write().remove(id);
+    }
+
+    // ========================================================================
+    // Sampling request-response flow
+    // ========================================================================
+
+    /// Return the first connected session ID, if any.
+    pub fn first_session_id(&self) -> Option<String> {
+        self.multiplexer.first_session_id()
+    }
+
+    /// Forward a `sampling/createMessage` request and wait for the client response.
+    ///
+    /// Full bidirectional flow:
+    /// 1. Generates a unique request ID.
+    /// 2. Registers a pending entry so the response can be correlated.
+    /// 3. Sends the request as an SSE event to the named session.
+    /// 4. Awaits the client's POST-back response, subject to `timeout`.
+    /// 5. Returns the response on success, or a [`SamplingError`] on failure.
+    ///
+    /// # Errors
+    ///
+    /// - [`SamplingError::SendFailed`] if the SSE send fails (client disconnected).
+    /// - [`SamplingError::Timeout`] if the client does not respond within `timeout`.
+    /// - [`SamplingError::Cancelled`] if the oneshot channel is dropped unexpectedly.
+    pub async fn forward_sampling_with_response(
+        &self,
+        session_id: &str,
+        params: &SamplingCreateMessageParams,
+        timeout: Duration,
+    ) -> Result<Value, SamplingError> {
+        let id = format!("sampling-{}", Uuid::new_v4());
+
+        let rx = self.register_pending(id.clone());
+
+        let data = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "sampling/createMessage",
+            "params": serde_json::to_value(params).unwrap_or(json!({}))
+        });
+
+        let notification = TaggedNotification {
+            source: "gateway".to_string(),
+            event_type: "sampling_request".to_string(),
+            data,
+            event_id: Some(self.multiplexer.next_event_id()),
+        };
+
+        let sent = self.multiplexer.send_to_session(session_id, notification);
+        if !sent {
+            self.cancel_pending(&id);
+            warn!(session_id = %session_id, %id, "Failed to forward sampling/createMessage");
+            return Err(SamplingError::SendFailed);
+        }
+
+        debug!(session_id = %session_id, %id, "Awaiting sampling response from client");
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => {
+                debug!(%id, "Received sampling response from client");
+                Ok(response)
+            }
+            Ok(Err(_recv_err)) => {
+                // Sender was dropped — should not happen in normal operation.
+                self.cancel_pending(&id);
+                Err(SamplingError::Cancelled)
+            }
+            Err(_timeout) => {
+                self.cancel_pending(&id);
+                warn!(%id, timeout = ?timeout, "Sampling request timed out");
+                Err(SamplingError::Timeout(timeout))
+            }
         }
     }
 
@@ -194,6 +339,89 @@ mod tests {
         let mux = make_multiplexer();
         let proxy = ProxyManager::new(mux);
         assert!(proxy.cached_roots().is_empty());
+    }
+
+    // ── Pending sampling request map ───────────────────────────────────
+
+    #[tokio::test]
+    async fn register_and_resolve_pending_delivers_response() {
+        // GIVEN: a fresh proxy manager
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+
+        // WHEN: we register a pending request and immediately resolve it
+        let rx = proxy.register_pending("sampling-abc".to_string());
+        let response = json!({"result": "done"});
+        let resolved = proxy.resolve_pending("sampling-abc", response.clone());
+
+        // THEN: resolve returns true and the receiver gets the value
+        assert!(resolved);
+        let received = rx.await.expect("receiver should not be dropped");
+        assert_eq!(received, response);
+    }
+
+    #[test]
+    fn resolve_pending_unknown_id_returns_false() {
+        // GIVEN: a proxy manager with no pending requests
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+
+        // WHEN: we try to resolve an ID that was never registered
+        let resolved = proxy.resolve_pending("sampling-unknown", json!({}));
+
+        // THEN: returns false — no waiting caller
+        assert!(!resolved);
+    }
+
+    #[test]
+    fn cancel_pending_removes_entry() {
+        // GIVEN: a registered pending request
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+        let _rx = proxy.register_pending("sampling-xyz".to_string());
+
+        // WHEN: we cancel it
+        proxy.cancel_pending("sampling-xyz");
+
+        // THEN: resolving after cancellation returns false (entry gone)
+        let resolved = proxy.resolve_pending("sampling-xyz", json!({}));
+        assert!(!resolved);
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_with_dropped_receiver_does_not_panic() {
+        // GIVEN: a pending request where the receiver has been dropped
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+        let rx = proxy.register_pending("sampling-dropped".to_string());
+        drop(rx); // simulate timeout dropping the receiver
+
+        // WHEN: the client posts back a response
+        let resolved = proxy.resolve_pending("sampling-dropped", json!({"ok": true}));
+
+        // THEN: returns true (entry existed) but send fails silently — no panic
+        assert!(resolved);
+    }
+
+    #[test]
+    fn first_session_id_none_when_no_sessions() {
+        // GIVEN: a multiplexer with no sessions
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+
+        // THEN: first_session_id returns None
+        assert!(proxy.first_session_id().is_none());
+    }
+
+    #[test]
+    fn first_session_id_returns_session_when_connected() {
+        // GIVEN: a multiplexer with one session
+        let mux = make_multiplexer();
+        let (session_id, _rx) = mux.get_or_create_session(Some("my-session"));
+        let proxy = ProxyManager::new(mux);
+
+        // THEN: first_session_id returns that session
+        assert_eq!(proxy.first_session_id(), Some(session_id));
     }
 
     // ── Roots caching ──────────────────────────────────────────────────

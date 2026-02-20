@@ -204,6 +204,14 @@ impl NotificationMultiplexer {
             }
         }
     }
+
+    /// Return the ID of the first connected session, if any.
+    ///
+    /// Used by [`super::proxy::ProxyManager`] to locate a client capable of
+    /// handling server-to-client requests such as `sampling/createMessage`.
+    pub fn first_session_id(&self) -> Option<String> {
+        self.sessions.read().keys().next().cloned()
+    }
 }
 
 /// Create SSE response for GET /mcp

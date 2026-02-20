@@ -12,14 +12,15 @@ use axum::{
 };
 use serde_json::{Value, json};
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::auth::{AuthenticatedClient, ResolvedAuthConfig, auth_middleware};
 use super::meta_mcp::MetaMcp;
+use super::proxy::ProxyManager;
 use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
-use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::protocol::{JsonRpcResponse, RequestId, SamplingCreateMessageParams};
 use crate::security::{ToolPolicy, sanitize_json_value, validate_url_not_ssrf};
 
 /// Shared application state
@@ -32,6 +33,8 @@ pub struct AppState {
     pub meta_mcp_enabled: bool,
     /// Notification multiplexer for streaming
     pub multiplexer: Arc<NotificationMultiplexer>,
+    /// Proxy manager for server-to-client capability forwarding
+    pub proxy_manager: Arc<ProxyManager>,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
     /// Authentication configuration
@@ -333,6 +336,30 @@ async fn meta_mcp_handler(
         request
     };
 
+    // Detect client POST-back responses (has "result" or "error" but no "method").
+    // These are replies to server-to-client requests such as `sampling/createMessage`.
+    // Must be handled BEFORE `parse_request`, which rejects messages without "method".
+    if request.get("method").is_none()
+        && (request.get("result").is_some() || request.get("error").is_some())
+    {
+        if let Some(resp_id) = request.get("id").and_then(|v| v.as_str()) {
+            if resp_id.starts_with("sampling-") {
+                let resolved = state.proxy_manager.resolve_pending(resp_id, request.clone());
+                if resolved {
+                    debug!(id = %resp_id, "Routed sampling response to caller");
+                } else {
+                    warn!(id = %resp_id, "No pending sampling request for response");
+                }
+                let mut resp = Json(json!({})).into_response();
+                resp.headers_mut().insert(
+                    axum::http::header::HeaderName::from_static("mcp-session-id"),
+                    session_id.parse().unwrap(),
+                );
+                return (StatusCode::ACCEPTED, resp).into_response();
+            }
+        }
+    }
+
     // Parse request
     let (id, method, params) = match parse_request(&request) {
         Ok(parsed) => parsed,
@@ -488,6 +515,32 @@ async fn meta_mcp_handler(
         }
 
         "ping" => JsonRpcResponse::success(id, json!({})),
+
+        "sampling/createMessage" => {
+            let Some(sid) = state.proxy_manager.first_session_id() else {
+                return build_response(
+                    JsonRpcResponse::error(Some(id), -32002, "No sampling-capable client connected"),
+                    &session_id,
+                    StatusCode::OK,
+                );
+            };
+
+            let sampling_params = match parse_sampling_params(id.clone(), params, &session_id) {
+                Ok(p) => p,
+                Err(resp) => return resp,
+            };
+
+            let timeout = std::time::Duration::from_secs(120);
+            match state
+                .proxy_manager
+                .forward_sampling_with_response(&sid, &sampling_params, timeout)
+                .await
+            {
+                Ok(result) => JsonRpcResponse::success(id, result),
+                Err(e) => JsonRpcResponse::error(Some(id), -32002, e.to_string()),
+            }
+        }
+
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
@@ -608,6 +661,44 @@ async fn backend_handler(
             )
         }
     }
+}
+
+/// Build an HTTP response with a `mcp-session-id` header and a given status.
+fn build_response(
+    rpc: JsonRpcResponse,
+    session_id: &str,
+    status: StatusCode,
+) -> axum::response::Response {
+    let mut resp = Json(serde_json::to_value(rpc).unwrap()).into_response();
+    resp.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("mcp-session-id"),
+        session_id.parse().unwrap(),
+    );
+    (status, resp).into_response()
+}
+
+/// Parse `sampling/createMessage` params from raw JSON, returning an early
+/// HTTP error response on failure.
+#[allow(clippy::result_large_err)] // early-return pattern mirrors existing handlers
+fn parse_sampling_params(
+    id: RequestId,
+    params: Option<Value>,
+    session_id: &str,
+) -> Result<SamplingCreateMessageParams, axum::response::Response> {
+    let Some(p) = params else {
+        return Err(build_response(
+            JsonRpcResponse::error(Some(id), -32602, "Missing sampling params"),
+            session_id,
+            StatusCode::BAD_REQUEST,
+        ));
+    };
+    serde_json::from_value(p).map_err(|e| {
+        build_response(
+            JsonRpcResponse::error(Some(id), -32602, format!("Invalid sampling params: {e}")),
+            session_id,
+            StatusCode::BAD_REQUEST,
+        )
+    })
 }
 
 /// Extract a `RequestId` from a JSON value.
