@@ -1,0 +1,70 @@
+fulcrum: "1.0"
+name: linear_attach_url
+description: "Attach an external URL (GitHub PR, commit, doc) to a Linear issue. Shows as rich link in issue sidebar."
+
+schema:
+  input:
+    type: object
+    properties:
+      issueId:
+        type: string
+        description: "Issue UUID"
+      url:
+        type: string
+        description: "URL to attach (GitHub PR, commit, doc, etc.)"
+      title:
+        type: string
+        description: "Display title for the attachment"
+      subtitle:
+        type: string
+        description: "Subtitle (e.g., commit hash, PR status)"
+      iconUrl:
+        type: string
+        description: "Icon URL for the attachment"
+    required: [issueId, url, title]
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          mutation AttachUrl($issueId: String!, $url: String!, $title: String!, $subtitle: String, $iconUrl: String) {
+            attachmentCreate(input: {
+              issueId: $issueId
+              url: $url
+              title: $title
+              subtitle: $subtitle
+              iconUrl: $iconUrl
+              createAsUser: "Claude Elite"
+            }) {
+              success
+              attachment { id url title subtitle }
+            }
+          }
+        variables:
+          issueId: "{issueId}"
+          url: "{url}"
+          title: "{title}"
+          subtitle: "{subtitle}"
+          iconUrl: "{iconUrl}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, attachment, github, link]
+  cost_category: free
+  execution_time: fast
+  read_only: false

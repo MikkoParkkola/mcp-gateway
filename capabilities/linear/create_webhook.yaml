@@ -1,0 +1,74 @@
+fulcrum: "1.0"
+name: linear_create_webhook
+description: "Create a Linear webhook to receive real-time events (issue created/updated, comment added, etc.)"
+
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+        description: "Public URL to receive webhook POST events (use cloudflared tunnel)"
+      label:
+        type: string
+        description: "Webhook label"
+        default: "Claude Elite Gateway"
+      resourceTypes:
+        type: array
+        description: "Resource types to listen for: Issue, Comment, Project, Cycle, IssueLabel, Reaction"
+        items:
+          type: string
+        default: ["Issue", "Comment", "Project"]
+      allPublicTeams:
+        type: boolean
+        description: "Subscribe to all teams"
+        default: true
+    required: [url]
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          mutation CreateWebhook($url: String!, $label: String, $resourceTypes: [String!]!, $allPublicTeams: Boolean) {
+            webhookCreate(input: {
+              url: $url
+              label: $label
+              resourceTypes: $resourceTypes
+              allPublicTeams: $allPublicTeams
+              enabled: true
+            }) {
+              success
+              webhook {
+                id url label enabled
+                resourceTypes
+                secret
+              }
+            }
+          }
+        variables:
+          url: "{url}"
+          label: "{label}"
+          resourceTypes: "{resourceTypes}"
+          allPublicTeams: "{allPublicTeams}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, webhook, events, real-time]
+  cost_category: free
+  execution_time: fast
+  read_only: false

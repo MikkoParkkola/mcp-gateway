@@ -1,0 +1,63 @@
+fulcrum: "1.0"
+name: linear_create_project
+description: "Create a new Linear project with optional description, target date, and team associations"
+
+schema:
+  input:
+    type: object
+    properties:
+      name:
+        type: string
+        description: "Project name"
+      description:
+        type: string
+        description: "Project description (markdown)"
+      teamIds:
+        type: array
+        description: "Team UUIDs to associate"
+        items:
+          type: string
+    required: [name, teamIds]
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          mutation CreateProject($name: String!, $description: String, $teamIds: [String!]!) {
+            projectCreate(input: {
+              name: $name
+              description: $description
+              teamIds: $teamIds
+            }) {
+              success
+              project {
+                id name description state url
+              }
+            }
+          }
+        variables:
+          name: "{name}"
+          description: "{description}"
+          teamIds: "{teamIds}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, project, create]
+  cost_category: free
+  execution_time: fast
+  read_only: false

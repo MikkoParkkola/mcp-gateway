@@ -1,0 +1,60 @@
+fulcrum: "1.0"
+name: linear_search_issues
+description: Search Linear issues by query string with optional filters (team, state, assignee, priority)
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: "Search query string (searches title, description, comments)"
+    required: [query]
+  output:
+    type: object
+    properties:
+      issues:
+        type: array
+        description: Matching issues
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          query SearchIssues($term: String!) {
+            searchIssues(term: $term, first: 50, includeArchived: false) {
+              nodes {
+                id identifier title description priority priorityLabel
+                state { id name type color }
+                team { id name key }
+                assignee { id name displayName }
+                labels { nodes { id name color } }
+                project { id name }
+                createdAt updatedAt completedAt
+                url
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        variables:
+          term: "{query}"
+
+cache:
+  strategy: exact
+  ttl: 30
+
+metadata:
+  category: productivity
+  tags: [linear, issues, search]
+  cost_category: free
+  execution_time: fast
+  read_only: true

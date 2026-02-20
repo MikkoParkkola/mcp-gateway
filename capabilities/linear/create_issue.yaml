@@ -1,0 +1,109 @@
+fulcrum: "1.0"
+name: linear_create_issue
+description: Create a new issue in Linear. Requires teamId (use linear_get_teams to find it).
+
+schema:
+  input:
+    type: object
+    properties:
+      title:
+        type: string
+        description: Issue title
+      description:
+        type: string
+        description: Issue description (Markdown supported)
+      teamId:
+        type: string
+        description: "Team UUID (use linear_get_teams to get IDs)"
+      priority:
+        type: integer
+        description: "Priority: 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low"
+      assigneeId:
+        type: string
+        description: "Assignee user UUID"
+      labelIds:
+        type: array
+        description: "Label UUIDs to apply"
+        items:
+          type: string
+      projectId:
+        type: string
+        description: "Project UUID to associate"
+      parentId:
+        type: string
+        description: "Parent issue UUID for sub-issues"
+      stateId:
+        type: string
+        description: "Workflow state UUID"
+      estimate:
+        type: integer
+        description: "Estimate points"
+      dueDate:
+        type: string
+        description: "Due date in YYYY-MM-DD format"
+      createAsUser:
+        type: string
+        description: "Display name for agent attribution (AIG compliance). Default: Claude Elite"
+        default: "Claude Elite"
+      displayIconUrl:
+        type: string
+        description: "Avatar URL for agent identity"
+        default: "https://www.anthropic.com/images/icons/safari-pinned-tab.svg"
+    required: [title, teamId]
+  output:
+    type: object
+    properties:
+      issue:
+        type: object
+        description: Created issue
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          mutation CreateIssue($input: IssueCreateInput!) {
+            issueCreate(input: $input) {
+              success
+              issue {
+                id identifier title url
+                state { name }
+                team { key }
+                priority priorityLabel
+              }
+            }
+          }
+        variables:
+          input:
+            title: "{title}"
+            description: "{description}"
+            teamId: "{teamId}"
+            priority: "{priority}"
+            assigneeId: "{assigneeId}"
+            labelIds: "{labelIds}"
+            projectId: "{projectId}"
+            parentId: "{parentId}"
+            stateId: "{stateId}"
+            estimate: "{estimate}"
+            dueDate: "{dueDate}"
+            createAsUser: "{createAsUser}"
+            displayIconUrl: "{displayIconUrl}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, issue, create]
+  cost_category: free
+  execution_time: fast
+  read_only: false

@@ -1,0 +1,58 @@
+fulcrum: "1.0"
+name: linear_add_comment
+description: Add a comment to a Linear issue
+
+schema:
+  input:
+    type: object
+    properties:
+      issueId:
+        type: string
+        description: "Issue UUID"
+      body:
+        type: string
+        description: "Comment body (Markdown supported)"
+    required: [issueId, body]
+  output:
+    type: object
+    properties:
+      comment:
+        type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          mutation AddComment($issueId: String!, $body: String!) {
+            commentCreate(input: { issueId: $issueId, body: $body }) {
+              success
+              comment {
+                id body createdAt
+                user { name }
+                issue { identifier title }
+              }
+            }
+          }
+        variables:
+          issueId: "{issueId}"
+          body: "{body}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, comment, create]
+  cost_category: free
+  execution_time: fast
+  read_only: false

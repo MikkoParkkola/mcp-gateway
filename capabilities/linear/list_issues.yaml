@@ -1,0 +1,57 @@
+fulcrum: "1.0"
+name: linear_list_issues
+description: "List recent issues for a team, optionally filtered by state (backlog, todo, in_progress, done, canceled)"
+
+schema:
+  input:
+    type: object
+    properties:
+      teamKey:
+        type: string
+        description: "Team key (e.g., MIK)"
+    required: [teamKey]
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          query ListIssues($teamKey: String!) {
+            team(id: $teamKey) {
+              issues(first: 50, orderBy: updatedAt) {
+                nodes {
+                  id identifier title priority priorityLabel
+                  state { name type color }
+                  assignee { displayName }
+                  labels { nodes { name color } }
+                  project { name }
+                  createdAt updatedAt
+                  url
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        variables:
+          teamKey: "{teamKey}"
+
+cache:
+  strategy: exact
+  ttl: 30
+
+metadata:
+  category: productivity
+  tags: [linear, issues, list]
+  cost_category: free
+  execution_time: fast
+  read_only: true

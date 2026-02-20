@@ -1,0 +1,48 @@
+fulcrum: "1.0"
+name: linear_get_teams
+description: List all Linear teams with their IDs, states, and labels
+
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+    properties:
+      teams:
+        type: array
+        description: List of teams with states and labels
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          {
+            teams {
+              nodes {
+                id name key description
+                states { nodes { id name type color } }
+                labels(first: 50) { nodes { id name color } }
+              }
+            }
+          }
+
+cache:
+  strategy: exact
+  ttl: 300
+
+metadata:
+  category: productivity
+  tags: [linear, teams, states, labels]
+  cost_category: free
+  execution_time: fast
+  read_only: true

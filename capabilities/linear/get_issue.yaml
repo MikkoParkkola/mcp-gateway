@@ -1,0 +1,76 @@
+fulcrum: "1.0"
+name: linear_get_issue
+description: "Get a single Linear issue by identifier (e.g., 'ENG-123') with full details and comments"
+
+schema:
+  input:
+    type: object
+    properties:
+      identifier:
+        type: string
+        description: "Issue identifier like 'ENG-123' or 'BOT-42'"
+        examples:
+          - "ENG-123"
+    required: [identifier]
+  output:
+    type: object
+    properties:
+      issue:
+        type: object
+        description: Full issue details
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          query GetIssue($identifier: String!) {
+            issueSearch(query: $identifier, first: 1) {
+              nodes {
+                id identifier title description priority priorityLabel estimate
+                state { id name type color }
+                team { id name key }
+                assignee { id name displayName email }
+                labels { nodes { id name color } }
+                project { id name }
+                parent { id identifier title }
+                children { nodes { id identifier title state { name } } }
+                comments {
+                  nodes {
+                    id body createdAt
+                    user { id name displayName }
+                    resolvedAt
+                  }
+                }
+                relations {
+                  nodes {
+                    type
+                    relatedIssue { id identifier title }
+                  }
+                }
+                createdAt updatedAt completedAt dueDate
+                url
+              }
+            }
+          }
+        variables:
+          identifier: "{identifier}"
+
+cache:
+  strategy: exact
+  ttl: 30
+
+metadata:
+  category: productivity
+  tags: [linear, issue, detail, comments]
+  cost_category: free
+  execution_time: fast
+  read_only: true

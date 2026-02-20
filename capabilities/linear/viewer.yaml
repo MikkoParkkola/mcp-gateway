@@ -1,0 +1,44 @@
+fulcrum: "1.0"
+name: linear_viewer
+description: Get current authenticated Linear user info (name, email, teams)
+
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      email:
+        type: string
+      displayName:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: "{ viewer { id name email displayName active admin url } }"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+metadata:
+  category: productivity
+  tags: [linear, user, profile]
+  cost_category: free
+  execution_time: fast
+  read_only: true

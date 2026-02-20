@@ -1,0 +1,98 @@
+fulcrum: "1.0"
+name: linear_update_issue
+description: "Update an existing Linear issue. Requires issue UUID (use linear_search_issues or linear_get_issue to find it)."
+
+schema:
+  input:
+    type: object
+    properties:
+      issueId:
+        type: string
+        description: "Issue UUID (not identifier like ENG-123)"
+      title:
+        type: string
+        description: New title
+      description:
+        type: string
+        description: New description (Markdown)
+      stateId:
+        type: string
+        description: New workflow state UUID
+      priority:
+        type: integer
+        description: "Priority: 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low"
+      assigneeId:
+        type: string
+        description: New assignee UUID
+      labelIds:
+        type: array
+        description: "Label UUIDs (replaces existing)"
+        items:
+          type: string
+      projectId:
+        type: string
+        description: Project UUID
+      parentId:
+        type: string
+        description: Parent issue UUID
+      estimate:
+        type: integer
+        description: Estimate points
+      dueDate:
+        type: string
+        description: "Due date YYYY-MM-DD"
+    required: [issueId]
+  output:
+    type: object
+    properties:
+      issue:
+        type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          mutation UpdateIssue($issueId: String!, $input: IssueUpdateInput!) {
+            issueUpdate(id: $issueId, input: $input) {
+              success
+              issue {
+                id identifier title url
+                state { name }
+                priority priorityLabel
+                assignee { name }
+              }
+            }
+          }
+        variables:
+          issueId: "{issueId}"
+          input:
+            title: "{title}"
+            description: "{description}"
+            stateId: "{stateId}"
+            priority: "{priority}"
+            assigneeId: "{assigneeId}"
+            labelIds: "{labelIds}"
+            projectId: "{projectId}"
+            parentId: "{parentId}"
+            estimate: "{estimate}"
+            dueDate: "{dueDate}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, issue, update, edit]
+  cost_category: free
+  execution_time: fast
+  read_only: false
