@@ -166,14 +166,14 @@ impl ProxyManager {
 
         let notification = TaggedNotification {
             source: "gateway".to_string(),
-            event_type: "sampling_request".to_string(),
+            event_type: "message".to_string(), // MCP-standard: raw JSON-RPC for compliant clients
             data,
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        // Broadcast to ALL sessions — any client capable of sampling will respond.
+        // Broadcast to ALL sessions — first Claude Code instance to respond wins.
         self.multiplexer.broadcast(notification);
-        debug!(%id, "Broadcast sampling/createMessage to all sessions");
+        debug!(%id, "Broadcast sampling/createMessage as MCP message to all sessions");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {
@@ -218,14 +218,14 @@ impl ProxyManager {
 
         let notification = TaggedNotification {
             source: "gateway".to_string(),
-            event_type: "elicitation_request".to_string(),
+            event_type: "message".to_string(), // MCP-standard: raw JSON-RPC for compliant clients
             data,
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        // Broadcast to ALL sessions — any client capable of elicitation will respond.
+        // Broadcast to ALL sessions — first Claude Code instance to respond wins.
         self.multiplexer.broadcast(notification);
-        debug!(%id, "Broadcast elicitation/create to all sessions");
+        debug!(%id, "Broadcast elicitation/create as MCP message to all sessions");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {

@@ -246,9 +246,18 @@ pub fn create_sse_response(
         loop {
             match rx.recv().await {
                 Ok(notification) => {
-                    let event = Event::default()
-                        .event(&notification.event_type)
-                        .data(serde_json::to_string(&notification).unwrap_or_default());
+                    // MCP-standard events (event_type == "message") send raw
+                    // JSON-RPC as data so compliant clients (e.g. Claude Code)
+                    // can parse them as server-to-client requests.
+                    let event = if notification.event_type == "message" {
+                        Event::default()
+                            .event("message")
+                            .data(notification.data.to_string())
+                    } else {
+                        Event::default()
+                            .event(&notification.event_type)
+                            .data(serde_json::to_string(&notification).unwrap_or_default())
+                    };
 
                     // Add event ID if present
                     let event = if let Some(ref id) = notification.event_id {
