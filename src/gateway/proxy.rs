@@ -135,18 +135,21 @@ impl ProxyManager {
     /// Full bidirectional flow:
     /// 1. Generates a unique request ID.
     /// 2. Registers a pending entry so the response can be correlated.
-    /// 3. Sends the request as an SSE event to the named session.
-    /// 4. Awaits the client's POST-back response, subject to `timeout`.
+    /// 3. Broadcasts the request to ALL connected SSE sessions.
+    /// 4. Awaits the first client's POST-back response, subject to `timeout`.
     /// 5. Returns the response on success, or a [`SamplingError`] on failure.
+    ///
+    /// Broadcasting ensures the request reaches any client capable of handling
+    /// sampling, regardless of which session happens to be "first."
     ///
     /// # Errors
     ///
-    /// - [`SamplingError::SendFailed`] if the SSE send fails (client disconnected).
-    /// - [`SamplingError::Timeout`] if the client does not respond within `timeout`.
+    /// - [`SamplingError::NoSession`] if no sessions are connected.
+    /// - [`SamplingError::Timeout`] if no client responds within `timeout`.
     /// - [`SamplingError::Cancelled`] if the oneshot channel is dropped unexpectedly.
     pub async fn forward_sampling_with_response(
         &self,
-        session_id: &str,
+        _session_id: &str,
         params: &SamplingCreateMessageParams,
         timeout: Duration,
     ) -> Result<Value, SamplingError> {
@@ -168,14 +171,9 @@ impl ProxyManager {
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        let sent = self.multiplexer.send_to_session(session_id, notification);
-        if !sent {
-            self.cancel_pending(&id);
-            warn!(session_id = %session_id, %id, "Failed to forward sampling/createMessage");
-            return Err(SamplingError::SendFailed);
-        }
-
-        debug!(session_id = %session_id, %id, "Awaiting sampling response from client");
+        // Broadcast to ALL sessions — any client capable of sampling will respond.
+        self.multiplexer.broadcast(notification);
+        debug!(%id, "Broadcast sampling/createMessage to all sessions");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {
@@ -183,7 +181,6 @@ impl ProxyManager {
                 Ok(response)
             }
             Ok(Err(_recv_err)) => {
-                // Sender was dropped — should not happen in normal operation.
                 self.cancel_pending(&id);
                 Err(SamplingError::Cancelled)
             }
@@ -201,10 +198,10 @@ impl ProxyManager {
 
     /// Forward an `elicitation/create` request and wait for the client response.
     ///
-    /// Same bidirectional pattern as [`Self::forward_sampling_with_response`].
+    /// Same bidirectional broadcast pattern as [`Self::forward_sampling_with_response`].
     pub async fn forward_elicitation_with_response(
         &self,
-        session_id: &str,
+        _session_id: &str,
         params: &ElicitationCreateParams,
         timeout: Duration,
     ) -> Result<Value, SamplingError> {
@@ -226,14 +223,9 @@ impl ProxyManager {
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        let sent = self.multiplexer.send_to_session(session_id, notification);
-        if !sent {
-            self.cancel_pending(&id);
-            warn!(session_id = %session_id, %id, "Failed to forward elicitation/create");
-            return Err(SamplingError::SendFailed);
-        }
-
-        debug!(session_id = %session_id, %id, "Awaiting elicitation response from client");
+        // Broadcast to ALL sessions — any client capable of elicitation will respond.
+        self.multiplexer.broadcast(notification);
+        debug!(%id, "Broadcast elicitation/create to all sessions");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {
