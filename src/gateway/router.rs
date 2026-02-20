@@ -344,6 +344,7 @@ async fn meta_mcp_handler(
     {
         if let Some(resp_id) = request.get("id").and_then(|v| v.as_str()) {
             if resp_id.starts_with("sampling-") || resp_id.starts_with("elicitation-") {
+                debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
                 let resolved = state.proxy_manager.resolve_pending(resp_id, request.clone());
                 if resolved {
                     debug!(id = %resp_id, "Routed proxy response to caller");
