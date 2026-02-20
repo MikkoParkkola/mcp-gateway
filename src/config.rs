@@ -42,6 +42,8 @@ pub struct Config {
     pub playbooks: PlaybooksConfig,
     /// Security policy configuration
     pub security: SecurityConfig,
+    /// Webhook receiver configuration
+    pub webhooks: WebhookConfig,
 }
 
 /// Cache configuration for response caching
@@ -82,6 +84,31 @@ impl Default for PlaybooksConfig {
         Self {
             enabled: false,
             directories: vec!["playbooks".to_string()],
+        }
+    }
+}
+
+/// Webhook receiver configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebhookConfig {
+    /// Enable the webhook receiver
+    pub enabled: bool,
+    /// Base path prefix for all webhook endpoints (e.g., "/webhooks")
+    pub base_path: String,
+    /// Require HMAC signature on all webhooks (can be overridden per definition)
+    pub require_signature: bool,
+    /// Rate limit for webhook endpoints (requests per minute, 0 = unlimited)
+    pub rate_limit: u32,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            base_path: "/webhooks".to_string(),
+            require_signature: true,
+            rate_limit: 100,
         }
     }
 }

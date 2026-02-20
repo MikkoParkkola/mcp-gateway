@@ -45,6 +45,10 @@ pub struct CapabilityDefinition {
     /// Response transform pipeline configuration
     #[serde(default)]
     pub transform: TransformConfig,
+
+    /// Webhook endpoint definitions for inbound events
+    #[serde(default)]
+    pub webhooks: HashMap<String, WebhookDefinition>,
 }
 
 /// Provider configurations supporting both named and fallback arrays
@@ -315,6 +319,43 @@ impl CacheConfig {
     }
 }
 
+/// Webhook transform configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebhookTransform {
+    /// Template for extracting the event type (e.g., "linear.issue.{action}")
+    #[serde(default)]
+    pub event_type: Option<String>,
+    /// Field mappings: output_key -> template or JSON path
+    #[serde(default)]
+    pub data: HashMap<String, String>,
+}
+
+/// Webhook endpoint definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookDefinition {
+    /// URL path relative to `base_path` (e.g., "/linear/webhook")
+    pub path: String,
+    /// HTTP method to accept (default: POST)
+    #[serde(default = "default_method")]
+    pub method: String,
+    /// HMAC secret reference (e.g., "env:LINEAR_WEBHOOK_SECRET")
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// Header that carries the signature (e.g., "X-Linear-Signature")
+    #[serde(default)]
+    pub signature_header: Option<String>,
+    /// Emit MCP notification when received
+    #[serde(default = "default_notify")]
+    pub notify: bool,
+    /// Payload transform configuration
+    #[serde(default)]
+    pub transform: WebhookTransform,
+}
+
+fn default_notify() -> bool {
+    true
+}
+
 /// Capability metadata
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CapabilityMetadata {
@@ -399,6 +440,7 @@ mod tests {
             cache: CacheConfig::default(),
             metadata: CapabilityMetadata::default(),
             transform: TransformConfig::default(),
+            webhooks: HashMap::new(),
         };
 
         let tool = cap.to_mcp_tool();

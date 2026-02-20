@@ -146,6 +146,11 @@ impl CapabilityBackend {
             .collect()
     }
 
+    /// List all capability definitions (cloned)
+    pub fn list_capabilities(&self) -> Vec<CapabilityDefinition> {
+        self.capabilities.read().clone()
+    }
+
     /// Execute a capability (call a tool)
     ///
     /// # Errors

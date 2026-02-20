@@ -58,20 +58,25 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
         )));
     }
 
-    // Must have at least one provider
-    if capability.providers.is_empty() {
-        return Err(Error::Config(format!(
-            "Capability '{}' must have at least one provider",
-            capability.name
-        )));
-    }
+    // Webhook-only capabilities don't need providers
+    let is_webhook_only = !capability.webhooks.is_empty() && capability.providers.is_empty();
 
-    // Primary provider should exist
-    if !capability.providers.contains_key("primary") {
-        return Err(Error::Config(format!(
-            "Capability '{}' should have a 'primary' provider",
-            capability.name
-        )));
+    if !is_webhook_only {
+        // Must have at least one provider
+        if capability.providers.is_empty() {
+            return Err(Error::Config(format!(
+                "Capability '{}' must have at least one provider",
+                capability.name
+            )));
+        }
+
+        // Primary provider should exist
+        if !capability.providers.contains_key("primary") {
+            return Err(Error::Config(format!(
+                "Capability '{}' should have a 'primary' provider",
+                capability.name
+            )));
+        }
     }
 
     // Validate auth config doesn't contain actual secrets
