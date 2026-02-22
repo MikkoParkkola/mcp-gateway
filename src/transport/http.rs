@@ -133,13 +133,9 @@ impl HttpTransport {
 
         if self.streamable_http {
             // Streamable HTTP: use URL directly
-            // Only add trailing slash for localhost (Starlette compatibility)
-            // Remote APIs (like Parallel.ai) reject trailing slashes
-            let mut url = self.base_url.clone();
-            let is_localhost = url.contains("localhost") || url.contains("127.0.0.1");
-            if is_localhost && !url.ends_with('/') {
-                url.push('/');
-            }
+            // Never add trailing slash — Dart/shelf (Pieces) returns 404 for trailing slash.
+            // Starlette compatibility was the original reason, but it handles both.
+            let url = self.base_url.clone();
             *self.message_url.write() = Some(url.clone());
             info!(url = %url, oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
         } else {
