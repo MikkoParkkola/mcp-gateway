@@ -1,6 +1,7 @@
 //! Gateway server implementation
 
 pub mod auth;
+mod differential;
 mod meta_mcp;
 mod meta_mcp_helpers;
 pub mod proxy;

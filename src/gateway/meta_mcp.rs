@@ -28,8 +28,10 @@ use crate::protocol::{
 };
 use crate::ranking::{SearchRanker, json_to_search_result};
 use crate::stats::UsageStats;
+use crate::transition::TransitionTracker;
 use crate::{Error, Result};
 
+use super::differential::annotate_differential;
 use super::meta_mcp_helpers::{
     build_discovery_preamble, build_initialize_result, build_match_json,
     build_match_json_with_chains, build_meta_tools, build_routing_instructions,
@@ -56,6 +58,8 @@ pub struct MetaMcp {
     stats: Option<Arc<UsageStats>>,
     /// Search ranker for usage-based ranking
     ranker: Option<Arc<SearchRanker>>,
+    /// Predictive tool prefetch via invocation sequence tracking
+    transition_tracker: RwLock<Option<Arc<TransitionTracker>>>,
     /// Playbook engine for multi-step tool chains
     playbook_engine: RwLock<PlaybookEngine>,
     /// Current logging level (gateway-wide, forwarded to backends)
@@ -73,6 +77,7 @@ impl MetaMcp {
             default_cache_ttl: Duration::from_secs(60),
             stats: None,
             ranker: None,
+            transition_tracker: RwLock::new(None),
             playbook_engine: RwLock::new(PlaybookEngine::new()),
             log_level: RwLock::new(LoggingLevel::default()),
         }
@@ -93,9 +98,22 @@ impl MetaMcp {
             default_cache_ttl: default_ttl,
             stats,
             ranker,
+            transition_tracker: RwLock::new(None),
             playbook_engine: RwLock::new(PlaybookEngine::new()),
             log_level: RwLock::new(LoggingLevel::default()),
         }
+    }
+
+    /// Attach a `TransitionTracker` for predictive tool prefetch.
+    ///
+    /// Must be called during server setup before any requests are handled.
+    pub fn set_transition_tracker(&self, tracker: Arc<TransitionTracker>) {
+        *self.transition_tracker.write() = Some(tracker);
+    }
+
+    /// Get the transition tracker if set.
+    fn get_transition_tracker(&self) -> Option<Arc<TransitionTracker>> {
+        self.transition_tracker.read().clone()
     }
 
     /// Set the capability backend
@@ -152,18 +170,22 @@ impl MetaMcp {
         JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
     }
 
-    /// Handle tools/call request
+    /// Handle tools/call request.
+    ///
+    /// `session_id` is forwarded to `gateway_invoke` to enable per-session
+    /// transition tracking and predictive prefetch.
     pub async fn handle_tools_call(
         &self,
         id: RequestId,
         tool_name: &str,
         arguments: Value,
+        session_id: Option<&str>,
     ) -> JsonRpcResponse {
         let result = match tool_name {
             "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments).await,
             "gateway_search_tools" => self.search_tools(&arguments).await,
-            "gateway_invoke" => self.invoke_tool(&arguments).await,
+            "gateway_invoke" => self.invoke_tool(&arguments, session_id).await,
             "gateway_get_stats" => self.get_stats(&arguments).await,
             "gateway_run_playbook" => self.run_playbook(&arguments).await,
             _ => Err(Error::json_rpc(
@@ -364,6 +386,10 @@ impl MetaMcp {
         // Truncate to requested limit AFTER ranking
         matches.truncate(limit);
 
+        // Annotate tool families with differential descriptions so LLMs can
+        // distinguish siblings (e.g. gmail_search vs gmail_send vs gmail_batch_modify).
+        annotate_differential(&mut matches);
+
         // Build suggestions only when no results were found
         let suggestions = if matches.is_empty() {
             build_suggestions(&query, &all_tags)
@@ -374,14 +400,22 @@ impl MetaMcp {
         Ok(build_search_response(&query, &matches, total_found, &suggestions))
     }
 
-    /// Invoke a tool on a backend
-    #[allow(clippy::too_many_lines)]
-    async fn invoke_tool(&self, args: &Value) -> Result<Value> {
+    /// Invoke a tool on a backend, recording the transition for predictive prefetch.
+    ///
+    /// When `session_id` is `Some` and a `TransitionTracker` is attached, records
+    /// the `previous_tool → current_tool` transition and appends `predicted_next`
+    /// to the response for transitions meeting the minimum count (≥3) and
+    /// confidence (≥30%) thresholds.
+    async fn invoke_tool(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         let arguments = parse_tool_arguments(args)?;
 
-        // Check cache first (if enabled)
+        // Canonical key used for transition tracking.
+        let tool_key = format!("{server}:{tool}");
+
+        // Check cache first (if enabled).
+        // Transitions are still recorded on cache hits — the sequence occurred.
         if let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             if let Some(cached) = cache.get(&cache_key) {
@@ -389,11 +423,12 @@ impl MetaMcp {
                 if let Some(ref stats) = self.stats {
                     stats.record_cache_hit();
                 }
-                return Ok(cached);
+                let predictions = self.record_and_predict(session_id, &tool_key);
+                return Ok(augment_with_predictions(cached, predictions));
             }
         }
 
-        // Record invocation and usage for ranking
+        // Record invocation and usage for ranking.
         if let Some(ref stats) = self.stats {
             stats.record_invocation(server, tool);
         }
@@ -403,72 +438,85 @@ impl MetaMcp {
 
         debug!(server = server, tool = tool, "Invoking tool");
 
-        // Check if it's a capability
-        let result = if let Some(cap) = self.get_capabilities() {
-            if server == cap.name && cap.has_capability(tool) {
-                let result = cap.call_tool(tool, arguments.clone()).await?;
-                serde_json::to_value(result)?
-            } else {
-                // Otherwise, invoke on MCP backend
-                let backend = self
-                    .backends
-                    .get(server)
-                    .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+        // Dispatch to the appropriate backend.
+        let result = self.dispatch_to_backend(server, tool, arguments.clone()).await?;
 
-                let response = backend
-                    .request(
-                        "tools/call",
-                        Some(json!({
-                            "name": tool,
-                            "arguments": arguments
-                        })),
-                    )
-                    .await?;
-
-                if let Some(error) = response.error {
-                    return Err(Error::JsonRpc {
-                        code: error.code,
-                        message: error.message,
-                        data: error.data,
-                    });
-                }
-                response.result.unwrap_or(json!(null))
-            }
-        } else {
-            // No capabilities, must be MCP backend
-            let backend = self
-                .backends
-                .get(server)
-                .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
-
-            let response = backend
-                .request(
-                    "tools/call",
-                    Some(json!({
-                        "name": tool,
-                        "arguments": arguments
-                    })),
-                )
-                .await?;
-
-            if let Some(error) = response.error {
-                return Err(Error::JsonRpc {
-                    code: error.code,
-                    message: error.message,
-                    data: error.data,
-                });
-            }
-            response.result.unwrap_or(json!(null))
-        };
-
-        // Cache the successful result (if cache enabled)
+        // Cache the successful result (if cache enabled).
         if let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             cache.set(&cache_key, result.clone(), self.default_cache_ttl);
             debug!(server = server, tool = tool, ttl = ?self.default_cache_ttl, "Cached result");
         }
 
-        Ok(result)
+        // Record transition and compute predictions after successful invocation.
+        let predictions = self.record_and_predict(session_id, &tool_key);
+
+        Ok(augment_with_predictions(result, predictions))
+    }
+
+    /// Record the session transition and return predictions for the current tool.
+    ///
+    /// Returns an empty `Vec` when no tracker is attached or no predictions clear
+    /// the thresholds — callers can pass directly to [`augment_with_predictions`].
+    fn record_and_predict(
+        &self,
+        session_id: Option<&str>,
+        tool_key: &str,
+    ) -> Vec<serde_json::Value> {
+        let Some(tracker) = self.get_transition_tracker() else {
+            return Vec::new();
+        };
+        let Some(sid) = session_id else {
+            return Vec::new();
+        };
+
+        tracker.record_transition(sid, tool_key);
+
+        tracker
+            .predict_next(tool_key, 0.30, 3)
+            .into_iter()
+            .map(|p| json!({"tool": p.tool, "confidence": p.confidence}))
+            .collect()
+    }
+
+    /// Dispatch a `tools/call` to the capability backend or an MCP backend.
+    async fn dispatch_to_backend(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value> {
+        if let Some(cap) = self.get_capabilities() {
+            if server == cap.name && cap.has_capability(tool) {
+                let result = cap.call_tool(tool, arguments).await?;
+                return Ok(serde_json::to_value(result)?);
+            }
+        }
+
+        let backend = self
+            .backends
+            .get(server)
+            .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+
+        let response = backend
+            .request(
+                "tools/call",
+                Some(json!({
+                    "name": tool,
+                    "arguments": arguments
+                })),
+            )
+            .await?;
+
+        if let Some(error) = response.error {
+            return Err(Error::JsonRpc {
+                code: error.code,
+                message: error.message,
+                data: error.data,
+            });
+        }
+
+        Ok(response.result.unwrap_or(json!(null)))
     }
 
     /// Get gateway statistics
@@ -911,6 +959,27 @@ impl ToolInvoker for MetaMcpInvoker<'_> {
             "tool": tool,
             "arguments": arguments
         });
-        self.meta.invoke_tool(&args).await
+        self.meta.invoke_tool(&args, None).await
     }
+}
+
+// ============================================================================
+// Response augmentation
+// ============================================================================
+
+/// Attach `predicted_next` to an invoke result when predictions are available.
+///
+/// If `predictions` is empty the original `result` is returned unchanged,
+/// preserving the zero-cost fast path for sessions without enough history.
+fn augment_with_predictions(mut result: Value, predictions: Vec<Value>) -> Value {
+    if predictions.is_empty() {
+        return result;
+    }
+    if let Value::Object(ref mut map) = result {
+        map.insert(
+            "predicted_next".to_string(),
+            Value::Array(predictions),
+        );
+    }
+    result
 }
