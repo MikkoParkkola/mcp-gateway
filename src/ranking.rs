@@ -63,6 +63,22 @@ pub fn expand_synonyms(word: &str) -> &'static [&'static str] {
         "research" | "investigate" | "study" | "explore" => {
             &["research", "investigate", "study", "explore"]
         }
+        // send group
+        "send" | "deliver" | "publish" | "emit" | "notify" => {
+            &["send", "deliver", "publish", "emit", "notify"]
+        }
+        // delete group
+        "delete" | "remove" | "purge" | "clear" | "destroy" => {
+            &["delete", "remove", "purge", "clear", "destroy"]
+        }
+        // list group
+        "list" | "enumerate" | "browse" | "catalog" | "index" => {
+            &["list", "enumerate", "browse", "catalog", "index"]
+        }
+        // convert group
+        "convert" | "transform" | "translate" | "format" | "encode" => {
+            &["convert", "transform", "translate", "format", "encode"]
+        }
         _ => &[],
     }
 }
@@ -786,6 +802,7 @@ mod tests {
         // Every word in a returned group should map back to the same group.
         let seeds = [
             "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research",
+            "send", "delete", "list", "convert",
         ];
         for seed in seeds {
             let group = expand_synonyms(seed);
