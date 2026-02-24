@@ -21,6 +21,7 @@ use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::security::ToolPolicy;
 use crate::stats::UsageStats;
+use crate::transition::TransitionTracker;
 use crate::{Error, Result};
 
 /// MCP Gateway server
@@ -134,6 +135,22 @@ impl Gateway {
         }
         let ranker_for_shutdown = Arc::clone(&ranker);
 
+        // Create transition tracker with persistence
+        let transition_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".mcp-gateway")
+            .join("transitions.json");
+
+        let transition_tracker = Arc::new(TransitionTracker::new());
+        if transition_path.exists() {
+            if let Err(e) = transition_tracker.load(&transition_path) {
+                warn!(error = %e, "Failed to load transition tracking data");
+            } else {
+                info!("Loaded transition tracking data");
+            }
+        }
+        let tracker_for_shutdown = Arc::clone(&transition_tracker);
+
         // Create app state with cache, stats, and ranking support
         let meta_mcp = Arc::new(MetaMcp::with_features(
             Arc::clone(&self.backends),
@@ -142,6 +159,9 @@ impl Gateway {
             Some(ranker),
             self.config.cache.default_ttl,
         ));
+
+        // Attach transition tracker for predictive tool prefetch
+        meta_mcp.set_transition_tracker(transition_tracker);
 
         // Create webhook registry
         let webhook_registry = Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
@@ -424,6 +444,13 @@ impl Gateway {
             warn!(error = %e, "Failed to save search ranker usage data");
         } else {
             info!("Saved search ranking usage data");
+        }
+
+        // Save transition tracking data
+        if let Err(e) = tracker_for_shutdown.save(&transition_path) {
+            warn!(error = %e, "Failed to save transition tracking data");
+        } else {
+            info!("Saved transition tracking data");
         }
 
         // Graceful drain: wait for in-flight requests to complete.
