@@ -463,7 +463,7 @@ async fn meta_mcp_handler(
 
             state
                 .meta_mcp
-                .handle_tools_call(id, tool_name, arguments)
+                .handle_tools_call(id, tool_name, arguments, Some(session_id.as_str()))
                 .await
         }
         // Resources
