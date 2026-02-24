@@ -31,10 +31,11 @@ use crate::stats::UsageStats;
 use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
-    build_discovery_preamble, build_initialize_result, build_match_json, build_meta_tools,
-    build_routing_instructions, build_search_response, build_stats_response, build_suggestions,
-    extract_client_version, extract_price_per_million, extract_required_str, extract_search_limit,
-    parse_tool_arguments, ranked_results_to_json, tool_matches_query, wrap_tool_success,
+    build_discovery_preamble, build_initialize_result, build_match_json,
+    build_match_json_with_chains, build_meta_tools, build_routing_instructions,
+    build_search_response, build_stats_response, build_suggestions, extract_client_version,
+    extract_price_per_million, extract_required_str, extract_search_limit, parse_tool_arguments,
+    ranked_results_to_json, tool_matches_query, wrap_tool_success,
 };
 
 // ============================================================================
@@ -296,12 +297,18 @@ impl MetaMcp {
         // Collect all available tags for suggestion generation (only used on zero-result queries).
         let mut all_tags: Vec<String> = Vec::new();
 
-        // Search capability backend exhaustively (fast, no network, all in memory)
+        // Search capability backend exhaustively (fast, no network, all in memory).
+        // Iterates over full CapabilityDefinition to include composition metadata.
         if let Some(cap) = self.get_capabilities() {
-            for tool in cap.get_tools() {
+            for capability in cap.list_capabilities() {
+                let tool = capability.to_mcp_tool();
                 collect_tool_tags(&tool, &mut all_tags);
                 if tool_matches_query(&tool, &query) {
-                    matches.push(build_match_json(&cap.name, &tool));
+                    matches.push(build_match_json_with_chains(
+                        &cap.name,
+                        &tool,
+                        &capability.metadata.chains_with,
+                    ));
                 }
             }
         }
