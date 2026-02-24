@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod autotag;
 pub mod backend;
 pub mod cache;
 pub mod capability;

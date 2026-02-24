@@ -16,6 +16,7 @@ use parking_lot::RwLock;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
+use crate::autotag;
 use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
@@ -260,10 +261,13 @@ impl MetaMcp {
             }
             if let Ok(tools) = backend.get_tools().await {
                 for tool in tools {
+                    let desc = autotag::enrich_description(
+                        tool.description.as_deref().unwrap_or(""),
+                    );
                     all_tools.push(json!({
                         "server": backend.name,
                         "name": tool.name,
-                        "description": tool.description.as_deref().unwrap_or("")
+                        "description": desc
                     }));
                 }
             }
@@ -311,10 +315,23 @@ impl MetaMcp {
                 continue;
             }
             if let Ok(tools) = backend.get_tools().await {
-                for tool in &tools {
+                // Enrich each tool's description with auto-extracted keyword tags so
+                // that MCP backend tools participate in keyword matching just like
+                // capability tools that carry explicit [keywords: ...] tags.
+                let enriched: Vec<_> = tools
+                    .into_iter()
+                    .map(|mut t| {
+                        if let Some(ref desc) = t.description {
+                            t.description = Some(autotag::enrich_description(desc));
+                        }
+                        t
+                    })
+                    .collect();
+
+                for tool in &enriched {
                     collect_tool_tags(tool, &mut all_tags);
                 }
-                for tool in tools {
+                for tool in enriched {
                     if tool_matches_query(&tool, &query) {
                         matches.push(build_match_json(&backend.name, &tool));
                     }
