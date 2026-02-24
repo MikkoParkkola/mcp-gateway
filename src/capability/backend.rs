@@ -17,6 +17,7 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use super::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
+use super::schema_validator::validate_arguments;
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
@@ -153,6 +154,11 @@ impl CapabilityBackend {
 
     /// Execute a capability (call a tool)
     ///
+    /// Arguments are validated against the capability's input schema before
+    /// any HTTP request is made.  Unknown parameters, wrong types, missing
+    /// required parameters, and invalid enum values are all rejected with an
+    /// LLM-friendly error message returned as a tool error content block.
+    ///
     /// # Errors
     ///
     /// Returns an error if the capability is not found or execution fails.
@@ -164,7 +170,27 @@ impl CapabilityBackend {
             .get(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
 
-        let result = self.executor.execute(&capability, arguments).await?;
+        // Validate arguments against the YAML schema before making any HTTP call.
+        let input_schema = &capability.schema.input;
+        let validation = validate_arguments(&arguments, input_schema);
+        if !validation.is_valid() {
+            let error_text = validation.format_error(input_schema);
+            tracing::warn!(
+                capability = %name,
+                violations = validation.violations.len(),
+                "Schema validation failed for capability call"
+            );
+            return Ok(ToolsCallResult {
+                content: vec![Content::Text {
+                    text: error_text,
+                    annotations: None,
+                }],
+                is_error: true,
+            });
+        }
+
+        // Use the coerced arguments (e.g., "123" → 123 for integer fields).
+        let result = self.executor.execute(&capability, validation.coerced).await?;
 
         // Format result as MCP tool response
         let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
