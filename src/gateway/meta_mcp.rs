@@ -20,6 +20,7 @@ use crate::autotag;
 use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
+use crate::kill_switch::{ErrorBudgetConfig, KillSwitch};
 use crate::playbook::{PlaybookEngine, ToolInvoker};
 use crate::protocol::{
     JsonRpcResponse, LoggingLevel, LoggingSetLevelParams, Prompt, PromptsListResult, RequestId,
@@ -35,9 +36,9 @@ use super::differential::annotate_differential;
 use super::meta_mcp_helpers::{
     build_discovery_preamble, build_initialize_result, build_match_json,
     build_match_json_with_chains, build_meta_tools, build_routing_instructions,
-    build_search_response, build_stats_response, build_suggestions, extract_client_version,
-    extract_price_per_million, extract_required_str, extract_search_limit, parse_tool_arguments,
-    ranked_results_to_json, tool_matches_query, wrap_tool_success,
+    build_search_response, build_server_safety_status, build_stats_response, build_suggestions,
+    extract_client_version, extract_price_per_million, extract_required_str, extract_search_limit,
+    parse_tool_arguments, ranked_results_to_json, tool_matches_query, wrap_tool_success,
 };
 
 // ============================================================================
@@ -64,6 +65,12 @@ pub struct MetaMcp {
     playbook_engine: RwLock<PlaybookEngine>,
     /// Current logging level (gateway-wide, forwarded to backends)
     log_level: RwLock<LoggingLevel>,
+    /// Operator kill switch + per-backend error budget
+    kill_switch: Arc<KillSwitch>,
+    /// Error budget configuration (thresholds, window size). Written once at
+    /// startup; read on every invocation, so `RwLock` provides zero-overhead
+    /// reads in the common case.
+    error_budget_config: RwLock<ErrorBudgetConfig>,
 }
 
 impl MetaMcp {
@@ -80,6 +87,8 @@ impl MetaMcp {
             transition_tracker: RwLock::new(None),
             playbook_engine: RwLock::new(PlaybookEngine::new()),
             log_level: RwLock::new(LoggingLevel::default()),
+            kill_switch: Arc::new(KillSwitch::new()),
+            error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
         }
     }
 
@@ -101,6 +110,8 @@ impl MetaMcp {
             transition_tracker: RwLock::new(None),
             playbook_engine: RwLock::new(PlaybookEngine::new()),
             log_level: RwLock::new(LoggingLevel::default()),
+            kill_switch: Arc::new(KillSwitch::new()),
+            error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
         }
     }
 
@@ -124,6 +135,18 @@ impl MetaMcp {
     /// Get capability backend if available
     fn get_capabilities(&self) -> Option<Arc<CapabilityBackend>> {
         self.capabilities.read().clone()
+    }
+
+    /// Expose the kill switch for external introspection or testing.
+    #[allow(dead_code)]
+    pub fn kill_switch(&self) -> Arc<KillSwitch> {
+        Arc::clone(&self.kill_switch)
+    }
+
+    /// Override the error-budget configuration (useful in tests and operator tooling).
+    #[allow(dead_code)]
+    pub fn set_error_budget_config(&self, config: ErrorBudgetConfig) {
+        *self.error_budget_config.write() = config;
     }
 
     /// Handle initialize request with version negotiation.
@@ -188,6 +211,8 @@ impl MetaMcp {
             "gateway_invoke" => self.invoke_tool(&arguments, session_id).await,
             "gateway_get_stats" => self.get_stats(&arguments).await,
             "gateway_run_playbook" => self.run_playbook(&arguments).await,
+            "gateway_kill_server" => self.kill_server(&arguments),
+            "gateway_revive_server" => self.revive_server(&arguments),
             _ => Err(Error::json_rpc(
                 -32601,
                 format!("Unknown tool: {tool_name}"),
@@ -200,7 +225,7 @@ impl MetaMcp {
         }
     }
 
-    /// List all servers
+    /// List all servers, including kill-switch state per server.
     #[allow(clippy::unnecessary_wraps)]
     fn list_servers(&self) -> Result<Value> {
         let mut servers: Vec<Value> = self
@@ -209,12 +234,14 @@ impl MetaMcp {
             .iter()
             .map(|b| {
                 let status = b.status();
+                let killed = self.kill_switch.is_killed(&status.name);
                 json!({
                     "name": status.name,
                     "running": status.running,
                     "transport": status.transport,
                     "tools_count": status.tools_cached,
-                    "circuit_state": status.circuit_state
+                    "circuit_state": status.circuit_state,
+                    "status": if killed { "disabled" } else { "active" }
                 })
             })
             .collect();
@@ -222,12 +249,14 @@ impl MetaMcp {
         // Add capability backend if available
         if let Some(cap) = self.get_capabilities() {
             let status = cap.status();
+            let killed = self.kill_switch.is_killed(&status.name);
             servers.push(json!({
                 "name": status.name,
                 "running": true,
                 "transport": "capability",
                 "tools_count": status.capabilities_count,
-                "circuit_state": "Closed"
+                "circuit_state": "Closed",
+                "status": if killed { "disabled" } else { "active" }
             }));
         }
 
@@ -235,15 +264,21 @@ impl MetaMcp {
     }
 
     /// List tools from a specific server, or ALL tools if server is omitted.
+    ///
+    /// Tools from killed servers are still returned but include `"status": "disabled"`
+    /// so that the LLM knows the tool exists but cannot be invoked right now.
     async fn list_tools(&self, args: &Value) -> Result<Value> {
         // If server is specified, return tools from that single backend (existing behavior)
         if let Some(server) = args.get("server").and_then(Value::as_str) {
+            let killed = self.kill_switch.is_killed(server);
+
             // Check if it's the capability backend
             if let Some(cap) = self.get_capabilities() {
                 if server == cap.name {
                     let tools = cap.get_tools();
                     return Ok(json!({
                         "server": server,
+                        "status": if killed { "disabled" } else { "active" },
                         "tools": tools
                     }));
                 }
@@ -259,6 +294,7 @@ impl MetaMcp {
 
             return Ok(json!({
                 "server": server,
+                "status": if killed { "disabled" } else { "active" },
                 "tools": tools
             }));
         }
@@ -268,12 +304,17 @@ impl MetaMcp {
 
         // Capability tools (instant, in memory)
         if let Some(cap) = self.get_capabilities() {
+            let cap_killed = self.kill_switch.is_killed(&cap.name);
             for tool in cap.get_tools() {
-                all_tools.push(json!({
+                let mut entry = json!({
                     "server": cap.name,
                     "name": tool.name,
                     "description": tool.description.as_deref().unwrap_or("")
-                }));
+                });
+                if cap_killed {
+                    entry["status"] = json!("disabled");
+                }
+                all_tools.push(entry);
             }
         }
 
@@ -282,16 +323,21 @@ impl MetaMcp {
             if !backend.has_cached_tools() {
                 continue;
             }
+            let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Ok(tools) = backend.get_tools().await {
                 for tool in tools {
                     let desc = autotag::enrich_description(
                         tool.description.as_deref().unwrap_or(""),
                     );
-                    all_tools.push(json!({
+                    let mut entry = json!({
                         "server": backend.name,
                         "name": tool.name,
                         "description": desc
-                    }));
+                    });
+                    if backend_killed {
+                        entry["status"] = json!("disabled");
+                    }
+                    all_tools.push(entry);
                 }
             }
         }
@@ -322,15 +368,20 @@ impl MetaMcp {
         // Search capability backend exhaustively (fast, no network, all in memory).
         // Iterates over full CapabilityDefinition to include composition metadata.
         if let Some(cap) = self.get_capabilities() {
+            let cap_killed = self.kill_switch.is_killed(&cap.name);
             for capability in cap.list_capabilities() {
                 let tool = capability.to_mcp_tool();
                 collect_tool_tags(&tool, &mut all_tags);
                 if tool_matches_query(&tool, &query) {
-                    matches.push(build_match_json_with_chains(
+                    let mut entry = build_match_json_with_chains(
                         &cap.name,
                         &tool,
                         &capability.metadata.chains_with,
-                    ));
+                    );
+                    if cap_killed {
+                        entry["status"] = json!("disabled");
+                    }
+                    matches.push(entry);
                 }
             }
         }
@@ -343,6 +394,7 @@ impl MetaMcp {
             if !backend.has_cached_tools() {
                 continue;
             }
+            let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Ok(tools) = backend.get_tools().await {
                 // Enrich each tool's description with auto-extracted keyword tags so
                 // that MCP backend tools participate in keyword matching just like
@@ -362,7 +414,11 @@ impl MetaMcp {
                 }
                 for tool in enriched {
                     if tool_matches_query(&tool, &query) {
-                        matches.push(build_match_json(&backend.name, &tool));
+                        let mut entry = build_match_json(&backend.name, &tool);
+                        if backend_killed {
+                            entry["status"] = json!("disabled");
+                        }
+                        matches.push(entry);
                     }
                 }
             }
@@ -402,6 +458,12 @@ impl MetaMcp {
 
     /// Invoke a tool on a backend, recording the transition for predictive prefetch.
     ///
+    /// Checks the kill switch **before** every dispatch. When a server is killed,
+    /// returns a clear operator error without touching the backend.
+    ///
+    /// Also records call outcomes against the per-backend error budget so that
+    /// misbehaving backends are auto-killed when the configured threshold is exceeded.
+    ///
     /// When `session_id` is `Some` and a `TransitionTracker` is attached, records
     /// the `previous_tool → current_tool` transition and appends `predicted_next`
     /// to the response for transitions meeting the minimum count (≥3) and
@@ -410,6 +472,16 @@ impl MetaMcp {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         let arguments = parse_tool_arguments(args)?;
+
+        // --- Kill switch check (BEFORE anything else) ---
+        if self.kill_switch.is_killed(server) {
+            return Err(Error::json_rpc(
+                -32000,
+                format!(
+                    "Server '{server}' is currently disabled by operator kill switch"
+                ),
+            ));
+        }
 
         // Canonical key used for transition tracking.
         let tool_key = format!("{server}:{tool}");
@@ -438,8 +510,35 @@ impl MetaMcp {
 
         debug!(server = server, tool = tool, "Invoking tool");
 
-        // Dispatch to the appropriate backend.
-        let result = self.dispatch_to_backend(server, tool, arguments.clone()).await?;
+        // Dispatch to the appropriate backend, recording error-budget outcome.
+        let result = self.dispatch_to_backend(server, tool, arguments.clone()).await;
+
+        // Record success or failure against the error budget.
+        {
+            let cfg = self.error_budget_config.read();
+            match &result {
+                Ok(_) => {
+                    self.kill_switch
+                        .record_success(server, cfg.window_size, cfg.window_duration);
+                }
+                Err(_) => {
+                    let auto_killed = self.kill_switch.record_failure(
+                        server,
+                        cfg.window_size,
+                        cfg.window_duration,
+                        cfg.threshold,
+                    );
+                    if auto_killed {
+                        warn!(
+                            server = server,
+                            "Server auto-killed by error budget exhaustion"
+                        );
+                    }
+                }
+            }
+        }
+
+        let result = result?;
 
         // Cache the successful result (if cache enabled).
         if let Some(ref cache) = self.cache {
@@ -519,7 +618,7 @@ impl MetaMcp {
         Ok(response.result.unwrap_or(json!(null)))
     }
 
-    /// Get gateway statistics
+    /// Get gateway statistics including per-backend error budget status.
     async fn get_stats(&self, args: &Value) -> Result<Value> {
         let price_per_million = extract_price_per_million(args);
 
@@ -540,7 +639,60 @@ impl MetaMcp {
         }
 
         let snapshot = stats.snapshot(total_tools);
-        Ok(build_stats_response(&snapshot, price_per_million))
+        let mut response = build_stats_response(&snapshot, price_per_million);
+
+        // Append per-backend safety status (kill switch + error budget)
+        let safety: Vec<Value> = self
+            .backends
+            .all()
+            .iter()
+            .map(|b| {
+                let killed = self.kill_switch.is_killed(&b.name);
+                let error_rate = self.kill_switch.error_rate(&b.name);
+                let (successes, failures) = self.kill_switch.window_counts(&b.name);
+                build_server_safety_status(&b.name, killed, error_rate, successes, failures)
+            })
+            .collect();
+
+        if let Value::Object(ref mut map) = response {
+            map.insert("server_safety".to_string(), Value::Array(safety));
+        }
+
+        Ok(response)
+    }
+
+    /// Kill a backend server via the operator kill switch.
+    ///
+    /// Returns an error only if the `server` argument is missing; otherwise
+    /// the kill is always accepted (idempotent).
+    #[allow(clippy::unnecessary_wraps)]
+    fn kill_server(&self, args: &Value) -> Result<Value> {
+        let server = extract_required_str(args, "server")?;
+        let was_already_killed = self.kill_switch.is_killed(server);
+        self.kill_switch.kill(server);
+        Ok(json!({
+            "server": server,
+            "status": "disabled",
+            "was_already_killed": was_already_killed,
+            "message": format!("Server '{server}' has been disabled by operator kill switch")
+        }))
+    }
+
+    /// Revive a previously killed backend server.
+    ///
+    /// Also resets the error-budget window so the backend starts with a clean slate.
+    /// Returns an error only if the `server` argument is missing.
+    #[allow(clippy::unnecessary_wraps)]
+    fn revive_server(&self, args: &Value) -> Result<Value> {
+        let server = extract_required_str(args, "server")?;
+        let was_killed = self.kill_switch.is_killed(server);
+        self.kill_switch.revive(server);
+        Ok(json!({
+            "server": server,
+            "status": "active",
+            "was_killed": was_killed,
+            "message": format!("Server '{server}' has been re-enabled")
+        }))
     }
 
     /// Set the playbook engine (replaces existing).

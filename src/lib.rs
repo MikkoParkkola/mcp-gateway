@@ -33,6 +33,7 @@ pub mod discovery;
 pub mod error;
 pub mod failsafe;
 pub mod gateway;
+pub mod kill_switch;
 pub mod oauth;
 pub mod playbook;
 pub mod protocol;

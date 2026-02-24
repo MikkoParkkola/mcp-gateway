@@ -273,6 +273,56 @@ fn build_playbook_tool() -> Tool {
     }
 }
 
+/// Build the `gateway_kill_server` meta-tool definition.
+fn build_kill_server_tool() -> Tool {
+    Tool {
+        name: "gateway_kill_server".to_string(),
+        title: Some("Kill Server".to_string()),
+        description: Some(
+            "Immediately disable routing to a backend server (operator kill switch). \
+             The server's tools remain visible in search/list but are marked as disabled."
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "server": {
+                    "type": "string",
+                    "description": "Name of the backend server to disable"
+                }
+            },
+            "required": ["server"]
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
+/// Build the `gateway_revive_server` meta-tool definition.
+fn build_revive_server_tool() -> Tool {
+    Tool {
+        name: "gateway_revive_server".to_string(),
+        title: Some("Revive Server".to_string()),
+        description: Some(
+            "Re-enable routing to a previously disabled backend server. \
+             Also resets the error budget so the server gets a clean slate."
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "server": {
+                    "type": "string",
+                    "description": "Name of the backend server to re-enable"
+                }
+            },
+            "required": ["server"]
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
 /// Construct the full meta-tool list, optionally including stats and playbooks.
 pub(crate) fn build_meta_tools(stats_enabled: bool) -> Vec<Tool> {
     let mut tools = build_base_tools();
@@ -280,6 +330,8 @@ pub(crate) fn build_meta_tools(stats_enabled: bool) -> Vec<Tool> {
         tools.push(build_stats_tool());
     }
     tools.push(build_playbook_tool());
+    tools.push(build_kill_server_tool());
+    tools.push(build_revive_server_tool());
     tools
 }
 
@@ -488,6 +540,36 @@ pub(crate) fn build_stats_response(snapshot: &StatsSnapshot, price_per_million: 
         "tokens_saved": snapshot.tokens_saved,
         "estimated_savings_usd": format!("${:.2}", estimated_savings),
         "top_tools": snapshot.top_tools
+    })
+}
+
+/// Build the kill-switch / error-budget status entry for a single server.
+///
+/// Returned object shape:
+/// ```json
+/// {
+///   "server": "my-backend",
+///   "killed": false,
+///   "error_rate": "12.5%",
+///   "window": { "successes": 7, "failures": 1 }
+/// }
+/// ```
+pub(crate) fn build_server_safety_status(
+    server: &str,
+    killed: bool,
+    error_rate: f64,
+    successes: usize,
+    failures: usize,
+) -> Value {
+    #[allow(clippy::cast_precision_loss)]
+    json!({
+        "server": server,
+        "killed": killed,
+        "error_rate": format!("{:.1}%", error_rate * 100.0),
+        "window": {
+            "successes": successes,
+            "failures": failures
+        }
     })
 }
 
@@ -714,24 +796,30 @@ mod tests {
     // ── build_meta_tools ────────────────────────────────────────────────
 
     #[test]
-    fn build_meta_tools_returns_base_plus_playbook_without_stats() {
+    fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats() {
         let tools = build_meta_tools(false);
-        assert_eq!(tools.len(), 5); // 4 base + 1 playbook
+        // 4 base + 1 playbook + 2 kill-switch = 7
+        assert_eq!(tools.len(), 7);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_list_servers"));
         assert!(names.contains(&"gateway_list_tools"));
         assert!(names.contains(&"gateway_search_tools"));
         assert!(names.contains(&"gateway_invoke"));
         assert!(names.contains(&"gateway_run_playbook"));
+        assert!(names.contains(&"gateway_kill_server"));
+        assert!(names.contains(&"gateway_revive_server"));
     }
 
     #[test]
     fn build_meta_tools_returns_all_tools_with_stats() {
         let tools = build_meta_tools(true);
-        assert_eq!(tools.len(), 6); // 4 base + 1 stats + 1 playbook
+        // 4 base + 1 stats + 1 playbook + 2 kill-switch = 8
+        assert_eq!(tools.len(), 8);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_get_stats"));
         assert!(names.contains(&"gateway_run_playbook"));
+        assert!(names.contains(&"gateway_kill_server"));
+        assert!(names.contains(&"gateway_revive_server"));
     }
 
     #[test]
@@ -1436,5 +1524,41 @@ chains_with: [linear_create_issue, linear_update_issue]
         assert!(meta.produces.is_empty());
         assert!(meta.consumes.is_empty());
         assert!(meta.chains_with.is_empty());
+    }
+
+    // ── build_server_safety_status ─────────────────────────────────────────
+
+    #[test]
+    fn build_server_safety_status_live_server() {
+        // GIVEN: a live server with 10% error rate
+        let status = build_server_safety_status("my-backend", false, 0.10, 9, 1);
+        // THEN: killed is false, error_rate formatted, window counts correct
+        assert_eq!(status["server"], "my-backend");
+        assert_eq!(status["killed"], false);
+        assert_eq!(status["error_rate"], "10.0%");
+        assert_eq!(status["window"]["successes"], 9);
+        assert_eq!(status["window"]["failures"], 1);
+    }
+
+    #[test]
+    fn build_server_safety_status_killed_server() {
+        // GIVEN: a killed server with 100% error rate
+        let status = build_server_safety_status("bad-backend", true, 1.0, 0, 5);
+        assert_eq!(status["killed"], true);
+        assert_eq!(status["error_rate"], "100.0%");
+    }
+
+    #[test]
+    fn build_kill_server_tool_has_required_server_param() {
+        let tool = build_kill_server_tool();
+        assert_eq!(tool.name, "gateway_kill_server");
+        assert_eq!(tool.input_schema["required"][0], "server");
+    }
+
+    #[test]
+    fn build_revive_server_tool_has_required_server_param() {
+        let tool = build_revive_server_tool();
+        assert_eq!(tool.name, "gateway_revive_server");
+        assert_eq!(tool.input_schema["required"][0], "server");
     }
 }
