@@ -20,6 +20,7 @@ use crate::autotag;
 use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
+use crate::idempotency::{GuardOutcome, IdempotencyCache, derive_key, enforce, spawn_cleanup_task};
 use crate::playbook::{PlaybookEngine, ToolInvoker};
 use crate::protocol::{
     JsonRpcResponse, LoggingLevel, LoggingSetLevelParams, Prompt, PromptsListResult, RequestId,
@@ -54,6 +55,8 @@ pub struct MetaMcp {
     cache: Option<Arc<ResponseCache>>,
     /// Default cache TTL
     default_cache_ttl: Duration,
+    /// Idempotency cache — prevents duplicate side effects on LLM retries
+    idempotency_cache: Option<Arc<IdempotencyCache>>,
     /// Usage statistics
     stats: Option<Arc<UsageStats>>,
     /// Search ranker for usage-based ranking
@@ -75,6 +78,7 @@ impl MetaMcp {
             capabilities: RwLock::new(None),
             cache: None,
             default_cache_ttl: Duration::from_secs(60),
+            idempotency_cache: None,
             stats: None,
             ranker: None,
             transition_tracker: RwLock::new(None),
@@ -96,12 +100,27 @@ impl MetaMcp {
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl: default_ttl,
+            idempotency_cache: None,
             stats,
             ranker,
             transition_tracker: RwLock::new(None),
             playbook_engine: RwLock::new(PlaybookEngine::new()),
             log_level: RwLock::new(LoggingLevel::default()),
         }
+    }
+
+    /// Enable idempotency support with a background cleanup task.
+    ///
+    /// Must be called during server setup before any requests are handled.
+    /// Spawns a tokio task that evicts stale entries every `cleanup_interval`.
+    #[allow(dead_code)]
+    pub fn enable_idempotency(
+        &mut self,
+        cache: Arc<IdempotencyCache>,
+        cleanup_interval: Duration,
+    ) {
+        spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
+        self.idempotency_cache = Some(cache);
     }
 
     /// Attach a `TransitionTracker` for predictive tool prefetch.
@@ -406,6 +425,20 @@ impl MetaMcp {
     /// the `previous_tool → current_tool` transition and appends `predicted_next`
     /// to the response for transitions meeting the minimum count (≥3) and
     /// confidence (≥30%) thresholds.
+    ///
+    /// # Idempotency
+    ///
+    /// When `args` contains an `"idempotency_key"` string field the call is
+    /// deduplicated via the [`IdempotencyCache`]:
+    ///
+    /// - Key not found → execute and cache result for 24 h.
+    /// - Key in-flight → return JSON-RPC 409 immediately.
+    /// - Key completed → return cached result without re-executing.
+    ///
+    /// For tools whose `CapabilityMetadata.read_only` is `false` (side-effecting),
+    /// a deterministic key is auto-derived from `(tool_name, arguments)` when no
+    /// explicit key is supplied, protecting against exact-duplicate LLM retries
+    /// even without client cooperation.
     async fn invoke_tool(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
@@ -414,14 +447,38 @@ impl MetaMcp {
         // Canonical key used for transition tracking.
         let tool_key = format!("{server}:{tool}");
 
-        // Check cache first (if enabled).
-        // Transitions are still recorded on cache hits — the sequence occurred.
+        // ── Idempotency guard ────────────────────────────────────────────────
+        // Resolve the idempotency key: explicit > auto-derived for side-effecting
+        // tools > None (read-only / no idempotency cache).
+        let idem_key = resolve_idempotency_key(args, server, tool, &arguments, &self.idempotency_cache);
+
+        if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
+            match enforce(idem_cache, key)? {
+                GuardOutcome::CachedResult(cached) => {
+                    debug!(server, tool, key, "Idempotency cache hit — returning stored result");
+                    if let Some(ref stats) = self.stats {
+                        stats.record_cache_hit();
+                    }
+                    let predictions = self.record_and_predict(session_id, &tool_key);
+                    return Ok(augment_with_predictions(cached, predictions));
+                }
+                GuardOutcome::Proceed => {
+                    debug!(server, tool, key, "Idempotency key registered as in-flight");
+                }
+            }
+        }
+
+        // ── Response cache (read-through, does not prevent side effects) ─────
         if let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server = server, tool = tool, "Cache hit");
                 if let Some(ref stats) = self.stats {
                     stats.record_cache_hit();
+                }
+                // Promote to idempotency cache if key present
+                if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
+                    idem_cache.mark_completed(key, cached.clone());
                 }
                 let predictions = self.record_and_predict(session_id, &tool_key);
                 return Ok(augment_with_predictions(cached, predictions));
@@ -439,13 +496,31 @@ impl MetaMcp {
         debug!(server = server, tool = tool, "Invoking tool");
 
         // Dispatch to the appropriate backend.
-        let result = self.dispatch_to_backend(server, tool, arguments.clone()).await?;
+        let dispatch_result = self.dispatch_to_backend(server, tool, arguments.clone()).await;
 
-        // Cache the successful result (if cache enabled).
+        // ── Handle dispatch outcome ──────────────────────────────────────────
+        let result = match dispatch_result {
+            Ok(value) => value,
+            Err(e) => {
+                // On failure: remove in-flight marker so the call is retryable.
+                if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
+                    idem_cache.remove(key);
+                }
+                return Err(e);
+            }
+        };
+
+        // Cache the successful result (response cache).
         if let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             cache.set(&cache_key, result.clone(), self.default_cache_ttl);
             debug!(server = server, tool = tool, ttl = ?self.default_cache_ttl, "Cached result");
+        }
+
+        // Transition idempotency entry to Completed.
+        if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
+            idem_cache.mark_completed(key, result.clone());
+            debug!(server, tool, key, "Idempotency entry marked completed");
         }
 
         // Record transition and compute predictions after successful invocation.
@@ -913,6 +988,34 @@ impl MetaMcp {
         }
         None
     }
+}
+
+/// Resolve the idempotency key for a `gateway_invoke` call.
+///
+/// Priority:
+/// 1. Explicit `"idempotency_key"` string in `args` — used verbatim.
+/// 2. Auto-derived from `(server, tool, arguments)` when an `IdempotencyCache`
+///    is active.  This protects against exact-duplicate LLM retries even when
+///    the client supplies no key.
+///
+/// Returns `None` when no idempotency cache is configured.
+fn resolve_idempotency_key(
+    args: &Value,
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+    idem_cache: &Option<Arc<IdempotencyCache>>,
+) -> Option<String> {
+    if idem_cache.is_none() {
+        return None;
+    }
+    // Explicit key takes precedence.
+    if let Some(key) = args.get("idempotency_key").and_then(Value::as_str) {
+        return Some(key.to_string());
+    }
+    // Auto-derive from (server, tool, arguments) — stable, deterministic.
+    let combined = format!("{server}:{tool}");
+    Some(derive_key(&combined, arguments))
 }
 
 /// Extract keyword tags from a tool's description into `out`.
