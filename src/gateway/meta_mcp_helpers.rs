@@ -273,11 +273,34 @@ fn build_playbook_tool() -> Tool {
     }
 }
 
-/// Construct the full meta-tool list, optionally including stats and playbooks.
-pub(crate) fn build_meta_tools(stats_enabled: bool) -> Vec<Tool> {
+/// Build the webhook status meta-tool definition.
+pub(crate) fn build_webhook_status_tool() -> Tool {
+    Tool {
+        name: "gateway_webhook_status".to_string(),
+        title: Some("Webhook Status".to_string()),
+        description: Some(
+            "List registered webhook endpoints and their delivery statistics \
+             (received, delivered, failures, last event)"
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
+/// Construct the full meta-tool list, optionally including stats, webhooks, and playbooks.
+pub(crate) fn build_meta_tools(stats_enabled: bool, webhooks_enabled: bool) -> Vec<Tool> {
     let mut tools = build_base_tools();
     if stats_enabled {
         tools.push(build_stats_tool());
+    }
+    if webhooks_enabled {
+        tools.push(build_webhook_status_tool());
     }
     tools.push(build_playbook_tool());
     tools
@@ -714,8 +737,8 @@ mod tests {
     // ── build_meta_tools ────────────────────────────────────────────────
 
     #[test]
-    fn build_meta_tools_returns_base_plus_playbook_without_stats() {
-        let tools = build_meta_tools(false);
+    fn build_meta_tools_returns_base_plus_playbook_without_stats_or_webhooks() {
+        let tools = build_meta_tools(false, false);
         assert_eq!(tools.len(), 5); // 4 base + 1 playbook
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_list_servers"));
@@ -723,15 +746,28 @@ mod tests {
         assert!(names.contains(&"gateway_search_tools"));
         assert!(names.contains(&"gateway_invoke"));
         assert!(names.contains(&"gateway_run_playbook"));
+        assert!(!names.contains(&"gateway_webhook_status"));
     }
 
     #[test]
-    fn build_meta_tools_returns_all_tools_with_stats() {
-        let tools = build_meta_tools(true);
-        assert_eq!(tools.len(), 6); // 4 base + 1 stats + 1 playbook
+    fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
+        let tools = build_meta_tools(true, true);
+        assert_eq!(tools.len(), 7); // 4 base + 1 stats + 1 webhooks + 1 playbook
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_get_stats"));
+        assert!(names.contains(&"gateway_webhook_status"));
         assert!(names.contains(&"gateway_run_playbook"));
+    }
+
+    #[test]
+    fn build_meta_tools_webhooks_only_without_stats() {
+        // GIVEN: webhooks enabled but stats disabled
+        // WHEN: building tool list
+        // THEN: webhook tool present, stats tool absent
+        let tools = build_meta_tools(false, true);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"gateway_webhook_status"));
+        assert!(!names.contains(&"gateway_get_stats"));
     }
 
     #[test]
