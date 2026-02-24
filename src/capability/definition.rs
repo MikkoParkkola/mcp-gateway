@@ -378,6 +378,27 @@ pub struct CapabilityMetadata {
     /// Whether the operation is read-only
     #[serde(default)]
     pub read_only: bool,
+
+    /// Data types or entities this tool produces as output.
+    ///
+    /// Examples: `["teamId", "issueId", "userId"]`
+    /// Used by the router to suggest which tools can feed into others.
+    #[serde(default)]
+    pub produces: Vec<String>,
+
+    /// Data types or entities this tool requires as input.
+    ///
+    /// Examples: `["teamId", "issueId"]`
+    /// Used by the router to surface tools that satisfy this tool's inputs.
+    #[serde(default)]
+    pub consumes: Vec<String>,
+
+    /// Tool names that are commonly invoked after this one (composition hints).
+    ///
+    /// Examples: `["linear_create_issue", "linear_update_issue"]`
+    /// Surfaced in search results to guide multi-step workflows.
+    #[serde(default)]
+    pub chains_with: Vec<String>,
 }
 
 impl CapabilityDefinition {
@@ -518,5 +539,49 @@ fallback:
         assert_eq!(providers.fallback.len(), 2);
         assert_eq!(providers.fallback[0].service, "anthropic");
         assert_eq!(providers.fallback[1].service, "groq");
+    }
+
+    #[test]
+    fn capability_metadata_produces_consumes_chains_with_default_empty() {
+        // GIVEN: no composition fields in JSON
+        // WHEN: deserializing CapabilityMetadata
+        // THEN: produces, consumes, chains_with all default to empty
+        let meta: CapabilityMetadata = serde_json::from_str("{}").unwrap();
+        assert!(meta.produces.is_empty());
+        assert!(meta.consumes.is_empty());
+        assert!(meta.chains_with.is_empty());
+    }
+
+    #[test]
+    fn capability_metadata_deserializes_all_composition_fields() {
+        // GIVEN: JSON with all three composition fields
+        // WHEN: deserializing
+        // THEN: fields populated correctly
+        let json = r#"{
+            "produces": ["teamId"],
+            "consumes": ["userId"],
+            "chains_with": ["linear_create_issue"]
+        }"#;
+        let meta: CapabilityMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.produces, vec!["teamId"]);
+        assert_eq!(meta.consumes, vec!["userId"]);
+        assert_eq!(meta.chains_with, vec!["linear_create_issue"]);
+    }
+
+    #[test]
+    fn capability_metadata_serializes_composition_fields() {
+        // GIVEN: CapabilityMetadata with composition data
+        // WHEN: serializing to JSON
+        // THEN: all fields present
+        let meta = CapabilityMetadata {
+            produces: vec!["teamId".to_string()],
+            consumes: vec!["userId".to_string()],
+            chains_with: vec!["next_tool".to_string()],
+            ..CapabilityMetadata::default()
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(json["produces"][0], "teamId");
+        assert_eq!(json["consumes"][0], "userId");
+        assert_eq!(json["chains_with"][0], "next_tool");
     }
 }

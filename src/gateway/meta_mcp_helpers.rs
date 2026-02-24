@@ -97,6 +97,14 @@ pub(crate) fn build_routing_instructions(
         }
     }
 
+    // Also track chains_with hints per category: source_tool -> [downstream_tools]
+    let mut chains: Vec<(String, Vec<String>)> = Vec::new();
+    for cap in capabilities {
+        if !cap.metadata.chains_with.is_empty() {
+            chains.push((cap.name.clone(), cap.metadata.chains_with.clone()));
+        }
+    }
+
     let mut lines = vec!["\nRouting Guide (by task type):".to_string()];
 
     for (category, (tools, tags)) in &by_category {
@@ -111,6 +119,13 @@ pub(crate) fn build_routing_instructions(
         if !tags.is_empty() {
             let tag_list = tags.iter().cloned().collect::<Vec<_>>().join(", ");
             lines.push(format!("  Search keywords: {tag_list}"));
+        }
+    }
+
+    if !chains.is_empty() {
+        lines.push("\nComposition chains (tool -> next steps):".to_string());
+        for (source, targets) in &chains {
+            lines.push(format!("  {source} -> {}", targets.join(", ")));
         }
     }
 
@@ -330,17 +345,43 @@ pub(crate) fn build_suggestions(query: &str, all_tags: &[String]) -> Vec<String>
 
 /// Build a search match JSON object from a tool and server name.
 ///
-/// Truncates description to 500 characters.
+/// Truncates description to 500 characters. When `chains_with` is non-empty,
+/// a `"chains_with"` array is included to surface composition hints to the caller.
 pub(crate) fn build_match_json(server: &str, tool: &Tool) -> Value {
-    json!({
-        "server": server,
-        "tool": tool.name,
-        "description": tool.description.as_deref()
-            .unwrap_or("")
-            .chars()
-            .take(500)
-            .collect::<String>()
-    })
+    build_match_json_with_chains(server, tool, &[])
+}
+
+/// Build a search match JSON object with optional tool composition hints.
+///
+/// Like [`build_match_json`] but includes a `"chains_with"` field when the
+/// capability declares downstream tools it commonly chains into.
+pub(crate) fn build_match_json_with_chains(
+    server: &str,
+    tool: &Tool,
+    chains_with: &[String],
+) -> Value {
+    let description = tool
+        .description
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(500)
+        .collect::<String>();
+
+    if chains_with.is_empty() {
+        json!({
+            "server": server,
+            "tool": tool.name,
+            "description": description
+        })
+    } else {
+        json!({
+            "server": server,
+            "tool": tool.name,
+            "description": description,
+            "chains_with": chains_with
+        })
+    }
 }
 
 /// Convert ranked `SearchResult` items to JSON.
@@ -1249,5 +1290,151 @@ mod tests {
         let suggestions = build_suggestions("xy", &tags);
         // Substring match still works
         assert!(suggestions.contains(&"xy_tool".to_string()));
+    }
+
+    // ── build_match_json_with_chains ────────────────────────────────────
+
+    #[test]
+    fn build_match_json_with_chains_omits_field_when_empty() {
+        // GIVEN: a tool with no chains_with
+        // WHEN: building match JSON with empty chains
+        // THEN: no "chains_with" key in output
+        let tool = make_tool("linear_get_teams", Some("List teams"));
+        let result = build_match_json_with_chains("cap", &tool, &[]);
+        assert_eq!(result["server"], "cap");
+        assert_eq!(result["tool"], "linear_get_teams");
+        assert!(result.get("chains_with").is_none());
+    }
+
+    #[test]
+    fn build_match_json_with_chains_includes_field_when_non_empty() {
+        // GIVEN: a tool that chains into two downstream tools
+        // WHEN: building match JSON with chains
+        // THEN: "chains_with" array is present with correct values
+        let tool = make_tool("linear_get_teams", Some("List teams"));
+        let chains = vec!["linear_create_issue".to_string(), "linear_list_projects".to_string()];
+        let result = build_match_json_with_chains("cap", &tool, &chains);
+        let chains_val = result["chains_with"].as_array().unwrap();
+        assert_eq!(chains_val.len(), 2);
+        assert_eq!(chains_val[0], "linear_create_issue");
+        assert_eq!(chains_val[1], "linear_list_projects");
+    }
+
+    #[test]
+    fn build_match_json_delegates_to_build_match_json_with_chains() {
+        // GIVEN: a tool
+        // WHEN: using the simple build_match_json helper
+        // THEN: result is identical to build_match_json_with_chains(..., &[])
+        let tool = make_tool("my_tool", Some("Does something"));
+        let simple = build_match_json("srv", &tool);
+        let explicit = build_match_json_with_chains("srv", &tool, &[]);
+        assert_eq!(simple, explicit);
+    }
+
+    #[test]
+    fn build_match_json_with_chains_truncates_long_description() {
+        // GIVEN: tool description longer than 500 chars
+        // WHEN: building match JSON
+        // THEN: description is truncated to 500 chars
+        let long_desc = "x".repeat(600);
+        let tool = make_tool("verbose_tool", Some(&long_desc));
+        let result = build_match_json_with_chains("srv", &tool, &[]);
+        assert_eq!(result["description"].as_str().unwrap().len(), 500);
+    }
+
+    // ── build_routing_instructions with chains ──────────────────────────
+
+    #[test]
+    fn build_routing_instructions_includes_chain_section_when_chains_present() {
+        // GIVEN: capabilities where one declares chains_with
+        use crate::capability::{CapabilityDefinition, CapabilityMetadata};
+        use std::collections::HashMap;
+
+        let make_cap = |name: &str, category: &str, chains: Vec<&str>| {
+            CapabilityDefinition {
+                fulcrum: "1.0".to_string(),
+                name: name.to_string(),
+                description: format!("{name} description"),
+                schema: Default::default(),
+                providers: Default::default(),
+                auth: Default::default(),
+                cache: Default::default(),
+                metadata: CapabilityMetadata {
+                    category: category.to_string(),
+                    chains_with: chains.into_iter().map(ToString::to_string).collect(),
+                    ..Default::default()
+                },
+                transform: Default::default(),
+                webhooks: HashMap::new(),
+            }
+        };
+
+        let caps = vec![
+            make_cap("linear_get_teams", "productivity", vec!["linear_create_issue"]),
+            make_cap("linear_create_issue", "productivity", vec![]),
+        ];
+
+        let instructions = build_routing_instructions(&caps, "cap");
+        assert!(instructions.contains("Composition chains"));
+        assert!(instructions.contains("linear_get_teams -> linear_create_issue"));
+    }
+
+    #[test]
+    fn build_routing_instructions_omits_chain_section_when_no_chains() {
+        // GIVEN: capabilities with no chains_with set
+        use crate::capability::{CapabilityDefinition, CapabilityMetadata};
+        use std::collections::HashMap;
+
+        let cap = CapabilityDefinition {
+            fulcrum: "1.0".to_string(),
+            name: "tool_a".to_string(),
+            description: "Tool A".to_string(),
+            schema: Default::default(),
+            providers: Default::default(),
+            auth: Default::default(),
+            cache: Default::default(),
+            metadata: CapabilityMetadata {
+                category: "general".to_string(),
+                chains_with: vec![],
+                ..Default::default()
+            },
+            transform: Default::default(),
+            webhooks: HashMap::new(),
+        };
+
+        let instructions = build_routing_instructions(&[cap], "cap");
+        assert!(!instructions.contains("Composition chains"));
+    }
+
+    // ── CapabilityMetadata deserialization (produces/consumes/chains_with) ──
+
+    #[test]
+    fn capability_metadata_deserializes_composition_fields_from_yaml() {
+        // GIVEN: YAML with produces, consumes, and chains_with
+        // WHEN: deserializing
+        // THEN: all three fields are populated correctly
+        let yaml = r#"
+category: productivity
+produces: [teamId, issueId]
+consumes: [teamId]
+chains_with: [linear_create_issue, linear_update_issue]
+"#;
+        let meta: crate::capability::CapabilityMetadata = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(meta.produces, vec!["teamId", "issueId"]);
+        assert_eq!(meta.consumes, vec!["teamId"]);
+        assert_eq!(meta.chains_with, vec!["linear_create_issue", "linear_update_issue"]);
+    }
+
+    #[test]
+    fn capability_metadata_defaults_composition_fields_to_empty() {
+        // GIVEN: YAML with no composition fields
+        // WHEN: deserializing
+        // THEN: produces, consumes, chains_with default to empty Vec
+        let yaml = "category: search
+";
+        let meta: crate::capability::CapabilityMetadata = serde_yaml::from_str(yaml).unwrap();
+        assert!(meta.produces.is_empty());
+        assert!(meta.consumes.is_empty());
+        assert!(meta.chains_with.is_empty());
     }
 }
