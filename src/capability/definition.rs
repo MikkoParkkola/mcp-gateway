@@ -401,18 +401,115 @@ pub struct CapabilityMetadata {
     pub chains_with: Vec<String>,
 }
 
+/// Extract searchable field names and descriptions from a JSON Schema object.
+///
+/// Walks the `properties` map (one level deep) and collects:
+/// - each property name (e.g. `symbol`, `exchange`)
+/// - the `description` string of each property, split into words
+/// - the top-level schema `description` string, split into words
+///
+/// Only non-empty, non-duplicate tokens are returned; all tokens are
+/// lowercased so callers can do case-insensitive matching cheaply.
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "type": "object",
+///   "description": "Stock query parameters",
+///   "properties": {
+///     "symbol": { "type": "string", "description": "Stock ticker symbol" },
+///     "exchange": { "type": "string" }
+///   }
+/// }
+/// ```
+///
+/// Returns: `["symbol", "exchange", "stock", "ticker", "query", "parameters"]`
+#[must_use]
+pub fn extract_schema_fields(schema: &serde_json::Value) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut fields = Vec::new();
+
+    // Collect a token, deduplicating across the whole result set.
+    let mut push = |token: &str| {
+        let token = token.trim().to_lowercase();
+        if !token.is_empty() && seen.insert(token.clone()) {
+            fields.push(token);
+        }
+    };
+
+    collect_schema_tokens(schema, &mut push);
+    fields
+}
+
+/// Recursively collect tokens from a JSON Schema node.
+fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)) {
+    // Top-level description words
+    if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
+        for word in desc.split_whitespace() {
+            let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+            push(clean);
+        }
+    }
+
+    // Property names and their descriptions
+    if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
+        for (name, prop_schema) in props {
+            push(name);
+            if let Some(desc) = prop_schema.get("description").and_then(|v| v.as_str()) {
+                for word in desc.split_whitespace() {
+                    let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+                    push(clean);
+                }
+            }
+        }
+    }
+}
+
 impl CapabilityDefinition {
-    /// Build the MCP tool description, appending keyword tags when present.
+    /// Build the MCP tool description, appending keyword tags and schema field
+    /// names when present.
     ///
-    /// The tags suffix has the form `[keywords: tag1, tag2, ...]` and is
-    /// invisible to human readers but searchable by both the gateway's
-    /// `tool_matches_query` function and by LLMs reading the description.
+    /// The suffixes have the forms:
+    /// - `[keywords: tag1, tag2, ...]`
+    /// - `[schema: field1, field2, ...]`
+    ///
+    /// Both are invisible to human readers but searchable by the gateway's
+    /// ranking engine and by LLMs reading the description.
     #[must_use]
     fn build_description(&self) -> String {
-        if self.metadata.tags.is_empty() {
-            return self.description.clone();
+        let keyword_suffix = if self.metadata.tags.is_empty() {
+            String::new()
+        } else {
+            format!(" [keywords: {}]", self.metadata.tags.join(", "))
+        };
+
+        let schema_fields = self.collect_all_schema_fields();
+        let schema_suffix = if schema_fields.is_empty() {
+            String::new()
+        } else {
+            format!(" [schema: {}]", schema_fields.join(", "))
+        };
+
+        format!("{}{keyword_suffix}{schema_suffix}", self.description)
+    }
+
+    /// Collect all schema field tokens from input and output schemas combined,
+    /// deduplicating across both.
+    fn collect_all_schema_fields(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut fields = Vec::new();
+
+        for token in extract_schema_fields(&self.schema.input)
+            .into_iter()
+            .chain(extract_schema_fields(&self.schema.output))
+        {
+            if seen.insert(token.clone()) {
+                fields.push(token);
+            }
         }
-        format!("{} [keywords: {}]", self.description, self.metadata.tags.join(", "))
+
+        fields
     }
 
     /// Convert to MCP tool format
@@ -517,6 +614,203 @@ mod tests {
     fn build_description_with_tags_includes_all_tags() {
         let cap = make_capability("multi", "Desc", vec!["a", "b", "c"]);
         assert_eq!(cap.build_description(), "Desc [keywords: a, b, c]");
+    }
+
+    // ── extract_schema_fields ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_schema_fields_returns_empty_for_null_schema() {
+        // GIVEN: null JSON value (default schema)
+        // WHEN: extracting fields
+        // THEN: empty vec
+        let fields = extract_schema_fields(&serde_json::Value::Null);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn extract_schema_fields_extracts_property_names() {
+        // GIVEN: schema with `symbol` and `exchange` properties
+        // WHEN: extracting fields
+        // THEN: both property names are present
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "symbol": { "type": "string" },
+                "exchange": { "type": "string" }
+            }
+        });
+        let fields = extract_schema_fields(&schema);
+        assert!(fields.contains(&"symbol".to_string()));
+        assert!(fields.contains(&"exchange".to_string()));
+    }
+
+    #[test]
+    fn extract_schema_fields_includes_property_description_words() {
+        // GIVEN: schema where property has a description
+        // WHEN: extracting fields
+        // THEN: words from property description are included
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "symbol": { "type": "string", "description": "Stock ticker symbol" }
+            }
+        });
+        let fields = extract_schema_fields(&schema);
+        assert!(fields.contains(&"symbol".to_string()));
+        assert!(fields.contains(&"stock".to_string()));
+        assert!(fields.contains(&"ticker".to_string()));
+    }
+
+    #[test]
+    fn extract_schema_fields_includes_top_level_description_words() {
+        // GIVEN: schema with a top-level description
+        // WHEN: extracting fields
+        // THEN: words from the top-level description are included
+        let schema = serde_json::json!({
+            "type": "object",
+            "description": "Market data query",
+            "properties": {}
+        });
+        let fields = extract_schema_fields(&schema);
+        assert!(fields.contains(&"market".to_string()));
+        assert!(fields.contains(&"data".to_string()));
+        assert!(fields.contains(&"query".to_string()));
+    }
+
+    #[test]
+    fn extract_schema_fields_deduplicates_tokens() {
+        // GIVEN: schema where "symbol" appears as property name AND in description
+        // WHEN: extracting fields
+        // THEN: "symbol" appears only once
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "symbol": { "type": "string", "description": "The symbol to look up" }
+            }
+        });
+        let fields = extract_schema_fields(&schema);
+        let count = fields.iter().filter(|f| f.as_str() == "symbol").count();
+        assert_eq!(count, 1, "symbol should appear exactly once");
+    }
+
+    #[test]
+    fn extract_schema_fields_lowercases_tokens() {
+        // GIVEN: schema with mixed-case property name
+        // WHEN: extracting fields
+        // THEN: all tokens are lowercase
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "StockSymbol": { "type": "string", "description": "A TICKER value" }
+            }
+        });
+        let fields = extract_schema_fields(&schema);
+        assert!(fields.iter().all(|f| f == &f.to_lowercase()));
+        assert!(fields.contains(&"stocksymbol".to_string()));
+        assert!(fields.contains(&"ticker".to_string()));
+        assert!(fields.contains(&"value".to_string()));
+    }
+
+    // ── build_description with schema ─────────────────────────────────────
+
+    fn make_capability_with_schema(
+        name: &str,
+        description: &str,
+        tags: Vec<&str>,
+        input: serde_json::Value,
+    ) -> CapabilityDefinition {
+        CapabilityDefinition {
+            fulcrum: "1.0".to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            schema: SchemaDefinition {
+                input,
+                output: serde_json::Value::Null,
+            },
+            providers: ProvidersConfig::default(),
+            auth: AuthConfig::default(),
+            cache: CacheConfig::default(),
+            metadata: CapabilityMetadata {
+                tags: tags.into_iter().map(ToString::to_string).collect(),
+                ..CapabilityMetadata::default()
+            },
+            transform: crate::transform::TransformConfig::default(),
+            webhooks: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn build_description_with_schema_appends_schema_suffix() {
+        // GIVEN: capability with schema containing symbol and exchange
+        // WHEN: building description
+        // THEN: [schema: ...] suffix is appended
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "symbol": { "type": "string" },
+                "exchange": { "type": "string" }
+            }
+        });
+        let cap = make_capability_with_schema("stock_tool", "Get stock data", vec![], schema);
+        let desc = cap.build_description();
+        assert!(desc.starts_with("Get stock data"));
+        assert!(desc.contains("[schema:"));
+        assert!(desc.contains("symbol"));
+        assert!(desc.contains("exchange"));
+    }
+
+    #[test]
+    fn build_description_with_tags_and_schema_includes_both_suffixes() {
+        // GIVEN: capability with both tags and schema fields
+        // WHEN: building description
+        // THEN: [keywords: ...] and [schema: ...] both appear
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "symbol": { "type": "string" } }
+        });
+        let cap = make_capability_with_schema(
+            "stock_tool",
+            "Get stock data",
+            vec!["finance", "market"],
+            schema,
+        );
+        let desc = cap.build_description();
+        assert!(desc.contains("[keywords: finance, market]"));
+        assert!(desc.contains("[schema:"));
+        assert!(desc.contains("symbol"));
+    }
+
+    #[test]
+    fn build_description_without_schema_omits_schema_suffix() {
+        // GIVEN: capability with tags but no schema properties
+        // WHEN: building description
+        // THEN: no [schema: ...] suffix
+        let cap = make_capability("search", "Search tool", vec!["web"]);
+        let desc = cap.build_description();
+        assert!(!desc.contains("[schema:"));
+    }
+
+    #[test]
+    fn to_mcp_tool_with_schema_includes_schema_fields_in_description() {
+        // GIVEN: capability with a rich input schema
+        // WHEN: converting to MCP tool
+        // THEN: description contains searchable schema fields
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "symbol": { "type": "string", "description": "Stock ticker symbol" },
+                "exchange": { "type": "string" },
+                "price": { "type": "number" },
+                "volume": { "type": "integer" }
+            }
+        });
+        let cap = make_capability_with_schema("market_data", "Fetch market data", vec![], schema);
+        let tool = cap.to_mcp_tool();
+        let desc = tool.description.unwrap();
+        assert!(desc.contains("symbol"), "description must contain 'symbol'");
+        assert!(desc.contains("exchange"), "description must contain 'exchange'");
+        assert!(desc.contains("price"), "description must contain 'price'");
+        assert!(desc.contains("volume"), "description must contain 'volume'");
     }
 
     #[test]

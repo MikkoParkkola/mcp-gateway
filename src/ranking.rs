@@ -109,6 +109,61 @@ fn text_contains_with_synonyms(text: &str, word: &str) -> (bool, bool) {
     (false, false)
 }
 
+/// Keyword-tag scoring: returns `(score, via_synonym)`.
+///
+/// Tier: `6 + 2N` where N is the number of matched keyword tags.
+#[allow(clippy::cast_precision_loss)]
+fn keyword_tag_score(desc_lower: &str, words: &[&str]) -> (f64, bool) {
+    if !desc_lower.contains("[keywords:") {
+        return (0.0, false);
+    }
+    let exact_kw = count_keyword_matches(desc_lower, words);
+    if exact_kw > 0 {
+        return (6.0 + (exact_kw as f64) * 2.0, false);
+    }
+    let syn_kw = count_keyword_matches_with_synonyms(desc_lower, words);
+    if syn_kw > 0 { (6.0 + (syn_kw as f64) * 2.0, true) } else { (0.0, false) }
+}
+
+/// Text-coverage scoring for multi-word queries: returns `(score, via_synonym)`.
+///
+/// Counts query words found anywhere in `combined` (tool name + description).
+/// Tiers: `10+2N` (all N matched), `3+2M` (M of N partial), `0` (no match).
+#[allow(clippy::cast_precision_loss)]
+fn text_coverage_score(combined: &str, words: &[&str]) -> (f64, bool) {
+    if words.len() <= 1 {
+        return (0.0, false);
+    }
+    let exact_matched = words.iter().filter(|w| combined.contains(**w)).count();
+    if exact_matched == words.len() {
+        return (10.0 + (exact_matched as f64) * 2.0, false);
+    }
+    let syn_matched = words
+        .iter()
+        .filter(|w| text_contains_with_synonyms(combined, w).0)
+        .count();
+    let any_syn = words.iter().any(|w| text_contains_with_synonyms(combined, w).1);
+    if syn_matched == words.len() {
+        (10.0 + (syn_matched as f64) * 2.0, any_syn)
+    } else if syn_matched > 0 {
+        (3.0 + (syn_matched as f64) * 2.0, any_syn)
+    } else {
+        (0.0, false)
+    }
+}
+
+/// Select the winning `(score, via_synonym)` from the three scoring paths.
+///
+/// Schema scores are never synonym-discounted (field names are exact identifiers).
+fn best_coverage_score(
+    kw: (f64, bool),
+    schema: f64,
+    text: (f64, bool),
+) -> (f64, bool) {
+    let (kw_best, kw_syn) = if kw.0 >= text.0 { kw } else { text };
+    if schema > kw_best { (schema, false) } else { (kw_best, kw_syn) }
+}
+
 /// Compute text relevance score for a single result against a pre-lowercased query.
 ///
 /// `words` must be `query.split_whitespace().collect()` — passed in to avoid
@@ -121,106 +176,44 @@ fn score_text_relevance(tool: &str, description: &str, query: &str, words: &[&st
     let tool_lower = tool.to_lowercase();
     let desc_lower = description.to_lowercase();
 
-    // Single-word exact name match
+    // Tier 1: single-word exact name match
     if tool_lower == query {
         return 10.0;
     }
 
-    // Multi-word: all words found in name alone (strongest signal)
-    // Check exact first, then synonym-expanded.
+    // Tier 2: all words found in tool name alone
     if words.len() > 1 {
         if words.iter().all(|w| tool_lower.contains(w)) {
             return 15.0;
         }
-        let syn_all_in_name = words.iter().all(|w| {
-            let (hit, _) = text_contains_with_synonyms(&tool_lower, w);
-            hit
-        });
-        let any_synonym = words.iter().any(|w| {
-            let (_, is_syn) = text_contains_with_synonyms(&tool_lower, w);
-            is_syn
-        });
+        let syn_all_in_name = words.iter().all(|w| text_contains_with_synonyms(&tool_lower, w).0);
+        let any_synonym = words.iter().any(|w| text_contains_with_synonyms(&tool_lower, w).1);
         if syn_all_in_name && any_synonym {
             return 15.0 * SYNONYM_MULTIPLIER;
         }
     }
 
-    // ── Coverage-aware scoring for multi-word queries ──
-    // Compute how many query words match via keywords and via text independently,
-    // then take the best composite score. This ensures 3/3 matches always
-    // dominate 1/3 matches regardless of which mechanism matched.
-
-    // Keyword tag matches (exact, then synonym-expanded)
-    #[allow(clippy::cast_precision_loss)]
-    let (kw_score, kw_via_synonym) = if desc_lower.contains("[keywords:") {
-        let exact_kw = count_keyword_matches(&desc_lower, words);
-        if exact_kw > 0 {
-            (6.0 + (exact_kw as f64) * 2.0, false)
-        } else {
-            let syn_kw = count_keyword_matches_with_synonyms(&desc_lower, words);
-            if syn_kw > 0 {
-                (6.0 + (syn_kw as f64) * 2.0, true)
-            } else {
-                (0.0, false)
-            }
-        }
-    } else {
-        (0.0, false)
-    };
-
-    // Text coverage: count words found anywhere in name + description
+    // Coverage tiers: keyword-tag, schema-field, text-coverage — take the best.
     let combined = format!("{tool_lower} {desc_lower}");
-    #[allow(clippy::cast_precision_loss)]
-    let (text_score, text_via_synonym) = if words.len() > 1 {
-        // Count exact matches first
-        let exact_matched = words.iter().filter(|w| combined.contains(**w)).count();
-        if exact_matched == words.len() {
-            (10.0 + (exact_matched as f64) * 2.0, false)
-        } else {
-            // Count synonym-expanded matches for words that didn't match exactly
-            let syn_matched = words
-                .iter()
-                .filter(|w| {
-                    let (hit, _) = text_contains_with_synonyms(&combined, w);
-                    hit
-                })
-                .count();
-            let any_syn = words.iter().any(|w| {
-                let (_, is_syn) = text_contains_with_synonyms(&combined, w);
-                is_syn
-            });
-            if syn_matched == words.len() {
-                (10.0 + (syn_matched as f64) * 2.0, any_syn)
-            } else if syn_matched > 0 {
-                (3.0 + (syn_matched as f64) * 2.0, any_syn)
-            } else {
-                (0.0, false)
-            }
-        }
-    } else {
-        (0.0, false)
-    };
-
-    // Take the best of keyword-tag and coverage-text scores, applying the
-    // synonym discount when the winning path was synonym-expanded.
-    let (best, via_syn) = if kw_score >= text_score {
-        (kw_score, kw_via_synonym)
-    } else {
-        (text_score, text_via_synonym)
-    };
-
+    let (best, via_syn) = best_coverage_score(
+        keyword_tag_score(&desc_lower, words),
+        schema_field_score(&desc_lower, words),
+        text_coverage_score(&combined, words),
+    );
     if best > 0.0 {
         return if via_syn { best * SYNONYM_MULTIPLIER } else { best };
     }
 
-    // Single-word substring fallbacks (exact, then synonym-expanded)
+    // Single-word substring fallbacks (exact, then schema-field, then desc, then synonyms)
     if tool_lower.contains(query) {
         return 5.0;
+    }
+    if words.len() == 1 && is_schema_field_match(&desc_lower, query) {
+        return 6.0;
     }
     if desc_lower.contains(query) {
         return 2.0;
     }
-    // Synonym substring fallbacks for single-word queries
     if words.len() == 1 {
         for syn in expand_synonyms(query) {
             if *syn != query {
@@ -237,25 +230,62 @@ fn score_text_relevance(tool: &str, description: &str, query: &str, words: &[&st
     0.0
 }
 
+/// Extract a bracketed tag section from a lowercased description by its prefix.
+///
+/// Returns the content between `[{prefix}:` and the matching `]`, or `None`
+/// if the section is absent.  Used by both keyword and schema tag lookups.
+fn extract_tag_section<'a>(desc_lower: &'a str, prefix: &str) -> Option<&'a str> {
+    let marker = format!("[{prefix}:");
+    let start = desc_lower.find(marker.as_str())?;
+    let after_marker = &desc_lower[start + marker.len()..];
+    let end = after_marker.find(']').unwrap_or(after_marker.len());
+    Some(&after_marker[..end])
+}
+
 /// Check whether `word` appears as a discrete keyword inside the
 /// `[keywords: tag1, tag2, ...]` suffix of a lowercased description.
 /// Also matches against hyphen-split parts (e.g., "entity" matches "entity-discovery").
 fn is_keyword_match(desc_lower: &str, word: &str) -> bool {
-    let Some(kw_start) = desc_lower.find("[keywords:") else {
+    let Some(section) = extract_tag_section(desc_lower, "keywords") else {
         return false;
     };
-    let kw_section = &desc_lower[kw_start..];
-    kw_section
-        .trim_start_matches("[keywords:")
-        .trim_end_matches(']')
-        .split(',')
-        .any(|tag| {
-            let tag = tag.trim();
-            // Exact tag match
-            tag == word
-            // Or word matches a hyphen-split part of the tag
-            || tag.split('-').any(|part| part == word)
-        })
+    section.split(',').any(|tag| {
+        let tag = tag.trim();
+        tag == word || tag.split('-').any(|part| part == word)
+    })
+}
+
+/// Check whether `word` appears as a token inside the `[schema: ...]` suffix.
+///
+/// Schema tokens are plain lowercase identifiers separated by commas.
+#[must_use]
+pub fn is_schema_field_match(desc_lower: &str, word: &str) -> bool {
+    let Some(section) = extract_tag_section(desc_lower, "schema") else {
+        return false;
+    };
+    section.split(',').any(|token| token.trim() == word)
+}
+
+/// Count how many query words match schema fields in the description.
+fn count_schema_field_matches(desc_lower: &str, words: &[&str]) -> usize {
+    words.iter().filter(|w| is_schema_field_match(desc_lower, w)).count()
+}
+
+/// Compute the schema-field scoring tier for a query against a description.
+///
+/// Returns `(score, via_synonym=false)` — schema tokens are exact identifiers
+/// so synonym expansion is never applied here.
+///
+/// Tier: `4 + 2N` where N is the count of matched schema fields.
+/// A single match scores 6.0 (above description-substring at 2.0, below
+/// keyword-tag at 8.0). When no schema section is present, returns 0.0.
+#[allow(clippy::cast_precision_loss)]
+fn schema_field_score(desc_lower: &str, words: &[&str]) -> f64 {
+    if !desc_lower.contains("[schema:") {
+        return 0.0;
+    }
+    let n = count_schema_field_matches(desc_lower, words);
+    if n > 0 { 4.0 + (n as f64) * 2.0 } else { 0.0 }
 }
 
 /// Check whether `word` or any of its synonyms appears as a keyword tag in the description.
@@ -341,7 +371,9 @@ impl SearchRanker {
     /// - 10+2N: all N words found in name+description combined (2w=14, 3w=16)
     /// - 10: exact single-word name match
     /// - 6+2N: N query words match keyword tags in `[keywords: …]` (1=8, 2=10, 3=12)
+    /// - 4+2N: N query words match schema field names in `[schema: …]` (1=6, 2=8, 3=10)
     /// - 3+2M: M of N words found in name+description (partial, 1/3=5, 2/3=7)
+    /// - 6: single-word query matches a schema field name exactly
     /// - 5: name contains the full query as a substring
     /// - 2: description contains the full query as a substring
     ///
@@ -935,5 +967,226 @@ mod tests {
     fn is_keyword_match_with_synonyms_returns_false_for_no_match() {
         let desc = "does stuff [keywords: weather, temperature]";
         assert!(!is_keyword_match_with_synonyms(desc, "find"));
+    }
+
+    // ── schema-aware matching ─────────────────────────────────────────────
+
+    #[test]
+    fn is_schema_field_match_finds_exact_token() {
+        // GIVEN: description with [schema: symbol, exchange, price]
+        // WHEN: checking each token
+        // THEN: all match, and non-schema words do not
+        let desc = "stock api [schema: symbol, exchange, price]";
+        assert!(is_schema_field_match(desc, "symbol"));
+        assert!(is_schema_field_match(desc, "exchange"));
+        assert!(is_schema_field_match(desc, "price"));
+        assert!(!is_schema_field_match(desc, "volume"));
+        assert!(!is_schema_field_match(desc, "stock"));
+    }
+
+    #[test]
+    fn is_schema_field_match_returns_false_when_no_schema_section() {
+        // GIVEN: description without [schema: ...] section
+        // WHEN: checking a word
+        // THEN: returns false
+        assert!(!is_schema_field_match("plain description", "symbol"));
+    }
+
+    #[test]
+    fn is_schema_field_match_returns_false_for_partial_token() {
+        // GIVEN: schema has "exchange" and we look for "change"
+        // WHEN: checking
+        // THEN: partial substring does not match (token boundary enforced)
+        let desc = "tool [schema: symbol, exchange]";
+        assert!(!is_schema_field_match(desc, "change"));
+        assert!(!is_schema_field_match(desc, "sym"));
+    }
+
+    #[test]
+    fn score_text_relevance_single_schema_field_scores_6() {
+        // GIVEN: description has [schema: symbol] and query is "symbol"
+        // WHEN: scoring
+        // THEN: score is 6.0 (schema single-word path: 6.0)
+        let words = vec!["symbol"];
+        let score = score_text_relevance(
+            "market_data",
+            "Get market data [schema: symbol, exchange]",
+            "symbol",
+            &words,
+        );
+        assert!((score - 6.0).abs() < f64::EPSILON, "expected 6.0, got {score}");
+    }
+
+    #[test]
+    fn score_text_relevance_two_schema_fields_scores_above_single_schema_field() {
+        // GIVEN: description has [schema: symbol, exchange, price]
+        // WHEN: scoring "symbol exchange" (2 query words, both schema fields)
+        // THEN: score is ≥ the score for querying just "symbol" (1 field)
+        //
+        // NOTE: the text-coverage path dominates here (words appear literally in
+        // the description string, so 10+2*2=14) but we assert ≥ 8.0 to confirm
+        // the multi-field schema path is at least as good as its direct score.
+        let two_words = vec!["symbol", "exchange"];
+        let one_word = vec!["symbol"];
+        let score_two = score_text_relevance(
+            "market_data",
+            "Get market data [schema: symbol, exchange, price]",
+            "symbol exchange",
+            &two_words,
+        );
+        let score_one = score_text_relevance(
+            "market_data2",
+            "Get market data [schema: symbol, price]",
+            "symbol",
+            &one_word,
+        );
+        assert!(
+            score_two >= score_one,
+            "two-field query ({score_two}) should score ≥ one-field query ({score_one})"
+        );
+        assert!(score_two >= 8.0, "two-field match should score ≥ 8.0, got {score_two}");
+    }
+
+    #[test]
+    fn score_text_relevance_schema_scores_above_description_substring() {
+        // GIVEN: two tools — one with schema field, one with query only in description text
+        // WHEN: scoring "symbol"
+        // THEN: schema-match tool scores higher than description-text-only tool
+        let words = vec!["symbol"];
+        let schema_score = score_text_relevance(
+            "market_data",
+            "Market data [schema: symbol, exchange]",
+            "symbol",
+            &words,
+        );
+        let text_score = score_text_relevance(
+            "other_tool",
+            "Handles ticker symbol lookups in plain text",
+            "symbol",
+            &words,
+        );
+        // schema match should yield ≥ 6.0, text-only is ≤ 2.0
+        assert!(
+            schema_score > text_score,
+            "schema ({schema_score}) should beat description-text ({text_score})"
+        );
+    }
+
+    #[test]
+    fn score_text_relevance_keyword_tag_beats_schema_match() {
+        // GIVEN: query "symbol", one tool has keyword tag, other has schema field
+        // WHEN: scoring
+        // THEN: keyword-tag match (8.0) beats single-schema-field match (6.0)
+        let words = vec!["symbol"];
+        let kw_score = score_text_relevance(
+            "kw_tool",
+            "Market data [keywords: symbol, exchange]",
+            "symbol",
+            &words,
+        );
+        let schema_score = score_text_relevance(
+            "schema_tool",
+            "Market data [schema: symbol, exchange]",
+            "symbol",
+            &words,
+        );
+        assert!(
+            kw_score > schema_score,
+            "keyword ({kw_score}) should beat schema ({schema_score})"
+        );
+    }
+
+    #[test]
+    fn ranking_schema_fields_find_stock_symbol_tool() {
+        // GIVEN: query "stock symbol" against tools without explicit description match
+        // The stock tool has [schema: symbol, exchange, price, volume]
+        // WHEN: ranking
+        // THEN: the stock tool with schema fields ranks first
+        let ranker = SearchRanker::new();
+        let results = vec![
+            sr("weather_api", "Get current weather data"),
+            sr(
+                "market_data",
+                "Fetch financial data [schema: symbol, exchange, price, volume]",
+            ),
+            sr("search_web", "Search the web for any query"),
+        ];
+        let ranked = ranker.rank(results, "stock symbol");
+        assert_eq!(
+            ranked[0].tool, "market_data",
+            "market_data should rank first; got {:?}",
+            ranked.iter().map(|r| (&r.tool, r.score)).collect::<Vec<_>>()
+        );
+        assert!(ranked[0].score > 0.0, "schema match should produce positive score");
+    }
+
+    #[test]
+    fn ranking_schema_field_tool_scores_above_zero_for_field_query() {
+        // GIVEN: query "symbol exchange", tool only matches via schema fields
+        // (description itself doesn't mention those words as plain text)
+        // WHEN: ranking
+        // THEN: schema-annotated tool scores > 0 (i.e. the schema section was searched)
+        //
+        // NOTE: because schema tokens appear literally in the description string,
+        // the text-coverage path also fires. Both paths produce a positive score.
+        // The test asserts the schema tool is correctly matched with a meaningful score.
+        let ranker = SearchRanker::new();
+        let results = vec![
+            sr("schema_tool", "Financial data [schema: symbol, exchange, price]"),
+            sr("unrelated_tool", "Send emails and notifications"),
+        ];
+        let ranked = ranker.rank(results, "symbol exchange");
+        let schema_result = ranked.iter().find(|r| r.tool == "schema_tool").unwrap();
+        assert!(
+            schema_result.score >= 8.0,
+            "schema tool should score ≥ 8.0 for 2 matching fields, got {}",
+            schema_result.score
+        );
+        assert_eq!(ranked[0].tool, "schema_tool", "schema tool must rank first");
+    }
+
+    #[test]
+    fn ranking_query_stock_symbol_finds_tool_with_symbol_schema_field() {
+        // Integration test: verifies the issue requirement
+        // A tool with input {symbol: string, exchange: string} should match "stock symbol"
+        let ranker = SearchRanker::new();
+        let results = vec![
+            sr("get_weather", "Retrieve current weather conditions"),
+            sr(
+                "get_quote",
+                "Retrieve financial quotes [schema: symbol, exchange, price, volume, currency]",
+            ),
+            sr("list_files", "List files in a directory"),
+        ];
+        let ranked = ranker.rank(results, "stock symbol");
+        assert_eq!(
+            ranked[0].tool, "get_quote",
+            "get_quote must rank first for 'stock symbol'; scores: {:?}",
+            ranked.iter().map(|r| (&r.tool, r.score)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_tag_section_finds_keywords_section() {
+        let desc = "tool desc [keywords: search, web] [schema: symbol]";
+        let section = extract_tag_section(desc, "keywords");
+        assert!(section.is_some());
+        assert!(section.unwrap().contains("search"));
+        assert!(section.unwrap().contains("web"));
+    }
+
+    #[test]
+    fn extract_tag_section_finds_schema_section() {
+        let desc = "tool desc [keywords: search] [schema: symbol, exchange]";
+        let section = extract_tag_section(desc, "schema");
+        assert!(section.is_some());
+        assert!(section.unwrap().contains("symbol"));
+    }
+
+    #[test]
+    fn extract_tag_section_returns_none_for_missing_section() {
+        let desc = "plain description with no tags";
+        assert!(extract_tag_section(desc, "keywords").is_none());
+        assert!(extract_tag_section(desc, "schema").is_none());
     }
 }
