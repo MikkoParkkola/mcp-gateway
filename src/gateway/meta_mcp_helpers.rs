@@ -8,7 +8,7 @@ use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
 };
-use crate::ranking::SearchResult;
+use crate::ranking::{SearchResult, expand_synonyms};
 use crate::stats::StatsSnapshot;
 use crate::{Error, Result};
 
@@ -27,7 +27,10 @@ pub(crate) fn extract_client_version(params: Option<&Value>) -> &str {
 }
 
 /// Build the `InitializeResult` for a given negotiated protocol version.
-pub(crate) fn build_initialize_result(negotiated_version: &str) -> InitializeResult {
+///
+/// `instructions` is appended after the static preamble; pass an empty string
+/// to get the minimal discovery-only text.
+pub(crate) fn build_initialize_result(negotiated_version: &str, instructions: &str) -> InitializeResult {
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
         capabilities: ServerCapabilities {
@@ -48,14 +51,70 @@ pub(crate) fn build_initialize_result(negotiated_version: &str) -> InitializeRes
                 "Universal MCP Gateway with Meta-MCP for dynamic tool discovery".to_string(),
             ),
         },
-        instructions: Some(
-            "Use gateway_list_servers to discover backends, \
-             gateway_list_tools to get tools from a backend, \
-             gateway_search_tools to search, and \
-             gateway_invoke to call tools."
-                .to_string(),
-        ),
+        instructions: Some(instructions.to_string()),
     }
+}
+
+/// Build the static discovery preamble shared by all initialize responses.
+pub(crate) fn build_discovery_preamble() -> String {
+    "Tool Discovery:\n\
+     - gateway_search_tools: Search by keyword (supports multi-word: \"batch research\")\n\
+     - gateway_list_tools: List all tools from a specific backend (omit server for ALL)\n\
+     - gateway_list_servers: List all available backends\n\
+     - gateway_invoke: Call any tool on any backend\n"
+        .to_string()
+}
+
+/// Build dynamic routing instructions from capability metadata.
+///
+/// Groups capabilities by `metadata.category`, listing representative tools
+/// and the union of their tags as search keywords. Returns an empty string
+/// when no capabilities are provided.
+pub(crate) fn build_routing_instructions(
+    capabilities: &[crate::capability::CapabilityDefinition],
+    capability_backend_name: &str,
+) -> String {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    if capabilities.is_empty() {
+        return String::new();
+    }
+
+    // Group tools by category, preserving insertion order via BTreeMap
+    let mut by_category: BTreeMap<String, (Vec<String>, BTreeSet<String>)> = BTreeMap::new();
+
+    for cap in capabilities {
+        let category = if cap.metadata.category.is_empty() {
+            "general".to_string()
+        } else {
+            cap.metadata.category.clone()
+        };
+
+        let entry = by_category.entry(category).or_default();
+        entry.0.push(format!("{}/{}", capability_backend_name, cap.name));
+        for tag in &cap.metadata.tags {
+            entry.1.insert(tag.clone());
+        }
+    }
+
+    let mut lines = vec!["\nRouting Guide (by task type):".to_string()];
+
+    for (category, (tools, tags)) in &by_category {
+        let tool_sample = tools.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        let suffix = if tools.len() > 3 {
+            format!(" (+{})", tools.len() - 3)
+        } else {
+            String::new()
+        };
+        lines.push(format!("- {category}: {tool_sample}{suffix}"));
+
+        if !tags.is_empty() {
+            let tag_list = tags.iter().cloned().collect::<Vec<_>>().join(", ");
+            lines.push(format!("  Search keywords: {tag_list}"));
+        }
+    }
+
+    lines.join("\n")
 }
 
 /// Build the base set of 4 meta-tools.
@@ -209,19 +268,69 @@ pub(crate) fn build_meta_tools(stats_enabled: bool) -> Vec<Tool> {
     tools
 }
 
-/// Check whether a tool matches a lowercased search query by name or description.
+/// Check whether a tool matches a search query by name or description.
+///
+/// The `query` may contain multiple whitespace-separated words. A tool
+/// matches if **any** query word (or any of its synonyms) appears
+/// case-insensitively in the tool name or description (including keyword tags).
+/// Single-word queries behave identically to the previous substring match.
 pub(crate) fn tool_matches_query(tool: &Tool, query: &str) -> bool {
-    let name_match = tool.name.to_lowercase().contains(query);
-    let desc_match = tool
-        .description
-        .as_ref()
-        .is_some_and(|d| d.to_lowercase().contains(query));
-    name_match || desc_match
+    let name_lower = tool.name.to_lowercase();
+    let desc_lower = tool.description.as_deref().unwrap_or("").to_lowercase();
+
+    query.split_whitespace().any(|word| {
+        word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower)
+    })
+}
+
+/// Return `true` if `word` or any of its synonyms appears as a substring of `text`.
+fn word_matches_text(word: &str, text: &str) -> bool {
+    if text.contains(word) {
+        return true;
+    }
+    expand_synonyms(word)
+        .iter()
+        .any(|syn| *syn != word && text.contains(*syn))
+}
+
+/// Build suggestions from the tag index when a search returns zero results.
+///
+/// Finds tags that share a common prefix with any query word (length ≥ 3) or
+/// that contain any query word as a substring. Returns at most 5 suggestions,
+/// alphabetically sorted, with duplicates removed.
+///
+/// # Arguments
+///
+/// * `query` — the original (lowercased) search query
+/// * `all_tags` — union of all keyword tags available across backends
+pub(crate) fn build_suggestions(query: &str, all_tags: &[String]) -> Vec<String> {
+    const MIN_PREFIX_LEN: usize = 3;
+    const MAX_SUGGESTIONS: usize = 5;
+
+    let words: Vec<&str> = query.split_whitespace().collect();
+
+    let mut seen = std::collections::BTreeSet::new();
+
+    for tag in all_tags {
+        let tag_lower = tag.to_lowercase();
+        let is_match = words.iter().any(|word| {
+            // Substring: tag contains the word
+            tag_lower.contains(*word)
+            // Or: word is long enough and shares a common prefix with the tag
+            || (word.len() >= MIN_PREFIX_LEN
+                && tag_lower.starts_with(&word[..MIN_PREFIX_LEN]))
+        });
+        if is_match {
+            seen.insert(tag_lower);
+        }
+    }
+
+    seen.into_iter().take(MAX_SUGGESTIONS).collect()
 }
 
 /// Build a search match JSON object from a tool and server name.
 ///
-/// Truncates description to 200 characters.
+/// Truncates description to 500 characters.
 pub(crate) fn build_match_json(server: &str, tool: &Tool) -> Value {
     json!({
         "server": server,
@@ -229,7 +338,7 @@ pub(crate) fn build_match_json(server: &str, tool: &Tool) -> Value {
         "description": tool.description.as_deref()
             .unwrap_or("")
             .chars()
-            .take(200)
+            .take(500)
             .collect::<String>()
     })
 }
@@ -253,13 +362,30 @@ pub(crate) fn ranked_results_to_json(ranked: Vec<SearchResult>) -> Vec<Value> {
 ///
 /// `total_found` is the number of matches across ALL backends (before truncation).
 /// `matches` may be truncated to the requested limit.
-pub(crate) fn build_search_response(query: &str, matches: &[Value], total_found: usize) -> Value {
-    json!({
-        "query": query,
-        "matches": matches,
-        "total": matches.len(),
-        "total_available": total_found
-    })
+/// `suggestions` is only emitted (and only non-empty) when `matches` is empty —
+/// callers should pass `&[]` when there are matches.
+pub(crate) fn build_search_response(
+    query: &str,
+    matches: &[Value],
+    total_found: usize,
+    suggestions: &[String],
+) -> Value {
+    if matches.is_empty() && !suggestions.is_empty() {
+        json!({
+            "query": query,
+            "matches": [],
+            "total": 0,
+            "total_available": total_found,
+            "suggestions": suggestions
+        })
+    } else {
+        json!({
+            "query": query,
+            "matches": matches,
+            "total": matches.len(),
+            "total_available": total_found
+        })
+    }
 }
 
 /// Extract the search limit from arguments, defaulting to 10.
@@ -385,22 +511,24 @@ mod tests {
 
     // ── build_initialize_result ─────────────────────────────────────────
 
+    const TEST_INSTRUCTIONS: &str = "test instructions";
+
     #[test]
     fn build_initialize_result_has_correct_version() {
-        let result = build_initialize_result("2025-11-25");
+        let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
         assert_eq!(result.protocol_version, "2025-11-25");
     }
 
     #[test]
     fn build_initialize_result_has_tools_capability() {
-        let result = build_initialize_result("2024-11-05");
+        let result = build_initialize_result("2024-11-05", TEST_INSTRUCTIONS);
         assert!(result.capabilities.tools.is_some());
         assert!(result.capabilities.tools.unwrap().list_changed);
     }
 
     #[test]
     fn build_initialize_result_has_resources_capability() {
-        let result = build_initialize_result("2025-11-25");
+        let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
         let resources = result.capabilities.resources.unwrap();
         assert!(resources.subscribe);
         assert!(resources.list_changed);
@@ -408,20 +536,20 @@ mod tests {
 
     #[test]
     fn build_initialize_result_has_prompts_capability() {
-        let result = build_initialize_result("2025-11-25");
+        let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
         let prompts = result.capabilities.prompts.unwrap();
         assert!(prompts.list_changed);
     }
 
     #[test]
     fn build_initialize_result_has_logging_capability() {
-        let result = build_initialize_result("2025-11-25");
+        let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
         assert!(result.capabilities.logging.is_some());
     }
 
     #[test]
     fn build_initialize_result_advertises_four_capabilities() {
-        let result = build_initialize_result("2025-11-25");
+        let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
         assert!(result.capabilities.tools.is_some(), "missing tools");
         assert!(result.capabilities.resources.is_some(), "missing resources");
         assert!(result.capabilities.prompts.is_some(), "missing prompts");
@@ -430,18 +558,116 @@ mod tests {
 
     #[test]
     fn build_initialize_result_has_server_info() {
-        let result = build_initialize_result("2024-11-05");
+        let result = build_initialize_result("2024-11-05", TEST_INSTRUCTIONS);
         assert_eq!(result.server_info.name, "mcp-gateway");
         assert!(result.server_info.title.is_some());
         assert!(result.server_info.description.is_some());
     }
 
     #[test]
-    fn build_initialize_result_has_instructions() {
-        let result = build_initialize_result("2024-11-05");
-        let instructions = result.instructions.as_ref().unwrap();
-        assert!(instructions.contains("gateway_list_servers"));
-        assert!(instructions.contains("gateway_invoke"));
+    fn build_initialize_result_passes_instructions_through() {
+        let instructions = "custom routing guide";
+        let result = build_initialize_result("2024-11-05", instructions);
+        assert_eq!(result.instructions.as_deref(), Some(instructions));
+    }
+
+    // ── build_discovery_preamble ────────────────────────────────────────
+
+    #[test]
+    fn discovery_preamble_contains_all_four_meta_tools() {
+        let preamble = build_discovery_preamble();
+        assert!(preamble.contains("gateway_search_tools"));
+        assert!(preamble.contains("gateway_list_tools"));
+        assert!(preamble.contains("gateway_list_servers"));
+        assert!(preamble.contains("gateway_invoke"));
+    }
+
+    #[test]
+    fn discovery_preamble_mentions_multi_word_search() {
+        let preamble = build_discovery_preamble();
+        assert!(preamble.contains("multi-word") || preamble.contains("batch research"));
+    }
+
+    // ── build_routing_instructions ──────────────────────────────────────
+
+    fn make_capability_def(
+        name: &str,
+        category: &str,
+        tags: &[&str],
+    ) -> crate::capability::CapabilityDefinition {
+        use crate::capability::{
+            AuthConfig, CacheConfig, CapabilityMetadata, ProvidersConfig, SchemaDefinition,
+        };
+        use crate::transform::TransformConfig;
+
+        crate::capability::CapabilityDefinition {
+            fulcrum: "1.0".to_string(),
+            name: name.to_string(),
+            description: format!("{name} description"),
+            schema: SchemaDefinition::default(),
+            providers: ProvidersConfig::default(),
+            auth: AuthConfig::default(),
+            cache: CacheConfig::default(),
+            metadata: CapabilityMetadata {
+                category: category.to_string(),
+                tags: tags.iter().map(|s| s.to_string()).collect(),
+                ..CapabilityMetadata::default()
+            },
+            transform: TransformConfig::default(),
+            webhooks: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn routing_instructions_empty_for_no_capabilities() {
+        let result = build_routing_instructions(&[], "fulcrum");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn routing_instructions_groups_by_category() {
+        let caps = vec![
+            make_capability_def("brave_search", "search", &["search", "web"]),
+            make_capability_def("brave_news", "search", &["news"]),
+            make_capability_def("uuid_generate", "utility", &["uuid"]),
+        ];
+        let result = build_routing_instructions(&caps, "fulcrum");
+        assert!(result.contains("search"));
+        assert!(result.contains("utility"));
+        assert!(result.contains("fulcrum/brave_search"));
+        assert!(result.contains("fulcrum/uuid_generate"));
+    }
+
+    #[test]
+    fn routing_instructions_includes_tags_as_keywords() {
+        let caps = vec![make_capability_def(
+            "brave_search",
+            "search",
+            &["search", "web", "brave"],
+        )];
+        let result = build_routing_instructions(&caps, "fulcrum");
+        assert!(result.contains("search"));
+        assert!(result.contains("web"));
+        assert!(result.contains("brave"));
+    }
+
+    #[test]
+    fn routing_instructions_truncates_tools_to_three_per_category() {
+        let caps = vec![
+            make_capability_def("tool_a", "search", &[]),
+            make_capability_def("tool_b", "search", &[]),
+            make_capability_def("tool_c", "search", &[]),
+            make_capability_def("tool_d", "search", &[]),
+        ];
+        let result = build_routing_instructions(&caps, "fulcrum");
+        assert!(result.contains("(+1)"), "Should show overflow count");
+    }
+
+    #[test]
+    fn routing_instructions_uses_general_for_empty_category() {
+        let caps = vec![make_capability_def("my_tool", "", &[])];
+        let result = build_routing_instructions(&caps, "backend");
+        assert!(result.contains("general"));
     }
 
     // ── build_meta_tools ────────────────────────────────────────────────
@@ -532,6 +758,57 @@ mod tests {
         assert!(!tool_matches_query(&tool, "weather"));
     }
 
+    #[test]
+    fn tool_matches_multi_word_query_any_word_in_name() {
+        // GIVEN: a tool named "brave_search" and query "batch search"
+        let tool = make_tool("brave_search", Some("Web search tool"));
+        // WHEN: querying with two words
+        // THEN: matches because "search" is in the name
+        assert!(tool_matches_query(&tool, "batch search"));
+    }
+
+    #[test]
+    fn tool_matches_multi_word_query_any_word_in_description() {
+        // GIVEN: a tool with "research" only in description, query "batch research"
+        let tool = make_tool("parallel_task", Some("Run deep research tasks in parallel"));
+        // WHEN: querying "batch research"
+        // THEN: matches because "research" is in the description
+        assert!(tool_matches_query(&tool, "batch research"));
+    }
+
+    #[test]
+    fn tool_no_match_when_no_word_found() {
+        // GIVEN: a tool unrelated to either query word
+        let tool = make_tool("weather_api", Some("Returns current temperature"));
+        // WHEN: searching for "batch search"
+        // THEN: no match
+        assert!(!tool_matches_query(&tool, "batch search"));
+    }
+
+    #[test]
+    fn tool_matches_keyword_tag_in_description() {
+        // GIVEN: tool description includes [keywords: search, web, brave]
+        let tool = make_tool(
+            "brave_query",
+            Some("Query the internet [keywords: search, web, brave]"),
+        );
+        // WHEN: querying "web"
+        // THEN: matches because "web" appears in the description
+        assert!(tool_matches_query(&tool, "web"));
+    }
+
+    #[test]
+    fn tool_matches_multi_word_where_one_word_is_tag() {
+        // GIVEN: description has [keywords: monitor, alert]
+        let tool = make_tool(
+            "watch_service",
+            Some("Watch endpoints [keywords: monitor, alert]"),
+        );
+        // WHEN: "batch monitor"
+        // THEN: matches because "monitor" is in description (as keyword tag)
+        assert!(tool_matches_query(&tool, "batch monitor"));
+    }
+
     // ── build_match_json ────────────────────────────────────────────────
 
     #[test]
@@ -545,11 +822,11 @@ mod tests {
 
     #[test]
     fn build_match_json_truncates_long_descriptions() {
-        let long_desc = "a".repeat(300);
+        let long_desc = "a".repeat(600);
         let tool = make_tool("tool", Some(&long_desc));
         let result = build_match_json("srv", &tool);
         let desc = result["description"].as_str().unwrap();
-        assert_eq!(desc.len(), 200);
+        assert_eq!(desc.len(), 500);
     }
 
     #[test]
@@ -595,7 +872,7 @@ mod tests {
     #[test]
     fn build_search_response_structure() {
         let matches = vec![json!({"tool": "a"}), json!({"tool": "b"})];
-        let resp = build_search_response("test", &matches, 2);
+        let resp = build_search_response("test", &matches, 2, &[]);
         assert_eq!(resp["query"], "test");
         assert_eq!(resp["total"], 2);
         assert_eq!(resp["total_available"], 2);
@@ -603,19 +880,47 @@ mod tests {
     }
 
     #[test]
-    fn build_search_response_empty_matches() {
-        let resp = build_search_response("nothing", &[], 0);
+    fn build_search_response_empty_matches_no_suggestions() {
+        // GIVEN: no matches and no suggestions
+        // WHEN: building the response
+        // THEN: no suggestions field emitted
+        let resp = build_search_response("nothing", &[], 0, &[]);
         assert_eq!(resp["total"], 0);
         assert_eq!(resp["total_available"], 0);
         assert!(resp["matches"].as_array().unwrap().is_empty());
+        assert!(resp.get("suggestions").is_none());
     }
 
     #[test]
     fn build_search_response_total_available_exceeds_returned() {
         let matches = vec![json!({"tool": "a"})];
-        let resp = build_search_response("test", &matches, 5);
+        let resp = build_search_response("test", &matches, 5, &[]);
         assert_eq!(resp["total"], 1);
         assert_eq!(resp["total_available"], 5);
+    }
+
+    #[test]
+    fn build_search_response_includes_suggestions_when_empty_matches() {
+        // GIVEN: no matches but suggestions available
+        // WHEN: building the response
+        // THEN: suggestions field is emitted
+        let suggestions = vec!["search".to_string(), "lookup".to_string()];
+        let resp = build_search_response("xyzzy", &[], 0, &suggestions);
+        let sugg = resp["suggestions"].as_array().unwrap();
+        assert_eq!(sugg.len(), 2);
+        assert_eq!(sugg[0], "search");
+        assert_eq!(sugg[1], "lookup");
+    }
+
+    #[test]
+    fn build_search_response_suppresses_suggestions_when_matches_present() {
+        // GIVEN: matches exist alongside suggestions
+        // WHEN: building the response
+        // THEN: suggestions field is NOT emitted (matches win)
+        let matches = vec![json!({"tool": "a"})];
+        let suggestions = vec!["other".to_string()];
+        let resp = build_search_response("test", &matches, 1, &suggestions);
+        assert!(resp.get("suggestions").is_none());
     }
 
     // ── extract_search_limit ────────────────────────────────────────────
@@ -827,5 +1132,122 @@ mod tests {
         } else {
             panic!("Expected text content");
         }
+    }
+
+    // ── tool_matches_query synonym expansion ────────────────────────────
+
+    #[test]
+    fn tool_matches_query_synonym_in_name() {
+        // GIVEN: tool name contains "search", query word is "find" (synonym)
+        // WHEN: matching
+        // THEN: matches via synonym expansion
+        let tool = make_tool("search_companies", Some("Find business entities"));
+        assert!(
+            tool_matches_query(&tool, "find"),
+            "'find' should match tool with 'search' via synonym"
+        );
+    }
+
+    #[test]
+    fn tool_matches_query_synonym_in_description() {
+        // GIVEN: description has "monitor", query word is "watch" (synonym)
+        let tool = make_tool("uptimer", Some("Continuously monitor your services"));
+        assert!(
+            tool_matches_query(&tool, "watch"),
+            "'watch' should match tool with 'monitor' via synonym"
+        );
+    }
+
+    #[test]
+    fn tool_matches_query_no_false_positive_for_unrelated_synonym_group() {
+        // GIVEN: a weather tool, query word is "find" whose synonyms are all search-related
+        let tool = make_tool("weather_api", Some("Get current temperature and humidity"));
+        // None of the search-group words appear in either name or desc
+        assert!(
+            !tool_matches_query(&tool, "find"),
+            "should not match a tool with no search-related words"
+        );
+    }
+
+    #[test]
+    fn tool_matches_query_multi_word_uses_synonym_for_one_word() {
+        // GIVEN: query "find weather", tool has "search" (synonym of "find") in name
+        let tool = make_tool("search_weather", Some("Get forecasts"));
+        assert!(
+            tool_matches_query(&tool, "find weather"),
+            "should match: 'weather' in name, 'find'≈'search' in name"
+        );
+    }
+
+    // ── build_suggestions ───────────────────────────────────────────────
+
+    #[test]
+    fn build_suggestions_empty_when_no_tags() {
+        // GIVEN: no tags in the index
+        // WHEN: building suggestions
+        // THEN: empty result
+        let suggestions = build_suggestions("xyzzy", &[]);
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn build_suggestions_finds_tags_containing_query_word() {
+        // GIVEN: tags include "searching" and query is "search"
+        let tags = vec!["searching".to_string(), "weather".to_string()];
+        let suggestions = build_suggestions("search", &tags);
+        assert!(suggestions.contains(&"searching".to_string()));
+        assert!(!suggestions.contains(&"weather".to_string()));
+    }
+
+    #[test]
+    fn build_suggestions_finds_tags_by_prefix() {
+        // GIVEN: tags include "scraping" and query word "scr" (3+ chars prefix match)
+        let tags = vec!["scraping".to_string(), "scripting".to_string(), "other".to_string()];
+        let suggestions = build_suggestions("scr", &tags);
+        assert!(suggestions.contains(&"scraping".to_string()));
+        assert!(suggestions.contains(&"scripting".to_string()));
+    }
+
+    #[test]
+    fn build_suggestions_limits_to_five_results() {
+        // GIVEN: 10 tags all matching the query
+        let tags: Vec<String> = (0..10).map(|i| format!("search{i}")).collect();
+        let suggestions = build_suggestions("search", &tags);
+        assert!(suggestions.len() <= 5);
+    }
+
+    #[test]
+    fn build_suggestions_returns_sorted_results() {
+        // GIVEN: tags in random order that all match
+        let tags = vec![
+            "scrape".to_string(),
+            "analyze".to_string(),
+            "audit".to_string(),
+        ];
+        // query matches "audit" and "analyze" (prefix "ana"/"aud" — both start with 3+ chars)
+        let suggestions = build_suggestions("aud", &tags);
+        // Verify sorted
+        let mut sorted = suggestions.clone();
+        sorted.sort();
+        assert_eq!(suggestions, sorted);
+    }
+
+    #[test]
+    fn build_suggestions_deduplicates_results() {
+        // GIVEN: duplicate tags
+        let tags = vec!["search".to_string(), "search".to_string(), "lookup".to_string()];
+        let suggestions = build_suggestions("search", &tags);
+        let unique_count = suggestions.iter().collect::<std::collections::HashSet<_>>().len();
+        assert_eq!(suggestions.len(), unique_count);
+    }
+
+    #[test]
+    fn build_suggestions_no_match_for_short_query_word_prefix() {
+        // GIVEN: query word < 3 chars, relies only on substring match
+        let tags = vec!["xy_tool".to_string()];
+        // "xy" won't match via prefix (needs 3+), but "xy" IS a substring of "xy_tool"
+        let suggestions = build_suggestions("xy", &tags);
+        // Substring match still works
+        assert!(suggestions.contains(&"xy_tool".to_string()));
     }
 }

@@ -30,10 +30,10 @@ use crate::stats::UsageStats;
 use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
-    build_initialize_result, build_match_json, build_meta_tools, build_search_response,
-    build_stats_response, extract_client_version, extract_price_per_million, extract_required_str,
-    extract_search_limit, parse_tool_arguments, ranked_results_to_json, tool_matches_query,
-    wrap_tool_success,
+    build_discovery_preamble, build_initialize_result, build_match_json, build_meta_tools,
+    build_routing_instructions, build_search_response, build_stats_response, build_suggestions,
+    extract_client_version, extract_price_per_million, extract_required_str, extract_search_limit,
+    parse_tool_arguments, ranked_results_to_json, tool_matches_query, wrap_tool_success,
 };
 
 // ============================================================================
@@ -106,8 +106,11 @@ impl MetaMcp {
         self.capabilities.read().clone()
     }
 
-    /// Handle initialize request with version negotiation
-    pub fn handle_initialize(id: RequestId, params: Option<&Value>) -> JsonRpcResponse {
+    /// Handle initialize request with version negotiation.
+    ///
+    /// Generates dynamic routing instructions from the loaded capability
+    /// definitions, giving the connecting LLM a task-oriented routing guide.
+    pub fn handle_initialize(&self, id: RequestId, params: Option<&Value>) -> JsonRpcResponse {
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
         debug!(
@@ -116,8 +119,25 @@ impl MetaMcp {
             "Protocol version negotiation"
         );
 
-        let result = build_initialize_result(negotiated_version);
+        let instructions = self.build_instructions();
+        let result = build_initialize_result(negotiated_version, &instructions);
         JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+    }
+
+    /// Compose the full `instructions` string from discovery preamble and
+    /// dynamically generated routing guide based on loaded capabilities.
+    fn build_instructions(&self) -> String {
+        let mut instructions = build_discovery_preamble();
+
+        if let Some(cap) = self.get_capabilities() {
+            let caps = cap.list_capabilities();
+            let routing = build_routing_instructions(&caps, &cap.name);
+            if !routing.is_empty() {
+                instructions.push_str(&routing);
+            }
+        }
+
+        instructions
     }
 
     /// Handle tools/list request
@@ -257,51 +277,52 @@ impl MetaMcp {
 
     /// Search tools across all backends.
     ///
-    /// Capability tools are searched exhaustively (fast, local) to get an
-    /// accurate `total_available`. MCP backends use early-exit once the
-    /// limit is reached to avoid slow network calls.
+    /// Capability tools are searched exhaustively (fast, local). MCP backends
+    /// with cached tools are also searched exhaustively. All matches are
+    /// collected first, ranked, and THEN truncated to the requested limit.
+    /// This ensures the best matches always surface regardless of iteration order.
+    ///
+    /// When zero matches are found, keyword tags from all backends are collected
+    /// and used to generate related query suggestions.
     async fn search_tools(&self, args: &Value) -> Result<Value> {
         let query = extract_required_str(args, "query")?.to_lowercase();
         let limit = extract_search_limit(args);
 
         let mut matches = Vec::new();
-        let mut total_found: usize = 0;
+        // Collect all available tags for suggestion generation (only used on zero-result queries).
+        let mut all_tags: Vec<String> = Vec::new();
 
-        // Search capability backend exhaustively (fast, no network)
-        // Count ALL matches for accurate total, collect up to limit
+        // Search capability backend exhaustively (fast, no network, all in memory)
         if let Some(cap) = self.get_capabilities() {
             for tool in cap.get_tools() {
+                collect_tool_tags(&tool, &mut all_tags);
                 if tool_matches_query(&tool, &query) {
-                    total_found += 1;
-                    if matches.len() < limit {
-                        matches.push(build_match_json(&cap.name, &tool));
-                    }
+                    matches.push(build_match_json(&cap.name, &tool));
                 }
             }
         }
 
-        // Then search MCP backends that have cached tools (fast, no blocking starts).
+        // Search MCP backends that have cached tools (fast, no blocking starts).
         // Backends without cached tools are skipped — use gateway_list_tools(server=X)
         // to force-start a specific backend.
         for backend in self.backends.all() {
-            if matches.len() >= limit {
-                break;
-            }
             // Only query backends with cached tools to avoid blocking on unstarted backends
             if !backend.has_cached_tools() {
                 continue;
             }
             if let Ok(tools) = backend.get_tools().await {
+                for tool in &tools {
+                    collect_tool_tags(tool, &mut all_tags);
+                }
                 for tool in tools {
                     if tool_matches_query(&tool, &query) {
-                        total_found += 1;
-                        if matches.len() < limit {
-                            matches.push(build_match_json(&backend.name, &tool));
-                        }
+                        matches.push(build_match_json(&backend.name, &tool));
                     }
                 }
             }
         }
+
+        let total_found = matches.len();
 
         // Record search stats
         if let Some(ref stats) = self.stats {
@@ -309,14 +330,24 @@ impl MetaMcp {
             stats.record_search(total_found as u64);
         }
 
-        // Apply ranking if enabled
+        // Apply ranking if enabled, then truncate to limit
         if let Some(ref ranker) = self.ranker {
             let search_results: Vec<_> = matches.iter().filter_map(json_to_search_result).collect();
             let ranked = ranker.rank(search_results, &query);
             matches = ranked_results_to_json(ranked);
         }
 
-        Ok(build_search_response(&query, &matches, total_found))
+        // Truncate to requested limit AFTER ranking
+        matches.truncate(limit);
+
+        // Build suggestions only when no results were found
+        let suggestions = if matches.is_empty() {
+            build_suggestions(&query, &all_tags)
+        } else {
+            Vec::new()
+        };
+
+        Ok(build_search_response(&query, &matches, total_found, &suggestions))
     }
 
     /// Invoke a tool on a backend
@@ -809,6 +840,37 @@ impl MetaMcp {
             }
         }
         None
+    }
+}
+
+/// Extract keyword tags from a tool's description into `out`.
+///
+/// Tags are parsed from the `[keywords: tag1, tag2, ...]` suffix appended by
+/// `CapabilityDefinition::to_mcp_tool()`. Tags are lowercased and hyphen-split
+/// parts are also collected so both "entity-discovery" and "entity" are indexed.
+fn collect_tool_tags(tool: &crate::protocol::Tool, out: &mut Vec<String>) {
+    let Some(desc) = tool.description.as_deref() else {
+        return;
+    };
+    let Some(kw_start) = desc.find("[keywords:") else {
+        return;
+    };
+    let section = &desc[kw_start..];
+    let inner = section
+        .trim_start_matches("[keywords:")
+        .trim_end_matches(']');
+    for tag in inner.split(',') {
+        let tag = tag.trim().to_lowercase();
+        if !tag.is_empty() {
+            // Also push hyphen-split parts (e.g. "entity-discovery" → "entity", "discovery")
+            for part in tag.split('-') {
+                let part = part.trim();
+                if !part.is_empty() {
+                    out.push(part.to_string());
+                }
+            }
+            out.push(tag);
+        }
     }
 }
 
