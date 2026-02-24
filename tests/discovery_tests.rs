@@ -8,7 +8,7 @@ async fn test_auto_discovery_initialization() {
 
     // Discovery should not panic on creation
     let result = discovery.discover_all().await;
-    assert!(result.is_ok(), "Discovery should not fail: {:?}", result);
+    assert!(result.is_ok(), "Discovery should not fail: {result:?}");
 }
 
 #[tokio::test]
@@ -110,7 +110,7 @@ async fn test_discovered_server_to_backend_config() {
         TransportConfig::Http { http_url, .. } => {
             assert_eq!(http_url, "http://localhost:3000");
         }
-        _ => panic!("Expected HTTP transport"),
+        TransportConfig::Stdio { .. } => panic!("Expected HTTP transport"),
     }
 }
 

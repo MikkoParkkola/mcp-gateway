@@ -373,17 +373,17 @@ mod tests {
 
     #[test]
     fn test_severity_score() {
-        assert_eq!(Severity::Pass.score(), 1.0);
-        assert_eq!(Severity::Info.score(), 0.9);
-        assert_eq!(Severity::Warn.score(), 0.6);
-        assert_eq!(Severity::Fail.score(), 0.0);
+        assert!((Severity::Pass.score() - 1.0).abs() < f64::EPSILON);
+        assert!((Severity::Info.score() - 0.9).abs() < f64::EPSILON);
+        assert!((Severity::Warn.score() - 0.6).abs() < f64::EPSILON);
+        assert!(Severity::Fail.score() < f64::EPSILON);
     }
 
     #[test]
     fn test_validation_result_builder() {
         let mut result = ValidationResult::new("AX-001", "Test Rule", "test_tool");
         assert!(result.passed);
-        assert_eq!(result.score, 1.0);
+        assert!((result.score - 1.0).abs() < f64::EPSILON);
 
         result.add_issue("Test issue");
         assert!(!result.passed);

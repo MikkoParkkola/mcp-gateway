@@ -674,7 +674,7 @@ fn write_discovered_to_config(
 mod tests {
     use super::*;
     use mcp_gateway::cli::Cli;
-    use mcp_gateway::config::Config;
+    use mcp_gateway::config::{BackendConfig, Config};
 
     /// Build a `Cli` struct with optional overrides for testing.
     fn make_cli(
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn apply_cli_overrides_preserves_other_config_fields() {
         let mut config = Config::default();
-        config.backends.insert("test".to_string(), Default::default());
+        config.backends.insert("test".to_string(), BackendConfig::default());
         config.server.request_timeout = std::time::Duration::from_secs(60);
 
         let cli = make_cli(Some(3000), None, false);

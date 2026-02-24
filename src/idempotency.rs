@@ -71,7 +71,7 @@ impl IdempotencyState {
 /// # Example
 ///
 /// ```
-/// use mcp_gateway::idempotency::IdempotencyCache;
+/// use mcp_gateway::idempotency::{IdempotencyCache, CheckOutcome};
 /// use serde_json::json;
 ///
 /// let cache = IdempotencyCache::new();
@@ -85,7 +85,7 @@ impl IdempotencyState {
 ///
 /// // Subsequent calls with the same key return the cached result
 /// let result = cache.check(key);
-/// assert!(result.is_some());
+/// assert!(matches!(result, CheckOutcome::Completed(_)));
 /// ```
 #[derive(Debug, Default)]
 pub struct IdempotencyCache {
@@ -411,7 +411,13 @@ mod tests {
         // Insert an entry with a timestamp in the distant past
         cache.entries.insert(
             "stale".to_string(),
-            IdempotencyState::InFlight(Instant::now() - IN_FLIGHT_TIMEOUT - Duration::from_secs(1)),
+            IdempotencyState::InFlight(
+                Instant::now()
+                    .checked_sub(IN_FLIGHT_TIMEOUT)
+                    .unwrap()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap(),
+            ),
         );
         assert!(matches!(cache.check("stale"), CheckOutcome::Proceed));
         assert_eq!(cache.len(), 0, "stale entry must be removed");
@@ -427,7 +433,11 @@ mod tests {
             "old".to_string(),
             IdempotencyState::Completed(
                 json!(null),
-                Instant::now() - COMPLETED_TTL - Duration::from_secs(1),
+                Instant::now()
+                    .checked_sub(COMPLETED_TTL)
+                    .unwrap()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap(),
             ),
         );
         assert!(matches!(cache.check("old"), CheckOutcome::Proceed));
@@ -448,7 +458,11 @@ mod tests {
             "stale".to_string(),
             IdempotencyState::Completed(
                 json!(2),
-                Instant::now() - COMPLETED_TTL - Duration::from_secs(1),
+                Instant::now()
+                    .checked_sub(COMPLETED_TTL)
+                    .unwrap()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap(),
             ),
         );
 
@@ -570,7 +584,11 @@ mod tests {
             "stale".to_string(),
             IdempotencyState::Completed(
                 json!(null),
-                Instant::now() - COMPLETED_TTL - Duration::from_secs(1),
+                Instant::now()
+                    .checked_sub(COMPLETED_TTL)
+                    .unwrap()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap(),
             ),
         );
 

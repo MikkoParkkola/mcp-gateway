@@ -112,7 +112,7 @@ impl KillSwitch {
         let rate = window.error_rate();
         let usage_fraction = rate / threshold;
 
-        if usage_fraction >= 0.8 && usage_fraction < 1.0 {
+        if (0.8..1.0).contains(&usage_fraction) {
             warn!(
                 server = server,
                 error_rate = rate,
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn error_rate_zero_with_no_calls() {
         let ks = KillSwitch::new();
-        assert_eq!(ks.error_rate("unknown"), 0.0);
+        assert!(ks.error_rate("unknown") < f64::EPSILON);
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
         w.record(false);
         w.record(false);
         w.reset();
-        assert_eq!(w.error_rate(), 0.0);
+        assert!(w.error_rate() < f64::EPSILON);
         let (s, f) = w.counts();
         assert_eq!(s, 0);
         assert_eq!(f, 0);

@@ -9,7 +9,7 @@
 use mcp_gateway::config::{ApiKeyConfig, AuthConfig};
 use mcp_gateway::gateway::auth::{AuthenticatedClient, ResolvedAuthConfig};
 
-/// Test that ResolvedAuthConfig correctly resolves from AuthConfig
+/// Test that `ResolvedAuthConfig` correctly resolves from `AuthConfig`
 #[test]
 fn test_auth_config_resolution() {
     let auth_config = AuthConfig {
@@ -184,7 +184,7 @@ fn test_auto_generated_token() {
     assert!(resolved.validate_token(token).is_some());
 }
 
-/// Test AuthenticatedClient backend access patterns
+/// Test `AuthenticatedClient` backend access patterns
 #[test]
 fn test_client_backend_access_patterns() {
     // Wildcard access

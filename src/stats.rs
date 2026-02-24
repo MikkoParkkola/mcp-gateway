@@ -293,7 +293,7 @@ mod tests {
     fn test_zero_invocations_cache_rate() {
         let stats = UsageStats::new();
         let snapshot = stats.snapshot(50);
-        assert_eq!(snapshot.cache_hit_rate, 0.0);
+        assert!(snapshot.cache_hit_rate < f64::EPSILON);
     }
 
     #[test]

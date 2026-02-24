@@ -3,12 +3,13 @@
 //! This example shows how to validate MCP tool definitions against
 //! agent-UX best practices.
 //!
-//! Run with: cargo run --example validator_demo
+//! Run with: `cargo run --example validator_demo`
 
 use mcp_gateway::protocol::Tool;
 use mcp_gateway::validator::{AgentUxValidator, Severity};
 use serde_json::json;
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     println!("\n╔══════════════════════════════════════════════════════════════╗");
     println!("║     MCP Server Design Validator - Agent-UX Compliance       ║");
@@ -117,8 +118,8 @@ fn main() {
             println!("╚══════════════════════════════════════════════════════════════╝\n");
 
             match serde_json::to_string_pretty(&report) {
-                Ok(json) => println!("{}", json),
-                Err(e) => eprintln!("Failed to serialize report: {}", e),
+                Ok(json) => println!("{json}"),
+                Err(e) => eprintln!("Failed to serialize report: {e}"),
             }
 
             // Show score breakdown
@@ -143,7 +144,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("Validation failed: {}", e);
+            eprintln!("Validation failed: {e}");
         }
     }
 }

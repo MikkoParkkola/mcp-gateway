@@ -887,13 +887,13 @@ timeout: 30
 
     #[test]
     fn deserialize_minimal_playbook() {
-        let yaml = r#"
+        let yaml = r"
 name: minimal
 description: Minimal playbook
 steps:
   - name: step1
     tool: some_tool
-"#;
+";
         let def: PlaybookDefinition = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(def.name, "minimal");
         assert_eq!(def.playbook, "1.0");

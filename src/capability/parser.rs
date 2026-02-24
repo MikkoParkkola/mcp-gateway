@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_parse_minimal_capability() {
-        let yaml = r#"
+        let yaml = r"
 name: test_capability
 description: A test capability
 providers:
@@ -132,7 +132,7 @@ providers:
     config:
       base_url: https://api.example.com
       path: /test
-"#;
+";
 
         let cap = parse_capability(yaml).unwrap();
         assert_eq!(cap.name, "test_capability");
@@ -141,12 +141,12 @@ providers:
 
     #[test]
     fn test_validate_missing_name() {
-        let yaml = r#"
+        let yaml = r"
 description: No name
 providers:
   primary:
     service: rest
-"#;
+";
 
         let cap = parse_capability(yaml).unwrap();
         let result = validate_capability(&cap);

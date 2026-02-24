@@ -295,7 +295,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let diff = token.expires_at.unwrap() - now;
-        assert!(diff >= 3598 && diff <= 3602); // allow 2 sec slack
+        assert!((3598..=3602).contains(&diff)); // allow 2 sec slack
     }
 
     #[test]

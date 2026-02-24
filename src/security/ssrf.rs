@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn private_ipv4_loopback() {
-        assert!(is_private_ipv4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert!(is_private_ipv4(Ipv4Addr::LOCALHOST));
         assert!(is_private_ipv4(Ipv4Addr::new(127, 255, 255, 255)));
     }
 
@@ -232,8 +232,8 @@ mod tests {
 
     #[test]
     fn private_ipv4_broadcast_and_unspecified() {
-        assert!(is_private_ipv4(Ipv4Addr::new(255, 255, 255, 255)));
-        assert!(is_private_ipv4(Ipv4Addr::new(0, 0, 0, 0)));
+        assert!(is_private_ipv4(Ipv4Addr::BROADCAST));
+        assert!(is_private_ipv4(Ipv4Addr::UNSPECIFIED));
     }
 
     #[test]

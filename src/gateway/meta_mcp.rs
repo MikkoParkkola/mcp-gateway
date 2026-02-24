@@ -543,7 +543,7 @@ impl MetaMcp {
         // ── Idempotency guard ────────────────────────────────────────────────
         // Resolve the idempotency key: explicit > auto-derived for side-effecting
         // tools > None (read-only / no idempotency cache).
-        let idem_key = resolve_idempotency_key(args, server, tool, &arguments, &self.idempotency_cache);
+        let idem_key = resolve_idempotency_key(args, server, tool, &arguments, self.idempotency_cache.as_ref());
 
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
             match enforce(idem_cache, key)? {
@@ -594,24 +594,21 @@ impl MetaMcp {
         // Record success or failure against the error budget.
         {
             let cfg = self.error_budget_config.read();
-            match &dispatch_result {
-                Ok(_) => {
-                    self.kill_switch
-                        .record_success(server, cfg.window_size, cfg.window_duration);
-                }
-                Err(_) => {
-                    let auto_killed = self.kill_switch.record_failure(
-                        server,
-                        cfg.window_size,
-                        cfg.window_duration,
-                        cfg.threshold,
+            if dispatch_result.is_ok() {
+                self.kill_switch
+                    .record_success(server, cfg.window_size, cfg.window_duration);
+            } else {
+                let auto_killed = self.kill_switch.record_failure(
+                    server,
+                    cfg.window_size,
+                    cfg.window_duration,
+                    cfg.threshold,
+                );
+                if auto_killed {
+                    warn!(
+                        server = server,
+                        "Server auto-killed by error budget exhaustion"
                     );
-                    if auto_killed {
-                        warn!(
-                            server = server,
-                            "Server auto-killed by error budget exhaustion"
-                        );
-                    }
                 }
             }
         }
@@ -1195,11 +1192,9 @@ fn resolve_idempotency_key(
     server: &str,
     tool: &str,
     arguments: &Value,
-    idem_cache: &Option<Arc<IdempotencyCache>>,
+    idem_cache: Option<&Arc<IdempotencyCache>>,
 ) -> Option<String> {
-    if idem_cache.is_none() {
-        return None;
-    }
+    idem_cache?;
     // Explicit key takes precedence.
     if let Some(key) = args.get("idempotency_key").and_then(Value::as_str) {
         return Some(key.to_string());
