@@ -92,7 +92,7 @@ impl TransitionTracker {
             let inner = self
                 .transitions
                 .entry(from)
-                .or_insert_with(DashMap::new);
+                .or_default();
             inner
                 .entry(tool.to_string())
                 .or_insert_with(|| AtomicU64::new(0))
@@ -220,7 +220,7 @@ impl TransitionTracker {
             let inner = self
                 .transitions
                 .entry(entry.from)
-                .or_insert_with(DashMap::new);
+                .or_default();
             inner
                 .entry(entry.to)
                 .or_insert_with(|| AtomicU64::new(0))

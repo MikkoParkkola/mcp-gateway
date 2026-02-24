@@ -325,7 +325,7 @@ pub struct WebhookTransform {
     /// Template for extracting the event type (e.g., "linear.issue.{action}")
     #[serde(default)]
     pub event_type: Option<String>,
-    /// Field mappings: output_key -> template or JSON path
+    /// Field mappings: `output_key` -> template or JSON path
     #[serde(default)]
     pub data: HashMap<String, String>,
 }
@@ -338,7 +338,7 @@ pub struct WebhookDefinition {
     /// HTTP method to accept (default: POST)
     #[serde(default = "default_method")]
     pub method: String,
-    /// HMAC secret reference (e.g., "env:LINEAR_WEBHOOK_SECRET")
+    /// HMAC secret reference (e.g., "`env:LINEAR_WEBHOOK_SECRET`")
     #[serde(default)]
     pub secret: Option<String>,
     /// Header that carries the signature (e.g., "X-Linear-Signature")
@@ -815,7 +815,7 @@ mod tests {
 
     #[test]
     fn test_providers_with_fallback_array() {
-        let yaml = r#"
+        let yaml = r"
 primary:
   service: openai
   config:
@@ -827,7 +827,7 @@ fallback:
   - service: groq
     config:
       endpoint: https://api.groq.com/v1/chat
-"#;
+";
         let providers: ProvidersConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(providers.named.contains_key("primary"));
         assert_eq!(providers.fallback.len(), 2);

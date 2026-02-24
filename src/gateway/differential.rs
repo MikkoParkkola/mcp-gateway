@@ -10,7 +10,7 @@
 //! # Algorithm
 //!
 //! 1. **Family detection** — tools are in the same family when they share the same
-//!    server AND a common snake_case prefix (the first segment before the first `_`).
+//!    server AND a common `snake_case` prefix (the first segment before the first `_`).
 //!    A family must have ≥ 2 members to qualify for differential treatment.
 //!
 //! 2. **Common-word extraction** — the descriptions of all family members are split
@@ -51,7 +51,7 @@ use serde_json::Value;
 pub fn annotate_differential(matches: &mut [Value]) {
     let families = detect_families(matches);
 
-    for (_, indices) in &families {
+    for indices in families.values() {
         if indices.len() < 2 {
             continue;
         }
@@ -63,7 +63,7 @@ pub fn annotate_differential(matches: &mut [Value]) {
 // Family detection
 // ============================================================================
 
-/// Family key: (server, name_prefix).
+/// Family key: (server, `name_prefix`).
 type FamilyKey = (String, String);
 
 /// Detect tool families in a list of search matches.
@@ -79,9 +79,8 @@ fn detect_families(matches: &[Value]) -> HashMap<FamilyKey, Vec<usize>> {
             Some(s) => s.to_string(),
             None => continue,
         };
-        let tool = match m.get("tool").and_then(Value::as_str) {
-            Some(t) => t,
-            None => continue,
+        let Some(tool) = m.get("tool").and_then(Value::as_str) else {
+            continue;
         };
         let prefix = tool_prefix(tool);
         families.entry((server, prefix)).or_default().push(idx);
@@ -96,15 +95,14 @@ fn detect_families(matches: &[Value]) -> HashMap<FamilyKey, Vec<usize>> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// assert_eq!(tool_prefix("gmail_search"), "gmail");
 /// assert_eq!(tool_prefix("gmail_batch_modify"), "gmail");
 /// assert_eq!(tool_prefix("search"), "search");
 /// ```
 fn tool_prefix(name: &str) -> String {
     name.split_once('_')
-        .map(|(prefix, _)| prefix.to_string())
-        .unwrap_or_else(|| name.to_string())
+        .map_or_else(|| name.to_string(), |(prefix, _)| prefix.to_string())
 }
 
 // ============================================================================

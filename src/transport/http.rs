@@ -544,13 +544,101 @@ impl HttpTransport {
     }
 }
 
+#[async_trait]
+impl Transport for HttpTransport {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: self.next_id(),
+            method: method.to_string(),
+            params,
+        };
+
+        self.send_request(&request).await
+    }
+
+    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+        let message_url = self.get_message_url();
+        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        });
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        // Accept both JSON and SSE - some servers (Beeper) require this for all requests
+        headers.insert(
+            header::ACCEPT,
+            "application/json, text/event-stream".parse().unwrap(),
+        );
+        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
+
+        // Add OAuth token if available
+        if let Some(token) = self.get_oauth_token().await? {
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {token}").parse().unwrap(),
+            );
+        }
+
+        if let Some(ref session_id) = *self.session_id.read() {
+            headers.insert("MCP-Session-Id", session_id.parse().unwrap());
+        }
+
+        let response = self
+            .client
+            .post(&message_url)
+            .headers(headers)
+            .json(&notification)
+            .send()
+            .await
+            .map_err(|e| Error::Transport(format!("Notification failed: {e}")))?;
+
+        if !response.status().is_success() {
+            warn!(
+                status = %response.status(),
+                url = %message_url,
+                "Notification failed"
+            );
+        }
+
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    async fn close(&self) -> Result<()> {
+        self.connected.store(false, Ordering::Relaxed);
+
+        // Send session termination if we have a session ID
+        let session_id = self.session_id.read().clone();
+        let message_url = self.get_message_url();
+
+        if let Some(ref id) = session_id {
+            let _ = self
+                .client
+                .delete(&message_url)
+                .header("MCP-Session-Id", id)
+                .send()
+                .await;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::time::Duration;
 
-    /// Helper: create an HttpTransport for testing (streamable HTTP mode, no OAuth)
+    /// Helper: create an `HttpTransport` for testing (streamable HTTP mode, no OAuth)
     fn make_transport(url: &str) -> Arc<HttpTransport> {
         HttpTransport::new(url, HashMap::new(), Duration::from_secs(30), true).unwrap()
     }
@@ -725,93 +813,5 @@ mod tests {
         assert!(t.is_connected());
         t.connected.store(false, Ordering::Relaxed);
         assert!(!t.is_connected());
-    }
-}
-
-#[async_trait]
-impl Transport for HttpTransport {
-    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: self.next_id(),
-            method: method.to_string(),
-            params,
-        };
-
-        self.send_request(&request).await
-    }
-
-    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let message_url = self.get_message_url();
-        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
-
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        });
-
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-        // Accept both JSON and SSE - some servers (Beeper) require this for all requests
-        headers.insert(
-            header::ACCEPT,
-            "application/json, text/event-stream".parse().unwrap(),
-        );
-        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
-
-        // Add OAuth token if available
-        if let Some(token) = self.get_oauth_token().await? {
-            headers.insert(
-                header::AUTHORIZATION,
-                format!("Bearer {token}").parse().unwrap(),
-            );
-        }
-
-        if let Some(ref session_id) = *self.session_id.read() {
-            headers.insert("MCP-Session-Id", session_id.parse().unwrap());
-        }
-
-        let response = self
-            .client
-            .post(&message_url)
-            .headers(headers)
-            .json(&notification)
-            .send()
-            .await
-            .map_err(|e| Error::Transport(format!("Notification failed: {e}")))?;
-
-        if !response.status().is_success() {
-            warn!(
-                status = %response.status(),
-                url = %message_url,
-                "Notification failed"
-            );
-        }
-
-        Ok(())
-    }
-
-    fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
-    }
-
-    async fn close(&self) -> Result<()> {
-        self.connected.store(false, Ordering::Relaxed);
-
-        // Send session termination if we have a session ID
-        let session_id = self.session_id.read().clone();
-        let message_url = self.get_message_url();
-
-        if let Some(ref id) = session_id {
-            let _ = self
-                .client
-                .delete(&message_url)
-                .header("MCP-Session-Id", id)
-                .send()
-                .await;
-        }
-
-        Ok(())
     }
 }

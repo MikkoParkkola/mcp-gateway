@@ -584,7 +584,6 @@ pub(crate) fn build_server_safety_status(
     successes: usize,
     failures: usize,
 ) -> Value {
-    #[allow(clippy::cast_precision_loss)]
     json!({
         "server": server,
         "killed": killed,
@@ -756,7 +755,7 @@ mod tests {
             cache: CacheConfig::default(),
             metadata: CapabilityMetadata {
                 category: category.to_string(),
-                tags: tags.iter().map(|s| s.to_string()).collect(),
+                tags: tags.iter().map(ToString::to_string).collect(),
                 ..CapabilityMetadata::default()
             },
             transform: TransformConfig::default(),
@@ -1471,7 +1470,11 @@ mod tests {
     #[test]
     fn build_routing_instructions_includes_chain_section_when_chains_present() {
         // GIVEN: capabilities where one declares chains_with
-        use crate::capability::{CapabilityDefinition, CapabilityMetadata};
+        use crate::capability::{
+            AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProvidersConfig,
+            SchemaDefinition,
+        };
+        use crate::transform::TransformConfig;
         use std::collections::HashMap;
 
         let make_cap = |name: &str, category: &str, chains: Vec<&str>| {
@@ -1479,16 +1482,16 @@ mod tests {
                 fulcrum: "1.0".to_string(),
                 name: name.to_string(),
                 description: format!("{name} description"),
-                schema: Default::default(),
-                providers: Default::default(),
-                auth: Default::default(),
-                cache: Default::default(),
+                schema: SchemaDefinition::default(),
+                providers: ProvidersConfig::default(),
+                auth: AuthConfig::default(),
+                cache: CacheConfig::default(),
                 metadata: CapabilityMetadata {
                     category: category.to_string(),
                     chains_with: chains.into_iter().map(ToString::to_string).collect(),
                     ..Default::default()
                 },
-                transform: Default::default(),
+                transform: TransformConfig::default(),
                 webhooks: HashMap::new(),
             }
         };
@@ -1506,23 +1509,27 @@ mod tests {
     #[test]
     fn build_routing_instructions_omits_chain_section_when_no_chains() {
         // GIVEN: capabilities with no chains_with set
-        use crate::capability::{CapabilityDefinition, CapabilityMetadata};
+        use crate::capability::{
+            AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProvidersConfig,
+            SchemaDefinition,
+        };
+        use crate::transform::TransformConfig;
         use std::collections::HashMap;
 
         let cap = CapabilityDefinition {
             fulcrum: "1.0".to_string(),
             name: "tool_a".to_string(),
             description: "Tool A".to_string(),
-            schema: Default::default(),
-            providers: Default::default(),
-            auth: Default::default(),
-            cache: Default::default(),
+            schema: SchemaDefinition::default(),
+            providers: ProvidersConfig::default(),
+            auth: AuthConfig::default(),
+            cache: CacheConfig::default(),
             metadata: CapabilityMetadata {
                 category: "general".to_string(),
                 chains_with: vec![],
                 ..Default::default()
             },
-            transform: Default::default(),
+            transform: TransformConfig::default(),
             webhooks: HashMap::new(),
         };
 
@@ -1537,12 +1544,12 @@ mod tests {
         // GIVEN: YAML with produces, consumes, and chains_with
         // WHEN: deserializing
         // THEN: all three fields are populated correctly
-        let yaml = r#"
+        let yaml = r"
 category: productivity
 produces: [teamId, issueId]
 consumes: [teamId]
 chains_with: [linear_create_issue, linear_update_issue]
-"#;
+";
         let meta: crate::capability::CapabilityMetadata = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(meta.produces, vec!["teamId", "issueId"]);
         assert_eq!(meta.consumes, vec!["teamId"]);

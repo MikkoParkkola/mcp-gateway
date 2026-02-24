@@ -489,6 +489,7 @@ mod tests {
 
     // ── Helper ──────────────────────────────────────────────────────────────
 
+    #[allow(clippy::needless_pass_by_value)]
     fn schema_with_props(props: serde_json::Value, required: &[&str]) -> serde_json::Value {
         json!({
             "type": "object",
@@ -593,6 +594,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is the test input string, not π
     fn string_value_for_number_field_is_coerced() {
         // GIVEN: "price" declared as number, WHEN: LLM passes "3.14"
         let schema = schema_with_props(

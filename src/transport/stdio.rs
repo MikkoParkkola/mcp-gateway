@@ -232,6 +232,64 @@ impl StdioTransport {
     }
 }
 
+#[async_trait]
+impl Transport for StdioTransport {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        let id = self.next_id();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: id.clone(),
+            method: method.to_string(),
+            params,
+        };
+
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(id.to_string(), tx);
+
+        let message = serde_json::to_string(&request)?;
+        self.write_message(&message).await?;
+
+        // Wait for response with timeout
+        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
+            Err(_) => {
+                self.pending.remove(&id.to_string());
+                Err(Error::BackendTimeout("Request timed out".to_string()))
+            }
+        }
+    }
+
+    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        });
+
+        let message = serde_json::to_string(&notification)?;
+        self.write_message(&message).await
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    async fn close(&self) -> Result<()> {
+        self.connected.store(false, Ordering::Relaxed);
+
+        // Close stdin
+        *self.writer.lock().await = None;
+
+        // Kill child process
+        if let Some(ref mut child) = *self.child.lock().await {
+            let _ = child.kill().await;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,63 +418,5 @@ mod tests {
         assert!(t.is_connected());
         t.connected.store(false, Ordering::Relaxed);
         assert!(!t.is_connected());
-    }
-}
-
-#[async_trait]
-impl Transport for StdioTransport {
-    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let id = self.next_id();
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: id.clone(),
-            method: method.to_string(),
-            params,
-        };
-
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert(id.to_string(), tx);
-
-        let message = serde_json::to_string(&request)?;
-        self.write_message(&message).await?;
-
-        // Wait for response with timeout
-        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-            Err(_) => {
-                self.pending.remove(&id.to_string());
-                Err(Error::BackendTimeout("Request timed out".to_string()))
-            }
-        }
-    }
-
-    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        });
-
-        let message = serde_json::to_string(&notification)?;
-        self.write_message(&message).await
-    }
-
-    fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
-    }
-
-    async fn close(&self) -> Result<()> {
-        self.connected.store(false, Ordering::Relaxed);
-
-        // Close stdin
-        *self.writer.lock().await = None;
-
-        // Kill child process
-        if let Some(ref mut child) = *self.child.lock().await {
-            let _ = child.kill().await;
-        }
-
-        Ok(())
     }
 }

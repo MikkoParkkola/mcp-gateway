@@ -261,7 +261,7 @@ mod tests {
         // Simulate the OAuth provider redirecting back
         let client = reqwest::Client::new();
         let resp = client
-            .get(&format!("{callback_url}?code=auth_code_xyz&state={state}"))
+            .get(format!("{callback_url}?code=auth_code_xyz&state={state}"))
             .send()
             .await
             .unwrap();
@@ -280,7 +280,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let _resp = client
-            .get(&format!("{callback_url}?code=code123&state=wrong_state"))
+            .get(format!("{callback_url}?code=code123&state=wrong_state"))
             .send()
             .await
             .unwrap();
@@ -296,7 +296,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let _resp = client
-            .get(&format!("{callback_url}?error=access_denied&error_description=User+denied"))
+            .get(format!("{callback_url}?error=access_denied&error_description=User+denied"))
             .send()
             .await
             .unwrap();
@@ -312,7 +312,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let _resp = client
-            .get(&format!("{callback_url}?state=state123"))
+            .get(format!("{callback_url}?state=state123"))
             .send()
             .await
             .unwrap();

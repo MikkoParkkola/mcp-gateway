@@ -853,6 +853,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 tests float input, not π
     fn extract_request_id_float_returns_none() {
         let val = json!(3.14);
         assert!(extract_request_id(&val).is_none());

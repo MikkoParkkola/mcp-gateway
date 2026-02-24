@@ -3,11 +3,13 @@
 use std::time::Duration;
 
 use mcp_gateway::backend::Backend;
+use std::collections::HashMap;
+
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 
 fn create_test_backend(name: &str, command: &str) -> Backend {
     let config = BackendConfig {
-        description: format!("Test backend: {}", name),
+        description: format!("Test backend: {name}"),
         enabled: true,
         transport: TransportConfig::Stdio {
             command: command.to_string(),
@@ -15,8 +17,8 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         },
         idle_timeout: Duration::from_secs(60),
         timeout: Duration::from_secs(30),
-        env: Default::default(),
-        headers: Default::default(),
+        env: HashMap::default(),
+        headers: HashMap::default(),
         oauth: None,
     };
 

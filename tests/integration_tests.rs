@@ -1,15 +1,15 @@
 //! Integration tests for MCP Gateway new features
 //!
 //! These tests verify the following new features:
-//! 1. Stats meta-tool (gateway_get_stats)
-//! 2. Search tools with ranking (gateway_search_tools)
-//! 3. Response caching (gateway_invoke)
-//! 4. List servers (gateway_list_servers)
+//! 1. Stats meta-tool (`gateway_get_stats`)
+//! 2. Search tools with ranking (`gateway_search_tools`)
+//! 3. Response caching (`gateway_invoke`)
+//! 4. List servers (`gateway_list_servers`)
 //! 5. CLI commands (cap registry-list)
 //!
 //! Note: These tests require the gateway to be running on localhost:39400
-//! Run with: cargo test --test integration_tests
-//! Or individually with: cargo test --test integration_tests test_name
+//! Run with: `cargo test --test integration_tests`
+//! Or individually with: `cargo test --test integration_tests` `test_name`
 
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -37,7 +37,7 @@ impl JsonRpcRequest {
         }
     }
 
-    fn tools_call(tool_name: &str, arguments: Value) -> Self {
+    fn tools_call(tool_name: &str, arguments: &Value) -> Self {
         Self::new(
             "tools/call",
             json!({
@@ -76,7 +76,7 @@ fn parse_tool_response(response: &Value) -> Result<Value, String> {
 }
 
 #[tokio::test]
-#[ignore] // Run with --ignored if gateway is running
+#[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_get_stats() {
     if !is_gateway_running().await {
         eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
@@ -86,7 +86,7 @@ async fn test_gateway_get_stats() {
     let client = Client::new();
 
     // Call gateway_get_stats via MCP JSON-RPC
-    let request = JsonRpcRequest::tools_call("gateway_get_stats", json!({}));
+    let request = JsonRpcRequest::tools_call("gateway_get_stats", &json!({}));
 
     let response = client
         .post(GATEWAY_URL)
@@ -155,11 +155,11 @@ async fn test_gateway_get_stats() {
     );
     assert!(stats["top_tools"].is_array(), "top_tools should be an array");
 
-    println!("✅ Stats test passed: {:?}", stats);
+    println!("✅ Stats test passed: {stats:?}");
 }
 
 #[tokio::test]
-#[ignore] // Run with --ignored if gateway is running
+#[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_search_tools() {
     if !is_gateway_running().await {
         eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
@@ -171,7 +171,7 @@ async fn test_gateway_search_tools() {
     // Search for "weather" tools
     let request = JsonRpcRequest::tools_call(
         "gateway_search_tools",
-        json!({
+        &json!({
             "query": "weather",
             "limit": 5
         }),
@@ -214,20 +214,11 @@ async fn test_gateway_search_tools() {
 
     // Each match should have server, tool, description
     for m in matches {
-        assert!(
-            m.get("server").is_some(),
-            "Match missing 'server' field: {:?}",
-            m
-        );
-        assert!(
-            m.get("tool").is_some(),
-            "Match missing 'tool' field: {:?}",
-            m
-        );
+        assert!(m.get("server").is_some(), "Match missing 'server' field: {m:?}");
+        assert!(m.get("tool").is_some(), "Match missing 'tool' field: {m:?}");
         assert!(
             m.get("description").is_some(),
-            "Match missing 'description' field: {:?}",
-            m
+            "Match missing 'description' field: {m:?}"
         );
 
         // If ranking is enabled, score field should be present
@@ -244,7 +235,7 @@ async fn test_gateway_search_tools() {
 }
 
 #[tokio::test]
-#[ignore] // Run with --ignored if gateway is running
+#[ignore = "requires gateway running on localhost:39400"]
 async fn test_invoke_caching() {
     if !is_gateway_running().await {
         eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
@@ -254,7 +245,7 @@ async fn test_invoke_caching() {
     let client = Client::new();
 
     // First, get stats to establish baseline
-    let stats_request = JsonRpcRequest::tools_call("gateway_get_stats", json!({}));
+    let stats_request = JsonRpcRequest::tools_call("gateway_get_stats", &json!({}));
 
     let initial_response = client
         .post(GATEWAY_URL)
@@ -274,7 +265,7 @@ async fn test_invoke_caching() {
     // First invocation - should NOT be cached
     let invoke_request = JsonRpcRequest::tools_call(
         "gateway_invoke",
-        json!({
+        &json!({
             "server": "capabilities",
             "tool": "weather_current",
             "arguments": {
@@ -343,9 +334,7 @@ async fn test_invoke_caching() {
     // Verify cache hit occurred
     assert!(
         final_cache_hits > initial_cache_hits,
-        "Cache hits should have increased. Initial: {}, Final: {}",
-        initial_cache_hits,
-        final_cache_hits
+        "Cache hits should have increased. Initial: {initial_cache_hits}, Final: {final_cache_hits}"
     );
 
     // Cached response should typically be faster (though not guaranteed in all environments)
@@ -358,7 +347,7 @@ async fn test_invoke_caching() {
 }
 
 #[tokio::test]
-#[ignore] // Run with --ignored if gateway is running
+#[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_list_servers() {
     if !is_gateway_running().await {
         eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
@@ -368,7 +357,7 @@ async fn test_gateway_list_servers() {
     let client = Client::new();
 
     // Call gateway_list_servers
-    let request = JsonRpcRequest::tools_call("gateway_list_servers", json!({}));
+    let request = JsonRpcRequest::tools_call("gateway_list_servers", &json!({}));
 
     let response = client
         .post(GATEWAY_URL)
@@ -408,30 +397,19 @@ async fn test_gateway_list_servers() {
 
     // Verify each server has required fields
     for server in servers {
-        assert!(
-            server.get("name").is_some(),
-            "Server missing 'name' field: {:?}",
-            server
-        );
-        assert!(
-            server.get("running").is_some(),
-            "Server missing 'running' field: {:?}",
-            server
-        );
+        assert!(server.get("name").is_some(), "Server missing 'name' field: {server:?}");
+        assert!(server.get("running").is_some(), "Server missing 'running' field: {server:?}");
         assert!(
             server.get("transport").is_some(),
-            "Server missing 'transport' field: {:?}",
-            server
+            "Server missing 'transport' field: {server:?}"
         );
         assert!(
             server.get("tools_count").is_some(),
-            "Server missing 'tools_count' field: {:?}",
-            server
+            "Server missing 'tools_count' field: {server:?}"
         );
         assert!(
             server.get("circuit_state").is_some(),
-            "Server missing 'circuit_state' field: {:?}",
-            server
+            "Server missing 'circuit_state' field: {server:?}"
         );
 
         // Verify types
@@ -452,7 +430,7 @@ async fn test_gateway_list_servers() {
 }
 
 #[tokio::test]
-#[ignore] // Run with --ignored if binary is built
+#[ignore = "requires mcp-gateway binary built in target/"]
 async fn test_cap_registry_list() {
     // Check if mcp-gateway binary exists in target/debug or target/release
     let binary_path = if std::path::Path::new("target/release/mcp-gateway").exists() {
@@ -498,9 +476,7 @@ async fn test_cap_registry_list() {
     for cap in &expected_capabilities {
         assert!(
             stdout.contains(cap),
-            "Output should contain capability '{}', but got: {}",
-            cap,
-            stdout
+            "Output should contain capability '{cap}', but got: {stdout}"
         );
     }
 
@@ -508,7 +484,7 @@ async fn test_cap_registry_list() {
 }
 
 #[tokio::test]
-#[ignore] // Run with --ignored if gateway is running
+#[ignore = "requires gateway running on localhost:39400"]
 async fn test_gateway_integration_flow() {
     if !is_gateway_running().await {
         eprintln!("⚠️  Gateway not running on {GATEWAY_URL}, skipping test");
@@ -518,7 +494,7 @@ async fn test_gateway_integration_flow() {
     let client = Client::new();
 
     // 1. List servers
-    let list_servers_req = JsonRpcRequest::tools_call("gateway_list_servers", json!({}));
+    let list_servers_req = JsonRpcRequest::tools_call("gateway_list_servers", &json!({}));
     let servers_response = client
         .post(GATEWAY_URL)
         .json(&list_servers_req)
@@ -534,7 +510,7 @@ async fn test_gateway_integration_flow() {
     // 2. Search for tools
     let search_req = JsonRpcRequest::tools_call(
         "gateway_search_tools",
-        json!({
+        &json!({
             "query": "weather",
             "limit": 10
         }),
@@ -549,7 +525,7 @@ async fn test_gateway_integration_flow() {
     let search_data = parse_tool_response(&search_body).expect("Failed to parse search");
 
     // 3. Get stats
-    let stats_req = JsonRpcRequest::tools_call("gateway_get_stats", json!({}));
+    let stats_req = JsonRpcRequest::tools_call("gateway_get_stats", &json!({}));
     let stats_response = client
         .post(GATEWAY_URL)
         .json(&stats_req)
@@ -568,6 +544,6 @@ async fn test_gateway_integration_flow() {
 
     println!("✅ Integration flow test passed");
     println!("   Servers: {}", servers.len());
-    println!("   Search results: {}", searches_found);
+    println!("   Search results: {searches_found}");
     println!("   Total invocations: {}", stats_data["invocations"]);
 }

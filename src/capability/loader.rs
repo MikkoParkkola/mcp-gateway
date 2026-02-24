@@ -131,7 +131,7 @@ mod tests {
         let mut file = std::fs::File::create(&cap_path).unwrap();
         writeln!(
             file,
-            r#"
+            r"
 name: test_capability
 description: A test capability
 providers:
@@ -140,7 +140,7 @@ providers:
     config:
       base_url: https://api.example.com
       path: /test
-"#
+"
         )
         .unwrap();
 
@@ -164,7 +164,7 @@ providers:
         let mut file = std::fs::File::create(&cap_path).unwrap();
         writeln!(
             file,
-            r#"
+            r"
 name: gmail_test
 description: Gmail test
 providers:
@@ -172,7 +172,7 @@ providers:
     service: rest
     config:
       base_url: https://gmail.googleapis.com
-"#
+"
         )
         .unwrap();
 

@@ -196,7 +196,7 @@ fn test_allowlist_and_denylist_combination() {
     assert!(client.check_tool_scope("server", "execute_command").is_err());
 }
 
-/// Test ApiKeyConfig with tool scopes (config layer)
+/// Test `ApiKeyConfig` with tool scopes (config layer)
 #[test]
 fn test_api_key_config_with_tool_scopes() {
     let config = ApiKeyConfig {
