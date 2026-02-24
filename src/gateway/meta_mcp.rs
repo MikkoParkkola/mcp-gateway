@@ -41,6 +41,7 @@ use super::meta_mcp_helpers::{
     extract_client_version, extract_price_per_million, extract_required_str, extract_search_limit,
     parse_tool_arguments, ranked_results_to_json, tool_matches_query, wrap_tool_success,
 };
+use super::webhooks::WebhookRegistry;
 
 // ============================================================================
 // MetaMcp struct and async methods (thin wrappers)
@@ -74,6 +75,8 @@ pub struct MetaMcp {
     /// startup; read on every invocation, so `RwLock` provides zero-overhead
     /// reads in the common case.
     error_budget_config: RwLock<ErrorBudgetConfig>,
+    /// Webhook registry for status reporting (optional — set after startup)
+    webhook_registry: RwLock<Option<Arc<parking_lot::RwLock<WebhookRegistry>>>>,
 }
 
 impl MetaMcp {
@@ -89,6 +92,7 @@ impl MetaMcp {
             stats: None,
             ranker: None,
             transition_tracker: RwLock::new(None),
+            webhook_registry: RwLock::new(None),
             playbook_engine: RwLock::new(PlaybookEngine::new()),
             log_level: RwLock::new(LoggingLevel::default()),
             kill_switch: Arc::new(KillSwitch::new()),
@@ -117,6 +121,7 @@ impl MetaMcp {
             log_level: RwLock::new(LoggingLevel::default()),
             kill_switch: Arc::new(KillSwitch::new()),
             error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
+            webhook_registry: RwLock::new(None),
         }
     }
 
@@ -132,6 +137,18 @@ impl MetaMcp {
     ) {
         spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
         self.idempotency_cache = Some(cache);
+    }
+
+    /// Attach the webhook registry for `gateway_webhook_status` reporting.
+    ///
+    /// Must be called during server setup, before any requests are handled.
+    pub fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {
+        *self.webhook_registry.write() = Some(registry);
+    }
+
+    /// Get the webhook registry if attached.
+    fn get_webhook_registry(&self) -> Option<Arc<parking_lot::RwLock<WebhookRegistry>>> {
+        self.webhook_registry.read().clone()
     }
 
     /// Attach a `TransitionTracker` for predictive tool prefetch.
@@ -204,7 +221,10 @@ impl MetaMcp {
 
     /// Handle tools/list request
     pub fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
-        let tools = build_meta_tools(self.stats.is_some());
+        let tools = build_meta_tools(
+            self.stats.is_some(),
+            self.get_webhook_registry().is_some(),
+        );
         let result = ToolsListResult {
             tools,
             next_cursor: None,
@@ -229,6 +249,7 @@ impl MetaMcp {
             "gateway_search_tools" => self.search_tools(&arguments).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id).await,
             "gateway_get_stats" => self.get_stats(&arguments).await,
+            "gateway_webhook_status" => self.webhook_status(),
             "gateway_run_playbook" => self.run_playbook(&arguments).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
@@ -765,6 +786,26 @@ impl MetaMcp {
             "status": "active",
             "was_killed": was_killed,
             "message": format!("Server '{server}' has been re-enabled")
+        }))
+    }
+
+    /// Return webhook endpoint status — registered paths and delivery stats.
+    #[allow(clippy::unnecessary_wraps)]
+    fn webhook_status(&self) -> Result<Value> {
+        let registry = self.get_webhook_registry().ok_or_else(|| {
+            Error::json_rpc(-32603, "Webhook receiver is not enabled on this gateway")
+        })?;
+
+        let endpoints = registry.read().list_endpoints();
+        let total = endpoints.len();
+        let total_received: u64 = endpoints.iter().map(|e| e.stats.received).sum();
+        let total_delivered: u64 = endpoints.iter().map(|e| e.stats.delivered).sum();
+
+        Ok(json!({
+            "endpoints": endpoints,
+            "total_endpoints": total,
+            "total_received": total_received,
+            "total_delivered": total_delivered
         }))
     }
 

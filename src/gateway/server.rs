@@ -256,6 +256,11 @@ impl Gateway {
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let auth_config = Arc::new(ResolvedAuthConfig::from_config(&self.config.auth));
 
+        // Wire webhook registry into MetaMcp for gateway_webhook_status.
+        if self.config.webhooks.enabled {
+            meta_mcp.set_webhook_registry(Arc::clone(&webhook_registry));
+        }
+
         // In-flight request tracker: large initial permits, drain waits for
         // all permits to be returned (i.e., all in-flight requests complete).
         let inflight = Arc::new(tokio::sync::Semaphore::new(10_000));
