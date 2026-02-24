@@ -343,6 +343,10 @@ impl Config {
             for value in backend.headers.values_mut() {
                 *value = Self::expand_string(&re, value);
             }
+            // Also expand in backend env maps (stdio subprocess environment)
+            for value in backend.env.values_mut() {
+                *value = Self::expand_string(&re, value);
+            }
         }
 
         // Expand in capability directories

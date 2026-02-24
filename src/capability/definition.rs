@@ -381,13 +381,26 @@ pub struct CapabilityMetadata {
 }
 
 impl CapabilityDefinition {
+    /// Build the MCP tool description, appending keyword tags when present.
+    ///
+    /// The tags suffix has the form `[keywords: tag1, tag2, ...]` and is
+    /// invisible to human readers but searchable by both the gateway's
+    /// `tool_matches_query` function and by LLMs reading the description.
+    #[must_use]
+    fn build_description(&self) -> String {
+        if self.metadata.tags.is_empty() {
+            return self.description.clone();
+        }
+        format!("{} [keywords: {}]", self.description, self.metadata.tags.join(", "))
+    }
+
     /// Convert to MCP tool format
     #[must_use]
     pub fn to_mcp_tool(&self) -> crate::protocol::Tool {
         crate::protocol::Tool {
             name: self.name.clone(),
             title: None,
-            description: Some(self.description.clone()),
+            description: Some(self.build_description()),
             input_schema: self.schema.input.clone(),
             output_schema: if self.schema.output.is_null() {
                 None
@@ -428,24 +441,61 @@ mod tests {
         assert!(config.auth_type.is_empty());
     }
 
-    #[test]
-    fn test_capability_to_mcp_tool() {
-        let cap = CapabilityDefinition {
+    fn make_capability(name: &str, description: &str, tags: Vec<&str>) -> CapabilityDefinition {
+        CapabilityDefinition {
             fulcrum: "1.0".to_string(),
-            name: "test_tool".to_string(),
-            description: "A test tool".to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
             schema: SchemaDefinition::default(),
             providers: ProvidersConfig::default(),
             auth: AuthConfig::default(),
             cache: CacheConfig::default(),
-            metadata: CapabilityMetadata::default(),
+            metadata: CapabilityMetadata {
+                tags: tags.into_iter().map(ToString::to_string).collect(),
+                ..CapabilityMetadata::default()
+            },
             transform: TransformConfig::default(),
             webhooks: HashMap::new(),
-        };
+        }
+    }
 
+    #[test]
+    fn to_mcp_tool_without_tags_uses_plain_description() {
+        let cap = make_capability("test_tool", "A test tool", vec![]);
         let tool = cap.to_mcp_tool();
         assert_eq!(tool.name, "test_tool");
         assert_eq!(tool.description, Some("A test tool".to_string()));
+    }
+
+    #[test]
+    fn to_mcp_tool_with_tags_appends_keywords_suffix() {
+        let cap = make_capability("search_tool", "Web search", vec!["search", "web", "brave"]);
+        let tool = cap.to_mcp_tool();
+        let desc = tool.description.unwrap();
+        assert!(desc.starts_with("Web search"));
+        assert!(desc.contains("[keywords: search, web, brave]"));
+    }
+
+    #[test]
+    fn to_mcp_tool_single_tag_formats_correctly() {
+        let cap = make_capability("weather", "Get weather", vec!["forecast"]);
+        let tool = cap.to_mcp_tool();
+        assert_eq!(
+            tool.description,
+            Some("Get weather [keywords: forecast]".to_string())
+        );
+    }
+
+    #[test]
+    fn build_description_with_empty_tags_is_plain() {
+        let cap = make_capability("no_tags", "Plain description", vec![]);
+        assert_eq!(cap.build_description(), "Plain description");
+    }
+
+    #[test]
+    fn build_description_with_tags_includes_all_tags() {
+        let cap = make_capability("multi", "Desc", vec!["a", "b", "c"]);
+        assert_eq!(cap.build_description(), "Desc [keywords: a, b, c]");
     }
 
     #[test]
