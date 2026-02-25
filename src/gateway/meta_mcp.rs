@@ -248,11 +248,25 @@ impl MetaMcp {
         *self.error_budget_config.write() = config;
     }
 
-    /// Handle initialize request with version negotiation.
+    /// Handle initialize request with version negotiation and optional profile binding.
     ///
     /// Generates dynamic routing instructions from the loaded capability
     /// definitions, giving the connecting LLM a task-oriented routing guide.
-    pub fn handle_initialize(&self, id: RequestId, params: Option<&Value>) -> JsonRpcResponse {
+    ///
+    /// Profile selection priority (highest to lowest):
+    /// 1. `header_profile` — value of the `X-MCP-Profile` HTTP header
+    /// 2. `params["profile"]` — profile key in the MCP initialize params
+    ///
+    /// When a valid `session_id` and profile name are both present, the session
+    /// is bound to that profile immediately. Unknown profile names are logged and
+    /// silently ignored (the session falls back to the registry default).
+    pub fn handle_initialize(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+        session_id: Option<&str>,
+        header_profile: Option<&str>,
+    ) -> JsonRpcResponse {
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
         debug!(
@@ -260,6 +274,26 @@ impl MetaMcp {
             negotiated = negotiated_version,
             "Protocol version negotiation"
         );
+
+        // Bind profile from header (highest priority) or params key.
+        let profile_hint = header_profile.or_else(|| {
+            params
+                .and_then(|p| p.get("profile"))
+                .and_then(serde_json::Value::as_str)
+        });
+
+        if let (Some(sid), Some(name)) = (session_id, profile_hint) {
+            if self.profile_registry.contains(name) {
+                self.session_profiles.set_profile(sid, name);
+                debug!(session_id = sid, profile = name, "Session bound to routing profile at initialize");
+            } else {
+                warn!(
+                    session_id = sid,
+                    requested = name,
+                    "Requested profile not found at initialize; using registry default"
+                );
+            }
+        }
 
         let instructions = self.build_instructions();
         let result = build_initialize_result(negotiated_version, &instructions);
@@ -319,6 +353,7 @@ impl MetaMcp {
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_set_profile" => self.set_profile(&arguments, session_id),
             "gateway_get_profile" => self.get_profile(session_id),
+            "gateway_list_profiles" => self.list_profiles(),
             "gateway_reload_config" => self.reload_config().await,
             _ => Err(Error::json_rpc(
                 -32601,
@@ -1407,6 +1442,22 @@ impl MetaMcp {
             "available_profiles": self.profile_registry.profile_names(),
         }))
     }
+
+    /// `gateway_list_profiles` — enumerate every configured routing profile.
+    ///
+    /// Returns an array of `{ name, description }` objects sorted alphabetically,
+    /// the registry's default profile name, and the total count.
+    #[allow(clippy::unnecessary_wraps)]
+    fn list_profiles(&self) -> Result<Value> {
+        let summaries = self.profile_registry.profile_summaries();
+        let total = summaries.len();
+        let default_name = self.profile_registry.default_name();
+        Ok(json!({
+            "profiles": summaries,
+            "default": default_name,
+            "total": total,
+        }))
+    }
 }
 
 /// Resolve the idempotency key for a `gateway_invoke` call.
@@ -1610,5 +1661,190 @@ mod tests {
         // WHEN: reading outside any with_trace_id scope
         // THEN: current() returns None
         assert_eq!(trace::current(), None);
+    }
+
+    // ── Toolshed: list_profiles ───────────────────────────────────────────
+
+    fn make_meta_mcp_with_profiles() -> MetaMcp {
+        use crate::backend::BackendRegistry;
+        use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
+        use std::collections::HashMap;
+
+        let backends = Arc::new(BackendRegistry::new());
+        let mut configs: HashMap<String, RoutingProfileConfig> = HashMap::new();
+        configs.insert(
+            "research".to_string(),
+            RoutingProfileConfig {
+                description: "Web research tools".to_string(),
+                allow_tools: Some(vec!["brave_*".to_string()]),
+                ..Default::default()
+            },
+        );
+        configs.insert(
+            "coding".to_string(),
+            RoutingProfileConfig {
+                description: "Software dev — no social".to_string(),
+                deny_tools: Some(vec!["slack_*".to_string()]),
+                ..Default::default()
+            },
+        );
+        let registry = ProfileRegistry::from_config(&configs, "research");
+
+        MetaMcp::new(backends).with_profile_registry(registry)
+    }
+
+    #[test]
+    fn list_profiles_returns_all_profiles_sorted_alphabetically() {
+        // GIVEN: a MetaMcp with two configured profiles
+        let mm = make_meta_mcp_with_profiles();
+        // WHEN: calling list_profiles
+        let result = mm.list_profiles().unwrap();
+        // THEN: profiles array contains both, sorted alphabetically
+        let profiles = result["profiles"].as_array().unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0]["name"], "coding");
+        assert_eq!(profiles[1]["name"], "research");
+    }
+
+    #[test]
+    fn list_profiles_includes_description_for_each_profile() {
+        // GIVEN: a MetaMcp with profiles that have descriptions
+        let mm = make_meta_mcp_with_profiles();
+        // WHEN
+        let result = mm.list_profiles().unwrap();
+        // THEN: each profile has a non-empty description
+        let profiles = result["profiles"].as_array().unwrap();
+        for profile in profiles {
+            assert!(
+                profile["description"].as_str().is_some_and(|s| !s.is_empty()),
+                "Profile '{}' missing description",
+                profile["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn list_profiles_reports_correct_default() {
+        // GIVEN: registry with default = "research"
+        let mm = make_meta_mcp_with_profiles();
+        // WHEN
+        let result = mm.list_profiles().unwrap();
+        // THEN: default field matches
+        assert_eq!(result["default"], "research");
+    }
+
+    #[test]
+    fn list_profiles_reports_correct_total() {
+        // GIVEN: two configured profiles
+        let mm = make_meta_mcp_with_profiles();
+        // WHEN
+        let result = mm.list_profiles().unwrap();
+        // THEN: total = 2
+        assert_eq!(result["total"], 2);
+    }
+
+    #[test]
+    fn list_profiles_empty_when_no_profiles_configured() {
+        // GIVEN: a MetaMcp with default (empty) registry
+        use crate::backend::BackendRegistry;
+        let mm = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        // WHEN
+        let result = mm.list_profiles().unwrap();
+        // THEN: profiles array is empty, total = 0
+        let profiles = result["profiles"].as_array().unwrap();
+        assert!(profiles.is_empty());
+        assert_eq!(result["total"], 0);
+    }
+
+    // ── Toolshed: handle_initialize profile binding ───────────────────────
+
+    #[test]
+    fn initialize_with_profile_in_params_binds_session() {
+        // GIVEN: MetaMcp with profiles + a session ID + profile in params
+        let mm = make_meta_mcp_with_profiles();
+        let id = RequestId::Number(1);
+        let params = json!({"protocolVersion": "2024-11-05", "profile": "coding"});
+        // WHEN: initializing with session_id and profile param
+        mm.handle_initialize(id, Some(&params), Some("session-42"), None);
+        // THEN: session is bound to "coding"
+        let active = mm.session_profiles.get_profile_name("session-42", "research");
+        assert_eq!(active, "coding");
+    }
+
+    #[test]
+    fn initialize_with_header_profile_takes_precedence_over_params() {
+        // GIVEN: both header and params specify a profile
+        let mm = make_meta_mcp_with_profiles();
+        let id = RequestId::Number(2);
+        let params = json!({"protocolVersion": "2024-11-05", "profile": "research"});
+        // WHEN: header says "coding", params say "research"
+        mm.handle_initialize(id, Some(&params), Some("session-99"), Some("coding"));
+        // THEN: header wins — session bound to "coding"
+        let active = mm.session_profiles.get_profile_name("session-99", "research");
+        assert_eq!(active, "coding");
+    }
+
+    #[test]
+    fn initialize_with_unknown_profile_does_not_bind_session() {
+        // GIVEN: params specify a profile that doesn't exist
+        let mm = make_meta_mcp_with_profiles();
+        let id = RequestId::Number(3);
+        let params = json!({"protocolVersion": "2024-11-05", "profile": "nonexistent"});
+        // WHEN: initializing with unknown profile
+        mm.handle_initialize(id, Some(&params), Some("session-77"), None);
+        // THEN: session is NOT bound (default remains "research")
+        let active = mm.session_profiles.get_profile_name("session-77", "research");
+        assert_eq!(active, "research");
+    }
+
+    #[test]
+    fn initialize_without_profile_does_not_change_session() {
+        // GIVEN: no profile in params or header
+        let mm = make_meta_mcp_with_profiles();
+        // Pre-set session to "coding"
+        mm.session_profiles.set_profile("session-5", "coding");
+        let id = RequestId::Number(4);
+        let params = json!({"protocolVersion": "2024-11-05"});
+        // WHEN: initializing without profile hint
+        mm.handle_initialize(id, Some(&params), Some("session-5"), None);
+        // THEN: existing binding is preserved
+        let active = mm.session_profiles.get_profile_name("session-5", "research");
+        assert_eq!(active, "coding");
+    }
+
+    #[test]
+    fn initialize_without_session_id_succeeds_without_panic() {
+        // GIVEN: no session_id (stateless call)
+        let mm = make_meta_mcp_with_profiles();
+        let id = RequestId::Number(5);
+        let params = json!({"protocolVersion": "2024-11-05", "profile": "coding"});
+        // WHEN / THEN: no panic; profile is simply not bound
+        let resp = mm.handle_initialize(id, Some(&params), None, None);
+        // Response should be a success (not an error)
+        let v = serde_json::to_value(resp).unwrap();
+        assert!(v.get("error").is_none(), "Expected success response");
+    }
+
+    // ── Toolshed: gateway_list_profiles appears in tools/list ─────────────
+
+    #[test]
+    fn gateway_list_profiles_tool_appears_in_tools_list() {
+        // GIVEN: a MetaMcp instance (no stats, no webhooks, no reload)
+        use crate::backend::BackendRegistry;
+        let mm = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        // WHEN: listing tools
+        let id = RequestId::Number(0);
+        let resp = mm.handle_tools_list(id);
+        let v = serde_json::to_value(resp).unwrap();
+        // THEN: gateway_list_profiles is in the tool names
+        let tools = v["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"gateway_list_profiles"),
+            "Expected gateway_list_profiles in tools list, got: {names:?}"
+        );
     }
 }
