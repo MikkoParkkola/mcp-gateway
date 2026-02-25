@@ -194,7 +194,8 @@ impl Gateway {
                 Some(ranker),
                 self.config.cache.default_ttl,
             )
-            .with_profile_registry(profile_registry),
+            .with_profile_registry(profile_registry)
+            .with_code_mode(self.config.code_mode.enabled),
         );
 
         // Attach transition tracker for predictive tool prefetch
