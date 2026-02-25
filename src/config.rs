@@ -52,10 +52,37 @@ pub struct Config {
     /// Defaults to `"default"` (allow-all when not explicitly configured).
     #[serde(default = "default_routing_profile")]
     pub default_routing_profile: String,
+    /// Code Mode configuration (search+execute pattern)
+    #[serde(default)]
+    pub code_mode: CodeModeConfig,
 }
 
 fn default_routing_profile() -> String {
     "default".to_string()
+}
+
+/// Code Mode configuration — the search+execute pattern for minimal context usage.
+///
+/// When enabled, `tools/list` returns only two meta-tools (`gateway_search` and
+/// `gateway_execute`) instead of the full meta-tool set.  This reduces context
+/// consumption to near-zero while preserving full access to every backend tool
+/// through the search-then-execute workflow.
+///
+/// # Example
+///
+/// ```yaml
+/// code_mode:
+///   enabled: true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CodeModeConfig {
+    /// Enable Code Mode.
+    ///
+    /// When `true`, `tools/list` returns only `gateway_search` and
+    /// `gateway_execute`.  When `false` (default), the full meta-tool list
+    /// is returned as before.
+    pub enabled: bool,
 }
 
 /// Cache configuration for response caching

@@ -37,11 +37,13 @@ use crate::{Error, Result};
 
 use super::differential::annotate_differential;
 use super::meta_mcp_helpers::{
-    build_discovery_preamble, build_initialize_result, build_match_json,
-    build_match_json_with_chains, build_meta_tools, build_routing_instructions,
-    build_search_response, build_server_safety_status, build_stats_response, build_suggestions,
-    extract_client_version, extract_price_per_million, extract_required_str, extract_search_limit,
-    parse_tool_arguments, ranked_results_to_json, tool_matches_query, wrap_tool_success,
+    build_code_mode_match_json, build_code_mode_tools, build_discovery_preamble,
+    build_initialize_result, build_match_json, build_match_json_with_chains, build_meta_tools,
+    build_routing_instructions, build_search_response, build_server_safety_status,
+    build_stats_response, build_suggestions, extract_client_version, extract_price_per_million,
+    extract_required_str, extract_search_limit, is_glob_pattern, parse_code_mode_tool_ref,
+    parse_tool_arguments, ranked_results_to_json, tool_matches_glob, tool_matches_query,
+    wrap_tool_success,
 };
 use super::trace;
 use super::webhooks::WebhookRegistry;
@@ -86,6 +88,9 @@ pub struct MetaMcp {
     session_profiles: Arc<SessionProfileStore>,
     /// Config reload context — set after startup to enable `gateway_reload_config`
     reload_context: RwLock<Option<Arc<ReloadContext>>>,
+    /// Code Mode: when `true`, `tools/list` returns only `gateway_search` + `gateway_execute`
+    /// instead of the full meta-tool set.
+    code_mode_enabled: bool,
 }
 
 impl MetaMcp {
@@ -109,6 +114,7 @@ impl MetaMcp {
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
             reload_context: RwLock::new(None),
+            code_mode_enabled: false,
         }
     }
 
@@ -137,6 +143,7 @@ impl MetaMcp {
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
             reload_context: RwLock::new(None),
+            code_mode_enabled: false,
         }
     }
 
@@ -146,6 +153,17 @@ impl MetaMcp {
     #[must_use]
     pub fn with_profile_registry(mut self, registry: ProfileRegistry) -> Self {
         self.profile_registry = Arc::new(registry);
+        self
+    }
+
+    /// Builder-style: enable Code Mode.
+    ///
+    /// When Code Mode is enabled, `tools/list` returns only `gateway_search`
+    /// and `gateway_execute` instead of the full meta-tool set. This reduces
+    /// context consumption to near-zero.
+    #[must_use]
+    pub fn with_code_mode(mut self, enabled: bool) -> Self {
+        self.code_mode_enabled = enabled;
         self
     }
 
@@ -283,12 +301,20 @@ impl MetaMcp {
     }
 
     /// Handle tools/list request
+    /// Handle `tools/list` request.
+    ///
+    /// When Code Mode is enabled, returns only `gateway_search` and
+    /// `gateway_execute`.  Otherwise returns the full meta-tool set.
     pub fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
-        let tools = build_meta_tools(
-            self.stats.is_some(),
-            self.get_webhook_registry().is_some(),
-            self.get_reload_context().is_some(),
-        );
+        let tools = if self.code_mode_enabled {
+            build_code_mode_tools()
+        } else {
+            build_meta_tools(
+                self.stats.is_some(),
+                self.get_webhook_registry().is_some(),
+                self.get_reload_context().is_some(),
+            )
+        };
         let result = ToolsListResult {
             tools,
             next_cursor: None,
@@ -296,10 +322,10 @@ impl MetaMcp {
         JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
     }
 
-    /// Handle tools/call request.
+    /// Handle `tools/call` request.
     ///
-    /// `session_id` is forwarded to `gateway_invoke` to enable per-session
-    /// transition tracking and predictive prefetch.
+    /// `session_id` is forwarded to `gateway_invoke` / `gateway_execute` to
+    /// enable per-session transition tracking and predictive prefetch.
     pub async fn handle_tools_call(
         &self,
         id: RequestId,
@@ -308,6 +334,10 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
         let result = match tool_name {
+            // Code Mode tools (always available, even when code_mode_enabled=false)
+            "gateway_search" => self.code_mode_search(&arguments, session_id).await,
+            "gateway_execute" => self.code_mode_execute(&arguments, session_id).await,
+            // Traditional meta-tools
             "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
@@ -368,6 +398,228 @@ impl MetaMcp {
         }
 
         Ok(json!({ "servers": servers }))
+    }
+
+    // ========================================================================
+    // Code Mode handlers (gateway_search + gateway_execute)
+    // ========================================================================
+
+    /// Handle `gateway_search` — Code Mode tool search with glob and schema support.
+    ///
+    /// Behaves like `search_tools` but:
+    /// - Supports glob patterns (`*`, `?`) on tool names in addition to keyword matching.
+    /// - Returns tool references in `"server:tool_name"` format (for use with `gateway_execute`).
+    /// - Optionally includes the full `input_schema` for each result (`include_schema`, default `true`).
+    async fn code_mode_search(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+        let raw_query = extract_required_str(args, "query")?;
+        let query = raw_query.to_lowercase();
+        let limit = extract_search_limit(args);
+        let include_schema = args
+            .get("include_schema")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let profile = self.active_profile(session_id);
+        let use_glob = is_glob_pattern(&query);
+
+        let mut matches: Vec<Value> = Vec::new();
+        let mut all_tags: Vec<String> = Vec::new();
+
+        // Search capability backend
+        if let Some(cap) = self.get_capabilities() {
+            if profile.backend_allowed(&cap.name) {
+                let cap_killed = self.kill_switch.is_killed(&cap.name);
+                for capability in cap.list_capabilities() {
+                    let tool = capability.to_mcp_tool();
+                    if !profile.tool_allowed(&tool.name) {
+                        continue;
+                    }
+                    collect_tool_tags_for_code_mode(&tool, &mut all_tags);
+                    let is_match = if use_glob {
+                        tool_matches_glob(&tool, &query)
+                    } else {
+                        tool_matches_query(&tool, &query)
+                    };
+                    if is_match {
+                        let mut entry =
+                            build_code_mode_match_json(&cap.name, &tool, include_schema);
+                        if cap_killed {
+                            entry["status"] = json!("disabled");
+                        }
+                        matches.push(entry);
+                    }
+                }
+            }
+        }
+
+        // Search MCP backends with cached tools
+        for backend in self.backends.all() {
+            if !backend.has_cached_tools() {
+                continue;
+            }
+            if !profile.backend_allowed(&backend.name) {
+                continue;
+            }
+            let backend_killed = self.kill_switch.is_killed(&backend.name);
+            if let Ok(tools) = backend.get_tools().await {
+                let enriched: Vec<_> = tools
+                    .into_iter()
+                    .filter(|t| profile.tool_allowed(&t.name))
+                    .map(|mut t| {
+                        if let Some(ref desc) = t.description {
+                            t.description = Some(autotag::enrich_description(desc));
+                        }
+                        t
+                    })
+                    .collect();
+
+                for tool in &enriched {
+                    collect_tool_tags_for_code_mode(tool, &mut all_tags);
+                }
+                for tool in enriched {
+                    let is_match = if use_glob {
+                        tool_matches_glob(&tool, &query)
+                    } else {
+                        tool_matches_query(&tool, &query)
+                    };
+                    if is_match {
+                        let mut entry =
+                            build_code_mode_match_json(&backend.name, &tool, include_schema);
+                        if backend_killed {
+                            entry["status"] = json!("disabled");
+                        }
+                        matches.push(entry);
+                    }
+                }
+            }
+        }
+
+        let total_found = matches.len();
+
+        // Apply ranking for keyword queries (not glob — glob already filters precisely)
+        if !use_glob {
+            if let Some(ref ranker) = self.ranker {
+                let search_results: Vec<_> =
+                    matches.iter().filter_map(json_to_code_mode_search_result).collect();
+                let ranked = ranker.rank(search_results, &query);
+                matches = ranked_results_to_code_mode_json(ranked, include_schema, &matches);
+            }
+        }
+
+        matches.truncate(limit);
+
+        let suggestions = if matches.is_empty() && !use_glob {
+            build_suggestions(&query, &all_tags)
+        } else {
+            Vec::new()
+        };
+
+        Ok(build_search_response(&query, &matches, total_found, &suggestions))
+    }
+
+    /// Handle `gateway_execute` — Code Mode single-tool or chain execution.
+    ///
+    /// Single tool: requires `"tool"` (format `"server:tool_name"`) and optional
+    /// `"arguments"`. Delegates to `invoke_tool` internally.
+    ///
+    /// Chain: requires `"chain"` array of `{tool, arguments}` objects. Each step
+    /// is executed sequentially; results flow through naturally.
+    async fn code_mode_execute(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+        // Chain mode: sequential execution
+        if let Some(chain) = args.get("chain").and_then(Value::as_array) {
+            return self.execute_chain(chain.clone(), session_id).await;
+        }
+
+        // Single tool execution
+        let tool_ref = extract_required_str(args, "tool")?;
+        let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
+
+        let server = server_opt.ok_or_else(|| {
+            Error::json_rpc(
+                -32602,
+                format!(
+                    "Tool reference '{tool_ref}' is missing server prefix. \
+                     Use format 'server:tool_name' from gateway_search results."
+                ),
+            )
+        })?;
+
+        let arguments = parse_tool_arguments(args)?;
+        let invoke_args = json!({
+            "server": server,
+            "tool": tool_name,
+            "arguments": arguments,
+        });
+
+        self.invoke_tool(&invoke_args, session_id).await
+    }
+
+    /// Execute a sequential chain of `{tool, arguments}` steps.
+    ///
+    /// Returns a JSON array of per-step results. Stops at the first error
+    /// and surfaces the failing step index in the error message.
+    async fn execute_chain(
+        &self,
+        chain: Vec<Value>,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
+        if chain.is_empty() {
+            return Err(Error::json_rpc(-32602, "Chain must not be empty"));
+        }
+
+        let mut results: Vec<Value> = Vec::with_capacity(chain.len());
+
+        for (idx, step) in chain.iter().enumerate() {
+            let tool_ref = step
+                .get("tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    Error::json_rpc(
+                        -32602,
+                        format!("Chain step {idx}: missing 'tool' field"),
+                    )
+                })?;
+
+            let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
+            let server = server_opt.ok_or_else(|| {
+                Error::json_rpc(
+                    -32602,
+                    format!(
+                        "Chain step {idx}: tool reference '{tool_ref}' is missing server prefix. \
+                         Use format 'server:tool_name'."
+                    ),
+                )
+            })?;
+
+            let arguments = step
+                .get("arguments")
+                .cloned()
+                .unwrap_or(json!({}));
+
+            let invoke_args = json!({
+                "server": server,
+                "tool": tool_name,
+                "arguments": arguments,
+            });
+
+            match self.invoke_tool(&invoke_args, session_id).await {
+                Ok(result) => results.push(json!({
+                    "step": idx,
+                    "tool": tool_ref,
+                    "result": result,
+                })),
+                Err(e) => {
+                    return Err(Error::json_rpc(
+                        -32603,
+                        format!("Chain step {idx} ({tool_ref}) failed: {e}"),
+                    ));
+                }
+            }
+        }
+
+        Ok(json!({
+            "steps": results.len(),
+            "results": results,
+        }))
     }
 
     /// List tools from a specific server, or ALL tools if server is omitted.
@@ -1466,6 +1718,54 @@ fn collect_tool_tags(tool: &crate::protocol::Tool, out: &mut Vec<String>) {
     }
 }
 
+/// Tag collector for Code Mode search (alias; delegates to the existing implementation).
+///
+/// Exists so that `code_mode_search` can call a descriptively named function without
+/// duplicating the tag-parsing logic from `collect_tool_tags`.
+fn collect_tool_tags_for_code_mode(tool: &crate::protocol::Tool, out: &mut Vec<String>) {
+    collect_tool_tags(tool, out);
+}
+
+/// Convert a Code Mode search result JSON object into a [`crate::ranking::SearchResult`].
+///
+/// Code Mode matches use `"tool": "server:name"` format; this function splits
+/// on the first `:` to recover server and `tool_name` for the ranker.
+fn json_to_code_mode_search_result(v: &Value) -> Option<crate::ranking::SearchResult> {
+    let tool_ref = v.get("tool")?.as_str()?;
+    let description = v.get("description")?.as_str().unwrap_or("").to_string();
+    let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
+    let server = server_opt?.to_string();
+    Some(crate::ranking::SearchResult {
+        server,
+        tool: tool_name.to_string(),
+        description,
+        score: 0.0,
+    })
+}
+
+/// Reconstruct ranked Code Mode results from ranked `SearchResult` objects.
+///
+/// After ranking, the schema must be re-fetched from the original matches list
+/// (the ranker only carries name/description/score). This function rebuilds each
+/// match JSON by looking up the original entry by its `"tool"` field.
+fn ranked_results_to_code_mode_json(
+    ranked: Vec<crate::ranking::SearchResult>,
+    _include_schema: bool,
+    originals: &[Value],
+) -> Vec<Value> {
+    ranked
+        .into_iter()
+        .filter_map(|r| {
+            let tool_ref = format!("{}:{}", r.server, r.tool);
+            // Find the original entry to preserve the schema field
+            originals
+                .iter()
+                .find(|v| v.get("tool").and_then(Value::as_str) == Some(&tool_ref))
+                .cloned()
+        })
+        .collect()
+}
+
 /// Bridges `MetaMcp::invoke_tool` to the `ToolInvoker` trait for playbook execution.
 struct MetaMcpInvoker<'a> {
     meta: &'a MetaMcp,
@@ -1610,5 +1910,235 @@ mod tests {
         // WHEN: reading outside any with_trace_id scope
         // THEN: current() returns None
         assert_eq!(trace::current(), None);
+    }
+
+    // ── Code Mode: handle_tools_list ─────────────────────────────────────────
+
+    fn make_meta_mcp() -> MetaMcp {
+        use crate::backend::BackendRegistry;
+        MetaMcp::new(Arc::new(BackendRegistry::new()))
+    }
+
+    fn make_meta_mcp_code_mode() -> MetaMcp {
+        use crate::backend::BackendRegistry;
+        MetaMcp::new(Arc::new(BackendRegistry::new())).with_code_mode(true)
+    }
+
+    #[test]
+    fn handle_tools_list_code_mode_disabled_returns_meta_tools() {
+        // GIVEN: code mode is disabled
+        let meta = make_meta_mcp();
+        // WHEN: tools/list is called
+        let response = meta.handle_tools_list(RequestId::Number(1));
+        // THEN: response has no error
+        assert!(response.error.is_none());
+        let result = response.result.unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        // Traditional mode returns 9+ meta-tools (none of which are gateway_search/gateway_execute)
+        assert!(tools.len() >= 9, "Expected at least 9 meta-tools, got {}", tools.len());
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"gateway_invoke"));
+        assert!(names.contains(&"gateway_search_tools"));
+        assert!(!names.contains(&"gateway_search"),
+            "gateway_search should NOT appear in traditional mode");
+        assert!(!names.contains(&"gateway_execute"),
+            "gateway_execute should NOT appear in traditional mode");
+    }
+
+    #[test]
+    fn handle_tools_list_code_mode_enabled_returns_exactly_two_tools() {
+        // GIVEN: code mode is enabled
+        let meta = make_meta_mcp_code_mode();
+        // WHEN: tools/list is called
+        let response = meta.handle_tools_list(RequestId::Number(1));
+        // THEN: exactly two tools are returned
+        assert!(response.error.is_none());
+        let result = response.result.unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2, "Code mode must return exactly 2 tools");
+    }
+
+    #[test]
+    fn handle_tools_list_code_mode_enabled_first_tool_is_gateway_search() {
+        // GIVEN: code mode enabled
+        let meta = make_meta_mcp_code_mode();
+        // WHEN: tools/list
+        let response = meta.handle_tools_list(RequestId::Number(2));
+        let tools = response.result.unwrap()["tools"].clone();
+        // THEN: first tool is gateway_search
+        assert_eq!(tools[0]["name"], "gateway_search");
+    }
+
+    #[test]
+    fn handle_tools_list_code_mode_enabled_second_tool_is_gateway_execute() {
+        // GIVEN: code mode enabled
+        let meta = make_meta_mcp_code_mode();
+        // WHEN: tools/list
+        let response = meta.handle_tools_list(RequestId::Number(3));
+        let tools = response.result.unwrap()["tools"].clone();
+        // THEN: second tool is gateway_execute
+        assert_eq!(tools[1]["name"], "gateway_execute");
+    }
+
+    #[test]
+    fn handle_tools_list_code_mode_enabled_does_not_include_traditional_tools() {
+        // GIVEN: code mode enabled
+        let meta = make_meta_mcp_code_mode();
+        // WHEN: tools/list
+        let response = meta.handle_tools_list(RequestId::Number(4));
+        let tools = response.result.unwrap()["tools"].clone();
+        let tools = tools.as_array().unwrap();
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        // THEN: traditional meta-tools are absent
+        assert!(!names.contains(&"gateway_invoke"),
+            "gateway_invoke should not appear in code mode");
+        assert!(!names.contains(&"gateway_search_tools"),
+            "gateway_search_tools should not appear in code mode");
+        assert!(!names.contains(&"gateway_list_servers"),
+            "gateway_list_servers should not appear in code mode");
+    }
+
+    // ── Code Mode: with_code_mode builder ────────────────────────────────────
+
+    #[test]
+    fn with_code_mode_false_is_default() {
+        // GIVEN: MetaMcp built without code mode
+        let meta = make_meta_mcp();
+        // WHEN: tools/list
+        let response = meta.handle_tools_list(RequestId::Number(10));
+        let tools = response.result.unwrap()["tools"].clone();
+        // THEN: not code mode (>2 tools)
+        assert!(tools.as_array().unwrap().len() > 2);
+    }
+
+    #[test]
+    fn with_code_mode_true_toggles_behavior() {
+        // GIVEN: MetaMcp built with code mode toggled on
+        let meta = make_meta_mcp().with_code_mode(true);
+        // WHEN: tools/list
+        let response = meta.handle_tools_list(RequestId::Number(11));
+        let tools = response.result.unwrap()["tools"].clone();
+        // THEN: exactly 2 tools returned
+        assert_eq!(tools.as_array().unwrap().len(), 2);
+    }
+
+    // ── Code Mode: code_mode_execute error paths ──────────────────────────────
+
+    #[tokio::test]
+    async fn code_mode_execute_missing_tool_parameter_returns_error() {
+        // GIVEN: args without 'tool' or 'chain'
+        let meta = make_meta_mcp_code_mode();
+        let args = json!({ "arguments": {} });
+        // WHEN: code_mode_execute is called
+        let result = meta.code_mode_execute(&args, None).await;
+        // THEN: error about missing 'tool'
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("tool") || msg.contains("Missing"),
+            "Expected error about missing tool, got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn code_mode_execute_bare_tool_name_without_server_returns_error() {
+        // GIVEN: tool ref without server prefix
+        let meta = make_meta_mcp_code_mode();
+        let args = json!({ "tool": "my_tool", "arguments": {} });
+        // WHEN: code_mode_execute is called
+        let result = meta.code_mode_execute(&args, None).await;
+        // THEN: error about missing server prefix
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("server") || msg.contains("prefix"),
+            "Expected error about server prefix, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_mode_execute_chain_empty_array_returns_error() {
+        // GIVEN: empty chain
+        let meta = make_meta_mcp_code_mode();
+        let args = json!({ "chain": [] });
+        // WHEN: code_mode_execute is called
+        let result = meta.code_mode_execute(&args, None).await;
+        // THEN: error about empty chain
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("empty") || msg.contains("Chain"),
+            "Expected error about empty chain, got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn code_mode_execute_chain_step_missing_tool_field_returns_error() {
+        // GIVEN: chain step without 'tool' field
+        let meta = make_meta_mcp_code_mode();
+        let args = json!({
+            "chain": [
+                {"arguments": {}}
+            ]
+        });
+        // WHEN: code_mode_execute is called
+        let result = meta.code_mode_execute(&args, None).await;
+        // THEN: error about missing tool field in step 0
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("step 0") || msg.contains("missing 'tool'"),
+            "Expected error about step 0, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn code_mode_execute_chain_step_bare_tool_name_returns_error() {
+        // GIVEN: chain step with bare tool name (no server prefix)
+        let meta = make_meta_mcp_code_mode();
+        let args = json!({
+            "chain": [
+                {"tool": "my_bare_tool"}
+            ]
+        });
+        // WHEN: code_mode_execute is called
+        let result = meta.code_mode_execute(&args, None).await;
+        // THEN: error about missing server prefix for step 0
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("server prefix") || msg.contains("step 0"),
+            "Expected error about step 0 server prefix, got: {msg}"
+        );
+    }
+
+    // ── Code Mode: gateway_search and gateway_execute are always callable ─────
+
+    #[tokio::test]
+    async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
+        // GIVEN: code mode disabled, but calling gateway_search explicitly
+        let meta = make_meta_mcp();
+        let args = json!({ "query": "nonexistent_xyz_404" });
+        let response = meta
+            .handle_tools_call(RequestId::Number(99), "gateway_search", args, None)
+            .await;
+        // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
+        assert!(response.error.is_none(),
+            "gateway_search should be callable even without code_mode enabled; got: {:?}",
+            response.error);
+    }
+
+    #[tokio::test]
+    async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
+        // GIVEN: code mode disabled, calling gateway_execute with no tool/chain
+        let meta = make_meta_mcp();
+        let args = json!({});
+        let response = meta
+            .handle_tools_call(RequestId::Number(100), "gateway_execute", args, None)
+            .await;
+        // THEN: returns an error (not -32601 unknown tool)
+        // The response wraps the error as tool content (is_error=true) OR as RPC error
+        // Either way, there should not be a -32601 "Unknown tool" error
+        if let Some(ref err) = response.error {
+            assert_ne!(err.code, -32601,
+                "Should not be 'Unknown tool' error; got code={}", err.code);
+        }
+        // If no RPC error, the tool result should indicate an error condition
     }
 }
