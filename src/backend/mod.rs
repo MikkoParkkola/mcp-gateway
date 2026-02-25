@@ -566,6 +566,14 @@ impl BackendRegistry {
             .collect()
     }
 
+    /// Remove a backend by name (deregister without stopping).
+    ///
+    /// If the backend must be stopped before removal, call `backend.stop()`
+    /// first.  Returns `true` when the backend was present and removed.
+    pub fn remove(&self, name: &str) -> bool {
+        self.backends.remove(name).is_some()
+    }
+
     /// Stop all backends
     pub async fn stop_all(&self) {
         for backend in &self.backends {

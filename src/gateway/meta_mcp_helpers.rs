@@ -388,8 +388,33 @@ fn build_get_profile_tool() -> Tool {
     }
 }
 
-/// Construct the full meta-tool list, optionally including stats, webhooks, and playbooks.
-pub(crate) fn build_meta_tools(stats_enabled: bool, webhooks_enabled: bool) -> Vec<Tool> {
+/// Build the `gateway_reload_config` meta-tool definition.
+pub(crate) fn build_reload_config_tool() -> Tool {
+    Tool {
+        name: "gateway_reload_config".to_string(),
+        title: Some("Reload Config".to_string()),
+        description: Some(
+            "Trigger an immediate reload of config.yaml from disk without restarting the gateway. \
+             Returns a summary of what changed (backends added/removed/modified, profile updates). \
+             Server host/port changes require a restart and are reported but not applied."
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
+/// Construct the full meta-tool list, optionally including stats, webhooks, playbooks, and reload.
+pub(crate) fn build_meta_tools(
+    stats_enabled: bool,
+    webhooks_enabled: bool,
+    reload_enabled: bool,
+) -> Vec<Tool> {
     let mut tools = build_base_tools();
     if stats_enabled {
         tools.push(build_stats_tool());
@@ -402,6 +427,9 @@ pub(crate) fn build_meta_tools(stats_enabled: bool, webhooks_enabled: bool) -> V
     tools.push(build_revive_server_tool());
     tools.push(build_set_profile_tool());
     tools.push(build_get_profile_tool());
+    if reload_enabled {
+        tools.push(build_reload_config_tool());
+    }
     tools
 }
 
@@ -892,7 +920,7 @@ mod tests {
 
     #[test]
     fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_webhooks() {
-        let tools = build_meta_tools(false, false);
+        let tools = build_meta_tools(false, false, false);
         // 4 base + 1 playbook + 2 kill-switch + 2 profile = 9
         assert_eq!(tools.len(), 9);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -906,11 +934,12 @@ mod tests {
         assert!(names.contains(&"gateway_set_profile"));
         assert!(names.contains(&"gateway_get_profile"));
         assert!(!names.contains(&"gateway_webhook_status"));
+        assert!(!names.contains(&"gateway_reload_config"));
     }
 
     #[test]
     fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
-        let tools = build_meta_tools(true, true);
+        let tools = build_meta_tools(true, true, false);
         // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile = 11
         assert_eq!(tools.len(), 11);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -928,10 +957,36 @@ mod tests {
         // GIVEN: webhooks enabled but stats disabled
         // WHEN: building tool list
         // THEN: webhook tool present, stats tool absent
-        let tools = build_meta_tools(false, true);
+        let tools = build_meta_tools(false, true, false);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_webhook_status"));
         assert!(!names.contains(&"gateway_get_stats"));
+    }
+
+    #[test]
+    fn build_meta_tools_includes_reload_when_enabled() {
+        // GIVEN: reload context enabled
+        let tools = build_meta_tools(false, false, true);
+        // 4 base + 1 playbook + 2 kill-switch + 2 profile + 1 reload = 10
+        assert_eq!(tools.len(), 10);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"gateway_reload_config"));
+        assert!(names.contains(&"gateway_set_profile"));
+        assert!(names.contains(&"gateway_get_profile"));
+    }
+
+    #[test]
+    fn build_meta_tools_all_enabled_includes_reload() {
+        // GIVEN: all optional tools enabled
+        let tools = build_meta_tools(true, true, true);
+        // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile + 1 reload = 12
+        assert_eq!(tools.len(), 12);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"gateway_reload_config"));
+        assert!(names.contains(&"gateway_get_stats"));
+        assert!(names.contains(&"gateway_webhook_status"));
+        assert!(names.contains(&"gateway_set_profile"));
+        assert!(names.contains(&"gateway_get_profile"));
     }
 
     #[test]

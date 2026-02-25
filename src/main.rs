@@ -614,8 +614,9 @@ async fn run_server(cli: Cli) -> ExitCode {
         "Starting MCP Gateway"
     );
 
-    // Create and run gateway
-    let gateway = match Gateway::new(config).await {
+    // Create and run gateway (pass config path for hot-reload support)
+    let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
+    let gateway = match Gateway::new_with_path(config, config_path).await {
         Ok(g) => g,
         Err(e) => {
             error!("Failed to create gateway: {e}");
