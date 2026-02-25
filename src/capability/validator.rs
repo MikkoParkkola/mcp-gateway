@@ -318,14 +318,17 @@ fn check_rest_config(
     }
 
     // CAP-008: base_url must parse as a valid URL.
-    if has_base_url && url::Url::parse(&config.base_url).is_err() {
+    // Skip validation when URL contains template references (e.g. {env.VAR})
+    // since these are resolved at runtime, not parse-time.
+    let contains_template = |s: &str| s.contains('{');
+    if has_base_url && !contains_template(&config.base_url) && url::Url::parse(&config.base_url).is_err() {
         issues.push(Issue::error(
             "CAP-008",
             format!("{context}: base_url '{}' is not a valid URL", config.base_url),
         ));
     }
 
-    if has_endpoint && url::Url::parse(&config.endpoint).is_err() {
+    if has_endpoint && !contains_template(&config.endpoint) && url::Url::parse(&config.endpoint).is_err() {
         issues.push(Issue::error(
             "CAP-008",
             format!("{context}: endpoint '{}' is not a valid URL", config.endpoint),
@@ -375,8 +378,14 @@ fn check_placeholders_in_text(
     issues: &mut Vec<Issue>,
 ) {
     for placeholder in extract_placeholders(text) {
-        // env.VAR references are not schema parameters.
-        if placeholder.starts_with("env.") {
+        // System-resolved references are not schema parameters.
+        // env.VAR — environment variable substitution
+        // keychain.KEY — macOS Keychain lookup
+        // oauth.PROVIDER — OAuth token injection
+        if placeholder.starts_with("env.")
+            || placeholder.starts_with("keychain.")
+            || placeholder.starts_with("oauth.")
+        {
             continue;
         }
 
