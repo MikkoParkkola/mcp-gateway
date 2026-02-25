@@ -21,6 +21,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use super::Transport;
+use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, SUPPORTED_VERSIONS, RequestId};
 use crate::{Error, Result};
@@ -468,6 +469,13 @@ impl HttpTransport {
                 value.parse::<reqwest::header::HeaderValue>(),
             ) {
                 headers.insert(k, v);
+            }
+        }
+
+        // Propagate ambient trace ID (set by gateway_invoke) as X-Trace-Id.
+        if let Some(trace_id) = trace::current() {
+            if let Ok(v) = trace_id.parse::<reqwest::header::HeaderValue>() {
+                headers.insert("x-trace-id", v);
             }
         }
 

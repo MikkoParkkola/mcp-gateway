@@ -5,7 +5,9 @@ mod health;
 mod rate_limiter;
 mod retry;
 
-pub use circuit_breaker::{CircuitBreaker, CircuitState};
+pub use circuit_breaker::{
+    CircuitBreaker, CircuitBreakerStats, CircuitState, build_circuit_breaker_error,
+};
 pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;
 pub use retry::{RetryPolicy, with_retry};

@@ -8,6 +8,7 @@ pub mod proxy;
 mod router;
 mod server;
 pub mod streaming;
+pub mod trace;
 pub mod webhooks;
 
 pub use auth::{ResolvedAuthConfig, auth_middleware};

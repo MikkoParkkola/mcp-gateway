@@ -4,6 +4,7 @@
 
 use serde_json::{Value, json};
 
+use crate::failsafe::CircuitBreakerStats;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
@@ -592,6 +593,32 @@ pub(crate) fn build_server_safety_status(
             "successes": successes,
             "failures": failures
         }
+    })
+}
+
+/// Build a JSON representation of circuit-breaker stats for a single backend.
+///
+/// Returned object shape:
+/// ```json
+/// {
+///   "server": "my-backend",
+///   "state": "open",
+///   "trips_count": 3,
+///   "last_trip_ms": 1717000000000,
+///   "retry_after_ms": 29500,
+///   "current_failures": 5,
+///   "failure_threshold": 5
+/// }
+/// ```
+pub(crate) fn build_circuit_breaker_stats_json(server: &str, stats: &CircuitBreakerStats) -> Value {
+    json!({
+        "server": server,
+        "state": stats.state.as_str(),
+        "trips_count": stats.trips_count,
+        "last_trip_ms": stats.last_trip_ms,
+        "retry_after_ms": stats.retry_after_ms,
+        "current_failures": stats.current_failures,
+        "failure_threshold": stats.failure_threshold
     })
 }
 
@@ -1603,5 +1630,77 @@ chains_with: [linear_create_issue, linear_update_issue]
         let tool = build_revive_server_tool();
         assert_eq!(tool.name, "gateway_revive_server");
         assert_eq!(tool.input_schema["required"][0], "server");
+    }
+
+    // ── build_circuit_breaker_stats_json ──────────────────────────────────
+
+    fn make_cb_stats_closed() -> CircuitBreakerStats {
+        CircuitBreakerStats {
+            state: crate::failsafe::CircuitState::Closed,
+            trips_count: 0,
+            last_trip_ms: 0,
+            retry_after_ms: 0,
+            current_failures: 0,
+            failure_threshold: 5,
+        }
+    }
+
+    fn make_cb_stats_open() -> CircuitBreakerStats {
+        CircuitBreakerStats {
+            state: crate::failsafe::CircuitState::Open,
+            trips_count: 3,
+            last_trip_ms: 1_717_000_000_000,
+            retry_after_ms: 29_000,
+            current_failures: 5,
+            failure_threshold: 5,
+        }
+    }
+
+    #[test]
+    fn build_circuit_breaker_stats_json_closed_state() {
+        // GIVEN: a closed circuit breaker stats snapshot
+        let stats = make_cb_stats_closed();
+        // WHEN: building JSON
+        let json = build_circuit_breaker_stats_json("my-backend", &stats);
+        // THEN: all fields are present with correct values
+        assert_eq!(json["server"], "my-backend");
+        assert_eq!(json["state"], "closed");
+        assert_eq!(json["trips_count"], 0);
+        assert_eq!(json["last_trip_ms"], 0);
+        assert_eq!(json["retry_after_ms"], 0);
+        assert_eq!(json["current_failures"], 0);
+        assert_eq!(json["failure_threshold"], 5);
+    }
+
+    #[test]
+    fn build_circuit_breaker_stats_json_open_state_shows_retry_after() {
+        // GIVEN: an open circuit breaker with 3 trips and retry_after_ms set
+        let stats = make_cb_stats_open();
+        // WHEN: building JSON
+        let json = build_circuit_breaker_stats_json("my-backend", &stats);
+        // THEN: state is "open" and retry_after_ms is non-zero
+        assert_eq!(json["state"], "open");
+        assert_eq!(json["trips_count"], 3);
+        assert_eq!(json["retry_after_ms"], 29_000_u64);
+        assert_eq!(json["current_failures"], 5);
+    }
+
+    #[test]
+    fn build_circuit_breaker_stats_json_half_open_state() {
+        // GIVEN: a half-open circuit breaker
+        let stats = CircuitBreakerStats {
+            state: crate::failsafe::CircuitState::HalfOpen,
+            trips_count: 1,
+            last_trip_ms: 1_717_000_000_000,
+            retry_after_ms: 0,
+            current_failures: 0,
+            failure_threshold: 5,
+        };
+        // WHEN: building JSON
+        let json = build_circuit_breaker_stats_json("probing-backend", &stats);
+        // THEN: state is "half_open"
+        assert_eq!(json["state"], "half_open");
+        assert_eq!(json["trips_count"], 1);
+        assert_eq!(json["retry_after_ms"], 0);
     }
 }
