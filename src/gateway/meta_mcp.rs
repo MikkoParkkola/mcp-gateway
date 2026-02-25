@@ -1210,13 +1210,17 @@ impl MetaMcp {
             .as_ref()
             .ok_or_else(|| Error::json_rpc(-32603, "Statistics not enabled for this gateway"))?;
 
-        // Count total tools across all backends
-        let mut total_tools = 0;
-        for backend in self.backends.all() {
-            if let Ok(tools) = backend.get_tools().await {
-                total_tools += tools.len();
-            }
-        }
+        // Count total tools across all backends (non-blocking, cache-only).
+        // We intentionally read only from the in-memory cache to avoid
+        // blocking on slow or unreachable backends.  The count may be stale
+        // (or zero for backends that haven't been contacted yet), but stats
+        // should never block on backend I/O.
+        let mut total_tools: usize = self
+            .backends
+            .all()
+            .iter()
+            .map(|b| b.cached_tools_count())
+            .sum();
         if let Some(cap) = self.get_capabilities() {
             total_tools += cap.get_tools().len();
         }

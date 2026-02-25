@@ -248,6 +248,18 @@ pub struct RestConfig {
     /// Response transformation (jq-like path)
     #[serde(default)]
     pub response_path: Option<String>,
+
+    /// Expected response format: "json" (default) or "xml".
+    ///
+    /// When set to "xml", the executor parses the response body as XML and
+    /// converts it to a JSON object before applying `response_path`.
+    /// When empty or "json", the response is parsed as JSON (the default).
+    ///
+    /// Auto-detection: if this field is empty the executor also checks the
+    /// `Content-Type` response header — if it contains `xml`, the response
+    /// is treated as XML automatically.
+    #[serde(default)]
+    pub response_format: String,
 }
 
 impl RestConfig {

@@ -232,6 +232,19 @@ impl Backend {
         )
     }
 
+    /// Return the number of tools in the cache (non-blocking, no network I/O).
+    ///
+    /// Returns `0` when the cache is empty or has never been populated.
+    /// This is intentionally best-effort: it reads whatever is in the cache
+    /// without triggering a refresh, so the count may be stale.
+    #[must_use]
+    pub fn cached_tools_count(&self) -> usize {
+        self.tools_cache
+            .read()
+            .as_ref()
+            .map_or(0, std::vec::Vec::len)
+    }
+
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.

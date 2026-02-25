@@ -86,6 +86,9 @@ x509-parser = "0.16"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 tokio-rustls = "0.26"
 
+# XML parsing (for APIs that return XML, e.g. ECB exchange rates)
+quick-xml = "0.37"
+
 # Environment file loading
 dotenvy = "0.15"
 

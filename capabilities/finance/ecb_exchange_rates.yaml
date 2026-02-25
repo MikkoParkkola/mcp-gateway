@@ -37,6 +37,7 @@ providers:
       base_url: https://www.ecb.europa.eu
       path: /stats/eurofxref/eurofxref-daily.xml
       method: GET
+      response_format: xml
       headers:
         Accept: "application/xml"
 
