@@ -606,10 +606,14 @@ impl Transport for HttpTransport {
             .map_err(|e| Error::Transport(format!("Notification failed: {e}")))?;
 
         if !response.status().is_success() {
-            warn!(
+            // Many HTTP backends (e.g. exa, beeper) do not support MCP
+            // notifications and return 4xx. This is expected behaviour — log at
+            // DEBUG so it does not spam the operator logs.
+            debug!(
                 status = %response.status(),
                 url = %message_url,
-                "Notification failed"
+                method = method,
+                "Notification not supported by backend (ignored)"
             );
         }
 
