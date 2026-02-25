@@ -1,7 +1,10 @@
 //! Config hot-reload with diff patching.
 //!
-//! This module watches `config.yaml` for changes, computes a structural diff
-//! against the running config, and applies only the changed sections in-place.
+//! This module watches `config.yaml` **and** any env files listed in
+//! `config.env_files` (e.g. `~/.claude/secrets.env`) for changes.  When either
+//! file type changes the full [`Config::load`] pipeline is re-run, env vars are
+//! re-expanded, a structural diff is computed, and only the changed sections are
+//! applied in-place.
 //!
 //! # Limitations
 //!
@@ -353,10 +356,67 @@ pub async fn apply_patch(
 }
 
 // ============================================================================
+// File watcher — helpers
+// ============================================================================
+
+/// What caused a reload to be scheduled.
+///
+/// Carried through the debounce channel so the reload task can log a
+/// context-specific message (config change vs. env-file change).
+#[derive(Debug, Clone)]
+enum ReloadTrigger {
+    /// The main `config.yaml` was modified.
+    ConfigFile,
+    /// One of the watched env files was modified.
+    EnvFile(PathBuf),
+}
+
+/// Expand a leading `~` to the current user's home directory.
+///
+/// Returns the path unchanged if it does not start with `~` or if the home
+/// directory cannot be determined.
+fn expand_tilde(path_str: &str) -> PathBuf {
+    if path_str.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            return PathBuf::from(path_str.replacen('~', &home.display().to_string(), 1));
+        }
+    }
+    PathBuf::from(path_str)
+}
+
+/// Resolve a list of raw env-file path strings (supports `~`) into
+/// canonical [`PathBuf`]s, deduplicating by parent directory while
+/// preserving the full path for event filtering.
+fn resolve_env_file_paths(raw: &[String]) -> Vec<PathBuf> {
+    raw.iter().map(|s| expand_tilde(s)).collect()
+}
+
+/// Returns `true` for create/modify events on the watched config file.
+fn is_config_event(event: &Event, config_path: &std::path::Path) -> bool {
+    matches!(
+        event.kind,
+        EventKind::Create(_) | EventKind::Modify(_)
+    ) && event.paths.iter().any(|p| p == config_path)
+}
+
+/// Returns `Some(path)` when the event matches any of the watched env files,
+/// `None` otherwise.
+fn matching_env_file(event: &Event, env_paths: &[PathBuf]) -> Option<PathBuf> {
+    if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+        return None;
+    }
+    env_paths
+        .iter()
+        .find(|ep| event.paths.iter().any(|p| p == *ep))
+        .cloned()
+}
+
+// ============================================================================
 // File watcher
 // ============================================================================
 
-/// File watcher that triggers config hot-reload on `config.yaml` changes.
+/// File watcher that triggers config hot-reload on `config.yaml` **and**
+/// env-file changes (e.g. `~/.claude/secrets.env`).
 ///
 /// Mirrors the structure of [`crate::capability::CapabilityWatcher`].
 /// Holds the underlying `notify` watcher alive for the lifetime of the struct.
@@ -366,7 +426,8 @@ pub struct ConfigWatcher {
 }
 
 impl ConfigWatcher {
-    /// Start watching `config_path` for changes.
+    /// Start watching `config_path` and any env files listed in the initial
+    /// config for changes.
     ///
     /// Spawns a debounced background task that re-parses the file and calls
     /// [`apply_patch`] on each detected change.
@@ -381,9 +442,12 @@ impl ConfigWatcher {
         initial_config: &Config,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
-        let (event_tx, event_rx) = tokio::sync::mpsc::channel(32);
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
-        let watcher = Self::create_notify_watcher(event_tx, &config_path)?;
+        let env_file_paths = resolve_env_file_paths(&initial_config.env_files);
+
+        let watcher =
+            Self::create_notify_watcher(event_tx, &config_path, &env_file_paths)?;
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
@@ -403,34 +467,81 @@ impl ConfigWatcher {
         })
     }
 
-    /// Create the low-level `notify` watcher.
+    /// Create the low-level `notify` watcher and register all watch paths.
+    ///
+    /// The config file's parent directory and each env file's parent directory
+    /// are registered with `NonRecursive` watching.  Duplicate parent
+    /// directories are watched only once.
     fn create_notify_watcher(
-        event_tx: tokio::sync::mpsc::Sender<()>,
-        config_path: &PathBuf,
+        event_tx: tokio::sync::mpsc::Sender<ReloadTrigger>,
+        config_path: &std::path::Path,
+        env_file_paths: &[PathBuf],
     ) -> Result<RecommendedWatcher> {
-        let watch_dir = config_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
-
-        // Clone into an owned PathBuf for the move closure.
-        let path_for_closure = config_path.clone();
+        let config_path_owned = config_path.to_path_buf();
+        let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
         let mut watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
-                let is_relevant =
-                    result.as_ref().is_ok_and(|e| is_config_event(e, &path_for_closure));
-                if is_relevant {
-                    let _ = event_tx.try_send(());
+                let Ok(event) = result else { return };
+
+                if is_config_event(&event, &config_path_owned) {
+                    let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
+                } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
+                    let _ = event_tx.try_send(ReloadTrigger::EnvFile(path));
                 }
             },
             NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
         )
         .map_err(|e| crate::Error::Internal(format!("Failed to create config watcher: {e}")))?;
 
+        // Watch the config file's parent directory.
+        let config_dir = config_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
         watcher
-            .watch(&watch_dir, RecursiveMode::NonRecursive)
+            .watch(&config_dir, RecursiveMode::NonRecursive)
             .map_err(|e| crate::Error::Internal(format!("Failed to watch config path: {e}")))?;
+
+        // Watch each env file's parent directory (skip duplicates and missing).
+        let mut watched_dirs = std::collections::HashSet::new();
+        watched_dirs.insert(config_dir);
+
+        for env_path in env_file_paths {
+            let dir = env_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+
+            if watched_dirs.contains(&dir) {
+                continue;
+            }
+
+            if dir.exists() {
+                match watcher.watch(&dir, RecursiveMode::NonRecursive) {
+                    Ok(()) => {
+                        info!(
+                            dir = %dir.display(),
+                            "Config watcher: watching env-file directory"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            dir = %dir.display(),
+                            error = %e,
+                            "Config watcher: failed to watch env-file directory"
+                        );
+                    }
+                }
+            } else {
+                warn!(
+                    dir = %dir.display(),
+                    "Config watcher: env-file directory does not exist, skipping"
+                );
+            }
+
+            watched_dirs.insert(dir);
+        }
 
         Ok(watcher)
     }
@@ -443,25 +554,32 @@ impl ConfigWatcher {
         registry: Arc<BackendRegistry>,
         failsafe_cfg: crate::config::FailsafeConfig,
         cache_ttl: Duration,
-        mut event_rx: tokio::sync::mpsc::Receiver<()>,
+        mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) {
         tokio::spawn(async move {
             const DEBOUNCE: Duration = Duration::from_millis(500);
             let mut last_event: Option<Instant> = None;
-            let mut pending = false;
+            let mut pending_trigger: Option<ReloadTrigger> = None;
             let mut ticker = tokio::time::interval(Duration::from_millis(100));
 
             loop {
                 tokio::select! {
-                    Some(()) = event_rx.recv() => {
+                    Some(trigger) = event_rx.recv() => {
                         last_event = Some(Instant::now());
-                        pending = true;
+                        // Keep the first trigger reason for the log message;
+                        // the reload re-reads everything anyway.
+                        if pending_trigger.is_none() {
+                            pending_trigger = Some(trigger);
+                        }
                     }
                     _ = ticker.tick() => {
-                        if pending && last_event.is_some_and(|t| t.elapsed() >= DEBOUNCE) {
-                            pending = false;
+                        if pending_trigger.is_some()
+                            && last_event.is_some_and(|t| t.elapsed() >= DEBOUNCE)
+                        {
+                            let trigger = pending_trigger.take().unwrap();
                             last_event = None;
+                            log_reload_trigger(&trigger);
                             reload_once(
                                 &config_path,
                                 &live_config,
@@ -482,12 +600,19 @@ impl ConfigWatcher {
     }
 }
 
-/// Returns `true` for create/modify events on the watched config file.
-fn is_config_event(event: &Event, config_path: &std::path::Path) -> bool {
-    matches!(
-        event.kind,
-        EventKind::Create(_) | EventKind::Modify(_)
-    ) && event.paths.iter().any(|p| p == config_path)
+/// Emit an INFO log describing what triggered the pending reload.
+fn log_reload_trigger(trigger: &ReloadTrigger) {
+    match trigger {
+        ReloadTrigger::ConfigFile => {
+            info!("Config watcher: config file changed, triggering reload");
+        }
+        ReloadTrigger::EnvFile(path) => {
+            info!(
+                path = %path.display(),
+                "Config watcher: env file changed, triggering reload"
+            );
+        }
+    }
 }
 
 /// Parse the config file, compute the diff, and apply the patch.
@@ -895,5 +1020,180 @@ mod tests {
 
         assert_eq!(patch.backends_modified.len(), 1, "expected b modified");
         assert_eq!(patch.backends_modified[0].0, "b");
+    }
+
+    // -------------------------------------------------------------------------
+    // expand_tilde
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn expand_tilde_leaves_absolute_path_unchanged() {
+        // GIVEN: a path that does not start with ~
+        let path = super::expand_tilde("/etc/secrets.env");
+        // THEN: returned as-is
+        assert_eq!(path, std::path::PathBuf::from("/etc/secrets.env"));
+    }
+
+    #[test]
+    fn expand_tilde_expands_home_prefix() {
+        // GIVEN: a tilde-prefixed path
+        let path = super::expand_tilde("~/.claude/secrets.env");
+        // THEN: ~ is replaced — we just verify it no longer starts with ~
+        let path_str = path.to_string_lossy();
+        assert!(
+            !path_str.starts_with('~'),
+            "expected ~ to be expanded, got: {path_str}"
+        );
+        assert!(
+            path_str.ends_with(".claude/secrets.env"),
+            "expected suffix preserved, got: {path_str}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // resolve_env_file_paths
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn resolve_env_file_paths_expands_tilde_entries() {
+        // GIVEN: a mix of absolute and tilde paths
+        let raw = vec![
+            "/tmp/a.env".to_string(),
+            "~/.claude/secrets.env".to_string(),
+        ];
+        // WHEN
+        let resolved = super::resolve_env_file_paths(&raw);
+        // THEN: two entries, first unchanged, second has ~ expanded
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0], std::path::PathBuf::from("/tmp/a.env"));
+        assert!(!resolved[1].to_string_lossy().starts_with('~'));
+    }
+
+    #[test]
+    fn resolve_env_file_paths_empty_input_returns_empty() {
+        // GIVEN: empty slice
+        let resolved = super::resolve_env_file_paths(&[]);
+        // THEN: empty vec
+        assert!(resolved.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // is_config_event
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn is_config_event_matches_modify_on_exact_path() {
+        use notify::{event::ModifyKind, EventKind};
+
+        // GIVEN: a Modify event on the watched path
+        let config_path = std::path::PathBuf::from("/tmp/config.yaml");
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![config_path.clone()],
+            attrs: Default::default(),
+        };
+        // WHEN / THEN
+        assert!(super::is_config_event(&event, &config_path));
+    }
+
+    #[test]
+    fn is_config_event_does_not_match_different_path() {
+        use notify::{event::ModifyKind, EventKind};
+
+        // GIVEN: a Modify event on a different path
+        let config_path = std::path::PathBuf::from("/tmp/config.yaml");
+        let other_path = std::path::PathBuf::from("/tmp/other.yaml");
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![other_path],
+            attrs: Default::default(),
+        };
+        // WHEN / THEN
+        assert!(!super::is_config_event(&event, &config_path));
+    }
+
+    #[test]
+    fn is_config_event_does_not_match_remove_event() {
+        use notify::{event::RemoveKind, EventKind};
+
+        // GIVEN: a Remove event on the exact path
+        let config_path = std::path::PathBuf::from("/tmp/config.yaml");
+        let event = notify::Event {
+            kind: EventKind::Remove(RemoveKind::File),
+            paths: vec![config_path.clone()],
+            attrs: Default::default(),
+        };
+        // WHEN / THEN: Remove is not a trigger (only Create/Modify are)
+        assert!(!super::is_config_event(&event, &config_path));
+    }
+
+    // -------------------------------------------------------------------------
+    // matching_env_file
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn matching_env_file_returns_path_when_event_matches_watched_env_file() {
+        use notify::{event::ModifyKind, EventKind};
+
+        // GIVEN: an event for a watched env file
+        let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![env_path.clone()],
+            attrs: Default::default(),
+        };
+        // WHEN
+        let result = super::matching_env_file(&event, &[env_path.clone()]);
+        // THEN
+        assert_eq!(result, Some(env_path));
+    }
+
+    #[test]
+    fn matching_env_file_returns_none_when_path_not_in_watch_list() {
+        use notify::{event::ModifyKind, EventKind};
+
+        // GIVEN: an event for a file not in the watch list
+        let watched = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+        let other = std::path::PathBuf::from("/tmp/other.env");
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![other],
+            attrs: Default::default(),
+        };
+        // WHEN / THEN
+        assert!(super::matching_env_file(&event, &[watched]).is_none());
+    }
+
+    #[test]
+    fn matching_env_file_returns_none_for_remove_event() {
+        use notify::{event::RemoveKind, EventKind};
+
+        // GIVEN: a Remove event on a watched env file
+        let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
+        let event = notify::Event {
+            kind: EventKind::Remove(RemoveKind::File),
+            paths: vec![env_path.clone()],
+            attrs: Default::default(),
+        };
+        // WHEN / THEN: Remove does not trigger an env-file reload
+        assert!(super::matching_env_file(&event, &[env_path]).is_none());
+    }
+
+    #[test]
+    fn matching_env_file_returns_first_matching_path_among_multiple() {
+        use notify::{event::ModifyKind, EventKind};
+
+        // GIVEN: multiple watched env files, event hits the second
+        let path_a = std::path::PathBuf::from("/tmp/a.env");
+        let path_b = std::path::PathBuf::from("/tmp/b.env");
+        let event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![path_b.clone()],
+            attrs: Default::default(),
+        };
+        // WHEN
+        let result = super::matching_env_file(&event, &[path_a, path_b.clone()]);
+        // THEN: returns the matching path
+        assert_eq!(result, Some(path_b));
     }
 }
