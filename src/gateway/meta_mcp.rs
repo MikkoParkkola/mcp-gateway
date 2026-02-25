@@ -29,6 +29,7 @@ use crate::protocol::{
     negotiate_version,
 };
 use crate::ranking::{SearchRanker, json_to_search_result};
+use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
@@ -78,6 +79,10 @@ pub struct MetaMcp {
     error_budget_config: RwLock<ErrorBudgetConfig>,
     /// Webhook registry for status reporting (optional — set after startup)
     webhook_registry: RwLock<Option<Arc<parking_lot::RwLock<WebhookRegistry>>>>,
+    /// Routing profiles registry (immutable after startup)
+    profile_registry: Arc<ProfileRegistry>,
+    /// Per-session active profile binding
+    session_profiles: Arc<SessionProfileStore>,
 }
 
 impl MetaMcp {
@@ -98,6 +103,8 @@ impl MetaMcp {
             log_level: RwLock::new(LoggingLevel::default()),
             kill_switch: Arc::new(KillSwitch::new()),
             error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
+            profile_registry: Arc::new(ProfileRegistry::default()),
+            session_profiles: Arc::new(SessionProfileStore::new()),
         }
     }
 
@@ -123,7 +130,18 @@ impl MetaMcp {
             kill_switch: Arc::new(KillSwitch::new()),
             error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
             webhook_registry: RwLock::new(None),
+            profile_registry: Arc::new(ProfileRegistry::default()),
+            session_profiles: Arc::new(SessionProfileStore::new()),
         }
+    }
+
+    /// Builder-style: attach a routing profile registry.
+    ///
+    /// Call this after `with_features` and before wrapping in `Arc`.
+    #[must_use]
+    pub fn with_profile_registry(mut self, registry: ProfileRegistry) -> Self {
+        self.profile_registry = Arc::new(registry);
+        self
     }
 
     /// Enable idempotency support with a background cleanup task.
@@ -178,6 +196,33 @@ impl MetaMcp {
     #[allow(dead_code)]
     pub fn kill_switch(&self) -> Arc<KillSwitch> {
         Arc::clone(&self.kill_switch)
+    }
+
+    /// Expose the session profile store for testing and server teardown.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn session_profiles(&self) -> Arc<SessionProfileStore> {
+        Arc::clone(&self.session_profiles)
+    }
+
+    /// Expose the profile registry for testing.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn profile_registry(&self) -> Arc<ProfileRegistry> {
+        Arc::clone(&self.profile_registry)
+    }
+
+    /// Resolve the active `RoutingProfile` for a session.
+    fn active_profile(
+        &self,
+        session_id: Option<&str>,
+    ) -> crate::routing_profile::RoutingProfile {
+        let default_name = self.profile_registry.default_name();
+        let name = session_id.map_or_else(
+            || default_name.to_string(),
+            |sid| self.session_profiles.get_profile_name(sid, default_name),
+        );
+        self.profile_registry.get(&name)
     }
 
     /// Override the error-budget configuration (useful in tests and operator tooling).
@@ -246,14 +291,16 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         let result = match tool_name {
             "gateway_list_servers" => self.list_servers(),
-            "gateway_list_tools" => self.list_tools(&arguments).await,
-            "gateway_search_tools" => self.search_tools(&arguments).await,
+            "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
+            "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id).await,
             "gateway_get_stats" => self.get_stats(&arguments).await,
             "gateway_webhook_status" => self.webhook_status(),
             "gateway_run_playbook" => self.run_playbook(&arguments).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
+            "gateway_set_profile" => self.set_profile(&arguments, session_id),
+            "gateway_get_profile" => self.get_profile(session_id),
             _ => Err(Error::json_rpc(
                 -32601,
                 format!("Unknown tool: {tool_name}"),
@@ -308,15 +355,31 @@ impl MetaMcp {
     ///
     /// Tools from killed servers are still returned but include `"status": "disabled"`
     /// so that the LLM knows the tool exists but cannot be invoked right now.
-    async fn list_tools(&self, args: &Value) -> Result<Value> {
+    ///
+    /// Results are filtered by the session's active routing profile.
+    async fn list_tools(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+        let profile = self.active_profile(session_id);
+
         // If server is specified, return tools from that single backend (existing behavior)
         if let Some(server) = args.get("server").and_then(Value::as_str) {
             let killed = self.kill_switch.is_killed(server);
 
+            // Backend-level profile check for single-server queries
+            if !profile.backend_allowed(server) {
+                return Err(Error::Protocol(format!(
+                    "Backend '{server}' is not available in the '{}' routing profile",
+                    profile.name
+                )));
+            }
+
             // Check if it's the capability backend
             if let Some(cap) = self.get_capabilities() {
                 if server == cap.name {
-                    let tools = cap.get_tools();
+                    let tools: Vec<_> = cap
+                        .get_tools()
+                        .into_iter()
+                        .filter(|t| profile.tool_allowed(&t.name))
+                        .collect();
                     return Ok(json!({
                         "server": server,
                         "status": if killed { "disabled" } else { "active" },
@@ -331,7 +394,12 @@ impl MetaMcp {
                 .get(server)
                 .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
-            let tools = backend.get_tools().await?;
+            let tools: Vec<_> = backend
+                .get_tools()
+                .await?
+                .into_iter()
+                .filter(|t| profile.tool_allowed(&t.name))
+                .collect();
 
             return Ok(json!({
                 "server": server,
@@ -345,17 +413,22 @@ impl MetaMcp {
 
         // Capability tools (instant, in memory)
         if let Some(cap) = self.get_capabilities() {
-            let cap_killed = self.kill_switch.is_killed(&cap.name);
-            for tool in cap.get_tools() {
-                let mut entry = json!({
-                    "server": cap.name,
-                    "name": tool.name,
-                    "description": tool.description.as_deref().unwrap_or("")
-                });
-                if cap_killed {
-                    entry["status"] = json!("disabled");
+            if profile.backend_allowed(&cap.name) {
+                let cap_killed = self.kill_switch.is_killed(&cap.name);
+                for tool in cap.get_tools() {
+                    if !profile.tool_allowed(&tool.name) {
+                        continue;
+                    }
+                    let mut entry = json!({
+                        "server": cap.name,
+                        "name": tool.name,
+                        "description": tool.description.as_deref().unwrap_or("")
+                    });
+                    if cap_killed {
+                        entry["status"] = json!("disabled");
+                    }
+                    all_tools.push(entry);
                 }
-                all_tools.push(entry);
             }
         }
 
@@ -364,9 +437,15 @@ impl MetaMcp {
             if !backend.has_cached_tools() {
                 continue;
             }
+            if !profile.backend_allowed(&backend.name) {
+                continue;
+            }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Ok(tools) = backend.get_tools().await {
                 for tool in tools {
+                    if !profile.tool_allowed(&tool.name) {
+                        continue;
+                    }
                     let desc = autotag::enrich_description(
                         tool.description.as_deref().unwrap_or(""),
                     );
@@ -398,9 +477,12 @@ impl MetaMcp {
     ///
     /// When zero matches are found, keyword tags from all backends are collected
     /// and used to generate related query suggestions.
-    async fn search_tools(&self, args: &Value) -> Result<Value> {
+    ///
+    /// Results are filtered by the session's active routing profile.
+    async fn search_tools(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
         let query = extract_required_str(args, "query")?.to_lowercase();
         let limit = extract_search_limit(args);
+        let profile = self.active_profile(session_id);
 
         let mut matches = Vec::new();
         // Collect all available tags for suggestion generation (only used on zero-result queries).
@@ -409,20 +491,25 @@ impl MetaMcp {
         // Search capability backend exhaustively (fast, no network, all in memory).
         // Iterates over full CapabilityDefinition to include composition metadata.
         if let Some(cap) = self.get_capabilities() {
-            let cap_killed = self.kill_switch.is_killed(&cap.name);
-            for capability in cap.list_capabilities() {
-                let tool = capability.to_mcp_tool();
-                collect_tool_tags(&tool, &mut all_tags);
-                if tool_matches_query(&tool, &query) {
-                    let mut entry = build_match_json_with_chains(
-                        &cap.name,
-                        &tool,
-                        &capability.metadata.chains_with,
-                    );
-                    if cap_killed {
-                        entry["status"] = json!("disabled");
+            if profile.backend_allowed(&cap.name) {
+                let cap_killed = self.kill_switch.is_killed(&cap.name);
+                for capability in cap.list_capabilities() {
+                    let tool = capability.to_mcp_tool();
+                    if !profile.tool_allowed(&tool.name) {
+                        continue;
                     }
-                    matches.push(entry);
+                    collect_tool_tags(&tool, &mut all_tags);
+                    if tool_matches_query(&tool, &query) {
+                        let mut entry = build_match_json_with_chains(
+                            &cap.name,
+                            &tool,
+                            &capability.metadata.chains_with,
+                        );
+                        if cap_killed {
+                            entry["status"] = json!("disabled");
+                        }
+                        matches.push(entry);
+                    }
                 }
             }
         }
@@ -435,6 +522,9 @@ impl MetaMcp {
             if !backend.has_cached_tools() {
                 continue;
             }
+            if !profile.backend_allowed(&backend.name) {
+                continue;
+            }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Ok(tools) = backend.get_tools().await {
                 // Enrich each tool's description with auto-extracted keyword tags so
@@ -442,6 +532,7 @@ impl MetaMcp {
                 // capability tools that carry explicit [keywords: ...] tags.
                 let enriched: Vec<_> = tools
                     .into_iter()
+                    .filter(|t| profile.tool_allowed(&t.name))
                     .map(|mut t| {
                         if let Some(ref desc) = t.description {
                             t.description = Some(autotag::enrich_description(desc));
@@ -562,6 +653,12 @@ impl MetaMcp {
                     "Server '{server}' is currently disabled by operator kill switch"
                 ),
             ));
+        }
+
+        // --- Routing profile check (after kill switch, before dispatch) ---
+        let profile = self.active_profile(session_id);
+        if let Err(msg) = profile.check(server, tool) {
+            return Err(Error::Protocol(msg));
         }
 
         // Canonical key used for transition tracking.
@@ -1221,6 +1318,59 @@ impl MetaMcp {
             }
         }
         None
+    }
+
+    // ========================================================================
+    // Routing profile meta-tools
+    // ========================================================================
+
+    /// `gateway_set_profile` — switch the active routing profile for this session.
+    ///
+    /// Returns an error when:
+    /// - No `session_id` is available (stateless call).
+    /// - The requested profile name is unknown.
+    fn set_profile(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+        let Some(sid) = session_id else {
+            return Err(Error::Protocol(
+                "gateway_set_profile requires a session (send Mcp-Session-Id header)".to_string(),
+            ));
+        };
+
+        let profile_name = extract_required_str(args, "profile")?;
+
+        if !self.profile_registry.contains(profile_name) {
+            let available = self.profile_registry.profile_names();
+            return Err(Error::Protocol(format!(
+                "Unknown routing profile '{profile_name}'. Available profiles: {}",
+                if available.is_empty() {
+                    "none configured".to_string()
+                } else {
+                    available.join(", ")
+                }
+            )));
+        }
+
+        self.session_profiles.set_profile(sid, profile_name);
+        let profile = self.profile_registry.get(profile_name);
+
+        Ok(json!({
+            "profile": profile_name,
+            "session_id": sid,
+            "description": profile.describe(),
+            "message": format!("Routing profile set to '{profile_name}'")
+        }))
+    }
+
+    /// `gateway_get_profile` — report the active routing profile for this session.
+    #[allow(clippy::unnecessary_wraps)] // Consistent with other meta-tool handlers that return Result<Value>
+    fn get_profile(&self, session_id: Option<&str>) -> Result<Value> {
+        let profile = self.active_profile(session_id);
+        Ok(json!({
+            "profile": profile.name,
+            "session_id": session_id,
+            "description": profile.describe(),
+            "available_profiles": self.profile_registry.profile_names(),
+        }))
     }
 }
 

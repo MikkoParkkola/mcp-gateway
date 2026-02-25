@@ -19,6 +19,7 @@ use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher
 use crate::config::Config;
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
+use crate::routing_profile::ProfileRegistry;
 use crate::security::ToolPolicy;
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
@@ -151,14 +152,30 @@ impl Gateway {
         }
         let tracker_for_shutdown = Arc::clone(&transition_tracker);
 
+        // Build routing profile registry from config
+        let profile_registry = ProfileRegistry::from_config(
+            &self.config.routing_profiles,
+            &self.config.default_routing_profile,
+        );
+        if !self.config.routing_profiles.is_empty() {
+            info!(
+                profiles = ?self.config.routing_profiles.keys().collect::<Vec<_>>(),
+                default = %self.config.default_routing_profile,
+                "Routing profiles loaded"
+            );
+        }
+
         // Create app state with cache, stats, and ranking support
-        let meta_mcp = Arc::new(MetaMcp::with_features(
-            Arc::clone(&self.backends),
-            cache,
-            usage_stats,
-            Some(ranker),
-            self.config.cache.default_ttl,
-        ));
+        let meta_mcp = Arc::new(
+            MetaMcp::with_features(
+                Arc::clone(&self.backends),
+                cache,
+                usage_stats,
+                Some(ranker),
+                self.config.cache.default_ttl,
+            )
+            .with_profile_registry(profile_registry),
+        );
 
         // Attach transition tracker for predictive tool prefetch
         meta_mcp.set_transition_tracker(transition_tracker);

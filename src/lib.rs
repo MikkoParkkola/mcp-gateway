@@ -40,6 +40,7 @@ pub mod playbook;
 pub mod protocol;
 pub mod ranking;
 pub mod registry;
+pub mod routing_profile;
 pub mod secrets;
 pub mod security;
 pub mod stats;
