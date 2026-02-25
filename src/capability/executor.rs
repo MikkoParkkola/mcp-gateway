@@ -205,6 +205,35 @@ impl CapabilityExecutor {
             }
         }
 
+        // For GET requests, append static_params directly as query params when they
+        // aren't already covered by config.params or config.param_map templates.
+        // This ensures fixed API parameters (e.g., current=temperature_2m,...) are sent.
+        if config.method.eq_ignore_ascii_case("GET") && !config.static_params.is_empty() {
+            let covered_keys: std::collections::HashSet<&str> = config
+                .params
+                .keys()
+                .chain(config.param_map.keys())
+                .map(String::as_str)
+                .collect();
+            let extra: Vec<(String, String)> = config
+                .static_params
+                .iter()
+                .filter(|(k, _)| !covered_keys.contains(k.as_str()))
+                .map(|(k, v)| {
+                    let v_str = match v {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => serde_json::to_string(v).unwrap_or_default(),
+                    };
+                    (k.clone(), v_str)
+                })
+                .collect();
+            if !extra.is_empty() {
+                request = request.query(&extra);
+            }
+        }
+
         // Add body for POST/PUT/PATCH
         let method_upper = config.method.to_uppercase();
         if method_upper == "POST" || method_upper == "PUT" || method_upper == "PATCH" {
