@@ -390,9 +390,20 @@ async fn meta_mcp_handler(
     // For requests, id is guaranteed to exist (checked in parse_request)
     let id = id.expect("id should exist for non-notification requests");
 
+    // Extract optional profile hint from X-MCP-Profile header (used at initialize time).
+    let header_profile: Option<String> = headers
+        .get("x-mcp-profile")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
     // Route to appropriate handler
     let response = match method.as_str() {
-        "initialize" => state.meta_mcp.handle_initialize(id, params.as_ref()),
+        "initialize" => state.meta_mcp.handle_initialize(
+            id,
+            params.as_ref(),
+            Some(session_id.as_str()),
+            header_profile.as_deref(),
+        ),
         "tools/list" => state.meta_mcp.handle_tools_list(id),
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
