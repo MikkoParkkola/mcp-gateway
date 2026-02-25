@@ -186,9 +186,19 @@ impl CapabilityExecutor {
 
         let mut request = self.client.request(method, &url);
 
-        // Add headers with parameter substitution
+        // Add headers with parameter substitution.
+        // When auth.param is set, credential goes as a query param, not a header.
         let headers = self.build_headers(config, &capability.auth, params).await?;
         request = request.headers(headers);
+
+        // Inject auth credential as a query parameter when auth.param is specified
+        // (e.g., Spoonacular uses ?apiKey=..., Google Maps uses ?key=...)
+        if let Some(ref param_name) = capability.auth.param {
+            if capability.auth.required {
+                let credential = self.fetch_credential(&capability.auth).await?;
+                request = request.query(&[(param_name.as_str(), credential.as_str())]);
+            }
+        }
 
         // Add query parameters (from config.params with substitution)
         if !config.params.is_empty() {
@@ -315,8 +325,9 @@ impl CapabilityExecutor {
             }
         }
 
-        // Inject authentication from configured credential source
-        if auth.required {
+        // Inject authentication from configured credential source.
+        // Skip header injection when auth.param is set (credential goes as query param instead).
+        if auth.required && auth.param.is_none() {
             self.inject_auth(&mut headers, auth).await?;
         }
 

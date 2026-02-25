@@ -366,6 +366,12 @@ pub struct AuthConfig {
     /// Prefix for the auth header (e.g., "Bearer", "Token")
     #[serde(default)]
     pub prefix: Option<String>,
+
+    /// Query parameter name for API key auth (e.g., "apiKey", "key").
+    /// When set, the credential is injected as a query parameter instead
+    /// of an HTTP header.
+    #[serde(default)]
+    pub param: Option<String>,
 }
 
 /// Cache configuration
