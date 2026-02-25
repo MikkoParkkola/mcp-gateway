@@ -90,7 +90,9 @@ providers:
     cost_per_call: 0.0
     timeout: 15
     config:
-      endpoint: https://api.spoonacular.com/recipes/complexSearch?addRecipeInformation=true
+      endpoint: https://api.spoonacular.com/recipes/complexSearch
+      static_params:
+        addRecipeInformation: true
       method: GET
       param_map:
         query: query
