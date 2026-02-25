@@ -380,10 +380,10 @@ mod tests {
 
         let index = registry.build_index().await.expect("Failed to build registry index");
 
-        // Verify we have a reasonable number of capabilities (should be 43+)
+        // Verify we have a reasonable number of capabilities (38 after dedup cleanup)
         assert!(
-            index.capabilities.len() >= 43,
-            "Registry should contain at least 43 capabilities, found {}",
+            index.capabilities.len() >= 35,
+            "Registry should contain at least 35 capabilities, found {}",
             index.capabilities.len()
         );
 
@@ -435,7 +435,7 @@ mod tests {
             ("ecb_exchange_rates", "finance", false),
             ("stripe_list_charges", "finance", true),
             ("weather_current", "knowledge", false),
-            ("wikipedia_search", "knowledge", false),
+            ("semantic_scholar", "knowledge", false),
             ("github_create_issue", "utility", true),
             ("slack_post_message", "communication", true),
             ("gmail_send_email", "communication", true),
