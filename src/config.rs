@@ -9,6 +9,7 @@ use figment::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
 use crate::security::policy::ToolPolicyConfig;
 use crate::{Error, Result};
@@ -55,6 +56,9 @@ pub struct Config {
     /// Code Mode configuration (search+execute pattern)
     #[serde(default)]
     pub code_mode: CodeModeConfig,
+    /// Mutual TLS configuration for transport-layer certificate authentication
+    #[serde(default)]
+    pub mtls: MtlsConfig,
 }
 
 fn default_routing_profile() -> String {

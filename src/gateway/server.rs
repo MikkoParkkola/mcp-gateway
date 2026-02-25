@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum_server::tls_rustls::RustlsConfig;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::{debug, info, warn};
@@ -18,6 +19,7 @@ use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
+use crate::mtls::MtlsPolicy;
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
@@ -129,6 +131,16 @@ impl Gateway {
         let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
         if self.config.security.tool_policy.enabled {
             info!("Tool security policy enabled");
+        }
+
+        // Compile mTLS access control policy
+        let mtls_policy = Arc::new(MtlsPolicy::from_config(&self.config.mtls));
+        if self.config.mtls.enabled {
+            info!(
+                policies = self.config.mtls.policies.len(),
+                require_client_cert = self.config.mtls.require_client_cert,
+                "mTLS enabled"
+            );
         }
 
         // Create usage stats (always enabled for now)
@@ -344,6 +356,7 @@ impl Gateway {
             streaming_config: self.config.streaming.clone(),
             auth_config,
             tool_policy,
+            mtls_policy,
             sanitize_input: self.config.security.sanitize_input,
             ssrf_protection: self.config.security.ssrf_protection,
             inflight: Arc::clone(&inflight),
@@ -508,11 +521,15 @@ impl Gateway {
             }
         });
 
-        // Run server with graceful shutdown
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-            .await
-            .map_err(|e| Error::Internal(e.to_string()))?;
+        // Run server — plain HTTP or mTLS depending on config
+        if self.config.mtls.enabled {
+            serve_tls(app, addr, &self.config.mtls, shutdown_signal(shutdown_tx)).await?;
+        } else {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal(shutdown_tx))
+                .await
+                .map_err(|e| Error::Internal(e.to_string()))?;
+        }
 
         // Save search ranker usage data
         if let Err(e) = ranker_for_shutdown.save(&ranker_path) {
@@ -560,6 +577,47 @@ impl Gateway {
         Ok(())
     }
 }
+
+/// Start the HTTPS (mTLS) server using `axum-server`.
+///
+/// Builds a `rustls::ServerConfig` from `mtls_config`, wraps it in
+/// `axum-server`'s `RustlsConfig`, and runs until the `shutdown_fut` resolves.
+async fn serve_tls(
+    app: axum::Router,
+    addr: SocketAddr,
+    mtls_config: &crate::mtls::MtlsConfig,
+    shutdown_fut: impl std::future::Future<Output = ()> + Send + 'static,
+) -> crate::Result<()> {
+    use crate::mtls::cert_manager::build_tls_config;
+
+    let rustls_cfg = build_tls_config(mtls_config)?;
+    let rustls_config = RustlsConfig::from_config(Arc::new(rustls_cfg));
+
+    info!(
+        addr = %addr,
+        require_client_cert = mtls_config.require_client_cert,
+        "mTLS listener starting"
+    );
+
+    let handle = axum_server::Handle::new();
+    let handle_for_shutdown = handle.clone();
+
+    // Bridge our broadcast-based shutdown signal to the axum-server handle
+    tokio::spawn(async move {
+        shutdown_fut.await;
+        handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+    });
+
+    axum_server::bind_rustls(addr, rustls_config)
+        .handle(handle)
+        .serve(app.into_make_service())
+        .await
+        .map_err(|e| crate::Error::Internal(format!("TLS server error: {e}")))
+}
+
+// The TLS path drops the `listener` created for plain HTTP because
+// `axum_server::bind_rustls` creates its own socket.  We re-bind above.
+// The plain `listener` variable is dropped before `serve_tls` is called.
 
 /// Shutdown signal handler
 async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
