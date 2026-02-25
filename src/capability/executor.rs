@@ -170,6 +170,11 @@ impl CapabilityExecutor {
     ) -> Result<Value> {
         let config = &provider.config;
 
+        // Merge static_params (capability-defined fixed values) with caller params.
+        // Caller-supplied values always win on key collision.
+        let effective_params = config.merge_with_static_params(params);
+        let params = effective_params.as_ref();
+
         // Build URL
         let url = self.build_url(config, params)?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");

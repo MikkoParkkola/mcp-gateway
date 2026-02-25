@@ -217,6 +217,30 @@ pub struct RestConfig {
     #[serde(default)]
     pub param_map: HashMap<String, String>,
 
+    /// Static parameters merged into every request.
+    ///
+    /// These are fixed values baked into the capability definition — they do
+    /// not need to be supplied by the caller.  User-provided parameters with
+    /// the same key always take precedence, so callers can still override a
+    /// static default when needed.
+    ///
+    /// Static params participate in the same substitution pipeline as
+    /// dynamic params: they flow into URL path templates, query strings,
+    /// request bodies, and header values exactly like caller-supplied params.
+    ///
+    /// # Example (YAML)
+    ///
+    /// ```yaml
+    /// config:
+    ///   base_url: https://api.open-meteo.com
+    ///   path: /v1/forecast
+    ///   static_params:
+    ///     current: "temperature_2m,precipitation,weather_code"
+    ///     timezone: "auto"
+    /// ```
+    #[serde(default)]
+    pub static_params: HashMap<String, serde_json::Value>,
+
     /// Request body template (for POST/PUT)
     #[serde(default)]
     pub body: Option<serde_json::Value>,
@@ -242,6 +266,47 @@ impl RestConfig {
     #[must_use]
     pub fn uses_endpoint(&self) -> bool {
         !self.endpoint.is_empty()
+    }
+
+    /// Merge `static_params` with caller-supplied `params`, returning an
+    /// effective parameter object where **caller values take precedence**.
+    ///
+    /// If `static_params` is empty the original `params` value is returned
+    /// unchanged (zero allocation in the common case).
+    ///
+    /// # Merge semantics
+    ///
+    /// ```text
+    /// effective = static_params ∪ caller_params   (caller wins on collision)
+    /// ```
+    #[must_use]
+    pub fn merge_with_static_params<'a>(
+        &'a self,
+        caller_params: &'a serde_json::Value,
+    ) -> std::borrow::Cow<'a, serde_json::Value> {
+        if self.static_params.is_empty() {
+            return std::borrow::Cow::Borrowed(caller_params);
+        }
+
+        // Start with static params as base, then overlay caller params on top.
+        let mut merged = serde_json::Map::with_capacity(
+            self.static_params.len()
+                + caller_params
+                    .as_object()
+                    .map_or(0, serde_json::Map::len),
+        );
+
+        for (k, v) in &self.static_params {
+            merged.insert(k.clone(), v.clone());
+        }
+
+        if let Some(caller_obj) = caller_params.as_object() {
+            for (k, v) in caller_obj {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+
+        std::borrow::Cow::Owned(serde_json::Value::Object(merged))
     }
 }
 
