@@ -343,6 +343,50 @@ fn build_revive_server_tool() -> Tool {
     }
 }
 
+/// Build the `gateway_set_profile` meta-tool definition.
+fn build_set_profile_tool() -> Tool {
+    Tool {
+        name: "gateway_set_profile".to_string(),
+        title: Some("Set Routing Profile".to_string()),
+        description: Some(
+            "Switch the active routing profile for this session. \
+             A routing profile restricts which tools and backends are available."
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "string",
+                    "description": "Name of the routing profile to activate (e.g. \"research\", \"coding\")"
+                }
+            },
+            "required": ["profile"]
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
+/// Build the `gateway_get_profile` meta-tool definition.
+fn build_get_profile_tool() -> Tool {
+    Tool {
+        name: "gateway_get_profile".to_string(),
+        title: Some("Get Routing Profile".to_string()),
+        description: Some(
+            "Show the active routing profile for this session and what it allows or denies."
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
 /// Construct the full meta-tool list, optionally including stats, webhooks, and playbooks.
 pub(crate) fn build_meta_tools(stats_enabled: bool, webhooks_enabled: bool) -> Vec<Tool> {
     let mut tools = build_base_tools();
@@ -355,6 +399,8 @@ pub(crate) fn build_meta_tools(stats_enabled: bool, webhooks_enabled: bool) -> V
     tools.push(build_playbook_tool());
     tools.push(build_kill_server_tool());
     tools.push(build_revive_server_tool());
+    tools.push(build_set_profile_tool());
+    tools.push(build_get_profile_tool());
     tools
 }
 
@@ -820,8 +866,8 @@ mod tests {
     #[test]
     fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_webhooks() {
         let tools = build_meta_tools(false, false);
-        // 4 base + 1 playbook + 2 kill-switch = 7
-        assert_eq!(tools.len(), 7);
+        // 4 base + 1 playbook + 2 kill-switch + 2 profile = 9
+        assert_eq!(tools.len(), 9);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_list_servers"));
         assert!(names.contains(&"gateway_list_tools"));
@@ -830,20 +876,24 @@ mod tests {
         assert!(names.contains(&"gateway_run_playbook"));
         assert!(names.contains(&"gateway_kill_server"));
         assert!(names.contains(&"gateway_revive_server"));
+        assert!(names.contains(&"gateway_set_profile"));
+        assert!(names.contains(&"gateway_get_profile"));
         assert!(!names.contains(&"gateway_webhook_status"));
     }
 
     #[test]
     fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
         let tools = build_meta_tools(true, true);
-        // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch = 9
-        assert_eq!(tools.len(), 9);
+        // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile = 11
+        assert_eq!(tools.len(), 11);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_get_stats"));
         assert!(names.contains(&"gateway_webhook_status"));
         assert!(names.contains(&"gateway_run_playbook"));
         assert!(names.contains(&"gateway_kill_server"));
         assert!(names.contains(&"gateway_revive_server"));
+        assert!(names.contains(&"gateway_set_profile"));
+        assert!(names.contains(&"gateway_get_profile"));
     }
 
     #[test]
