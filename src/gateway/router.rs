@@ -20,6 +20,7 @@ use super::proxy::ProxyManager;
 use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
+use crate::mtls::{CertIdentity, MtlsPolicy};
 use crate::protocol::{ElicitationCreateParams, JsonRpcResponse, RequestId, SamplingCreateMessageParams};
 use crate::security::{ToolPolicy, sanitize_json_value, validate_url_not_ssrf};
 
@@ -41,6 +42,8 @@ pub struct AppState {
     pub auth_config: Arc<ResolvedAuthConfig>,
     /// Tool access policy
     pub tool_policy: Arc<ToolPolicy>,
+    /// Certificate-based mTLS tool access policy
+    pub mtls_policy: Arc<MtlsPolicy>,
     /// Whether input sanitization is enabled
     pub sanitize_input: bool,
     /// Whether SSRF protection is enabled for outbound URLs
@@ -258,6 +261,12 @@ async fn meta_mcp_handler(
         .extensions()
         .get::<AuthenticatedClient>()
         .cloned();
+    // Extract mTLS certificate identity (present when mTLS is active and a valid
+    // client certificate was presented during the TLS handshake).
+    let cert_identity = http_request
+        .extensions()
+        .get::<CertIdentity>()
+        .cloned();
 
     // Parse JSON body
     let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
@@ -432,6 +441,40 @@ async fn meta_mcp_handler(
                                 session_id.parse().unwrap(),
                             );
                             return (StatusCode::FORBIDDEN, response).into_response();
+                        }
+
+                        // mTLS certificate-based policy check (defense-in-depth layer)
+                        if !state.mtls_policy.is_empty() {
+                            use crate::mtls::PolicyDecision;
+                            let decision = state
+                                .mtls_policy
+                                .evaluate(cert_identity.as_ref(), server, tool);
+                            if decision == PolicyDecision::Deny {
+                                let identity_label = cert_identity
+                                    .as_ref()
+                                    .map_or("<unauthenticated>", |id| id.display_name.as_str());
+                                warn!(
+                                    server = server,
+                                    tool = tool,
+                                    identity = identity_label,
+                                    "Tool invocation denied by mTLS policy"
+                                );
+                                let resp = JsonRpcResponse::error(
+                                    Some(id),
+                                    -32600,
+                                    format!(
+                                        "Tool '{tool}' on server '{server}' is blocked by \
+                                         certificate policy"
+                                    ),
+                                );
+                                let mut response =
+                                    Json(serde_json::to_value(resp).unwrap()).into_response();
+                                response.headers_mut().insert(
+                                    axum::http::header::HeaderName::from_static("mcp-session-id"),
+                                    session_id.parse().unwrap(),
+                                );
+                                return (StatusCode::FORBIDDEN, response).into_response();
+                            }
                         }
 
                         // Per-client tool scope check

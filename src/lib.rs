@@ -37,6 +37,7 @@ pub mod failsafe;
 pub mod gateway;
 pub mod idempotency;
 pub mod kill_switch;
+pub mod mtls;
 pub mod oauth;
 pub mod playbook;
 pub mod protocol;
