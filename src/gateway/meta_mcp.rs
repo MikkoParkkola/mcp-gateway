@@ -752,6 +752,7 @@ impl MetaMcp {
                     cfg.window_size,
                     cfg.window_duration,
                     cfg.threshold,
+                    cfg.min_samples,
                 );
                 if auto_killed {
                     warn!(
