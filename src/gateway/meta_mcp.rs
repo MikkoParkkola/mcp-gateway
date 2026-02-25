@@ -18,6 +18,7 @@ use tracing::{debug, warn};
 
 use crate::autotag;
 use crate::backend::BackendRegistry;
+use crate::config_reload::ReloadContext;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::idempotency::{GuardOutcome, IdempotencyCache, derive_key, enforce, spawn_cleanup_task};
@@ -83,6 +84,8 @@ pub struct MetaMcp {
     profile_registry: Arc<ProfileRegistry>,
     /// Per-session active profile binding
     session_profiles: Arc<SessionProfileStore>,
+    /// Config reload context — set after startup to enable `gateway_reload_config`
+    reload_context: RwLock<Option<Arc<ReloadContext>>>,
 }
 
 impl MetaMcp {
@@ -105,6 +108,7 @@ impl MetaMcp {
             error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
+            reload_context: RwLock::new(None),
         }
     }
 
@@ -132,6 +136,7 @@ impl MetaMcp {
             webhook_registry: RwLock::new(None),
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
+            reload_context: RwLock::new(None),
         }
     }
 
@@ -168,6 +173,18 @@ impl MetaMcp {
     /// Get the webhook registry if attached.
     fn get_webhook_registry(&self) -> Option<Arc<parking_lot::RwLock<WebhookRegistry>>> {
         self.webhook_registry.read().clone()
+    }
+
+    /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
+    ///
+    /// Must be called during server setup, before any requests are handled.
+    pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
+        *self.reload_context.write() = Some(ctx);
+    }
+
+    /// Get the reload context if set.
+    fn get_reload_context(&self) -> Option<Arc<ReloadContext>> {
+        self.reload_context.read().clone()
     }
 
     /// Attach a `TransitionTracker` for predictive tool prefetch.
@@ -270,6 +287,7 @@ impl MetaMcp {
         let tools = build_meta_tools(
             self.stats.is_some(),
             self.get_webhook_registry().is_some(),
+            self.get_reload_context().is_some(),
         );
         let result = ToolsListResult {
             tools,
@@ -301,6 +319,7 @@ impl MetaMcp {
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_set_profile" => self.set_profile(&arguments, session_id),
             "gateway_get_profile" => self.get_profile(session_id),
+            "gateway_reload_config" => self.reload_config().await,
             _ => Err(Error::json_rpc(
                 -32601,
                 format!("Unknown tool: {tool_name}"),
@@ -927,6 +946,21 @@ impl MetaMcp {
             "was_killed": was_killed,
             "message": format!("Server '{server}' has been re-enabled")
         }))
+    }
+
+    /// Trigger an immediate config reload from disk and return a change summary.
+    async fn reload_config(&self) -> Result<Value> {
+        let ctx = self.get_reload_context().ok_or_else(|| {
+            Error::json_rpc(-32603, "Config reload is not enabled on this gateway")
+        })?;
+
+        match ctx.reload().await {
+            Ok(summary) => Ok(json!({
+                "status": "ok",
+                "changes": summary
+            })),
+            Err(e) => Err(Error::json_rpc(-32603, e)),
+        }
     }
 
     /// Return webhook endpoint status — registered paths and delivery stats.

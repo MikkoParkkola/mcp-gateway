@@ -17,6 +17,7 @@ use crate::backend::{Backend, BackendRegistry};
 use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
+use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
@@ -29,6 +30,8 @@ use crate::{Error, Result};
 pub struct Gateway {
     /// Configuration
     config: Config,
+    /// Path to config file on disk (enables hot-reload when `Some`)
+    config_path: Option<std::path::PathBuf>,
     /// Backend registry
     backends: Arc<BackendRegistry>,
     /// Shutdown flag
@@ -43,6 +46,22 @@ impl Gateway {
     /// Returns an error if backend registration fails.
     #[allow(clippy::unused_async)] // async for future initialization needs
     pub async fn new(config: Config) -> Result<Self> {
+        Self::new_with_path(config, None).await
+    }
+
+    /// Create a new gateway with a config file path for hot-reload support.
+    ///
+    /// When `config_path` is `Some`, config changes to that file trigger
+    /// automatic diff + patch at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if backend registration fails.
+    #[allow(clippy::unused_async)] // async for future initialization needs
+    pub async fn new_with_path(
+        config: Config,
+        config_path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
         let backends = Arc::new(BackendRegistry::new());
 
         // Register backends
@@ -59,6 +78,7 @@ impl Gateway {
 
         Ok(Self {
             config,
+            config_path,
             backends,
             shutdown_tx: None,
         })
@@ -277,6 +297,38 @@ impl Gateway {
         if self.config.webhooks.enabled {
             meta_mcp.set_webhook_registry(Arc::clone(&webhook_registry));
         }
+
+        // Wire config hot-reload if a config path was provided.
+        let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
+            let live_config = Arc::new(LiveConfig::new(self.config.clone()));
+            let reload_ctx = Arc::new(ReloadContext::new(
+                path.clone(),
+                Arc::clone(&live_config),
+                Arc::clone(&self.backends),
+                self.config.failsafe.clone(),
+                self.config.meta_mcp.cache_ttl,
+            ));
+            meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
+
+            match ConfigWatcher::start(
+                path.clone(),
+                live_config,
+                Arc::clone(&self.backends),
+                &self.config,
+                shutdown_tx.subscribe(),
+            ) {
+                Ok(w) => {
+                    info!(path = %path.display(), "Config hot-reload enabled");
+                    Some(w)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to start config watcher, hot-reload disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // In-flight request tracker: large initial permits, drain waits for
         // all permits to be returned (i.e., all in-flight requests complete).
