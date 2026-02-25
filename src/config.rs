@@ -622,6 +622,17 @@ pub struct OAuthConfig {
     /// Client ID (optional - uses dynamic registration or generates one if not set)
     #[serde(default)]
     pub client_id: Option<String>,
+    /// How many seconds before expiry to proactively refresh the token.
+    ///
+    /// The background refresh task triggers when
+    /// `time_until_expiry < max(token_lifetime * 0.10, token_refresh_buffer_secs)`.
+    /// Defaults to 300 seconds (5 minutes).
+    #[serde(default = "default_token_refresh_buffer")]
+    pub token_refresh_buffer_secs: u64,
+}
+
+fn default_token_refresh_buffer() -> u64 {
+    300
 }
 
 fn default_true() -> bool {

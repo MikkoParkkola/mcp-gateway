@@ -186,6 +186,7 @@ impl Backend {
             resource_url.to_string(),
             oauth_config.scopes.clone(),
             storage,
+            oauth_config.token_refresh_buffer_secs,
         );
 
         Ok(Some(oauth))
