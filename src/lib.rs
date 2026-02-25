@@ -28,6 +28,7 @@ pub mod backend;
 pub mod cache;
 pub mod config_reload;
 pub mod capability;
+pub mod provider;
 pub mod cli;
 pub mod config;
 pub mod discovery;
