@@ -290,18 +290,31 @@ fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue>) {
 
     for (provider_name, provider) in &cap.providers.named {
         let ctx = format!("providers.{provider_name}");
-        check_rest_config(&provider.config, &ctx, &schema_props, issues);
+        check_rest_config(&provider.config, &provider.service, &ctx, &schema_props, issues);
     }
 
     for (idx, provider) in cap.providers.fallback.iter().enumerate() {
         let ctx = format!("providers.fallback[{idx}]");
-        check_rest_config(&provider.config, &ctx, &schema_props, issues);
+        check_rest_config(&provider.config, &provider.service, &ctx, &schema_props, issues);
     }
+}
+
+/// Service types that require a base_url or endpoint.
+///
+/// Non-REST services (cli, local_binary, local_ml, microfetch, etc.) use
+/// other config fields (command, binary, handler) and should not be rejected
+/// for missing URL fields.
+const REST_LIKE_SERVICES: &[&str] = &["rest", "graphql"];
+
+/// Returns true if this service type requires base_url or endpoint.
+fn service_requires_url(service: &str) -> bool {
+    REST_LIKE_SERVICES.contains(&service)
 }
 
 /// Validate a single `RestConfig` entry.
 fn check_rest_config(
     config: &RestConfig,
+    service: &str,
     context: &str,
     schema_props: &HashSet<String>,
     issues: &mut Vec<Issue>,
@@ -310,7 +323,10 @@ fn check_rest_config(
     let has_endpoint = !config.endpoint.is_empty();
     let has_path = !config.path.is_empty();
 
-    if !has_base_url && !has_endpoint {
+    // CAP-005: Only require base_url/endpoint for REST-like services.
+    // Non-REST services (cli, local_binary, local_ml, microfetch, folo, etc.)
+    // use alternative config fields and don't need URLs.
+    if !has_base_url && !has_endpoint && service_requires_url(service) {
         issues.push(Issue::error(
             "CAP-005",
             format!("{context}: provider must have 'base_url' or 'endpoint'"),
@@ -384,18 +400,43 @@ fn check_placeholders_in_text(
         // oauth.PROVIDER — OAuth token injection
         // access_token / refresh_token — OAuth runtime injection
         // api_key — runtime API key injection
+        // timestamp — computed auth timestamp
+        // *_auth_header — computed HMAC/auth headers
         const RUNTIME_PLACEHOLDERS: &[&str] = &[
             "access_token", "refresh_token", "api_key", "bearer_token", "auth_token",
+            "timestamp",
         ];
         if placeholder.starts_with("env.")
             || placeholder.starts_with("keychain.")
             || placeholder.starts_with("oauth.")
             || RUNTIME_PLACEHOLDERS.contains(&placeholder.as_str())
+            // Computed auth headers (e.g. {podcast_index_auth_header})
+            || placeholder.ends_with("_auth_header")
         {
             continue;
         }
 
-        if !schema_props.contains(&placeholder) {
+        // Template expressions (e.g. {{input.wait ? 'wait' : ''}}) start with
+        // '{' when the outer braces have already been stripped.  These are
+        // evaluated at runtime, not simple schema references.
+        if placeholder.starts_with('{') || placeholder.contains('?') {
+            continue;
+        }
+
+        // Array-index access patterns like `symbols[0]` or `holdings[0].symbol`
+        // reference a top-level schema property that is an array.  Extract the
+        // root property name and validate that instead.
+        let prop_name = if let Some(bracket_pos) = placeholder.find('[') {
+            &placeholder[..bracket_pos]
+        } else if let Some(dot_pos) = placeholder.find('.') {
+            // Nested property access like `foo.bar` — check the root property.
+            // (env/keychain/oauth prefixes are already handled above.)
+            &placeholder[..dot_pos]
+        } else {
+            placeholder.as_str()
+        };
+
+        if !schema_props.contains(prop_name) {
             issues.push(Issue::error(
                 "CAP-006",
                 format!(
@@ -1093,5 +1134,235 @@ providers:
         let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
         let issues = validate_capability_definition(&cap, None);
         assert!(has_code(&errors_of(&issues), "CAP-006"), "expected CAP-006: {:?}", issues);
+    }
+
+    // ── CAP-005: non-REST services skip URL check ─────────────────────────
+
+    #[test]
+    fn non_rest_service_without_url_passes() {
+        // GIVEN: provider with service=cli and no base_url/endpoint
+        // WHEN: validating
+        // THEN: no CAP-005 error (cli services don't need URLs)
+        let yaml = r#"
+name: metacognition_verify
+description: Verify text using CLI tool.
+schema:
+  input:
+    type: object
+    properties:
+      text:
+        type: string
+providers:
+  primary:
+    service: cli
+    config:
+      command: /usr/local/bin/verify
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(!has_code(&errors_of(&issues), "CAP-005"), "unexpected CAP-005: {:?}", issues);
+    }
+
+    #[test]
+    fn local_ml_service_without_url_passes() {
+        // GIVEN: provider with service=local_ml and no base_url/endpoint
+        // WHEN: validating
+        // THEN: no CAP-005 error
+        let yaml = r#"
+name: face_detect
+description: Detect faces locally.
+schema:
+  input:
+    type: object
+    properties:
+      image:
+        type: string
+providers:
+  primary:
+    service: local_ml
+    config:
+      model: face_recognition
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(!has_code(&errors_of(&issues), "CAP-005"), "unexpected CAP-005: {:?}", issues);
+    }
+
+    #[test]
+    fn rest_service_without_url_still_errors() {
+        // GIVEN: provider with service=rest and no base_url/endpoint
+        // WHEN: validating
+        // THEN: CAP-005 error
+        let yaml = r#"
+name: broken_rest
+description: REST without URL.
+providers:
+  primary:
+    service: rest
+    config:
+      path: /v1/items
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(has_code(&errors_of(&issues), "CAP-005"), "expected CAP-005: {:?}", issues);
+    }
+
+    // ── CAP-006: array-index and nested placeholders ──────────────────────
+
+    #[test]
+    fn array_index_placeholder_resolves_to_root_property() {
+        // GIVEN: param uses {symbols[0]} and schema has "symbols" array property
+        // WHEN: validating
+        // THEN: no CAP-006 error (root "symbols" is in schema)
+        let yaml = r#"
+name: portfolio_opt
+description: Portfolio optimization.
+schema:
+  input:
+    type: object
+    properties:
+      symbols:
+        type: array
+        items:
+          type: string
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path: /query
+      params:
+        symbol: "{symbols[0]}"
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    }
+
+    #[test]
+    fn nested_array_property_placeholder_resolves_to_root() {
+        // GIVEN: param uses {holdings[0].symbol} and schema has "holdings" property
+        // WHEN: validating
+        // THEN: no CAP-006 error
+        let yaml = r#"
+name: portfolio_risk
+description: Portfolio risk analysis.
+schema:
+  input:
+    type: object
+    properties:
+      holdings:
+        type: array
+        items:
+          type: object
+          properties:
+            symbol:
+              type: string
+            weight:
+              type: number
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path: /query
+      params:
+        symbol: "{holdings[0].symbol}"
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    }
+
+    #[test]
+    fn template_expression_placeholder_is_skipped() {
+        // GIVEN: header uses Jinja-style template {{input.wait ? 'wait' : ''}}
+        // WHEN: validating
+        // THEN: no CAP-006 error (template expressions are runtime-evaluated)
+        let yaml = r#"
+name: replicate_run
+description: Run models on Replicate.
+schema:
+  input:
+    type: object
+    properties:
+      model:
+        type: string
+      input:
+        type: object
+      wait:
+        type: boolean
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.replicate.com
+      path: /v1/predictions
+      headers:
+        Prefer: "{{input.wait ? 'wait' : ''}}"
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    }
+
+    #[test]
+    fn timestamp_runtime_placeholder_is_skipped() {
+        // GIVEN: header uses {timestamp} which is a runtime-computed value
+        // WHEN: validating
+        // THEN: no CAP-006 error
+        let yaml = r#"
+name: podcast_search
+description: Search podcasts.
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.podcastindex.org
+      path: /api/1.0/search/byterm
+      headers:
+        X-Auth-Date: "{timestamp}"
+      params:
+        q: "{query}"
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    }
+
+    #[test]
+    fn auth_header_runtime_placeholder_is_skipped() {
+        // GIVEN: header uses {podcast_index_auth_header} ending in _auth_header
+        // WHEN: validating
+        // THEN: no CAP-006 error (computed auth headers are runtime values)
+        let yaml = r#"
+name: podcast_search
+description: Search podcasts.
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.podcastindex.org
+      path: /api/1.0/search/byterm
+      headers:
+        Authorization: "{podcast_index_auth_header}"
+      params:
+        q: "{query}"
+"#;
+        let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
     }
 }
