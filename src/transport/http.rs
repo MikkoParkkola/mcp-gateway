@@ -17,6 +17,7 @@ use parking_lot::RwLock;
 use reqwest::{Client, header};
 use serde_json::Value;
 use tokio::sync::Mutex as TokioMutex;
+use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -47,8 +48,11 @@ pub struct HttpTransport {
     timeout: Duration,
     /// Use Streamable HTTP (direct POST, no SSE handshake)
     streamable_http: bool,
-    /// OAuth client for authenticated backends (protected by async mutex for token refresh)
-    oauth_client: Option<TokioMutex<OAuthClient>>,
+    /// OAuth client for authenticated backends (Arc allows background refresh task to share it)
+    oauth_client: Option<Arc<TokioMutex<OAuthClient>>>,
+    /// Background token-refresh task handle, set during `initialize()`.
+    /// Stored in a lock so `initialize(&self)` can assign it after construction.
+    refresh_task: RwLock<Option<JoinHandle<()>>>,
     /// Protocol version override (if `None`, uses `PROTOCOL_VERSION` with fallback)
     protocol_version: RwLock<Option<String>>,
 }
@@ -104,7 +108,8 @@ impl HttpTransport {
             connected: AtomicBool::new(false),
             timeout,
             streamable_http,
-            oauth_client: oauth_client.map(TokioMutex::new),
+            oauth_client: oauth_client.map(|c| Arc::new(TokioMutex::new(c))),
+            refresh_task: RwLock::new(None),
             protocol_version: RwLock::new(protocol_version),
         }))
     }
@@ -121,15 +126,26 @@ impl HttpTransport {
     /// or protocol version negotiation is unsuccessful.
     pub async fn initialize(&self) -> Result<()> {
         // Initialize OAuth client if configured
-        if let Some(ref oauth_mutex) = self.oauth_client {
-            let mut oauth = oauth_mutex.lock().await;
-            oauth.initialize().await?;
+        if let Some(ref oauth_arc) = self.oauth_client {
+            let backend_name = {
+                let mut oauth = oauth_arc.lock().await;
+                oauth.initialize().await?;
 
-            // If we don't have a valid token, trigger authorization flow
-            if !oauth.has_valid_token() {
-                info!(url = %self.base_url, "OAuth required - initiating authorization flow");
-                oauth.authorize().await?;
-            }
+                // If we don't have a valid token, trigger authorization flow
+                if !oauth.has_valid_token() {
+                    info!(url = %self.base_url, "OAuth required - initiating authorization flow");
+                    oauth.authorize().await?;
+                }
+
+                oauth.backend_name().to_string()
+            };
+
+            // Spawn background refresh task now that we have a valid token
+            let handle = OAuthClient::spawn_refresh_task(
+                Arc::clone(oauth_arc),
+                backend_name,
+            );
+            *self.refresh_task.write() = Some(handle);
         }
 
         if self.streamable_http {

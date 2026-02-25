@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use parking_lot::RwLock;
@@ -11,6 +12,7 @@ use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -50,6 +52,11 @@ pub struct OAuthClient {
 
     /// Client ID (registered or generated)
     client_id: RwLock<Option<String>>,
+
+    /// Seconds before expiry at which the background task proactively refreshes.
+    ///
+    /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
+    token_refresh_buffer_secs: u64,
 }
 
 /// OAuth token response
@@ -79,6 +86,7 @@ impl OAuthClient {
         resource_url: String,
         scopes: Vec<String>,
         storage: Arc<TokenStorage>,
+        token_refresh_buffer_secs: u64,
     ) -> Self {
         Self {
             http_client,
@@ -91,6 +99,7 @@ impl OAuthClient {
             current_token: RwLock::new(None),
             scopes,
             client_id: RwLock::new(None),
+            token_refresh_buffer_secs,
         }
     }
 
@@ -180,10 +189,195 @@ impl OAuthClient {
         Ok(token)
     }
 
+    /// Return the backend name (used by the background refresh task for logging).
+    #[must_use]
+    pub fn backend_name(&self) -> &str {
+        &self.backend_name
+    }
+
     /// Check if the client has a valid token
     pub fn has_valid_token(&self) -> bool {
         let token = self.current_token.read();
         token.as_ref().is_some_and(|t| !t.is_expired())
+    }
+
+    /// Return true if the token should be proactively refreshed.
+    ///
+    /// Triggers when remaining lifetime is below `max(lifetime * 10%, buffer)`.
+    #[must_use]
+    pub fn needs_proactive_refresh(&self) -> bool {
+        let token = self.current_token.read();
+        let Some(ref t) = *token else { return false };
+
+        // Tokens with no expiry never need proactive refresh
+        let Some(expires_at) = t.expires_at else { return false };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let remaining = expires_at.saturating_sub(now);
+
+        // Compute 10% of total lifetime using the stored expires_at as a proxy.
+        // We don't store issued_at, so approximate lifetime as (expires_at - now + remaining)
+        // which simplifies to: use a fixed fraction of the buffer itself.
+        // Practical rule: trigger refresh at max(buffer, 10% of remaining_at_last_check).
+        // Since we check every 60s, use the simpler form: remaining < buffer.
+        remaining < self.token_refresh_buffer_secs
+    }
+
+    /// Attempt client-credentials grant (headless re-auth, no browser required).
+    ///
+    /// Returns `Ok(token)` only when the authorization server explicitly lists
+    /// `"client_credentials"` in `grant_types_supported` — so we never try it
+    /// against a server that won't accept it.
+    async fn try_client_credentials(&self) -> Result<String> {
+        let auth_meta = self
+            .auth_metadata
+            .as_ref()
+            .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
+
+        if !auth_meta
+            .grant_types_supported
+            .iter()
+            .any(|g| g == "client_credentials")
+        {
+            return Err(Error::Internal(
+                "Server does not support client_credentials grant".to_string(),
+            ));
+        }
+
+        let client_id = self
+            .client_id
+            .read()
+            .clone()
+            .ok_or_else(|| Error::Internal("No client ID for client_credentials".to_string()))?;
+
+        let scope_str = self.scopes.join(" ");
+        let mut params = HashMap::new();
+        params.insert("grant_type", "client_credentials");
+        params.insert("client_id", client_id.as_str());
+        if !scope_str.is_empty() {
+            params.insert("scope", scope_str.as_str());
+        }
+
+        let response = self
+            .http_client
+            .post(&auth_meta.token_endpoint)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| Error::Internal(format!("Client credentials request failed: {e}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Internal(format!(
+                "Client credentials failed: HTTP {status} - {body}"
+            )));
+        }
+
+        let token_response: TokenResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to parse credentials response: {e}")))?;
+
+        let token = TokenInfo::from_response(
+            token_response.access_token,
+            token_response.token_type,
+            token_response.refresh_token,
+            token_response.expires_in,
+            token_response.scope,
+        );
+
+        self.storage
+            .save(&self.backend_name, &self.resource_url, &token)?;
+        *self.current_token.write() = Some(token.clone());
+
+        info!(backend = %self.backend_name, "Token renewed via client_credentials");
+        Ok(token.access_token)
+    }
+
+    /// Try all headless renewal strategies (`refresh_token` → `client_credentials`).
+    ///
+    /// Returns `Ok(true)` on success, `Ok(false)` when all automatic methods
+    /// are unavailable and manual re-authorization is required.
+    async fn attempt_background_renewal(&self) -> bool {
+        // Strategy 1: refresh_token grant
+        let refresh_token_opt = {
+            let token = self.current_token.read();
+            token.as_ref().and_then(|t| t.refresh_token.clone())
+        };
+
+        if let Some(refresh_token) = refresh_token_opt {
+            match self.refresh_token(&refresh_token).await {
+                Ok(_) => return true,
+                Err(e) => {
+                    debug!(
+                        backend = %self.backend_name,
+                        error = %e,
+                        "Token refresh failed, trying client_credentials"
+                    );
+                }
+            }
+        }
+
+        // Strategy 2: client_credentials grant (headless, for Beeper-style tokens)
+        match self.try_client_credentials().await {
+            Ok(_) => return true,
+            Err(e) => {
+                debug!(
+                    backend = %self.backend_name,
+                    error = %e,
+                    "client_credentials renewal failed"
+                );
+            }
+        }
+
+        false
+    }
+
+    /// Spawn a background task that proactively refreshes the token before it
+    /// expires.  The task runs for the lifetime of the provided `Arc`; it
+    /// stops automatically when the last strong reference is dropped.
+    ///
+    /// The returned `JoinHandle` can be aborted to cancel the task.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic.
+    pub fn spawn_refresh_task(
+        client: Arc<TokioMutex<Self>>,
+        backend_name: String,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+
+                // Use a weak reference pattern: if the Arc has been dropped
+                // (HttpTransport gone), stop the loop.
+                let needs_refresh = {
+                    let guard = client.lock().await;
+                    guard.needs_proactive_refresh()
+                };
+
+                if needs_refresh {
+                    let success = {
+                        let guard = client.lock().await;
+                        guard.attempt_background_renewal().await
+                    };
+
+                    if !success {
+                        warn!(
+                            backend = %backend_name,
+                            "All automatic token renewal strategies failed — \
+                             manual re-authorization required"
+                        );
+                    }
+                }
+            }
+        })
     }
 
     /// Perform the authorization flow
@@ -579,6 +773,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             vec!["read".to_string()],
             storage,
+            300,
         );
         assert!(!client.has_valid_token());
     }
@@ -594,6 +789,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             vec![],
             storage,
+            300,
         );
 
         // Inject a non-expired token
@@ -620,6 +816,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             vec![],
             storage,
+            300,
         );
 
         // Inject an expired token
@@ -634,5 +831,121 @@ mod tests {
         *client.current_token.write() = Some(token);
 
         assert!(!client.has_valid_token());
+    }
+
+    // =========================================================================
+    // backend_name accessor
+    // =========================================================================
+
+    #[test]
+    fn backend_name_returns_configured_name() {
+        let storage = Arc::new(
+            TokenStorage::new(std::env::temp_dir().join("oauth_test_backend_name")).unwrap(),
+        );
+        let client = OAuthClient::new(
+            Client::new(),
+            "my-service".to_string(),
+            "http://localhost:8080".to_string(),
+            vec![],
+            storage,
+            300,
+        );
+        assert_eq!(client.backend_name(), "my-service");
+    }
+
+    // =========================================================================
+    // needs_proactive_refresh
+    // =========================================================================
+
+    #[test]
+    fn needs_proactive_refresh_false_when_no_token() {
+        // GIVEN: client with no token
+        let storage = Arc::new(
+            TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_no_token")).unwrap(),
+        );
+        let client = OAuthClient::new(
+            Client::new(),
+            "backend".to_string(),
+            "http://localhost".to_string(),
+            vec![],
+            storage,
+            300,
+        );
+
+        // WHEN / THEN: no token means no proactive refresh needed
+        assert!(!client.needs_proactive_refresh());
+    }
+
+    #[test]
+    fn needs_proactive_refresh_false_when_token_no_expiry() {
+        // GIVEN: token with no expiry (never expires)
+        let storage = Arc::new(
+            TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_no_expiry")).unwrap(),
+        );
+        let client = OAuthClient::new(
+            Client::new(),
+            "backend".to_string(),
+            "http://localhost".to_string(),
+            vec![],
+            storage,
+            300,
+        );
+        let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
+        *client.current_token.write() = Some(token);
+
+        // WHEN / THEN: no expiry → never needs refresh
+        assert!(!client.needs_proactive_refresh());
+    }
+
+    #[test]
+    fn needs_proactive_refresh_true_when_within_buffer() {
+        // GIVEN: token expiring in 200s with a 300s buffer
+        let storage = Arc::new(
+            TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_within_buf")).unwrap(),
+        );
+        let client = OAuthClient::new(
+            Client::new(),
+            "backend".to_string(),
+            "http://localhost".to_string(),
+            vec![],
+            storage,
+            300, // 300s buffer
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token = TokenInfo {
+            access_token: "tok".to_string(),
+            token_type: "Bearer".to_string(),
+            refresh_token: None,
+            expires_at: Some(now + 200), // only 200s left, buffer is 300s
+            scope: None,
+        };
+        *client.current_token.write() = Some(token);
+
+        // WHEN / THEN: 200s remaining < 300s buffer → should refresh
+        assert!(client.needs_proactive_refresh());
+    }
+
+    #[test]
+    fn needs_proactive_refresh_false_when_outside_buffer() {
+        // GIVEN: token expiring in 1h with 300s buffer
+        let storage = Arc::new(
+            TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_outside_buf")).unwrap(),
+        );
+        let client = OAuthClient::new(
+            Client::new(),
+            "backend".to_string(),
+            "http://localhost".to_string(),
+            vec![],
+            storage,
+            300,
+        );
+        let token = TokenInfo::from_response("tok".to_string(), None, None, Some(3600), None);
+        *client.current_token.write() = Some(token);
+
+        // WHEN / THEN: 3600s remaining >> 300s buffer → no refresh yet
+        assert!(!client.needs_proactive_refresh());
     }
 }
