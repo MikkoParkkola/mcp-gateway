@@ -9,6 +9,7 @@ use figment::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::routing_profile::RoutingProfileConfig;
 use crate::security::policy::ToolPolicyConfig;
 use crate::{Error, Result};
 
@@ -44,6 +45,17 @@ pub struct Config {
     pub security: SecurityConfig,
     /// Webhook receiver configuration
     pub webhooks: WebhookConfig,
+    /// Routing profiles for session-scoped tool access control
+    #[serde(default)]
+    pub routing_profiles: HashMap<String, RoutingProfileConfig>,
+    /// Name of the routing profile applied to new sessions.
+    /// Defaults to `"default"` (allow-all when not explicitly configured).
+    #[serde(default = "default_routing_profile")]
+    pub default_routing_profile: String,
+}
+
+fn default_routing_profile() -> String {
+    "default".to_string()
 }
 
 /// Cache configuration for response caching
