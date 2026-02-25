@@ -63,6 +63,10 @@ pub enum Command {
     #[command(subcommand, about = "Capability management commands")]
     Cap(CapCommand),
 
+    /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
+    #[command(subcommand, about = "Certificate lifecycle management (init-ca, issue-server, issue-client)")]
+    Tls(TlsCommand),
+
     /// Generate a starter gateway.yaml with sensible defaults
     #[command(about = "Create a new gateway configuration file")]
     Init {
@@ -231,5 +235,88 @@ pub enum CapCommand {
         /// Root directory containing capability definitions to index
         #[arg(short = 'c', long, default_value = "capabilities")]
         capabilities: PathBuf,
+    },
+}
+
+/// TLS certificate lifecycle subcommands (RFC-0051)
+#[derive(Subcommand, Debug)]
+pub enum TlsCommand {
+    /// Generate a self-signed Root CA certificate and private key.
+    ///
+    /// Store the CA key offline (or in a vault). Use the CA cert as the
+    /// `ca_cert` path in `gateway.yaml`.
+    #[command(about = "Generate a Root CA certificate and key")]
+    InitCa {
+        /// Common Name for the CA certificate (e.g. "MCP Gateway Root CA")
+        #[arg(long, default_value = "MCP Gateway Root CA")]
+        cn: String,
+
+        /// Validity period in days
+        #[arg(long, default_value_t = 3650)]
+        validity_days: u32,
+
+        /// Directory to write `ca.crt` and `ca.key` into
+        #[arg(short, long, default_value = "/etc/mcp-gateway/tls")]
+        out: PathBuf,
+    },
+
+    /// Issue a server certificate signed by the CA.
+    #[command(about = "Issue a server certificate (for the gateway)")]
+    IssueServer {
+        /// Path to the CA certificate file
+        #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.crt")]
+        ca_cert: PathBuf,
+
+        /// Path to the CA private key file
+        #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.key")]
+        ca_key: PathBuf,
+
+        /// Common Name (e.g. "gateway.company.com")
+        #[arg(long)]
+        cn: String,
+
+        /// Comma-separated SAN DNS names (e.g. "gateway.company.com,localhost")
+        #[arg(long, default_value = "")]
+        san_dns: String,
+
+        /// Validity period in days
+        #[arg(long, default_value_t = 365)]
+        validity_days: u32,
+
+        /// Directory to write `server.crt` and `server.key`
+        #[arg(short, long, default_value = "/etc/mcp-gateway/tls")]
+        out: PathBuf,
+    },
+
+    /// Issue a client certificate for an agent, signed by the CA.
+    #[command(about = "Issue a client certificate (for an agent)")]
+    IssueClient {
+        /// Path to the CA certificate file
+        #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.crt")]
+        ca_cert: PathBuf,
+
+        /// Path to the CA private key file
+        #[arg(long, default_value = "/etc/mcp-gateway/tls/ca.key")]
+        ca_key: PathBuf,
+
+        /// Common Name for the client (e.g. "claude-code-agent")
+        #[arg(long)]
+        cn: String,
+
+        /// Organisational Unit (e.g. "engineering")
+        #[arg(long)]
+        ou: Option<String>,
+
+        /// SPIFFE URI SAN (e.g. `spiffe://company.com/agent/claude-code`)
+        #[arg(long)]
+        spiffe_uri: Option<String>,
+
+        /// Validity period in days (default 1 day for short-lived certs)
+        #[arg(long, default_value_t = 1)]
+        validity_days: u32,
+
+        /// Directory to write `<cn>.crt` and `<cn>.key`
+        #[arg(short, long, default_value = ".")]
+        out: PathBuf,
     },
 }

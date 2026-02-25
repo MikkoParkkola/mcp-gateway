@@ -14,10 +14,11 @@ use mcp_gateway::{
         AuthTemplate, CapabilityExecutor, CapabilityLoader, OpenApiConverter,
         parse_capability_file, validate_capability,
     },
-    cli::{CapCommand, Cli, Command},
+    cli::{CapCommand, Cli, Command, TlsCommand},
     config::Config,
     discovery::AutoDiscovery,
     gateway::Gateway,
+    mtls::{CaParams, CertGenerator, LeafCertParams},
     registry::Registry,
     setup_tracing,
     validator::ValidateConfig,
@@ -40,6 +41,7 @@ async fn main() -> ExitCode {
             with_examples,
         }) => run_init_command(&output, with_examples),
         Some(Command::Cap(cap_cmd)) => run_cap_command(cap_cmd).await,
+        Some(Command::Tls(tls_cmd)) => run_tls_command(tls_cmd),
         Some(Command::Stats { url, price }) => run_stats_command(&url, price).await,
         Some(Command::Validate {
             paths,
@@ -153,6 +155,162 @@ meta_mcp:
         Err(e) => {
             eprintln!("Error: Failed to write {}: {e}", output.display());
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run `mcp-gateway tls` subcommands.
+#[allow(clippy::too_many_lines)]
+fn run_tls_command(cmd: TlsCommand) -> ExitCode {
+    match cmd {
+        TlsCommand::InitCa {
+            cn,
+            validity_days,
+            out,
+        } => {
+            println!("Generating Root CA: {cn}");
+            let params = CaParams {
+                cn: &cn,
+                validity_days,
+            };
+            match CertGenerator::init_ca(&params) {
+                Ok(cert) => {
+                    if let Err(e) = CertGenerator::write_to_dir(&cert, &out, "ca") {
+                        eprintln!("Error: Failed to write CA files: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    println!("  CA cert: {}", out.join("ca.crt").display());
+                    println!("  CA key:  {}", out.join("ca.key").display());
+                    println!();
+                    println!("Keep the CA key offline or in a vault.");
+                    println!("Add to gateway.yaml:");
+                    println!("  mtls:");
+                    println!("    ca_cert: \"{}\"", out.join("ca.crt").display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: CA generation failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        TlsCommand::IssueServer {
+            ca_cert,
+            ca_key,
+            cn,
+            san_dns,
+            validity_days,
+            out,
+        } => {
+            println!("Issuing server certificate for: {cn}");
+            let ca_cert_pem = match std::fs::read_to_string(&ca_cert) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: Cannot read CA cert '{}': {e}", ca_cert.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let ca_key_pem = match std::fs::read_to_string(&ca_key) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: Cannot read CA key '{}': {e}", ca_key.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let sans: Vec<String> = san_dns
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
+            let params = LeafCertParams {
+                cn: &cn,
+                ou: None,
+                san_dns: sans,
+                san_uris: vec![],
+                validity_days,
+            };
+            match CertGenerator::issue_leaf(&params, &ca_cert_pem, &ca_key_pem) {
+                Ok(cert) => {
+                    if let Err(e) = CertGenerator::write_to_dir(&cert, &out, "server") {
+                        eprintln!("Error: Failed to write server cert files: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    println!("  Cert: {}", out.join("server.crt").display());
+                    println!("  Key:  {}", out.join("server.key").display());
+                    println!();
+                    println!("Add to gateway.yaml:");
+                    println!("  mtls:");
+                    println!("    enabled: true");
+                    println!("    server_cert: \"{}\"", out.join("server.crt").display());
+                    println!("    server_key:  \"{}\"", out.join("server.key").display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: Server cert generation failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        TlsCommand::IssueClient {
+            ca_cert,
+            ca_key,
+            cn,
+            ou,
+            spiffe_uri,
+            validity_days,
+            out,
+        } => {
+            println!("Issuing client certificate for: {cn}");
+            let ca_cert_pem = match std::fs::read_to_string(&ca_cert) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: Cannot read CA cert '{}': {e}", ca_cert.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let ca_key_pem = match std::fs::read_to_string(&ca_key) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: Cannot read CA key '{}': {e}", ca_key.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let san_uris = spiffe_uri.map(|u| vec![u]).unwrap_or_default();
+            let params = LeafCertParams {
+                cn: &cn,
+                ou: ou.as_deref(),
+                san_dns: vec![],
+                san_uris,
+                validity_days,
+            };
+            let stem = cn.replace(['/', ' '], "-");
+            match CertGenerator::issue_leaf(&params, &ca_cert_pem, &ca_key_pem) {
+                Ok(cert) => {
+                    if let Err(e) = CertGenerator::write_to_dir(&cert, &out, &stem) {
+                        eprintln!("Error: Failed to write client cert files: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    println!("  Cert: {}", out.join(format!("{stem}.crt")).display());
+                    println!("  Key:  {}", out.join(format!("{stem}.key")).display());
+                    println!();
+                    println!("Configure the agent:");
+                    println!(
+                        "  export MCP_GATEWAY_CLIENT_CERT={}",
+                        out.join(format!("{stem}.crt")).display()
+                    );
+                    println!(
+                        "  export MCP_GATEWAY_CLIENT_KEY={}",
+                        out.join(format!("{stem}.key")).display()
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: Client cert generation failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
         }
     }
 }
