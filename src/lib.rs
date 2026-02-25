@@ -36,6 +36,7 @@ pub mod error;
 pub mod failsafe;
 pub mod gateway;
 pub mod idempotency;
+pub mod key_server;
 pub mod kill_switch;
 pub mod mtls;
 pub mod oauth;

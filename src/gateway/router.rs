@@ -14,12 +14,13 @@ use serde_json::{Value, json};
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 use tracing::{debug, error, info, warn};
 
-use super::auth::{AuthenticatedClient, ResolvedAuthConfig, auth_middleware};
+use super::auth::{AuthState, AuthenticatedClient, ResolvedAuthConfig, auth_middleware};
 use super::meta_mcp::MetaMcp;
 use super::proxy::ProxyManager;
 use super::streaming::{NotificationMultiplexer, create_sse_response};
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
+use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::{CertIdentity, MtlsPolicy};
 use crate::protocol::{ElicitationCreateParams, JsonRpcResponse, RequestId, SamplingCreateMessageParams};
 use crate::security::{ToolPolicy, sanitize_json_value, validate_url_not_ssrf};
@@ -38,8 +39,10 @@ pub struct AppState {
     pub proxy_manager: Arc<ProxyManager>,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
-    /// Authentication configuration
+    /// Authentication configuration (static keys)
     pub auth_config: Arc<ResolvedAuthConfig>,
+    /// Key server for OIDC-issued temporary tokens (optional)
+    pub key_server: Option<Arc<KeyServer>>,
     /// Tool access policy
     pub tool_policy: Arc<ToolPolicy>,
     /// Certificate-based mTLS tool access policy
@@ -56,9 +59,18 @@ pub struct AppState {
 
 /// Create the router
 pub fn create_router(state: Arc<AppState>) -> Router {
-    let auth_config = Arc::clone(&state.auth_config);
+    let auth_state = AuthState {
+        auth_config: Arc::clone(&state.auth_config),
+        key_server: state.key_server.clone(),
+    };
 
-    Router::new()
+    // Key server routes run outside the standard auth middleware (they ARE the auth step).
+    let maybe_ks_routes: Option<Router> = state
+        .key_server
+        .as_ref()
+        .map(|ks| key_server_routes(Arc::clone(ks)));
+
+    let mut app = Router::new()
         .route("/health", get(health_handler))
         .route(
             "/mcp",
@@ -74,11 +86,18 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(sse_deprecated_handler).post(sse_deprecated_handler),
         )
         // Authentication middleware (applied before other layers)
-        .layer(middleware::from_fn_with_state(auth_config, auth_middleware))
+        .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .with_state(Arc::clone(&state));
+
+    // Merge key server routes (unauthenticated) if enabled
+    if let Some(ks_routes) = maybe_ks_routes {
+        app = app.merge(ks_routes);
+    }
+
+    app
 }
 
 /// GET /mcp handler - SSE stream for server→client notifications

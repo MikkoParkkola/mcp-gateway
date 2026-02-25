@@ -27,6 +27,7 @@ use serde_json::json;
 use tracing::{debug, warn};
 
 use crate::config::AuthConfig;
+use crate::key_server::KeyServer;
 
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
@@ -229,12 +230,28 @@ impl AuthenticatedClient {
     }
 }
 
+/// Combined auth state: static config + optional key server.
+#[derive(Clone)]
+pub struct AuthState {
+    /// Static key / bearer token configuration.
+    pub auth_config: Arc<ResolvedAuthConfig>,
+    /// Key server for OIDC-issued temporary tokens (optional).
+    pub key_server: Option<Arc<KeyServer>>,
+}
+
 /// Authentication middleware
+///
+/// Validation order (for performance and backward compatibility):
+/// 1. Static auth (existing `ResolvedAuthConfig`) — O(n) comparison.
+/// 2. Temporary token (key server `DashMap` lookup) — O(1).
+/// 3. Reject.
 pub async fn auth_middleware(
-    State(auth_config): State<Arc<ResolvedAuthConfig>>,
+    State(state): State<AuthState>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let auth_config = &state.auth_config;
+
     // If auth is disabled, pass through with anonymous client
     if !auth_config.enabled {
         request.extensions_mut().insert(AuthenticatedClient {
@@ -279,21 +296,30 @@ pub async fn auth_middleware(
         );
     };
 
+    // 1. Try static auth (existing behavior)
     if let Some(client) = auth_config.validate_token(token) {
-        // Check rate limit
         if !auth_config.check_rate_limit(&client.name) {
             warn!(client = %client.name, path = %path, "Rate limit exceeded");
             return rate_limited_response(&client.name);
         }
-
-        debug!(client = %client.name, path = %path, "Authenticated request");
-        // Inject client info for downstream handlers
+        debug!(client = %client.name, path = %path, "Authenticated via static key");
         request.extensions_mut().insert(client);
-        next.run(request).await
-    } else {
-        warn!(path = %path, "Invalid token");
-        unauthorized_response("Invalid token")
+        return next.run(request).await;
     }
+
+    // 2. Try temporary token (key server)
+    if let Some(ref ks) = state.key_server {
+        if let Some((client, identity_token)) = ks.validate_token(token).await {
+            debug!(client = %client.name, path = %path, "Authenticated via temporary token");
+            request.extensions_mut().insert(identity_token.identity.clone());
+            request.extensions_mut().insert(client);
+            return next.run(request).await;
+        }
+    }
+
+    // 3. Reject
+    warn!(path = %path, "Invalid token");
+    unauthorized_response("Invalid token")
 }
 
 /// Create a 401 Unauthorized response
