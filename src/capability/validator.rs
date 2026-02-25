@@ -382,9 +382,15 @@ fn check_placeholders_in_text(
         // env.VAR — environment variable substitution
         // keychain.KEY — macOS Keychain lookup
         // oauth.PROVIDER — OAuth token injection
+        // access_token / refresh_token — OAuth runtime injection
+        // api_key — runtime API key injection
+        const RUNTIME_PLACEHOLDERS: &[&str] = &[
+            "access_token", "refresh_token", "api_key", "bearer_token", "auth_token",
+        ];
         if placeholder.starts_with("env.")
             || placeholder.starts_with("keychain.")
             || placeholder.starts_with("oauth.")
+            || RUNTIME_PLACEHOLDERS.contains(&placeholder.as_str())
         {
             continue;
         }
