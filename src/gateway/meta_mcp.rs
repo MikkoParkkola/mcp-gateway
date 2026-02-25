@@ -41,6 +41,7 @@ use super::meta_mcp_helpers::{
     extract_client_version, extract_price_per_million, extract_required_str, extract_search_limit,
     parse_tool_arguments, ranked_results_to_json, tool_matches_query, wrap_tool_success,
 };
+use super::trace;
 use super::webhooks::WebhookRegistry;
 
 // ============================================================================
@@ -265,7 +266,7 @@ impl MetaMcp {
         }
     }
 
-    /// List all servers, including kill-switch state per server.
+    /// List all servers, including kill-switch state and circuit-breaker state per server.
     #[allow(clippy::unnecessary_wraps)]
     fn list_servers(&self) -> Result<Value> {
         let mut servers: Vec<Value> = self
@@ -280,7 +281,7 @@ impl MetaMcp {
                     "running": status.running,
                     "transport": status.transport,
                     "tools_count": status.tools_cached,
-                    "circuit_state": status.circuit_state,
+                    "circuit_breaker": status.circuit_state,
                     "status": if killed { "disabled" } else { "active" }
                 })
             })
@@ -295,7 +296,7 @@ impl MetaMcp {
                 "running": true,
                 "transport": "capability",
                 "tools_count": status.capabilities_count,
-                "circuit_state": "Closed",
+                "circuit_breaker": "closed",
                 "status": if killed { "disabled" } else { "active" }
             }));
         }
@@ -523,9 +524,35 @@ impl MetaMcp {
     /// explicit key is supplied, protecting against exact-duplicate LLM retries
     /// even without client cooperation.
     async fn invoke_tool(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+        // Generate a unique trace ID for this invocation and scope all work under it.
+        // The ID is propagated to backend HTTP calls via the X-Trace-Id header and
+        // returned to the caller in the response JSON so operators can correlate logs.
+        let trace_id = trace::generate();
+        let trace_id_clone = trace_id.clone();
+        trace::with_trace_id(trace_id, async move {
+            self.invoke_tool_traced(args, session_id, &trace_id_clone).await
+        })
+        .await
+    }
+
+    /// Inner implementation of [`invoke_tool`] executed within a trace-ID scope.
+    ///
+    /// The `trace_id` is already installed as the task-local [`trace::TRACE_ID`]
+    /// by the caller and is passed explicitly here only so that it can be embedded
+    /// in the response without a second task-local lookup.
+    #[allow(clippy::too_many_lines)] // Complex dispatch logic; further splitting would harm readability
+    async fn invoke_tool_traced(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        trace_id: &str,
+    ) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         let arguments = parse_tool_arguments(args)?;
+
+        // Attach trace ID to the current span so it appears in all log lines.
+        tracing::Span::current().record("trace_id", trace_id);
 
         // --- Kill switch check (BEFORE anything else) ---
         if self.kill_switch.is_killed(server) {
@@ -548,15 +575,18 @@ impl MetaMcp {
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
             match enforce(idem_cache, key)? {
                 GuardOutcome::CachedResult(cached) => {
-                    debug!(server, tool, key, "Idempotency cache hit — returning stored result");
+                    debug!(server, tool, key, trace_id, "Idempotency cache hit — returning stored result");
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }
                     let predictions = self.record_and_predict(session_id, &tool_key);
-                    return Ok(augment_with_predictions(cached, predictions));
+                    return Ok(augment_with_trace(
+                        augment_with_predictions(cached, predictions),
+                        trace_id,
+                    ));
                 }
                 GuardOutcome::Proceed => {
-                    debug!(server, tool, key, "Idempotency key registered as in-flight");
+                    debug!(server, tool, key, trace_id, "Idempotency key registered as in-flight");
                 }
             }
         }
@@ -565,7 +595,7 @@ impl MetaMcp {
         if let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             if let Some(cached) = cache.get(&cache_key) {
-                debug!(server = server, tool = tool, "Cache hit");
+                debug!(server = server, tool = tool, trace_id, "Cache hit");
                 if let Some(ref stats) = self.stats {
                     stats.record_cache_hit();
                 }
@@ -574,7 +604,10 @@ impl MetaMcp {
                     idem_cache.mark_completed(key, cached.clone());
                 }
                 let predictions = self.record_and_predict(session_id, &tool_key);
-                return Ok(augment_with_predictions(cached, predictions));
+                return Ok(augment_with_trace(
+                    augment_with_predictions(cached, predictions),
+                    trace_id,
+                ));
             }
         }
 
@@ -586,7 +619,7 @@ impl MetaMcp {
             ranker.record_use(server, tool);
         }
 
-        debug!(server = server, tool = tool, "Invoking tool");
+        debug!(server = server, tool = tool, trace_id, "Invoking tool");
 
         // Dispatch to the appropriate backend.
         let dispatch_result = self.dispatch_to_backend(server, tool, arguments.clone()).await;
@@ -607,6 +640,7 @@ impl MetaMcp {
                 if auto_killed {
                     warn!(
                         server = server,
+                        trace_id,
                         "Server auto-killed by error budget exhaustion"
                     );
                 }
@@ -629,19 +663,22 @@ impl MetaMcp {
         if let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             cache.set(&cache_key, result.clone(), self.default_cache_ttl);
-            debug!(server = server, tool = tool, ttl = ?self.default_cache_ttl, "Cached result");
+            debug!(server = server, tool = tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
         }
 
         // Transition idempotency entry to Completed.
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
             idem_cache.mark_completed(key, result.clone());
-            debug!(server, tool, key, "Idempotency entry marked completed");
+            debug!(server, tool, key, trace_id, "Idempotency entry marked completed");
         }
 
         // Record transition and compute predictions after successful invocation.
         let predictions = self.record_and_predict(session_id, &tool_key);
 
-        Ok(augment_with_predictions(result, predictions))
+        Ok(augment_with_trace(
+            augment_with_predictions(result, predictions),
+            trace_id,
+        ))
     }
 
     /// Record the session transition and return predictions for the current tool.
@@ -709,8 +746,10 @@ impl MetaMcp {
         Ok(response.result.unwrap_or(json!(null)))
     }
 
-    /// Get gateway statistics including per-backend error budget status.
+    /// Get gateway statistics including per-backend error budget and circuit-breaker status.
     async fn get_stats(&self, args: &Value) -> Result<Value> {
+        use super::meta_mcp_helpers::build_circuit_breaker_stats_json;
+
         let price_per_million = extract_price_per_million(args);
 
         let stats = self
@@ -732,10 +771,10 @@ impl MetaMcp {
         let snapshot = stats.snapshot(total_tools);
         let mut response = build_stats_response(&snapshot, price_per_million);
 
+        let all_backends = self.backends.all();
+
         // Append per-backend safety status (kill switch + error budget)
-        let safety: Vec<Value> = self
-            .backends
-            .all()
+        let safety: Vec<Value> = all_backends
             .iter()
             .map(|b| {
                 let killed = self.kill_switch.is_killed(&b.name);
@@ -745,8 +784,15 @@ impl MetaMcp {
             })
             .collect();
 
+        // Append per-backend circuit-breaker stats
+        let cb_stats: Vec<Value> = all_backends
+            .iter()
+            .map(|b| build_circuit_breaker_stats_json(&b.name, &b.circuit_breaker_stats()))
+            .collect();
+
         if let Value::Object(ref mut map) = response {
             map.insert("server_safety".to_string(), Value::Array(safety));
+            map.insert("circuit_breakers".to_string(), Value::Array(cb_stats));
         }
 
         Ok(response)
@@ -1271,4 +1317,113 @@ fn augment_with_predictions(mut result: Value, predictions: Vec<Value>) -> Value
         );
     }
     result
+}
+
+/// Attach `trace_id` to an invoke result so callers can correlate gateway logs
+/// with backend logs.
+///
+/// The `trace_id` is always inserted; this function never returns the original
+/// `result` unmodified (the contract guarantees the field is present).
+fn augment_with_trace(mut result: Value, trace_id: &str) -> Value {
+    if let Value::Object(ref mut map) = result {
+        map.insert("trace_id".to_string(), json!(trace_id));
+    }
+    result
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::trace;
+
+    // ── augment_with_trace ────────────────────────────────────────────────
+
+    #[test]
+    fn augment_with_trace_inserts_trace_id_field() {
+        // GIVEN: a JSON object result and a trace ID
+        let result = json!({"content": [{"type": "text", "text": "hello"}]});
+        let trace_id = "gw-abc123";
+        // WHEN: augmenting with the trace ID
+        let augmented = augment_with_trace(result, trace_id);
+        // THEN: trace_id field is present with the correct value
+        assert_eq!(augmented["trace_id"], "gw-abc123");
+    }
+
+    #[test]
+    fn augment_with_trace_preserves_existing_fields() {
+        // GIVEN: a result with content and predicted_next
+        let result = json!({
+            "content": [{"type": "text", "text": "ok"}],
+            "predicted_next": [{"tool": "foo", "confidence": 0.8}]
+        });
+        // WHEN: augmenting with a trace ID
+        let augmented = augment_with_trace(result, "gw-xyz");
+        // THEN: existing fields are preserved
+        assert!(augmented.get("content").is_some());
+        assert!(augmented.get("predicted_next").is_some());
+        assert_eq!(augmented["trace_id"], "gw-xyz");
+    }
+
+    #[test]
+    fn augment_with_trace_does_not_modify_non_object_values() {
+        // GIVEN: a non-object JSON value (edge case)
+        let result = json!(null);
+        // WHEN: augmenting
+        let augmented = augment_with_trace(result, "gw-abc");
+        // THEN: null is returned unchanged (no panic)
+        assert!(augmented.is_null());
+    }
+
+    // ── augment_with_predictions ──────────────────────────────────────────
+
+    #[test]
+    fn augment_with_predictions_no_op_when_empty() {
+        // GIVEN: empty predictions
+        let result = json!({"content": []});
+        let original = result.clone();
+        // WHEN: augmenting with empty predictions
+        let augmented = augment_with_predictions(result, vec![]);
+        // THEN: result is unchanged
+        assert_eq!(augmented, original);
+    }
+
+    #[test]
+    fn augment_with_predictions_inserts_predicted_next() {
+        // GIVEN: one prediction
+        let result = json!({"content": []});
+        let predictions = vec![json!({"tool": "foo:bar", "confidence": 0.9})];
+        // WHEN: augmenting
+        let augmented = augment_with_predictions(result, predictions);
+        // THEN: predicted_next field is present
+        let preds = augmented["predicted_next"].as_array().unwrap();
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0]["tool"], "foo:bar");
+    }
+
+    // ── trace ID generation roundtrip ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn invoke_tool_trace_id_is_accessible_inside_scope() {
+        // GIVEN: a fresh trace ID
+        let id = trace::generate();
+        // WHEN: inside a with_trace_id scope
+        let observed = trace::with_trace_id(id.clone(), async {
+            trace::current()
+        })
+        .await;
+        // THEN: the same ID is visible inside the scope
+        assert_eq!(observed, Some(id));
+    }
+
+    #[tokio::test]
+    async fn trace_id_not_accessible_outside_scope() {
+        // GIVEN: no active scope
+        // WHEN: reading outside any with_trace_id scope
+        // THEN: current() returns None
+        assert_eq!(trace::current(), None);
+    }
 }

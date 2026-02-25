@@ -417,8 +417,10 @@ impl Backend {
 
         // Check failsafe
         if !self.failsafe.can_proceed() {
-            tracing::warn!("Request rejected by failsafe mechanisms");
-            return Err(Error::BackendUnavailable(self.name.clone()));
+            let cb_stats = self.failsafe.circuit_breaker.stats();
+            let msg = crate::failsafe::build_circuit_breaker_error(&self.name, &cb_stats);
+            tracing::warn!(backend = %self.name, "Request rejected by circuit breaker");
+            return Err(Error::json_rpc(-32000, msg));
         }
 
         // Acquire semaphore
@@ -495,9 +497,14 @@ impl Backend {
                 .read()
                 .as_ref()
                 .map_or(0, std::vec::Vec::len),
-            circuit_state: format!("{:?}", self.failsafe.circuit_breaker.state()),
+            circuit_state: self.failsafe.circuit_breaker.state().as_str().to_string(),
             request_count: self.request_count.load(Ordering::Relaxed),
         }
+    }
+
+    /// Get circuit breaker stats for this backend.
+    pub fn circuit_breaker_stats(&self) -> crate::failsafe::CircuitBreakerStats {
+        self.failsafe.circuit_breaker.stats()
     }
 }
 
