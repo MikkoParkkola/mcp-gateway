@@ -98,6 +98,10 @@ metrics = ["dep:metrics-exporter-prometheus"]
 name = "mcp-gateway"
 path = "src/main.rs"
 
+[profile.dev]
+debug = 0               # No debug symbols — biggest size saver (~50%)
+strip = true            # Strip remaining metadata
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
