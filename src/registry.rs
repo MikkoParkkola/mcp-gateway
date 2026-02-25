@@ -3,6 +3,7 @@
 //! Provides discovery and installation of pre-built capability definitions
 //! from both local capabilities directory and remote GitHub sources.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,26 +30,81 @@ pub struct RegistryEntry {
     pub requires_key: bool,
 }
 
-/// Capability registry index
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Capability registry index with O(1) name lookup.
+///
+/// The `name_index` field is excluded from serialisation (`#[serde(skip)]`)
+/// and rebuilt automatically by [`RegistryIndex::new`] and by the custom
+/// `Deserialize` impl (via the `#[serde(from)]` bridge).  All public
+/// constructors go through `new`, so the index is always valid.
+#[derive(Debug, Clone, Serialize)]
 pub struct RegistryIndex {
     /// Registry format version
     pub version: String,
-    /// All available capabilities
+    /// All available capabilities (insertion-order preserved for display)
     pub capabilities: Vec<RegistryEntry>,
+    /// O(1) name → `capabilities` index; not serialised.
+    #[serde(skip)]
+    name_index: HashMap<String, usize>,
 }
 
+// ── Wire format used exclusively by serde deserialization ────────────────────
+
+/// Intermediate wire-format type used by serde deserialization.
+///
+/// `RegistryIndex` itself uses `#[serde(from = "RegistryIndexWire")]` so that
+/// the `name_index` is rebuilt after every deserialization without requiring
+/// hand-written `Deserialize` impl.
+#[derive(Deserialize)]
+struct RegistryIndexWire {
+    #[serde(default = "default_version")]
+    version: String,
+    #[serde(default)]
+    capabilities: Vec<RegistryEntry>,
+}
+
+fn default_version() -> String {
+    "2.0".to_string()
+}
+
+impl From<RegistryIndexWire> for RegistryIndex {
+    fn from(wire: RegistryIndexWire) -> Self {
+        Self::from_parts(wire.version, wire.capabilities)
+    }
+}
+
+impl<'de> Deserialize<'de> for RegistryIndex {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let wire = RegistryIndexWire::deserialize(deserializer)?;
+        Ok(Self::from(wire))
+    }
+}
+
+// ── impl ─────────────────────────────────────────────────────────────────────
+
 impl RegistryIndex {
-    /// Create a new registry index
+    /// Create a new registry index, building the O(1) name lookup.
     #[must_use]
     pub fn new(capabilities: Vec<RegistryEntry>) -> Self {
+        Self::from_parts("2.0".to_string(), capabilities)
+    }
+
+    /// Internal constructor that builds the index from arbitrary `version` + `capabilities`.
+    fn from_parts(version: String, capabilities: Vec<RegistryEntry>) -> Self {
+        let name_index = capabilities
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.name.clone(), i))
+            .collect();
         Self {
-            version: "2.0".to_string(),
+            version,
             capabilities,
+            name_index,
         }
     }
 
-    /// Search capabilities by name, description, or tags
+    /// Search capabilities by name, description, or tags — O(n) full-scan (intentional).
+    ///
+    /// Full-text search must visit every entry; the O(1) index is not applicable here.
     #[must_use]
     pub fn search(&self, query: &str) -> Vec<&RegistryEntry> {
         let query_lower = query.to_lowercase();
@@ -62,10 +118,12 @@ impl RegistryIndex {
             .collect()
     }
 
-    /// Find capability by exact name
+    /// Find capability by exact name — O(1) via the name index.
     #[must_use]
     pub fn find(&self, name: &str) -> Option<&RegistryEntry> {
-        self.capabilities.iter().find(|e| e.name == name)
+        self.name_index
+            .get(name)
+            .map(|&i| &self.capabilities[i])
     }
 }
 
@@ -248,27 +306,22 @@ mod tests {
         assert_eq!(deserialized.tags.len(), 1);
     }
 
+    fn make_entry(name: &str, description: &str, path: &str, tags: Vec<&str>, requires_key: bool) -> RegistryEntry {
+        RegistryEntry {
+            name: name.to_string(),
+            description: description.to_string(),
+            path: path.to_string(),
+            tags: tags.into_iter().map(String::from).collect(),
+            requires_key,
+        }
+    }
+
     #[test]
     fn test_registry_search() {
-        let index = RegistryIndex {
-            version: "1.0".to_string(),
-            capabilities: vec![
-                RegistryEntry {
-                    name: "stripe_charges".to_string(),
-                    description: "List Stripe charges".to_string(),
-                    path: "finance/stripe_charges.yaml".to_string(),
-                    tags: vec!["finance".to_string(), "stripe".to_string()],
-                    requires_key: true,
-                },
-                RegistryEntry {
-                    name: "gmail_send".to_string(),
-                    description: "Send email via Gmail".to_string(),
-                    path: "communication/gmail_send.yaml".to_string(),
-                    tags: vec!["email".to_string(), "google".to_string()],
-                    requires_key: true,
-                },
-            ],
-        };
+        let index = RegistryIndex::new(vec![
+            make_entry("stripe_charges", "List Stripe charges", "finance/stripe_charges.yaml", vec!["finance", "stripe"], true),
+            make_entry("gmail_send", "Send email via Gmail", "communication/gmail_send.yaml", vec!["email", "google"], true),
+        ]);
 
         let results = index.search("stripe");
         assert_eq!(results.len(), 1);
@@ -284,18 +337,9 @@ mod tests {
 
     #[test]
     fn test_registry_find_exact() {
-        let index = RegistryIndex {
-            version: "1.0".to_string(),
-            capabilities: vec![
-                RegistryEntry {
-                    name: "test_tool".to_string(),
-                    description: "Test".to_string(),
-                    path: "test.yaml".to_string(),
-                    tags: vec![],
-                    requires_key: false,
-                },
-            ],
-        };
+        let index = RegistryIndex::new(vec![
+            make_entry("test_tool", "Test", "test.yaml", vec![], false),
+        ]);
 
         let result = index.find("test_tool");
         assert!(result.is_some());
@@ -307,18 +351,9 @@ mod tests {
 
     #[test]
     fn test_registry_search_case_insensitive() {
-        let index = RegistryIndex {
-            version: "1.0".to_string(),
-            capabilities: vec![
-                RegistryEntry {
-                    name: "MyTool".to_string(),
-                    description: "Description".to_string(),
-                    path: "tool.yaml".to_string(),
-                    tags: vec!["TAG".to_string()],
-                    requires_key: false,
-                },
-            ],
-        };
+        let index = RegistryIndex::new(vec![
+            make_entry("MyTool", "Description", "tool.yaml", vec!["TAG"], false),
+        ]);
 
         let results = index.search("mytool");
         assert_eq!(results.len(), 1);
@@ -329,18 +364,9 @@ mod tests {
 
     #[test]
     fn test_registry_search_empty_query() {
-        let index = RegistryIndex {
-            version: "1.0".to_string(),
-            capabilities: vec![
-                RegistryEntry {
-                    name: "tool1".to_string(),
-                    description: "Desc".to_string(),
-                    path: "tool1.yaml".to_string(),
-                    tags: vec![],
-                    requires_key: false,
-                },
-            ],
-        };
+        let index = RegistryIndex::new(vec![
+            make_entry("tool1", "Desc", "tool1.yaml", vec![], false),
+        ]);
 
         let results = index.search("");
         assert_eq!(results.len(), 1);
@@ -367,6 +393,80 @@ mod tests {
         };
 
         assert!(!entry_no_key.requires_key);
+    }
+
+    // ── O(1) index tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn registry_index_find_is_o1_by_name() {
+        // GIVEN: an index with multiple entries
+        let index = RegistryIndex::new(vec![
+            make_entry("alpha", "A", "a.yaml", vec![], false),
+            make_entry("beta", "B", "b.yaml", vec![], false),
+            make_entry("gamma", "G", "g.yaml", vec![], false),
+        ]);
+        // WHEN: finding entries by exact name (O(1) path)
+        // THEN: the correct entries are returned
+        assert_eq!(index.find("alpha").unwrap().name, "alpha");
+        assert_eq!(index.find("gamma").unwrap().name, "gamma");
+        assert!(index.find("delta").is_none());
+    }
+
+    #[test]
+    fn registry_index_find_returns_none_for_prefix_match() {
+        // GIVEN: an index where "foo" exists but "fo" does not
+        let index = RegistryIndex::new(vec![
+            make_entry("foo", "Foo tool", "foo.yaml", vec![], false),
+        ]);
+        // WHEN: looking up a name prefix
+        let result = index.find("fo");
+        // THEN: None — find is exact-match only
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn registry_index_new_builds_index_for_all_entries() {
+        // GIVEN: a set of entries with unique names
+        let names = ["tool_a", "tool_b", "tool_c", "tool_d"];
+        let entries: Vec<_> = names
+            .iter()
+            .map(|n| make_entry(n, "desc", &format!("{n}.yaml"), vec![], false))
+            .collect();
+        let index = RegistryIndex::new(entries);
+        // WHEN: finding every name
+        // THEN: all are found via the O(1) index
+        for name in &names {
+            assert!(
+                index.find(name).is_some(),
+                "Expected '{name}' to be found in the index"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_index_serde_round_trip_rebuilds_name_index() {
+        // GIVEN: an index serialised to JSON
+        let original = RegistryIndex::new(vec![
+            make_entry("serde_tool", "Round-trip test", "serde.yaml", vec!["test"], false),
+        ]);
+        let json = serde_json::to_string(&original).unwrap();
+        // WHEN: deserialising back
+        let restored: RegistryIndex = serde_json::from_str(&json).unwrap();
+        // THEN: the O(1) index is rebuilt and find() works
+        let found = restored.find("serde_tool");
+        assert!(found.is_some(), "name_index must be rebuilt after deserialization");
+        assert_eq!(found.unwrap().name, "serde_tool");
+        // AND: a missing name still returns None
+        assert!(restored.find("nonexistent").is_none());
+    }
+
+    #[test]
+    fn registry_index_empty_index_find_returns_none() {
+        // GIVEN: an empty registry index
+        let index = RegistryIndex::new(vec![]);
+        // WHEN: finding any name
+        // THEN: None (no panic, no incorrect result)
+        assert!(index.find("anything").is_none());
     }
 
     #[tokio::test]
