@@ -6,6 +6,7 @@
 #
 # For high-frequency verification (every Write/Edit), use direct MCP instead.
 
+fulcrum: "1.0"
 name: metacognition_verify
 description: |
   Semantic NLI verification for LLM outputs. Detects contradictions and
@@ -13,6 +14,32 @@ description: |
 
   Use when: Verifying important outputs before accepting them.
   Returns: {passed: bool, confidence: float, failures: [...]}
+
+schema:
+  input:
+    type: object
+    properties:
+      text:
+        type: string
+        description: "Text to verify for contradictions and hallucinations"
+      context:
+        type: string
+        description: "Optional source context to verify against"
+    required: [text]
+  output:
+    type: object
+    properties:
+      passed:
+        type: boolean
+        description: "True if no contradictions detected"
+      confidence:
+        type: number
+        description: "Model confidence score (0.0–1.0)"
+      failures:
+        type: array
+        description: "List of contradiction descriptions"
+        items:
+          type: string
 
 providers:
   primary:
@@ -27,16 +54,6 @@ providers:
         - "--format"
         - "json"
       timeout_ms: 5000
-
-parameters:
-  text:
-    description: "Text to verify for contradictions and hallucinations"
-    type: string
-    required: true
-  context:
-    description: "Optional source context to verify against"
-    type: string
-    required: false
 
 examples:
   - name: "Verify consistent text"
