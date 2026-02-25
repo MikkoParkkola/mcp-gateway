@@ -19,6 +19,7 @@ use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
+use crate::key_server::{KeyServer, store::spawn_reaper};
 use crate::mtls::MtlsPolicy;
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
@@ -347,6 +348,33 @@ impl Gateway {
         // all permits to be returned (i.e., all in-flight requests complete).
         let inflight = Arc::new(tokio::sync::Semaphore::new(10_000));
 
+        // Create key server if enabled
+        let key_server = if self.config.key_server.enabled {
+            let mut ks_config = self.config.key_server.clone();
+            // Resolve admin token (expand env:VAR_NAME)
+            ks_config.admin_token = ks_config.resolve_admin_token();
+
+            let cleanup_interval =
+                std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
+            let ks = Arc::new(KeyServer::new(ks_config));
+
+            spawn_reaper(
+                Arc::clone(&ks.store),
+                cleanup_interval,
+                shutdown_tx.subscribe(),
+            );
+
+            info!(
+                token_ttl_secs = self.config.key_server.token_ttl_secs,
+                providers = self.config.key_server.oidc.len(),
+                policies = self.config.key_server.policies.len(),
+                "Key server enabled"
+            );
+            Some(ks)
+        } else {
+            None
+        };
+
         let state = Arc::new(AppState {
             backends: Arc::clone(&self.backends),
             meta_mcp,
@@ -355,6 +383,7 @@ impl Gateway {
             proxy_manager,
             streaming_config: self.config.streaming.clone(),
             auth_config,
+            key_server,
             tool_policy,
             mtls_policy,
             sanitize_input: self.config.security.sanitize_input,

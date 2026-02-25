@@ -11,7 +11,7 @@ pub mod streaming;
 pub mod trace;
 pub mod webhooks;
 
-pub use auth::{ResolvedAuthConfig, auth_middleware};
+pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
 pub use proxy::ProxyManager;
 pub use server::Gateway;
 pub use streaming::{NotificationMultiplexer, TaggedNotification};

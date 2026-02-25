@@ -72,6 +72,10 @@ dirs = "6.0"
 open = "5.3"
 hmac = "0.12"
 hex = "0.4"
+# Key Server: OIDC JWT verification
+jsonwebtoken = "9.3"
+# Constant-time comparison (prevent timing attacks in admin token check)
+subtle = "2.6"
 
 # mTLS / TLS
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
