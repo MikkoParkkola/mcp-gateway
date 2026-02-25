@@ -388,6 +388,32 @@ fn build_get_profile_tool() -> Tool {
     }
 }
 
+/// Build the `gateway_list_disabled_capabilities` meta-tool definition.
+///
+/// This tool surfaces the per-capability error budget state, allowing operators
+/// and LLM agents to see which capabilities are temporarily suspended and when
+/// they will auto-recover.
+pub(crate) fn build_list_disabled_capabilities_tool() -> Tool {
+    Tool {
+        name: "gateway_list_disabled_capabilities".to_string(),
+        title: Some("List Disabled Capabilities".to_string()),
+        description: Some(
+            "List capabilities that have been automatically disabled due to a high error rate. \
+             Each entry shows the backend, capability name, and how long it has been suspended. \
+             Disabled capabilities auto-recover after the configured cooldown period (default 5 min). \
+             Use gateway_revive_server to manually re-enable an entire backend immediately."
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
 /// Build the `gateway_reload_config` meta-tool definition.
 pub(crate) fn build_reload_config_tool() -> Tool {
     Tool {
@@ -427,6 +453,7 @@ pub(crate) fn build_meta_tools(
     tools.push(build_revive_server_tool());
     tools.push(build_set_profile_tool());
     tools.push(build_get_profile_tool());
+    tools.push(build_list_disabled_capabilities_tool());
     if reload_enabled {
         tools.push(build_reload_config_tool());
     }
@@ -1134,8 +1161,8 @@ mod tests {
     #[test]
     fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_webhooks() {
         let tools = build_meta_tools(false, false, false);
-        // 4 base + 1 playbook + 2 kill-switch + 2 profile = 9
-        assert_eq!(tools.len(), 9);
+        // 4 base + 1 playbook + 2 kill-switch + 2 profile + 1 disabled-caps = 10
+        assert_eq!(tools.len(), 10);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_list_servers"));
         assert!(names.contains(&"gateway_list_tools"));
@@ -1146,6 +1173,7 @@ mod tests {
         assert!(names.contains(&"gateway_revive_server"));
         assert!(names.contains(&"gateway_set_profile"));
         assert!(names.contains(&"gateway_get_profile"));
+        assert!(names.contains(&"gateway_list_disabled_capabilities"));
         assert!(!names.contains(&"gateway_webhook_status"));
         assert!(!names.contains(&"gateway_reload_config"));
     }
@@ -1153,8 +1181,8 @@ mod tests {
     #[test]
     fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
         let tools = build_meta_tools(true, true, false);
-        // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile = 11
-        assert_eq!(tools.len(), 11);
+        // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile + 1 disabled-caps = 12
+        assert_eq!(tools.len(), 12);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_get_stats"));
         assert!(names.contains(&"gateway_webhook_status"));
@@ -1163,6 +1191,7 @@ mod tests {
         assert!(names.contains(&"gateway_revive_server"));
         assert!(names.contains(&"gateway_set_profile"));
         assert!(names.contains(&"gateway_get_profile"));
+        assert!(names.contains(&"gateway_list_disabled_capabilities"));
     }
 
     #[test]
@@ -1180,26 +1209,28 @@ mod tests {
     fn build_meta_tools_includes_reload_when_enabled() {
         // GIVEN: reload context enabled
         let tools = build_meta_tools(false, false, true);
-        // 4 base + 1 playbook + 2 kill-switch + 2 profile + 1 reload = 10
-        assert_eq!(tools.len(), 10);
+        // 4 base + 1 playbook + 2 kill-switch + 2 profile + 1 disabled-caps + 1 reload = 11
+        assert_eq!(tools.len(), 11);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_reload_config"));
         assert!(names.contains(&"gateway_set_profile"));
         assert!(names.contains(&"gateway_get_profile"));
+        assert!(names.contains(&"gateway_list_disabled_capabilities"));
     }
 
     #[test]
     fn build_meta_tools_all_enabled_includes_reload() {
         // GIVEN: all optional tools enabled
         let tools = build_meta_tools(true, true, true);
-        // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile + 1 reload = 12
-        assert_eq!(tools.len(), 12);
+        // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile + 1 disabled-caps + 1 reload = 13
+        assert_eq!(tools.len(), 13);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"gateway_reload_config"));
         assert!(names.contains(&"gateway_get_stats"));
         assert!(names.contains(&"gateway_webhook_status"));
         assert!(names.contains(&"gateway_set_profile"));
         assert!(names.contains(&"gateway_get_profile"));
+        assert!(names.contains(&"gateway_list_disabled_capabilities"));
     }
 
     #[test]

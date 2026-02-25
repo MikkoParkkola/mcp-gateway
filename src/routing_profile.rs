@@ -1,15 +1,26 @@
-//! Routing profiles for session-scoped tool access control.
+//! Routing profiles (Toolshed) for session-scoped tool access control.
 //!
 //! A routing profile defines named allow/deny rules (both backend-level and
 //! tool-level) that restrict which tools are visible and invocable within a
 //! session.  The operator declares profiles in `config.yaml`; sessions bind
 //! to one profile at a time via `gateway_set_profile` and can query the
-//! current profile via `gateway_get_profile`.
+//! current profile via `gateway_get_profile` or list all profiles via
+//! `gateway_list_profiles`.
+//!
+//! ## Profile selection
+//!
+//! A profile can be selected in three ways (precedence: header > params > default):
+//! 1. **HTTP header**: `X-MCP-Profile: coding` on the initialize request.
+//! 2. **Initialize params**: `{"profile": "coding"}` in the JSON-RPC body.
+//! 3. **Meta-tool**: `gateway_set_profile({"profile": "coding"})` mid-session.
 //!
 //! ## Glob pattern semantics
 //!
-//! Both tool and backend filter lists support a simple glob subset:
+//! Both tool and backend filter lists support four glob forms:
 //! - `"brave_*"` — prefix match (anything starting with `brave_`)
+//! - `"*_write"` — suffix match (anything ending with `_write`)
+//! - `"*search*"` — contains match (anything containing `search`)
+//! - `"*"` — wildcard (matches everything)
 //! - `"write_file"` — exact match
 //!
 //! Evaluation order (mirrors [`crate::security::policy`]):
@@ -32,19 +43,35 @@ use serde::{Deserialize, Serialize};
 /// All filter fields are optional; `None` means "no restriction" for that
 /// dimension.
 ///
+/// Glob patterns support four forms:
+/// - `"brave_*"` — prefix match (anything starting with `brave_`)
+/// - `"*_write"` — suffix match (anything ending with `_write`)
+/// - `"*search*"` — contains match (anything containing `search`)
+/// - `"write_file"` — exact match
+///
 /// ```yaml
 /// routing_profiles:
 ///   research:
-///     allow_tools: ["brave_*", "wikipedia_*", "arxiv_*"]
+///     description: "Research tasks — web, papers, knowledge"
+///     allow_tools: ["brave_*", "exa_*", "arxiv_*", "gateway_*"]
 ///   coding:
-///     deny_tools: ["gmail_*", "slack_*"]
-///   dangerous:
-///     # No restrictions — all tools available
+///     description: "Coding tasks"
+///     allow_tools: ["file_*", "git_*", "lint_*", "gateway_*"]
+///   communication:
+///     description: "Communication tasks"
+///     allow_tools: ["gmail_*", "linear_*", "gateway_*"]
+///   full:
+///     description: "All tools (default)"
+///     # No restrictions
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RoutingProfileConfig {
+    /// Human-readable description of this profile's purpose.
+    #[serde(default)]
+    pub description: String,
+
     /// If `Some`, only backends whose names match are accessible.
-    /// Supports glob prefix patterns (`"mybackend_*"`).
+    /// Supports glob patterns (`"mybackend_*"`, `"*internal*"`).
     #[serde(default)]
     pub allow_backends: Option<Vec<String>>,
 
@@ -54,7 +81,7 @@ pub struct RoutingProfileConfig {
     pub deny_backends: Option<Vec<String>>,
 
     /// If `Some`, only tools whose names match are accessible.
-    /// Supports glob prefix patterns (`"brave_*"`).
+    /// Supports glob patterns (`"brave_*"`, `"*search*"`).
     #[serde(default)]
     pub allow_tools: Option<Vec<String>>,
 
@@ -73,6 +100,8 @@ pub struct RoutingProfileConfig {
 pub struct RoutingProfile {
     /// Human-readable profile name (e.g. `"research"`).
     pub name: String,
+    /// Human-readable description of this profile's purpose.
+    pub description: String,
     /// Compiled backend filter.
     backend_filter: PatternFilter,
     /// Compiled tool filter.
@@ -85,6 +114,7 @@ impl RoutingProfile {
     pub fn from_config(name: &str, config: &RoutingProfileConfig) -> Self {
         Self {
             name: name.to_string(),
+            description: config.description.clone(),
             backend_filter: PatternFilter::new(
                 config.allow_backends.as_deref(),
                 config.deny_backends.as_deref(),
@@ -103,6 +133,7 @@ impl RoutingProfile {
     pub fn allow_all(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            description: "All tools (unrestricted)".to_string(),
             backend_filter: PatternFilter::allow_all(),
             tool_filter: PatternFilter::allow_all(),
         }
@@ -152,6 +183,7 @@ impl RoutingProfile {
     pub fn describe(&self) -> serde_json::Value {
         serde_json::json!({
             "name": self.name,
+            "description": self.description,
             "backend_filter": self.backend_filter.describe(),
             "tool_filter": self.tool_filter.describe(),
         })
@@ -159,7 +191,7 @@ impl RoutingProfile {
 }
 
 // ============================================================================
-// Pattern filter (allow/deny list with glob prefix support)
+// Pattern filter (allow/deny list with glob support)
 // ============================================================================
 
 /// Compiled allow + deny pattern lists for a single dimension (tools or backends).
@@ -217,44 +249,86 @@ impl PatternFilter {
 }
 
 // ============================================================================
-// Pattern (glob prefix or exact)
+// Pattern (wildcard, prefix, suffix, contains, or exact)
 // ============================================================================
 
+/// A compiled glob pattern for matching tool or backend names.
+///
+/// Supports five forms:
+/// - `Wildcard` — matches everything (from `"*"`)
+/// - `Exact("write_file")` — `name == "write_file"`
+/// - `Prefix("brave_")` — `name.starts_with("brave_")` (from `"brave_*"`)
+/// - `Suffix("_write")` — `name.ends_with("_write")` (from `"*_write"`)
+/// - `Contains("search")` — `name.contains("search")` (from `"*search*"`)
 #[derive(Debug, Clone)]
 enum Pattern {
+    /// Matches everything.
+    Wildcard,
     /// Exact name match.
     Exact(String),
-    /// Prefix match — everything starting with this string is accepted.
+    /// Prefix match — everything starting with this string.
     Prefix(String),
+    /// Suffix match — everything ending with this string.
+    Suffix(String),
+    /// Contains match — everything containing this substring.
+    Contains(String),
 }
 
 impl Pattern {
     fn matches(&self, name: &str) -> bool {
         match self {
+            Self::Wildcard => true,
             Self::Exact(exact) => name == exact,
             Self::Prefix(prefix) => name.starts_with(prefix.as_str()),
+            Self::Suffix(suffix) => name.ends_with(suffix.as_str()),
+            Self::Contains(substr) => name.contains(substr.as_str()),
         }
     }
 
     fn raw(&self) -> String {
         match self {
+            Self::Wildcard => "*".to_string(),
             Self::Exact(s) => s.clone(),
             Self::Prefix(s) => format!("{s}*"),
+            Self::Suffix(s) => format!("*{s}"),
+            Self::Contains(s) => format!("*{s}*"),
         }
     }
 }
 
 /// Compile a slice of raw pattern strings into [`Pattern`] values.
 fn compile_patterns(raw: &[String]) -> Vec<Pattern> {
-    raw.iter()
-        .map(|s| {
-            if let Some(prefix) = s.strip_suffix('*') {
-                Pattern::Prefix(prefix.to_string())
+    raw.iter().map(|s| compile_pattern(s)).collect()
+}
+
+/// Compile a single raw pattern string into a [`Pattern`].
+///
+/// Pattern forms:
+/// - `"*"` → `Wildcard`
+/// - `"brave_*"` → `Prefix("brave_")`
+/// - `"*_write"` → `Suffix("_write")`
+/// - `"*search*"` → `Contains("search")`
+/// - `"write_file"` → `Exact("write_file")`
+pub(crate) fn compile_pattern(s: &str) -> Pattern {
+    match (s.starts_with('*'), s.ends_with('*')) {
+        // Pure wildcard
+        (_, _) if s == "*" => Pattern::Wildcard,
+        // Contains: starts and ends with '*', interior non-empty
+        (true, true) => {
+            let inner = s[1..s.len() - 1].to_string();
+            if inner.is_empty() {
+                Pattern::Wildcard
             } else {
-                Pattern::Exact(s.clone())
+                Pattern::Contains(inner)
             }
-        })
-        .collect()
+        }
+        // Suffix: starts with '*' only
+        (true, false) => Pattern::Suffix(s[1..].to_string()),
+        // Prefix: ends with '*' only
+        (false, true) => Pattern::Prefix(s[..s.len() - 1].to_string()),
+        // Exact
+        (false, false) => Pattern::Exact(s.to_string()),
+    }
 }
 
 // ============================================================================
@@ -317,12 +391,35 @@ impl ProfileRegistry {
         self.profiles.contains_key(name)
     }
 
-    /// Return the names of all configured profiles.
+    /// Return the names of all configured profiles, sorted alphabetically.
     #[must_use]
     pub fn profile_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
         names.sort_unstable();
         names
+    }
+
+    /// Return a list of all profiles with their names and descriptions, sorted by name.
+    #[must_use]
+    pub fn profile_summaries(&self) -> Vec<serde_json::Value> {
+        let mut summaries: Vec<_> = self
+            .profiles
+            .values()
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "description": p.description,
+                })
+            })
+            .collect();
+        // Sort by name for deterministic output
+        summaries.sort_by(|a, b| {
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
+        });
+        summaries
     }
 }
 
@@ -397,6 +494,7 @@ mod tests {
         deny_backends: Option<&[&str]>,
     ) -> RoutingProfile {
         let cfg = RoutingProfileConfig {
+            description: String::new(),
             allow_tools: allow_tools
                 .map(|s| s.iter().map(|x| (*x).to_string()).collect()),
             deny_tools: deny_tools
@@ -617,5 +715,251 @@ mod tests {
         store.set_profile("s2", "coding");
         assert_eq!(store.get_profile_name("s1", "default"), "research");
         assert_eq!(store.get_profile_name("s2", "default"), "coding");
+    }
+
+    // ── description field ────────────────────────────────────────────────
+
+    #[test]
+    fn profile_description_is_propagated_from_config() {
+        // GIVEN: a profile config with a description
+        let cfg = RoutingProfileConfig {
+            description: "Research tasks".to_string(),
+            ..Default::default()
+        };
+        // WHEN: compiled
+        let p = RoutingProfile::from_config("research", &cfg);
+        // THEN: description is preserved
+        assert_eq!(p.description, "Research tasks");
+    }
+
+    #[test]
+    fn allow_all_profile_has_default_description() {
+        // GIVEN: allow_all profile
+        let p = RoutingProfile::allow_all("full");
+        // THEN: description is non-empty
+        assert!(!p.description.is_empty());
+    }
+
+    #[test]
+    fn describe_includes_name_and_description() {
+        // GIVEN: a named profile with a description
+        let cfg = RoutingProfileConfig {
+            description: "Coding assistant".to_string(),
+            ..Default::default()
+        };
+        let p = RoutingProfile::from_config("coding", &cfg);
+        // WHEN: described
+        let desc = p.describe();
+        // THEN: both name and description appear
+        assert_eq!(desc["name"], "coding");
+        assert_eq!(desc["description"], "Coding assistant");
+    }
+
+    // ── contains-glob patterns ───────────────────────────────────────────
+
+    #[test]
+    fn contains_glob_matches_substring_anywhere_in_name() {
+        // GIVEN: allow_tools: ["*search*"]
+        let p = profile_from(Some(&["*search*"]), None, None, None);
+        // WHEN / THEN: any tool with "search" in the name is allowed
+        assert!(p.check("b", "brave_search").is_ok());
+        assert!(p.check("b", "search_web").is_ok());
+        assert!(p.check("b", "advanced_search_engine").is_ok());
+    }
+
+    #[test]
+    fn contains_glob_blocks_tools_without_substring() {
+        // GIVEN: allow_tools: ["*search*"]
+        let p = profile_from(Some(&["*search*"]), None, None, None);
+        // WHEN / THEN: tools without "search" are blocked
+        assert!(p.check("b", "brave_news").is_err());
+        assert!(p.check("b", "gmail_send").is_err());
+    }
+
+    #[test]
+    fn suffix_glob_matches_tools_ending_with_pattern() {
+        // GIVEN: allow_tools: ["*_write"]
+        let p = profile_from(Some(&["*_write"]), None, None, None);
+        // WHEN / THEN: tools ending with "_write" are allowed
+        assert!(p.check("b", "file_write").is_ok());
+        assert!(p.check("b", "memory_write").is_ok());
+    }
+
+    #[test]
+    fn suffix_glob_blocks_non_suffix_matching_tools() {
+        // GIVEN: allow_tools: ["*_write"]
+        let p = profile_from(Some(&["*_write"]), None, None, None);
+        // WHEN / THEN: tools not ending with "_write" are blocked
+        assert!(p.check("b", "file_read").is_err());
+        assert!(p.check("b", "write_file").is_err());
+    }
+
+    #[test]
+    fn wildcard_alone_allows_everything() {
+        // GIVEN: allow_tools: ["*"]
+        let p = profile_from(Some(&["*"]), None, None, None);
+        // WHEN / THEN: any tool passes
+        assert!(p.check("b", "anything").is_ok());
+        assert!(p.check("b", "brave_search").is_ok());
+    }
+
+    #[test]
+    fn compile_pattern_wildcard_only() {
+        // GIVEN / WHEN
+        let pat = compile_pattern("*");
+        // THEN: any name matches
+        assert!(pat.matches("anything"));
+        assert!(pat.matches(""));
+    }
+
+    #[test]
+    fn compile_pattern_prefix() {
+        let pat = compile_pattern("brave_*");
+        assert!(pat.matches("brave_search"));
+        assert!(pat.matches("brave_news"));
+        assert!(!pat.matches("exa_search"));
+    }
+
+    #[test]
+    fn compile_pattern_suffix() {
+        let pat = compile_pattern("*_search");
+        assert!(pat.matches("brave_search"));
+        assert!(pat.matches("exa_search"));
+        assert!(!pat.matches("brave_news"));
+    }
+
+    #[test]
+    fn compile_pattern_contains() {
+        let pat = compile_pattern("*search*");
+        assert!(pat.matches("brave_search"));
+        assert!(pat.matches("search_web"));
+        assert!(pat.matches("advanced_search_engine"));
+        assert!(!pat.matches("brave_news"));
+    }
+
+    #[test]
+    fn compile_pattern_exact() {
+        let pat = compile_pattern("write_file");
+        assert!(pat.matches("write_file"));
+        assert!(!pat.matches("write_files"));
+        assert!(!pat.matches("xwrite_file"));
+    }
+
+    #[test]
+    fn pattern_raw_round_trips_correctly() {
+        // GIVEN: patterns of each form
+        let cases = [
+            ("*", "*"),
+            ("brave_*", "brave_*"),
+            ("*_search", "*_search"),
+            ("*search*", "*search*"),
+            ("exact", "exact"),
+        ];
+        for (input, expected_raw) in cases {
+            let pat = compile_pattern(input);
+            assert_eq!(pat.raw(), expected_raw, "raw() mismatch for '{input}'");
+        }
+    }
+
+    // ── ProfileRegistry::profile_summaries ───────────────────────────────
+
+    #[test]
+    fn profile_summaries_returns_sorted_profiles_with_descriptions() {
+        // GIVEN: registry with two profiles
+        let mut configs = HashMap::new();
+        configs.insert(
+            "research".to_string(),
+            RoutingProfileConfig {
+                description: "Research tasks".to_string(),
+                ..Default::default()
+            },
+        );
+        configs.insert(
+            "coding".to_string(),
+            RoutingProfileConfig {
+                description: "Coding tasks".to_string(),
+                ..Default::default()
+            },
+        );
+        let registry = ProfileRegistry::from_config(&configs, "coding");
+        // WHEN
+        let summaries = registry.profile_summaries();
+        // THEN: sorted alphabetically, descriptions present
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0]["name"], "coding");
+        assert_eq!(summaries[0]["description"], "Coding tasks");
+        assert_eq!(summaries[1]["name"], "research");
+        assert_eq!(summaries[1]["description"], "Research tasks");
+    }
+
+    #[test]
+    fn profile_summaries_empty_when_no_profiles_configured() {
+        // GIVEN: empty registry
+        let registry = ProfileRegistry::default();
+        // WHEN / THEN: returns empty vec
+        assert!(registry.profile_summaries().is_empty());
+    }
+
+    // ── toolshed-style include/exclude patterns from issue #83 ───────────
+
+    #[test]
+    fn coding_profile_includes_file_and_git_tools_excludes_communication() {
+        // GIVEN: coding profile — allow file_*, git_*, lint_*, gateway_*
+        let p = profile_from(
+            Some(&["file_*", "git_*", "lint_*", "gateway_*"]),
+            None,
+            None,
+            None,
+        );
+        // WHEN / THEN: file and git tools pass
+        assert!(p.check("b", "file_read").is_ok());
+        assert!(p.check("b", "file_write").is_ok());
+        assert!(p.check("b", "git_commit").is_ok());
+        assert!(p.check("b", "lint_check").is_ok());
+        assert!(p.check("b", "gateway_invoke").is_ok());
+        // AND: communication tools are blocked
+        assert!(p.check("b", "gmail_send").is_err());
+        assert!(p.check("b", "beeper_send").is_err());
+    }
+
+    #[test]
+    fn research_profile_allows_search_tools_blocks_communication() {
+        // GIVEN: research profile — allow brave_*, exa_*, gateway_*
+        let p = profile_from(
+            Some(&["brave_*", "exa_*", "tavily_*", "gateway_*"]),
+            None,
+            None,
+            None,
+        );
+        // WHEN / THEN: search tools pass
+        assert!(p.check("b", "brave_search").is_ok());
+        assert!(p.check("b", "exa_search").is_ok());
+        assert!(p.check("b", "tavily_search").is_ok());
+        assert!(p.check("b", "gateway_list_tools").is_ok());
+        // AND: non-search tools are blocked
+        assert!(p.check("b", "gmail_send").is_err());
+        assert!(p.check("b", "linear_create_issue").is_err());
+    }
+
+    #[test]
+    fn full_profile_uses_wildcard_to_allow_all_tools() {
+        // GIVEN: full profile — include: ["*"]
+        let p = profile_from(Some(&["*"]), None, None, None);
+        // WHEN / THEN: any tool passes
+        assert!(p.check("b", "brave_search").is_ok());
+        assert!(p.check("b", "gmail_send").is_ok());
+        assert!(p.check("b", "anything_at_all").is_ok());
+    }
+
+    #[test]
+    fn meta_tools_always_included_when_gateway_prefix_in_allow_list() {
+        // GIVEN: profile with gateway_* in allow list
+        let p = profile_from(Some(&["brave_*", "gateway_*"]), None, None, None);
+        // WHEN / THEN: meta-tools pass
+        assert!(p.check("b", "gateway_invoke").is_ok());
+        assert!(p.check("b", "gateway_list_tools").is_ok());
+        assert!(p.check("b", "gateway_set_profile").is_ok());
+        // AND: non-gateway, non-brave blocked
+        assert!(p.check("b", "gmail_send").is_err());
     }
 }

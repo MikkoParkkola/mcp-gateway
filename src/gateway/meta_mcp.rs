@@ -22,7 +22,7 @@ use crate::config_reload::ReloadContext;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::idempotency::{GuardOutcome, IdempotencyCache, derive_key, enforce, spawn_cleanup_task};
-use crate::kill_switch::{ErrorBudgetConfig, KillSwitch};
+use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::{PlaybookEngine, ToolInvoker};
 use crate::protocol::{
     JsonRpcResponse, LoggingLevel, LoggingSetLevelParams, Prompt, PromptsListResult, RequestId,
@@ -80,6 +80,10 @@ pub struct MetaMcp {
     /// startup; read on every invocation, so `RwLock` provides zero-overhead
     /// reads in the common case.
     error_budget_config: RwLock<ErrorBudgetConfig>,
+    /// Per-capability error budget configuration. Governs the sliding-window
+    /// threshold and cooldown used to auto-disable individual failing tools
+    /// without killing the entire backend.
+    capability_budget_config: RwLock<CapabilityErrorBudgetConfig>,
     /// Webhook registry for status reporting (optional — set after startup)
     webhook_registry: RwLock<Option<Arc<parking_lot::RwLock<WebhookRegistry>>>>,
     /// Routing profiles registry (immutable after startup)
@@ -111,6 +115,7 @@ impl MetaMcp {
             log_level: RwLock::new(LoggingLevel::default()),
             kill_switch: Arc::new(KillSwitch::new()),
             error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
+            capability_budget_config: RwLock::new(CapabilityErrorBudgetConfig::default()),
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
             reload_context: RwLock::new(None),
@@ -139,6 +144,7 @@ impl MetaMcp {
             log_level: RwLock::new(LoggingLevel::default()),
             kill_switch: Arc::new(KillSwitch::new()),
             error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
+            capability_budget_config: RwLock::new(CapabilityErrorBudgetConfig::default()),
             webhook_registry: RwLock::new(None),
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
@@ -266,6 +272,16 @@ impl MetaMcp {
         *self.error_budget_config.write() = config;
     }
 
+    /// Override the per-capability error-budget configuration.
+    ///
+    /// Call this during server setup to tune per-capability thresholds, window
+    /// sizes, and cooldown period. Thread-safe: reads on the hot path are
+    /// zero-overhead because `RwLock` has no contention after startup.
+    #[allow(dead_code)]
+    pub fn set_capability_budget_config(&self, config: CapabilityErrorBudgetConfig) {
+        *self.capability_budget_config.write() = config;
+    }
+
     /// Handle initialize request with version negotiation.
     ///
     /// Generates dynamic routing instructions from the loaded capability
@@ -347,6 +363,7 @@ impl MetaMcp {
             "gateway_run_playbook" => self.run_playbook(&arguments).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
+            "gateway_list_disabled_capabilities" => self.list_disabled_capabilities(),
             "gateway_set_profile" => self.set_profile(&arguments, session_id),
             "gateway_get_profile" => self.get_profile(session_id),
             "gateway_reload_config" => self.reload_config().await,
@@ -926,6 +943,24 @@ impl MetaMcp {
             ));
         }
 
+        // --- Per-capability error budget check ---
+        // Check AFTER the backend kill switch so a hard-killed backend short-circuits
+        // first. This check auto-clears entries whose cooldown has elapsed, enabling
+        // transparent recovery without a background sweep task.
+        {
+            let cap_cfg = self.capability_budget_config.read();
+            if self.kill_switch.is_capability_disabled_with_cooldown(server, tool, cap_cfg.cooldown) {
+                return Err(Error::json_rpc(
+                    -32000,
+                    format!(
+                        "Capability '{tool}' on server '{server}' is temporarily disabled due to \
+                         a high error rate. It will auto-recover after the cooldown period. \
+                         Use gateway_list_disabled_capabilities to see all disabled capabilities."
+                    ),
+                ));
+            }
+        }
+
         // --- Routing profile check (after kill switch, before dispatch) ---
         let profile = self.active_profile(session_id);
         if let Err(msg) = profile.check(server, tool) {
@@ -992,12 +1027,16 @@ impl MetaMcp {
         // Dispatch to the appropriate backend.
         let dispatch_result = self.dispatch_to_backend(server, tool, arguments.clone()).await;
 
-        // Record success or failure against the error budget.
+        // Record success or failure against both the backend and per-capability
+        // error budgets. Backend budget guards the whole server; capability budget
+        // guards individual tools to reduce blast radius.
         {
             let cfg = self.error_budget_config.read();
+            let cap_cfg = self.capability_budget_config.read();
             if dispatch_result.is_ok() {
                 self.kill_switch
                     .record_success(server, cfg.window_size, cfg.window_duration);
+                self.kill_switch.record_capability_success(server, tool, &cap_cfg);
             } else {
                 let auto_killed = self.kill_switch.record_failure(
                     server,
@@ -1006,11 +1045,21 @@ impl MetaMcp {
                     cfg.threshold,
                     cfg.min_samples,
                 );
+                let cap_disabled =
+                    self.kill_switch.record_capability_failure(server, tool, &cap_cfg);
                 if auto_killed {
                     warn!(
                         server = server,
                         trace_id,
                         "Server auto-killed by error budget exhaustion"
+                    );
+                }
+                if cap_disabled {
+                    warn!(
+                        server = server,
+                        tool = tool,
+                        trace_id,
+                        "Capability auto-disabled by per-capability error budget"
                     );
                 }
             }
@@ -1198,6 +1247,40 @@ impl MetaMcp {
             "status": "active",
             "was_killed": was_killed,
             "message": format!("Server '{server}' has been re-enabled")
+        }))
+    }
+
+    /// List capabilities that are currently suspended by the per-capability error budget.
+    ///
+    /// Capabilities are auto-disabled when their error rate exceeds the configured
+    /// threshold within the sliding window. Each entry reports the backend, tool
+    /// name, and how long the capability has been suspended. Entries whose cooldown
+    /// has elapsed are purged transparently from the list.
+    #[allow(clippy::unnecessary_wraps)]
+    fn list_disabled_capabilities(&self) -> Result<Value> {
+        let cap_cfg = self.capability_budget_config.read();
+        let disabled = self.kill_switch.disabled_capabilities(cap_cfg.cooldown);
+        let entries: Vec<Value> = disabled
+            .iter()
+            .filter_map(|key| {
+                let (backend, capability) = key.split_once(':')?;
+                let error_rate = self.kill_switch.capability_error_rate(backend, capability);
+                Some(json!({
+                    "backend": backend,
+                    "capability": capability,
+                    "error_rate": error_rate,
+                    "cooldown_seconds": cap_cfg.cooldown.as_secs(),
+                }))
+            })
+            .collect();
+        Ok(json!({
+            "disabled_count": entries.len(),
+            "disabled_capabilities": entries,
+            "note": if entries.is_empty() {
+                "No capabilities are currently disabled."
+            } else {
+                "Capabilities auto-recover after the cooldown period elapses."
+            }
         }))
     }
 
