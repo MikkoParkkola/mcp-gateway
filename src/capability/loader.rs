@@ -1,6 +1,9 @@
 //! Capability directory loader
 
-use super::{CapabilityDefinition, parse_capability_file, validate_capability};
+use super::{
+    CapabilityDefinition, IssueSeverity, parse_capability_file, validate_capability,
+    validate_capability_definition,
+};
 use crate::{Error, Result};
 use std::path::Path;
 use tracing::{debug, info, warn};
@@ -88,10 +91,49 @@ impl CapabilityLoader {
         Ok(())
     }
 
-    /// Load and validate a single capability file
+    /// Load and validate a single capability file.
+    ///
+    /// Runs both the legacy `validate_capability` check and the structural
+    /// validator.  Structural errors cause the capability to be skipped (this
+    /// function returns `Err`); structural warnings are logged but the capability
+    /// is still loaded.
     async fn load_capability_file(path: &Path) -> Result<CapabilityDefinition> {
         let capability = parse_capability_file(path).await?;
         validate_capability(&capability)?;
+
+        let path_str = path.to_string_lossy();
+        let issues = validate_capability_definition(&capability, Some(&path_str));
+
+        let has_errors = issues.iter().any(|i| i.severity == IssueSeverity::Error);
+
+        for issue in &issues {
+            if issue.severity == IssueSeverity::Error {
+                warn!(
+                    code = issue.code,
+                    field = ?issue.field,
+                    path = %path_str,
+                    "Structural validation error: {}",
+                    issue.message,
+                );
+            } else {
+                warn!(
+                    code = issue.code,
+                    field = ?issue.field,
+                    path = %path_str,
+                    "Structural validation warning: {}",
+                    issue.message,
+                );
+            }
+        }
+
+        if has_errors {
+            return Err(Error::Config(format!(
+                "Capability '{}' has {} structural error(s); skipping",
+                path_str,
+                issues.iter().filter(|i| i.severity == IssueSeverity::Error).count(),
+            )));
+        }
+
         Ok(capability)
     }
 

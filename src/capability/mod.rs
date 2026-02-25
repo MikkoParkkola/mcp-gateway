@@ -38,6 +38,7 @@ mod openapi;
 mod parser;
 mod response_cache;
 mod schema_validator;
+pub mod validator;
 mod watcher;
 
 pub use backend::{CapabilityBackend, CapabilityBackendStatus};
@@ -47,6 +48,7 @@ pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
 pub use schema_validator::{SchemaValidationResult, ValidationViolation, validate_arguments};
+pub use validator::{Issue, IssueSeverity, validate_capability_definition, validate_capabilities};
 pub use watcher::CapabilityWatcher;
 
 use crate::Result;
