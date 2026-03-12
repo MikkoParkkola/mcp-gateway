@@ -1,0 +1,112 @@
+fulcrum: "1.0"
+name: desktop_event_bus
+description: >
+  Universal Desktop Event Bus — subscribe to Electron app DOM mutations via CDP,
+  route cross-app events through the gateway, and trigger LLM-powered workflows.
+  IFTTT/Zapier for desktop apps with agent intelligence. Pairs with axterminator
+  for Electron CDP control.
+  [keywords: desktop, automation, electron, event, webhook, trigger, workflow, cdp]
+
+schema:
+  input:
+    type: object
+    properties:
+      operation:
+        type: string
+        description: "Event bus operation"
+        enum:
+          - subscribe
+          - unsubscribe
+          - list_subscriptions
+          - emit_event
+          - list_sources
+          - create_rule
+          - list_rules
+      source:
+        type: string
+        description: "Event source (app name or CDP endpoint, e.g. 'discord', 'slack-desktop')"
+      event_type:
+        type: string
+        description: "Event type to subscribe to (e.g. 'dom_mutation', 'notification', 'window_focus')"
+      selector:
+        type: string
+        description: "CSS selector for DOM mutation events"
+      rule:
+        type: object
+        description: "Automation rule (for create_rule)"
+        properties:
+          name:
+            type: string
+          trigger:
+            type: object
+            properties:
+              source:
+                type: string
+              event_type:
+                type: string
+              filter:
+                type: string
+          action:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [invoke_tool, run_playbook, send_notification, emit_event]
+              config:
+                type: object
+      subscription_id:
+        type: string
+        description: "Subscription ID (for unsubscribe)"
+    required:
+      - operation
+  output:
+    type: object
+    properties:
+      subscription_id:
+        type: string
+      events:
+        type: array
+        description: "Event stream or event history"
+      sources:
+        type: array
+        description: "Available event sources"
+      rules:
+        type: array
+        description: "Active automation rules"
+
+providers:
+  primary:
+    service: mcp
+    cost_per_call: 0
+    timeout: 30
+    config:
+      command: axterminator
+      args:
+        - "--mode"
+        - "event-bus"
+      transport: stdio
+
+auth:
+  required: false
+  description: >
+    Requires axterminator with Electron CDP backend.
+    Install: cargo install axterminator
+
+cache:
+  strategy: none
+
+metadata:
+  category: automation
+  tags:
+    - desktop
+    - automation
+    - electron
+    - event
+    - webhook
+    - trigger
+    - workflow
+    - cdp
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://github.com/AXImpact/axterminator

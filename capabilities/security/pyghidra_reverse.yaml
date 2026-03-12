@@ -1,0 +1,86 @@
+fulcrum: "1.0"
+name: pyghidra_reverse
+description: >
+  PyGhidra MCP server for binary reverse engineering — decompile, disassemble,
+  analyze call graphs, search symbols, and get cross-references in compiled
+  binaries. Completes the red team tooling stack with binary analysis capability.
+  [keywords: binary, reverse-engineering, decompile, disassemble, ghidra, security, malware]
+
+schema:
+  input:
+    type: object
+    properties:
+      operation:
+        type: string
+        description: "Reverse engineering operation"
+        enum:
+          - decompile
+          - disassemble
+          - get_xrefs
+          - get_call_graph
+          - search_symbols
+          - analyze_binary
+      binary_path:
+        type: string
+        description: "Path to binary file to analyze"
+      function_name:
+        type: string
+        description: "Function name or address for decompile/disassemble"
+      symbol_query:
+        type: string
+        description: "Symbol search pattern (for search_symbols)"
+      address:
+        type: string
+        description: "Memory address (hex, e.g. '0x401000')"
+    required:
+      - operation
+  output:
+    type: object
+    properties:
+      code:
+        type: string
+        description: "Decompiled C code or disassembly"
+      symbols:
+        type: array
+        description: "Matching symbols"
+      call_graph:
+        type: object
+        description: "Function call graph"
+      xrefs:
+        type: array
+        description: "Cross-references to/from address"
+
+providers:
+  primary:
+    service: mcp
+    cost_per_call: 0
+    timeout: 60
+    config:
+      command: pyghidra-mcp
+      transport: stdio
+
+auth:
+  required: false
+  description: >
+    Install: pip install pyghidra-mcp
+    Requires Ghidra installation (set GHIDRA_INSTALL_DIR env var).
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+metadata:
+  category: security
+  tags:
+    - binary
+    - reverse-engineering
+    - decompile
+    - disassemble
+    - ghidra
+    - security
+    - malware
+    - forensics
+  cost_category: free
+  execution_time: slow
+  read_only: true
+  docs: https://github.com/FlorianWil662/pyghidra-mcp

@@ -108,7 +108,8 @@ tempfile = "3.14"
 serde_urlencoded = "0.7"
 
 [features]
-default = []
+default = ["webui"]
+webui = []
 metrics = ["dep:metrics-exporter-prometheus"]
 
 [[bin]]
