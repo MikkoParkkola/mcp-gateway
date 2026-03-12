@@ -3,9 +3,8 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
+    Router, middleware,
     routing::{get, post},
-    middleware,
 };
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
@@ -20,6 +19,7 @@ use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
 use crate::security::ToolPolicy;
 
+mod backend_handlers;
 mod handlers;
 mod helpers;
 
@@ -86,15 +86,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     let mut app = Router::new()
         .route("/health", get(handlers::health_handler))
-        .route("/api/costs", get(handlers::costs_handler))
+        .route("/api/costs", get(backend_handlers::costs_handler))
         .route(
             "/mcp",
             post(handlers::meta_mcp_handler)
                 .get(handlers::mcp_sse_handler)
                 .delete(handlers::mcp_delete_handler),
         )
-        .route("/mcp/{name}", post(handlers::backend_handler))
-        .route("/mcp/{name}/{*path}", post(handlers::backend_handler))
+        .route("/mcp/{name}", post(backend_handlers::backend_handler))
+        .route("/mcp/{name}/{*path}", post(backend_handlers::backend_handler))
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
             "/sse",

@@ -9,9 +9,9 @@
 //! 5. **Name for Discovery** - Service-prefixed, searchable names
 //! 6. **Paginate Large Results** - Include pagination and metadata
 
-use crate::protocol::Tool;
+use super::{Severity, ValidationResult};
 use crate::Result;
-use super::{ValidationResult, Severity};
+use crate::protocol::Tool;
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -36,7 +36,9 @@ pub trait Rule: Send + Sync {
 }
 
 // Re-export schema rules
-pub use super::rules_schema::{SchemaCompletenessRule, ConflictDetectionRule, NamingConsistencyRule};
+pub use super::rules_schema::{
+    ConflictDetectionRule, NamingConsistencyRule, SchemaCompletenessRule,
+};
 
 /// Collection of all validation rules
 pub struct ValidationRules {
@@ -104,48 +106,82 @@ impl Rule for OutcomeOrientedRule {
 
         // CRUD patterns that suggest operation-oriented design
         let crud_patterns = [
-            "create_", "read_", "update_", "delete_",
-            "get_", "set_", "list_", "fetch_",
-            "retrieve_", "insert_", "remove_", "add_",
+            "create_",
+            "read_",
+            "update_",
+            "delete_",
+            "get_",
+            "set_",
+            "list_",
+            "fetch_",
+            "retrieve_",
+            "insert_",
+            "remove_",
+            "add_",
         ];
 
         // Check name for CRUD patterns
         for pattern in &crud_patterns {
             if name_lower.starts_with(pattern) {
-                result.add_issue(format!("Name '{}' starts with '{}' suggesting operation, not outcome", tool.name, pattern));
-                result.add_suggestion("Rename to describe what agent achieves (e.g., 'find_', 'search_', 'analyze_')");
+                result.add_issue(format!(
+                    "Name '{}' starts with '{}' suggesting operation, not outcome",
+                    tool.name, pattern
+                ));
+                result.add_suggestion(
+                    "Rename to describe what agent achieves (e.g., 'find_', 'search_', 'analyze_')",
+                );
                 break;
             }
         }
 
         // Check for API-wrapper language in description
         let api_wrapper_terms = [
-            "calls the api", "api endpoint", "rest api",
-            "wrapper", "proxy to", "forwards to",
+            "calls the api",
+            "api endpoint",
+            "rest api",
+            "wrapper",
+            "proxy to",
+            "forwards to",
         ];
 
         for term in &api_wrapper_terms {
             if desc_lower.contains(term) {
-                result.add_issue(format!("Description mentions '{term}' - focus on agent outcomes, not implementation"));
-                result.add_suggestion("Describe what the agent accomplishes, not how the API is called");
+                result.add_issue(format!(
+                    "Description mentions '{term}' - focus on agent outcomes, not implementation"
+                ));
+                result.add_suggestion(
+                    "Describe what the agent accomplishes, not how the API is called",
+                );
                 break;
             }
         }
 
         // Positive patterns: outcome verbs
         let outcome_verbs = [
-            "check", "find", "search", "analyze", "summarize",
-            "extract", "generate", "transform", "validate",
-            "calculate", "compare", "discover", "identify",
+            "check",
+            "find",
+            "search",
+            "analyze",
+            "summarize",
+            "extract",
+            "generate",
+            "transform",
+            "validate",
+            "calculate",
+            "compare",
+            "discover",
+            "identify",
         ];
 
-        let has_outcome_verb = outcome_verbs.iter().any(|v|
-            name_lower.contains(v) || desc_lower.contains(v)
-        );
+        let has_outcome_verb = outcome_verbs
+            .iter()
+            .any(|v| name_lower.contains(v) || desc_lower.contains(v));
 
         if !has_outcome_verb && result.issues.is_empty() {
             result.add_issue("Tool lacks outcome-oriented verbs in name or description");
-            result.add_suggestion("Use action verbs that describe agent goals: find, search, analyze, etc.");
+            result.add_suggestion(
+                "Use action verbs that describe agent goals: find, search, analyze, etc.",
+            );
         }
 
         // Calculate score
@@ -194,7 +230,8 @@ impl Rule for FlatArgumentsRule {
     fn check(&self, tool: &Tool) -> Result<ValidationResult> {
         let mut result = ValidationResult::new(self.code(), self.name(), &tool.name);
 
-        let properties = tool.input_schema
+        let properties = tool
+            .input_schema
             .get("properties")
             .and_then(|p| p.as_object());
 
@@ -206,7 +243,9 @@ impl Rule for FlatArgumentsRule {
 
                 // Check for nested objects
                 if prop_type == "object" {
-                    result.add_issue(format!("Parameter '{name}' is a nested object - flatten to primitives"));
+                    result.add_issue(format!(
+                        "Parameter '{name}' is a nested object - flatten to primitives"
+                    ));
                     nesting_count += 1;
                 }
 
@@ -215,7 +254,9 @@ impl Rule for FlatArgumentsRule {
                     if let Some(items) = prop.get("items") {
                         let items_type = items.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         if items_type == "object" {
-                            result.add_issue(format!("Parameter '{name}' is an array of objects - simplify structure"));
+                            result.add_issue(format!(
+                                "Parameter '{name}' is an array of objects - simplify structure"
+                            ));
                             nesting_count += 1;
                         }
                     }
@@ -224,7 +265,9 @@ impl Rule for FlatArgumentsRule {
 
             if nesting_count > 0 {
                 result.add_suggestion("Use primitives: string, number, boolean, enum");
-                result.add_suggestion("For complex data, use multiple flat parameters or string encoding (JSON, CSV)");
+                result.add_suggestion(
+                    "For complex data, use multiple flat parameters or string encoding (JSON, CSV)",
+                );
             }
 
             // Score based on nesting depth
@@ -281,13 +324,17 @@ impl Rule for DocumentationQualityRule {
         // Check description length (too short lacks context)
         if desc.len() < 50 {
             result.add_issue("Description too short - agents need rich context");
-            result.add_suggestion("Add 2-3 sentences explaining when to use this tool and what it returns");
+            result.add_suggestion(
+                "Add 2-3 sentences explaining when to use this tool and what it returns",
+            );
             quality_score -= 0.3;
         }
 
         // Check for contextual keywords
         let context_keywords = ["use", "when", "returns", "helps", "provides", "enables"];
-        let has_context = context_keywords.iter().any(|k| desc.to_lowercase().contains(k));
+        let has_context = context_keywords
+            .iter()
+            .any(|k| desc.to_lowercase().contains(k));
 
         if !has_context {
             result.add_issue("Description lacks usage guidance");
@@ -296,7 +343,8 @@ impl Rule for DocumentationQualityRule {
         }
 
         // Check parameter descriptions
-        let properties = tool.input_schema
+        let properties = tool
+            .input_schema
             .get("properties")
             .and_then(|p| p.as_object());
 
@@ -304,7 +352,10 @@ impl Rule for DocumentationQualityRule {
             let mut missing_desc = 0;
 
             for (name, prop) in props {
-                if prop.get("description").is_none_or(|d| d.as_str().unwrap_or("").is_empty()) {
+                if prop
+                    .get("description")
+                    .is_none_or(|d| d.as_str().unwrap_or("").is_empty())
+                {
                     result.add_issue(format!("Parameter '{name}' missing description"));
                     missing_desc += 1;
                 }
@@ -317,7 +368,8 @@ impl Rule for DocumentationQualityRule {
         }
 
         // Check for examples
-        let has_example = desc.contains("example") || desc.contains("e.g.") || desc.contains("for instance");
+        let has_example =
+            desc.contains("example") || desc.contains("e.g.") || desc.contains("for instance");
         if !has_example && desc.len() > 50 {
             result.add_issue("No examples provided");
             result.add_suggestion("Include concrete examples of usage");
@@ -336,7 +388,8 @@ impl Rule for DocumentationQualityRule {
             Severity::Pass
         };
 
-        result.passed = result.issues.is_empty() || severity == Severity::Pass || severity == Severity::Info;
+        result.passed =
+            result.issues.is_empty() || severity == Severity::Pass || severity == Severity::Info;
 
         Ok(result.with_score(quality_score).with_severity(severity))
     }
@@ -369,10 +422,22 @@ impl Rule for ResponseCurationRule {
 
         // Red flags: returning everything
         let over_return_patterns = [
-            ("all data", "Returning 'all data' - consider filtering/summarizing"),
-            ("full response", "Returning 'full response' - curate to essential fields"),
-            ("entire", "Returning 'entire' response - extract key information"),
-            ("complete", "Returning 'complete' data - select relevant subset"),
+            (
+                "all data",
+                "Returning 'all data' - consider filtering/summarizing",
+            ),
+            (
+                "full response",
+                "Returning 'full response' - curate to essential fields",
+            ),
+            (
+                "entire",
+                "Returning 'entire' response - extract key information",
+            ),
+            (
+                "complete",
+                "Returning 'complete' data - select relevant subset",
+            ),
         ];
 
         for (pattern, issue) in &over_return_patterns {
@@ -385,20 +450,24 @@ impl Rule for ResponseCurationRule {
 
         // Check output schema if present
         if let Some(output_schema) = &tool.output_schema {
-            let properties = output_schema
-                .get("properties")
-                .and_then(|p| p.as_object());
+            let properties = output_schema.get("properties").and_then(|p| p.as_object());
 
             if let Some(props) = properties {
                 let field_count = props.len();
 
                 // Too many fields suggests lack of curation
                 if field_count > 15 {
-                    result.add_issue(format!("Output has {field_count} fields - consider curating to essential data"));
-                    result.add_suggestion("Reduce to 5-10 most relevant fields for agent decision-making");
+                    result.add_issue(format!(
+                        "Output has {field_count} fields - consider curating to essential data"
+                    ));
+                    result.add_suggestion(
+                        "Reduce to 5-10 most relevant fields for agent decision-making",
+                    );
                     curation_score -= 0.2;
                 } else if field_count > 10 {
-                    result.add_issue(format!("Output has {field_count} fields - verify all are necessary"));
+                    result.add_issue(format!(
+                        "Output has {field_count} fields - verify all are necessary"
+                    ));
                     result.add_suggestion("Review if all fields are needed for agent tasks");
                     curation_score -= 0.1;
                 }
@@ -406,13 +475,22 @@ impl Rule for ResponseCurationRule {
         }
 
         // Positive signals
-        let curation_keywords = ["summarize", "extract", "key", "relevant", "essential", "filtered"];
+        let curation_keywords = [
+            "summarize",
+            "extract",
+            "key",
+            "relevant",
+            "essential",
+            "filtered",
+        ];
         let has_curation = curation_keywords.iter().any(|k| desc.contains(k));
 
         if has_curation {
             result.add_suggestion("Good: Tool indicates data curation");
         } else if curation_score < 1.0 {
-            result.add_suggestion("Focus on extracting key information, not dumping full API responses");
+            result.add_suggestion(
+                "Focus on extracting key information, not dumping full API responses",
+            );
         }
 
         curation_score = curation_score.max(0.0);
@@ -425,7 +503,8 @@ impl Rule for ResponseCurationRule {
             Severity::Pass
         };
 
-        result.passed = result.issues.is_empty() || severity == Severity::Pass || severity == Severity::Info;
+        result.passed =
+            result.issues.is_empty() || severity == Severity::Pass || severity == Severity::Info;
 
         Ok(result.with_score(curation_score).with_severity(severity))
     }
@@ -463,7 +542,9 @@ impl Rule for NamingDiscoveryRule {
 
         if parts.len() < 2 {
             result.add_issue("No service prefix - hard to discover in large tool lists");
-            result.add_suggestion("Use pattern: service_action (e.g., github_search_issues, slack_send_message)");
+            result.add_suggestion(
+                "Use pattern: service_action (e.g., github_search_issues, slack_send_message)",
+            );
             discovery_score -= 0.4;
         }
 
@@ -479,7 +560,9 @@ impl Rule for NamingDiscoveryRule {
         for term in &ambiguous_terms {
             if tool.name.to_lowercase().contains(term) {
                 result.add_issue(format!("Name contains ambiguous term '{term}'"));
-                result.add_suggestion("Use specific, descriptive names that indicate the service and action");
+                result.add_suggestion(
+                    "Use specific, descriptive names that indicate the service and action",
+                );
                 discovery_score -= 0.2;
                 break;
             }
@@ -511,7 +594,8 @@ impl Rule for NamingDiscoveryRule {
             Severity::Pass
         };
 
-        result.passed = result.issues.is_empty() || severity == Severity::Pass || severity == Severity::Info;
+        result.passed =
+            result.issues.is_empty() || severity == Severity::Pass || severity == Severity::Info;
 
         Ok(result.with_score(discovery_score).with_severity(severity))
     }
@@ -544,9 +628,9 @@ impl Rule for PaginationRule {
 
         // Determine if this is a list/search operation
         let list_indicators = ["list", "search", "find", "query", "all", "multiple"];
-        let is_list_operation = list_indicators.iter().any(|i|
-            name_lower.contains(i) || desc.contains(i)
-        );
+        let is_list_operation = list_indicators
+            .iter()
+            .any(|i| name_lower.contains(i) || desc.contains(i));
 
         if !is_list_operation {
             // Not a list operation, pagination not required
@@ -555,43 +639,63 @@ impl Rule for PaginationRule {
         }
 
         // Check for pagination parameters
-        let properties = tool.input_schema
+        let properties = tool
+            .input_schema
             .get("properties")
             .and_then(|p| p.as_object());
 
-        let pagination_params = ["limit", "offset", "page", "cursor", "page_size", "max_results"];
+        let pagination_params = [
+            "limit",
+            "offset",
+            "page",
+            "cursor",
+            "page_size",
+            "max_results",
+        ];
         let has_pagination = properties.is_some_and(|props| {
-            pagination_params.iter().any(|param| props.contains_key(*param))
+            pagination_params
+                .iter()
+                .any(|param| props.contains_key(*param))
         });
 
         let mut pagination_score: f64 = 1.0;
 
         if !has_pagination {
             result.add_issue("List operation lacks pagination parameters");
-            result.add_suggestion("Add 'limit' and 'offset' (or 'page' and 'page_size') parameters");
+            result
+                .add_suggestion("Add 'limit' and 'offset' (or 'page' and 'page_size') parameters");
             pagination_score -= 0.5;
         }
 
         // Check output schema for pagination metadata
         if let Some(output_schema) = &tool.output_schema {
-            let properties = output_schema
-                .get("properties")
-                .and_then(|p| p.as_object());
+            let properties = output_schema.get("properties").and_then(|p| p.as_object());
 
-            let metadata_fields = ["total", "total_count", "has_more", "next_cursor", "page_info"];
+            let metadata_fields = [
+                "total",
+                "total_count",
+                "has_more",
+                "next_cursor",
+                "page_info",
+            ];
             let has_metadata = properties.is_some_and(|props| {
-                metadata_fields.iter().any(|field| props.contains_key(*field))
+                metadata_fields
+                    .iter()
+                    .any(|field| props.contains_key(*field))
             });
 
             if !has_metadata {
                 result.add_issue("Output lacks pagination metadata (total_count, has_more, etc.)");
-                result.add_suggestion("Include metadata fields: total_count, has_more, next_cursor");
+                result
+                    .add_suggestion("Include metadata fields: total_count, has_more, next_cursor");
                 pagination_score -= 0.3;
             }
         } else {
             // No output schema defined for list operation
             result.add_issue("List operation should define output schema with pagination metadata");
-            result.add_suggestion("Define output schema including items array and pagination metadata");
+            result.add_suggestion(
+                "Define output schema including items array and pagination metadata",
+            );
             pagination_score -= 0.2;
         }
 
@@ -613,154 +717,4 @@ impl Rule for PaginationRule {
 
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn create_tool(name: &str, description: &str, input_schema: serde_json::Value) -> Tool {
-        Tool {
-            name: name.to_string(),
-            title: None,
-            description: Some(description.to_string()),
-            input_schema,
-            output_schema: None,
-            annotations: None,
-        }
-    }
-
-    #[test]
-    fn test_outcome_oriented_rule_pass() {
-        let rule = OutcomeOrientedRule;
-        let tool = create_tool(
-            "github_search_issues",
-            "Find and analyze GitHub issues matching search criteria",
-            json!({"type": "object", "properties": {}})
-        );
-
-        let result = rule.check(&tool).unwrap();
-        assert!(result.score > 0.8);
-    }
-
-    #[test]
-    fn test_outcome_oriented_rule_fail() {
-        let rule = OutcomeOrientedRule;
-        let tool = create_tool(
-            "get_user",
-            "Calls the API endpoint to retrieve user data",
-            json!({"type": "object", "properties": {}})
-        );
-
-        let result = rule.check(&tool).unwrap();
-        assert!(result.score < 0.5);
-        assert!(!result.issues.is_empty());
-    }
-
-    #[test]
-    fn test_flat_arguments_rule_pass() {
-        let rule = FlatArgumentsRule;
-        let tool = create_tool(
-            "search",
-            "Search",
-            json!({
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": "number"}
-                }
-            })
-        );
-
-        let result = rule.check(&tool).unwrap();
-        assert!(result.score > 0.9);
-    }
-
-    #[test]
-    fn test_flat_arguments_rule_fail() {
-        let rule = FlatArgumentsRule;
-        let tool = create_tool(
-            "search",
-            "Search",
-            json!({
-                "type": "object",
-                "properties": {
-                    "filter": {
-                        "type": "object",
-                        "properties": {"field": {"type": "string"}}
-                    }
-                }
-            })
-        );
-
-        let result = rule.check(&tool).unwrap();
-        assert!(result.score < 0.8);
-        assert!(!result.issues.is_empty());
-    }
-
-    #[test]
-    fn test_documentation_quality_good() {
-        let rule = DocumentationQualityRule;
-        let tool = create_tool(
-            "search",
-            "Search the knowledge base for relevant documents. Use this when you need to find information about a specific topic. Returns a list of matching documents with relevance scores.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query string"
-                    }
-                }
-            })
-        );
-
-        let result = rule.check(&tool).unwrap();
-        assert!(result.score > 0.8);
-    }
-
-    #[test]
-    fn test_naming_discovery_good() {
-        let rule = NamingDiscoveryRule;
-        let tool = create_tool(
-            "github_search_issues",
-            "Search GitHub issues",
-            json!({"type": "object"})
-        );
-
-        let result = rule.check(&tool).unwrap();
-        assert!(result.score > 0.8);
-    }
-
-    #[test]
-    fn test_naming_discovery_bad() {
-        let rule = NamingDiscoveryRule;
-        let tool = create_tool(
-            "search",
-            "Search",
-            json!({"type": "object"})
-        );
-
-        let result = rule.check(&tool).unwrap();
-        assert!(result.score < 0.7);
-    }
-
-    #[test]
-    fn test_pagination_rule_list_operation() {
-        let rule = PaginationRule;
-        let tool = create_tool(
-            "list_users",
-            "List all users",
-            json!({
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "number"},
-                    "offset": {"type": "number"}
-                }
-            })
-        );
-
-        let result = rule.check(&tool).unwrap();
-        // Has pagination params but no output schema
-        assert!(result.score > 0.4);
-    }
-
-}
+mod tests;
