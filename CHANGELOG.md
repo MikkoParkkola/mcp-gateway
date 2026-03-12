@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Embedded Web Dashboard** — Operator dashboard served from the same binary and port.
+  `GET /ui` (htmx SPA with live status, tools, servers, config tabs), `GET /dashboard`
+  (server-rendered operator view with auto-refresh), and `/ui/api/*` JSON endpoints.
+  Feature-gated behind `webui` (default-enabled). Zero new dependencies.
+
 ## [2.4.0] - 2026-02-25
 
 ### Added

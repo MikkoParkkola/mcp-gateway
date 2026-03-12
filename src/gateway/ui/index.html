@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Gateway</title>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+:root {
+  --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --fg: #e6edf3;
+  --fg2: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+  --yellow: #d29922; --border: #30363d; --radius: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); min-height: 100vh; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.shell { display: flex; min-height: 100vh; }
+nav { width: 220px; background: var(--bg2); border-right: 1px solid var(--border); padding: 1rem 0; flex-shrink: 0; }
+nav .logo { padding: 0.75rem 1rem; font-size: 1.1rem; font-weight: 700; color: var(--accent); border-bottom: 1px solid var(--border); margin-bottom: 0.5rem; }
+nav a { display: block; padding: 0.6rem 1rem; color: var(--fg2); font-size: 0.9rem; border-left: 3px solid transparent; }
+nav a:hover, nav a.active { color: var(--fg); background: var(--bg3); border-left-color: var(--accent); text-decoration: none; }
+main { flex: 1; padding: 1.5rem 2rem; max-width: 1200px; }
+h1 { font-size: 1.5rem; margin-bottom: 1rem; font-weight: 600; }
+h2 { font-size: 1.1rem; margin-bottom: 0.75rem; font-weight: 600; color: var(--fg2); }
+
+/* Cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.25rem; }
+.card .label { font-size: 0.8rem; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; }
+.card .value { font-size: 1.8rem; font-weight: 700; margin-top: 0.25rem; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+th { text-align: left; padding: 0.6rem 0.75rem; background: var(--bg3); font-size: 0.8rem; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
+td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--bg3); }
+
+/* Badges */
+.badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 10px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
+.badge-closed, .badge-healthy { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge-open, .badge-down { background: rgba(248,81,73,0.15); color: var(--red); }
+.badge-halfopen { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.badge-running { background: rgba(88,166,255,0.15); color: var(--accent); }
+
+/* Search */
+.search-bar { margin-bottom: 1rem; display: flex; gap: 0.5rem; }
+.search-bar input, .search-bar select {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--fg); padding: 0.5rem 0.75rem; font-size: 0.875rem;
+}
+.search-bar input { flex: 1; }
+.search-bar input::placeholder { color: var(--fg2); }
+
+/* Buttons */
+.btn { background: var(--accent); color: #fff; border: none; border-radius: var(--radius); padding: 0.5rem 1rem; font-size: 0.875rem; cursor: pointer; font-weight: 600; }
+.btn:hover { opacity: 0.9; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger { background: var(--red); }
+
+/* Config display */
+.config-block { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; line-height: 1.6; overflow-x: auto; }
+
+/* Auth bar */
+.auth-bar { position: fixed; top: 0; right: 0; padding: 0.5rem 1rem; background: var(--bg2); border-bottom-left-radius: var(--radius); border: 1px solid var(--border); font-size: 0.8rem; color: var(--fg2); z-index: 100; }
+.auth-bar .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.4rem; }
+.auth-bar .dot.on { background: var(--green); }
+.auth-bar .dot.off { background: var(--red); }
+
+/* Tool detail */
+.tool-detail { display: none; background: var(--bg3); padding: 0.75rem; border-radius: var(--radius); margin-top: 0.25rem; font-size: 0.8rem; }
+.tool-detail.open { display: block; }
+.tool-desc { color: var(--fg2); margin-bottom: 0.5rem; }
+.tool-schema { font-family: monospace; font-size: 0.78rem; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+
+/* Page sections */
+.page { display: none; }
+.page.active { display: block; }
+
+/* Uptime */
+.uptime { font-size: 0.85rem; color: var(--fg2); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .shell { flex-direction: column; }
+  nav { width: 100%; display: flex; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
+  nav .logo { border-bottom: none; }
+  nav a { border-left: none; border-bottom: 3px solid transparent; }
+  nav a.active { border-bottom-color: var(--accent); border-left: none; }
+  main { padding: 1rem; }
+  .cards { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<div class="auth-bar">
+  <span class="dot off" id="auth-dot"></span>
+  <span id="auth-label">Not authenticated</span>
+  <a href="#" id="auth-btn" style="margin-left:0.5rem">Set API Key</a>
+</div>
+
+<div class="shell">
+  <nav>
+    <div class="logo">MCP Gateway</div>
+    <a href="#dashboard" class="nav-link active" data-page="dashboard">Dashboard</a>
+    <a href="#tools" class="nav-link" data-page="tools">Tools</a>
+    <a href="#servers" class="nav-link" data-page="servers">Servers</a>
+    <a href="#config" class="nav-link" data-page="config">Config</a>
+  </nav>
+
+  <main>
+    <!-- ═══ Dashboard ═══ -->
+    <div id="page-dashboard" class="page active">
+      <h1>Dashboard</h1>
+      <div id="dashboard-content">
+        <div class="cards" id="dash-cards">
+          <div class="card"><div class="label">Servers</div><div class="value" id="d-servers">-</div></div>
+          <div class="card"><div class="label">Tools</div><div class="value" id="d-tools">-</div></div>
+          <div class="card"><div class="label">Uptime</div><div class="value uptime" id="d-uptime">-</div></div>
+          <div class="card"><div class="label">Version</div><div class="value" id="d-version" style="font-size:1.2rem">-</div></div>
+        </div>
+        <h2>Circuit Breakers</h2>
+        <div class="cards" id="dash-cb">
+          <div class="card"><div class="label">Closed</div><div class="value" id="d-cb-closed" style="color:var(--green)">-</div></div>
+          <div class="card"><div class="label">Open</div><div class="value" id="d-cb-open" style="color:var(--red)">-</div></div>
+          <div class="card"><div class="label">Half-Open</div><div class="value" id="d-cb-half" style="color:var(--yellow)">-</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Tools ═══ -->
+    <div id="page-tools" class="page">
+      <h1>Tools</h1>
+      <div class="search-bar">
+        <input type="text" id="tool-search" placeholder="Search tools..." autocomplete="off">
+        <select id="tool-server-filter"><option value="">All servers</option></select>
+      </div>
+      <div id="tools-table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Server</th><th>Description</th></tr></thead>
+          <tbody id="tools-tbody"><tr><td colspan="3" style="color:var(--fg2)">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ Servers ═══ -->
+    <div id="page-servers" class="page">
+      <h1>Servers</h1>
+      <div id="servers-table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Transport</th><th>Status</th><th>Circuit</th><th>Requests</th><th>Success</th><th>Failures</th><th>P50</th><th>P95</th></tr></thead>
+          <tbody id="servers-tbody"><tr><td colspan="9" style="color:var(--fg2)">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ Config ═══ -->
+    <div id="page-config" class="page">
+      <h1>Configuration</h1>
+      <div style="margin-bottom:1rem">
+        <button class="btn" id="reload-btn" onclick="doReload()">Hot Reload</button>
+        <span id="reload-status" style="margin-left:0.75rem;font-size:0.85rem;color:var(--fg2)"></span>
+      </div>
+      <div class="config-block" id="config-content">Loading...</div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── Auth ──
+let apiKey = localStorage.getItem('mcpgw_key') || '';
+const authDot = document.getElementById('auth-dot');
+const authLabel = document.getElementById('auth-label');
+const authBtn = document.getElementById('auth-btn');
+
+function updateAuthUI() {
+  if (apiKey) {
+    authDot.className = 'dot on';
+    authLabel.textContent = 'Authenticated';
+    authBtn.textContent = 'Change Key';
+  } else {
+    authDot.className = 'dot off';
+    authLabel.textContent = 'Not authenticated';
+    authBtn.textContent = 'Set API Key';
+  }
+}
+authBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  const key = prompt('Enter API key (Bearer token):');
+  if (key !== null) {
+    apiKey = key.trim();
+    if (apiKey) localStorage.setItem('mcpgw_key', apiKey);
+    else localStorage.removeItem('mcpgw_key');
+    updateAuthUI();
+    refreshAll();
+  }
+});
+updateAuthUI();
+
+function authHeaders() {
+  const h = { 'Accept': 'application/json' };
+  if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
+  return h;
+}
+
+async function apiFetch(url, opts = {}) {
+  opts.headers = { ...authHeaders(), ...opts.headers };
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+// ── Router ──
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
+  const el = document.getElementById('page-' + name);
+  if (el) el.classList.add('active');
+  const link = document.querySelector(`[data-page="${name}"]`);
+  if (link) link.classList.add('active');
+}
+
+function onHash() {
+  const hash = location.hash.replace('#', '') || 'dashboard';
+  showPage(hash);
+  if (hash === 'tools') refreshTools();
+  if (hash === 'config') refreshConfig();
+}
+window.addEventListener('hashchange', onHash);
+
+// ── Format helpers ──
+function fmtUptime(secs) {
+  if (!secs && secs !== 0) return '-';
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm ' + (secs % 60) + 's';
+}
+
+function cbBadge(state) {
+  const s = (state || '').toLowerCase();
+  if (s === 'closed') return '<span class="badge badge-closed">Closed</span>';
+  if (s === 'open') return '<span class="badge badge-open">Open</span>';
+  return '<span class="badge badge-halfopen">Half-Open</span>';
+}
+
+function statusBadge(running) {
+  return running
+    ? '<span class="badge badge-running">Running</span>'
+    : '<span class="badge badge-down">Down</span>';
+}
+
+function fmtMs(v) { return v != null ? v + 'ms' : '-'; }
+
+function truncate(s, n) {
+  if (!s) return '';
+  return s.length > n ? s.substring(0, n) + '...' : s;
+}
+
+// ── Dashboard ──
+async function refreshDashboard() {
+  try {
+    const d = await apiFetch('/ui/api/status');
+    document.getElementById('d-servers').textContent = d.server_count ?? '-';
+    document.getElementById('d-tools').textContent = d.tool_count ?? '-';
+    document.getElementById('d-uptime').textContent = fmtUptime(d.uptime_secs);
+    document.getElementById('d-version').textContent = 'v' + (d.version || '?');
+    if (d.circuit_breakers) {
+      document.getElementById('d-cb-closed').textContent = d.circuit_breakers.closed ?? 0;
+      document.getElementById('d-cb-open').textContent = d.circuit_breakers.open ?? 0;
+      document.getElementById('d-cb-half').textContent = d.circuit_breakers.half_open ?? 0;
+    }
+    // Also refresh servers table if visible
+    if (d.servers) refreshServersTable(d.servers);
+  } catch (e) {
+    console.warn('Status fetch failed:', e);
+  }
+}
+
+// ── Servers ──
+function refreshServersTable(servers) {
+  const tbody = document.getElementById('servers-tbody');
+  if (!servers || servers.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--fg2)">No servers</td></tr>';
+    return;
+  }
+  tbody.innerHTML = servers.map(s => `<tr>
+    <td><strong>${esc(s.name)}</strong></td>
+    <td>${esc(s.transport)}</td>
+    <td>${statusBadge(s.running)}</td>
+    <td>${cbBadge(s.circuit_state)}</td>
+    <td>${s.request_count}</td>
+    <td>${s.success_count}</td>
+    <td>${s.failure_count}</td>
+    <td>${fmtMs(s.latency_p50_ms)}</td>
+    <td>${fmtMs(s.latency_p95_ms)}</td>
+  </tr>`).join('');
+}
+
+// ── Tools ──
+let allTools = [];
+async function refreshTools() {
+  try {
+    const d = await apiFetch('/ui/api/tools');
+    allTools = d.tools || [];
+    populateServerFilter();
+    filterAndRenderTools();
+  } catch (e) {
+    document.getElementById('tools-tbody').innerHTML =
+      `<tr><td colspan="3" style="color:var(--red)">${esc(e.message)}</td></tr>`;
+  }
+}
+
+function populateServerFilter() {
+  const sel = document.getElementById('tool-server-filter');
+  const servers = [...new Set(allTools.map(t => t.server))].sort();
+  sel.innerHTML = '<option value="">All servers</option>' +
+    servers.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+}
+
+function filterAndRenderTools() {
+  const q = document.getElementById('tool-search').value.toLowerCase();
+  const srv = document.getElementById('tool-server-filter').value;
+  let filtered = allTools;
+  if (q) filtered = filtered.filter(t =>
+    t.name.toLowerCase().includes(q) ||
+    (t.description || '').toLowerCase().includes(q)
+  );
+  if (srv) filtered = filtered.filter(t => t.server === srv);
+
+  const tbody = document.getElementById('tools-tbody');
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="color:var(--fg2)">No tools found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map((t, i) => `<tr class="tool-row" data-idx="${i}" onclick="toggleToolDetail(this)">
+    <td><strong>${esc(t.name)}</strong></td>
+    <td>${esc(t.server)}</td>
+    <td>${esc(truncate(t.description, 80))}</td>
+  </tr>
+  <tr class="tool-detail-row" id="td-${i}" style="display:none"><td colspan="3">
+    <div class="tool-detail open">
+      <div class="tool-desc">${esc(t.description || 'No description')}</div>
+      ${t.schema ? '<div class="tool-schema">' + esc(JSON.stringify(t.schema, null, 2)) + '</div>' : ''}
+    </div>
+  </td></tr>`).join('');
+}
+
+function toggleToolDetail(row) {
+  const idx = row.dataset.idx;
+  const detail = document.getElementById('td-' + idx);
+  detail.style.display = detail.style.display === 'none' ? '' : 'none';
+}
+
+document.getElementById('tool-search').addEventListener('input', filterAndRenderTools);
+document.getElementById('tool-server-filter').addEventListener('change', filterAndRenderTools);
+
+// ── Config ──
+async function refreshConfig() {
+  try {
+    const d = await apiFetch('/ui/api/config');
+    document.getElementById('config-content').textContent = JSON.stringify(d, null, 2);
+  } catch (e) {
+    document.getElementById('config-content').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function doReload() {
+  const btn = document.getElementById('reload-btn');
+  const status = document.getElementById('reload-status');
+  btn.disabled = true;
+  try {
+    await apiFetch('/ui/api/reload', { method: 'POST' });
+    status.textContent = 'Reload requested at ' + new Date().toLocaleTimeString();
+    status.style.color = 'var(--green)';
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+    status.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+}
+
+// ── XSS escape ──
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.appendChild(document.createTextNode(String(s)));
+  return d.innerHTML;
+}
+
+// ── Auto-refresh ──
+function refreshAll() {
+  refreshDashboard();
+}
+
+// Initial load
+onHash();
+refreshAll();
+
+// Poll every 5 seconds
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>

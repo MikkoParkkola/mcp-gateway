@@ -530,6 +530,11 @@ impl Backend {
     pub fn circuit_breaker_stats(&self) -> crate::failsafe::CircuitBreakerStats {
         self.failsafe.circuit_breaker.stats()
     }
+
+    /// Get health metrics for this backend.
+    pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
+        self.failsafe.health_metrics()
+    }
 }
 
 /// Backend status information

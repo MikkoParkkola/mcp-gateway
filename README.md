@@ -200,6 +200,16 @@ The gateway routes the call to the Tavily backend, applies circuit breaker/retry
 
 ## Features
 
+### Web Dashboard
+
+The gateway includes an embedded web UI served from the same binary and port. No separate frontend process, no build step.
+
+- **`/ui`** — Single-page dashboard with live status, searchable tool list, server health, and config viewer. Auto-refreshes every 5 seconds via htmx.
+- **`/dashboard`** — Operator dashboard with backend health matrix, cache hit rates, and top tools. Server-rendered HTML, auto-refreshes every 5 seconds.
+- **`/ui/api/status`** — JSON API for programmatic monitoring.
+
+The dashboard is enabled by default (feature flag `webui`). Disable with `--no-default-features` to strip it from the binary entirely.
+
 ### Authentication
 
 Protect your gateway with bearer tokens and/or API keys:
