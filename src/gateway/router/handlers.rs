@@ -1,109 +1,30 @@
-//! HTTP router and handlers
+//! Axum request handlers for the MCP gateway.
 
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    middleware,
     response::IntoResponse,
-    routing::{get, post},
 };
 use serde_json::{Value, json};
-use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 use tracing::{debug, error, info, warn};
 
-use super::auth::{AuthState, AuthenticatedClient, ResolvedAuthConfig, auth_middleware};
-use super::meta_mcp::MetaMcp;
-use super::proxy::ProxyManager;
-use super::streaming::{NotificationMultiplexer, create_sse_response};
-use crate::backend::BackendRegistry;
-use crate::config::StreamingConfig;
-use crate::key_server::{KeyServer, handler::key_server_routes};
-use crate::mtls::{CertIdentity, MtlsPolicy};
-use crate::protocol::{ElicitationCreateParams, JsonRpcResponse, RequestId, SamplingCreateMessageParams};
-use crate::security::{ToolPolicy, sanitize_json_value, validate_tool_name, validate_url_not_ssrf};
-
-/// Shared application state
-pub struct AppState {
-    /// Backend registry
-    pub backends: Arc<BackendRegistry>,
-    /// Meta-MCP handler
-    pub meta_mcp: Arc<MetaMcp>,
-    /// Whether Meta-MCP is enabled
-    pub meta_mcp_enabled: bool,
-    /// Notification multiplexer for streaming
-    pub multiplexer: Arc<NotificationMultiplexer>,
-    /// Proxy manager for server-to-client capability forwarding
-    pub proxy_manager: Arc<ProxyManager>,
-    /// Streaming configuration
-    pub streaming_config: StreamingConfig,
-    /// Authentication configuration (static keys)
-    pub auth_config: Arc<ResolvedAuthConfig>,
-    /// Key server for OIDC-issued temporary tokens (optional)
-    pub key_server: Option<Arc<KeyServer>>,
-    /// Tool access policy
-    pub tool_policy: Arc<ToolPolicy>,
-    /// Certificate-based mTLS tool access policy
-    pub mtls_policy: Arc<MtlsPolicy>,
-    /// Whether input sanitization is enabled
-    pub sanitize_input: bool,
-    /// Whether SSRF protection is enabled for outbound URLs
-    pub ssrf_protection: bool,
-    /// In-flight request tracker for graceful drain.
-    /// Each in-flight request holds a permit; shutdown waits for all permits
-    /// to be returned.
-    pub inflight: Arc<tokio::sync::Semaphore>,
-}
-
-/// Create the router
-pub fn create_router(state: Arc<AppState>) -> Router {
-    let auth_state = AuthState {
-        auth_config: Arc::clone(&state.auth_config),
-        key_server: state.key_server.clone(),
-    };
-
-    // Key server routes run outside the standard auth middleware (they ARE the auth step).
-    let maybe_ks_routes: Option<Router> = state
-        .key_server
-        .as_ref()
-        .map(|ks| key_server_routes(Arc::clone(ks)));
-
-    let mut app = Router::new()
-        .route("/health", get(health_handler))
-        .route(
-            "/mcp",
-            post(meta_mcp_handler)
-                .get(mcp_sse_handler)
-                .delete(mcp_delete_handler),
-        )
-        .route("/mcp/{name}", post(backend_handler))
-        .route("/mcp/{name}/{*path}", post(backend_handler))
-        // Helpful error for deprecated SSE endpoint (common misconfiguration)
-        .route(
-            "/sse",
-            get(sse_deprecated_handler).post(sse_deprecated_handler),
-        )
-        // Authentication middleware (applied before other layers)
-        .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
-        .layer(CatchPanicLayer::new())
-        .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
-        .with_state(Arc::clone(&state));
-
-    // Merge key server routes (unauthenticated) if enabled
-    if let Some(ks_routes) = maybe_ks_routes {
-        app = app.merge(ks_routes);
-    }
-
-    app
-}
+use super::AppState;
+use super::helpers::{
+    build_response, extract_tools_call_params, parse_request, parse_sampling_params,
+};
+use crate::mtls::CertIdentity;
+use crate::protocol::{ElicitationCreateParams, JsonRpcResponse, RequestId};
+use crate::security::{sanitize_json_value, validate_tool_name, validate_url_not_ssrf};
+use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::streaming::create_sse_response;
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
-async fn mcp_sse_handler(
+pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -194,7 +115,7 @@ async fn mcp_sse_handler(
 
 /// DELETE /mcp handler - Session termination
 /// Per MCP spec 2025-03-26, clients SHOULD send DELETE to terminate session.
-async fn mcp_delete_handler(
+pub(super) async fn mcp_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -215,7 +136,7 @@ async fn mcp_delete_handler(
 }
 
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
-async fn sse_deprecated_handler() -> impl IntoResponse {
+pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
     (
         StatusCode::GONE,
         Json(json!({
@@ -231,7 +152,7 @@ async fn sse_deprecated_handler() -> impl IntoResponse {
 /// For unauthenticated (public) clients, backend details are redacted
 /// to avoid leaking internal topology. Only authenticated admin clients
 /// see full backend names and circuit breaker state.
-async fn health_handler(
+pub(super) async fn health_handler(
     State(state): State<Arc<AppState>>,
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
@@ -270,7 +191,7 @@ async fn health_handler(
 
 /// Meta-MCP handler (POST /mcp)
 #[allow(clippy::too_many_lines)]
-async fn meta_mcp_handler(
+pub(super) async fn meta_mcp_handler(
     State(state): State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
@@ -709,7 +630,7 @@ fn backend_security_error(id: &RequestId, message: String) -> (StatusCode, Json<
 }
 
 /// Backend handler (POST /mcp/{name})
-async fn backend_handler(
+pub(super) async fn backend_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     request: axum::http::Request<axum::body::Body>,
@@ -836,407 +757,5 @@ async fn backend_handler(
                 Json(serde_json::to_value(response).unwrap()),
             )
         }
-    }
-}
-
-/// Build an HTTP response with a `mcp-session-id` header and a given status.
-fn build_response(
-    rpc: JsonRpcResponse,
-    session_id: &str,
-    status: StatusCode,
-) -> axum::response::Response {
-    let mut resp = Json(serde_json::to_value(rpc).unwrap()).into_response();
-    resp.headers_mut().insert(
-        axum::http::header::HeaderName::from_static("mcp-session-id"),
-        session_id.parse().unwrap(),
-    );
-    (status, resp).into_response()
-}
-
-/// Parse `sampling/createMessage` params from raw JSON, returning an early
-/// HTTP error response on failure.
-#[allow(clippy::result_large_err)] // early-return pattern mirrors existing handlers
-fn parse_sampling_params(
-    id: RequestId,
-    params: Option<Value>,
-    session_id: &str,
-) -> Result<SamplingCreateMessageParams, axum::response::Response> {
-    let Some(p) = params else {
-        return Err(build_response(
-            JsonRpcResponse::error(Some(id), -32602, "Missing sampling params"),
-            session_id,
-            StatusCode::BAD_REQUEST,
-        ));
-    };
-    serde_json::from_value(p).map_err(|e| {
-        build_response(
-            JsonRpcResponse::error(Some(id), -32602, format!("Invalid sampling params: {e}")),
-            session_id,
-            StatusCode::BAD_REQUEST,
-        )
-    })
-}
-
-/// Extract a `RequestId` from a JSON value.
-///
-/// Supports string and integer ID values per JSON-RPC 2.0 spec.
-/// Returns `None` if the value is not a recognised ID type.
-fn extract_request_id(value: &Value) -> Option<RequestId> {
-    if value.is_string() {
-        Some(RequestId::String(value.as_str().unwrap().to_string()))
-    } else if value.is_i64() {
-        Some(RequestId::Number(value.as_i64().unwrap()))
-    } else if value.is_u64() {
-        #[allow(clippy::cast_possible_wrap)]
-        Some(RequestId::Number(value.as_u64().unwrap() as i64))
-    } else {
-        None
-    }
-}
-
-/// Check whether a method name represents a notification (no response expected).
-fn is_notification_method(method: &str) -> bool {
-    method.starts_with("notifications/")
-}
-
-/// Extract the `tools/call` parameters (tool name and arguments) from request params.
-///
-/// Returns `("", {})` when the expected fields are absent so callers never
-/// need to deal with `Option`.
-fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value) {
-    let tool_name = params
-        .and_then(|p| p.get("name"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let arguments = params
-        .and_then(|p| p.get("arguments"))
-        .cloned()
-        .unwrap_or(json!({}));
-    (tool_name, arguments)
-}
-
-/// Parse JSON-RPC request or notification
-/// Returns (Option<RequestId>, method, params) - id is None for notifications
-#[allow(clippy::result_large_err)] // JsonRpcResponse used directly as HTTP error body
-fn parse_request(
-    value: &Value,
-) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
-    // Check jsonrpc version
-    let jsonrpc = value.get("jsonrpc").and_then(|v| v.as_str());
-    if jsonrpc != Some("2.0") {
-        return Err(JsonRpcResponse::error(
-            None,
-            -32600,
-            "Invalid JSON-RPC version",
-        ));
-    }
-
-    // Get ID (required for requests, missing for notifications)
-    let id = value.get("id").and_then(extract_request_id);
-
-    // Get method
-    let method = value
-        .get("method")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| JsonRpcResponse::error(id.clone(), -32600, "Missing method"))?;
-
-    // Get params (optional)
-    let params = value.get("params").cloned();
-
-    // For notifications (methods starting with "notifications/"), id is optional
-    // For requests, id is required
-    if !is_notification_method(method) && id.is_none() {
-        return Err(JsonRpcResponse::error(None, -32600, "Missing id"));
-    }
-
-    Ok((id, method.to_string(), params))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    // =====================================================================
-    // extract_request_id
-    // =====================================================================
-
-    #[test]
-    fn extract_request_id_string_value() {
-        let val = json!("abc-123");
-        let id = extract_request_id(&val).unwrap();
-        assert_eq!(id, RequestId::String("abc-123".to_string()));
-    }
-
-    #[test]
-    fn extract_request_id_positive_integer() {
-        let val = json!(42);
-        let id = extract_request_id(&val).unwrap();
-        assert_eq!(id, RequestId::Number(42));
-    }
-
-    #[test]
-    fn extract_request_id_negative_integer() {
-        let val = json!(-1);
-        let id = extract_request_id(&val).unwrap();
-        assert_eq!(id, RequestId::Number(-1));
-    }
-
-    #[test]
-    fn extract_request_id_zero() {
-        let val = json!(0);
-        let id = extract_request_id(&val).unwrap();
-        assert_eq!(id, RequestId::Number(0));
-    }
-
-    #[test]
-    fn extract_request_id_null_returns_none() {
-        let val = json!(null);
-        assert!(extract_request_id(&val).is_none());
-    }
-
-    #[test]
-    fn extract_request_id_bool_returns_none() {
-        let val = json!(true);
-        assert!(extract_request_id(&val).is_none());
-    }
-
-    #[test]
-    #[allow(clippy::approx_constant)] // 3.14 tests float input, not π
-    fn extract_request_id_float_returns_none() {
-        let val = json!(3.14);
-        assert!(extract_request_id(&val).is_none());
-    }
-
-    #[test]
-    fn extract_request_id_array_returns_none() {
-        let val = json!([1, 2]);
-        assert!(extract_request_id(&val).is_none());
-    }
-
-    #[test]
-    fn extract_request_id_object_returns_none() {
-        let val = json!({"id": 1});
-        assert!(extract_request_id(&val).is_none());
-    }
-
-    // =====================================================================
-    // is_notification_method
-    // =====================================================================
-
-    #[test]
-    fn notification_method_recognized() {
-        assert!(is_notification_method("notifications/initialized"));
-        assert!(is_notification_method("notifications/cancelled"));
-        assert!(is_notification_method("notifications/"));
-    }
-
-    #[test]
-    fn regular_method_not_notification() {
-        assert!(!is_notification_method("initialize"));
-        assert!(!is_notification_method("tools/list"));
-        assert!(!is_notification_method("tools/call"));
-        assert!(!is_notification_method("ping"));
-        assert!(!is_notification_method(""));
-    }
-
-    // =====================================================================
-    // extract_tools_call_params
-    // =====================================================================
-
-    #[test]
-    fn extract_tools_call_params_full() {
-        let params = json!({"name": "my_tool", "arguments": {"key": "value"}});
-        let (name, args) = extract_tools_call_params(Some(&params));
-        assert_eq!(name, "my_tool");
-        assert_eq!(args, json!({"key": "value"}));
-    }
-
-    #[test]
-    fn extract_tools_call_params_missing_name() {
-        let params = json!({"arguments": {"key": "value"}});
-        let (name, args) = extract_tools_call_params(Some(&params));
-        assert_eq!(name, "");
-        assert_eq!(args, json!({"key": "value"}));
-    }
-
-    #[test]
-    fn extract_tools_call_params_missing_arguments() {
-        let params = json!({"name": "my_tool"});
-        let (name, args) = extract_tools_call_params(Some(&params));
-        assert_eq!(name, "my_tool");
-        assert_eq!(args, json!({}));
-    }
-
-    #[test]
-    fn extract_tools_call_params_none_input() {
-        let (name, args) = extract_tools_call_params(None);
-        assert_eq!(name, "");
-        assert_eq!(args, json!({}));
-    }
-
-    #[test]
-    fn extract_tools_call_params_empty_object() {
-        let params = json!({});
-        let (name, args) = extract_tools_call_params(Some(&params));
-        assert_eq!(name, "");
-        assert_eq!(args, json!({}));
-    }
-
-    // =====================================================================
-    // parse_request - valid requests
-    // =====================================================================
-
-    #[test]
-    fn parse_request_valid_with_string_id() {
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": "req-1",
-            "method": "tools/list"
-        });
-        let (id, method, params) = parse_request(&req).unwrap();
-        assert_eq!(id, Some(RequestId::String("req-1".to_string())));
-        assert_eq!(method, "tools/list");
-        assert!(params.is_none());
-    }
-
-    #[test]
-    fn parse_request_valid_with_numeric_id() {
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 42,
-            "method": "ping"
-        });
-        let (id, method, params) = parse_request(&req).unwrap();
-        assert_eq!(id, Some(RequestId::Number(42)));
-        assert_eq!(method, "ping");
-        assert!(params.is_none());
-    }
-
-    #[test]
-    fn parse_request_valid_with_params() {
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "my_tool", "arguments": {"q": "test"}}
-        });
-        let (id, method, params) = parse_request(&req).unwrap();
-        assert_eq!(id, Some(RequestId::Number(1)));
-        assert_eq!(method, "tools/call");
-        assert!(params.is_some());
-        let p = params.unwrap();
-        assert_eq!(p["name"], "my_tool");
-    }
-
-    #[test]
-    fn parse_request_notification_without_id() {
-        let req = json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        });
-        let (id, method, _params) = parse_request(&req).unwrap();
-        assert!(id.is_none());
-        assert_eq!(method, "notifications/initialized");
-    }
-
-    #[test]
-    fn parse_request_notification_with_id_accepted() {
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 99,
-            "method": "notifications/cancelled"
-        });
-        let (id, method, _params) = parse_request(&req).unwrap();
-        assert_eq!(id, Some(RequestId::Number(99)));
-        assert_eq!(method, "notifications/cancelled");
-    }
-
-    // =====================================================================
-    // parse_request - error cases
-    // =====================================================================
-
-    #[test]
-    fn parse_request_missing_jsonrpc_field() {
-        let req = json!({"id": 1, "method": "ping"});
-        let err = parse_request(&req).unwrap_err();
-        assert!(err.error.is_some());
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-        assert!(
-            err.error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("JSON-RPC version")
-        );
-    }
-
-    #[test]
-    fn parse_request_wrong_jsonrpc_version() {
-        let req = json!({"jsonrpc": "1.0", "id": 1, "method": "ping"});
-        let err = parse_request(&req).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-    }
-
-    #[test]
-    fn parse_request_missing_method() {
-        let req = json!({"jsonrpc": "2.0", "id": 1});
-        let err = parse_request(&req).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-        assert!(err.error.as_ref().unwrap().message.contains("method"));
-    }
-
-    #[test]
-    fn parse_request_non_notification_without_id() {
-        let req = json!({"jsonrpc": "2.0", "method": "tools/list"});
-        let err = parse_request(&req).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-        assert!(err.error.as_ref().unwrap().message.contains("id"));
-    }
-
-    #[test]
-    fn parse_request_null_jsonrpc() {
-        let req = json!({"jsonrpc": null, "id": 1, "method": "ping"});
-        let err = parse_request(&req).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-    }
-
-    #[test]
-    fn parse_request_numeric_jsonrpc() {
-        let req = json!({"jsonrpc": 2, "id": 1, "method": "ping"});
-        let err = parse_request(&req).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-    }
-
-    #[test]
-    fn parse_request_method_is_not_string() {
-        let req = json!({"jsonrpc": "2.0", "id": 1, "method": 123});
-        let err = parse_request(&req).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-    }
-
-    #[test]
-    fn parse_request_empty_object() {
-        let req = json!({});
-        let err = parse_request(&req).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, -32600);
-    }
-
-    #[test]
-    fn parse_request_initialize_method() {
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": "init-1",
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-03-26",
-                "capabilities": {},
-                "clientInfo": {"name": "test", "version": "1.0"}
-            }
-        });
-        let (id, method, params) = parse_request(&req).unwrap();
-        assert_eq!(id, Some(RequestId::String("init-1".to_string())));
-        assert_eq!(method, "initialize");
-        assert!(params.is_some());
     }
 }
