@@ -30,7 +30,7 @@ cargo run -- --config examples/servers.yaml
 - **Formatting**: Run `cargo fmt` before committing
 - **Linting**: Run `cargo clippy -- -W clippy::pedantic` and fix all warnings (pedantic is enforced in CI)
 - **Safety**: `unsafe` code is forbidden (`#[forbid(unsafe_code)]` in `Cargo.toml`)
-- **Tests**: Add tests for new functionality. Current: 446 tests, 0 allowed to regress.
+- **Tests**: Add tests for new functionality. Current: 1812 tests, 0 allowed to regress.
 - **Docs**: Update documentation for API changes
 
 ## Pull Request Process

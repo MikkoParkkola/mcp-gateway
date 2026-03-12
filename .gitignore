@@ -22,6 +22,9 @@ config.yaml
 !/capabilities/examples/
 !/capabilities/examples/
 
+# Claude Code
+.claude/
+
 # Build artifacts
 .mypy_cache/
 .ruff_cache/
