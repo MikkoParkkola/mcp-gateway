@@ -583,30 +583,30 @@ description: Search and ground a topic
 inputs:
   type: object
   properties:
-query:
-  type: string
+    query:
+      type: string
   required: [query]
 steps:
   - name: search
-tool: brave_search
-server: capabilities
-arguments:
-  query: "$inputs.query"
-  count: 5
+    tool: brave_search
+    server: capabilities
+    arguments:
+      query: "$inputs.query"
+      count: 5
   - name: ground
-tool: brave_grounding
-server: capabilities
-arguments:
-  query: "$search.web.results[0].title"
-condition: "$search.web.results | length > 0"
+    tool: brave_grounding
+    server: capabilities
+    arguments:
+      query: "$search.web.results[0].title"
+    condition: "$search.web.results | length > 0"
 output:
   type: object
   properties:
-summary:
-  path: "$ground.answer"
-  fallback: "No grounding available"
-sources:
-  path: "$search.web.results[].url"
+    summary:
+      path: "$ground.answer"
+      fallback: "No grounding available"
+    sources:
+      path: "$search.web.results[].url"
 on_error: continue
 max_retries: 2
 timeout: 30
@@ -629,7 +629,7 @@ name: minimal
 description: Minimal playbook
 steps:
   - name: step1
-tool: some_tool
+    tool: some_tool
 ";
     let def: PlaybookDefinition = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(def.name, "minimal");

@@ -267,14 +267,14 @@ fn test_providers_with_fallback_array() {
 primary:
   service: openai
   config:
-endpoint: https://api.openai.com/v1/chat
+    endpoint: https://api.openai.com/v1/chat
 fallback:
   - service: anthropic
-config:
-  endpoint: https://api.anthropic.com/v1/messages
+    config:
+      endpoint: https://api.anthropic.com/v1/messages
   - service: groq
-config:
-  endpoint: https://api.groq.com/v1/chat
+    config:
+      endpoint: https://api.groq.com/v1/chat
 ";
     let providers: ProvidersConfig = serde_yaml::from_str(yaml).unwrap();
     assert!(providers.named.contains_key("primary"));

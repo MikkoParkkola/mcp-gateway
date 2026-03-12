@@ -586,7 +586,7 @@ rename:
   web.results: results
 redact:
   - pattern: '\\b\\d{3}-\\d{2}-\\d{4}\\b'
-replacement: '[SSN]'
+    replacement: '[SSN]'
 format:
   type: flat
 ";
