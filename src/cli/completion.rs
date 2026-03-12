@@ -1,6 +1,6 @@
 //! Shell completion script generation for the `mcp-gateway` CLI.
 // String-building from iterators via format! is the clearest approach here.
-#![allow(clippy::format_collect_string_iterator)]
+#![allow(clippy::format_collect)]
 //!
 //! Generates tab-completion scripts for bash, zsh, and fish from the static
 //! command structure and the live capability registry.
