@@ -62,7 +62,8 @@ pub struct AppState {
     pub gateway_key_pair: Arc<GatewayKeyPair>,
 }
 
-/// Create the router
+/// Create the router.
+#[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
 pub fn create_router(state: Arc<AppState>) -> Router {
     let auth_state = AuthState {
         auth_config: Arc::clone(&state.auth_config),

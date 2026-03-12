@@ -372,6 +372,7 @@ pub(crate) fn build_cost_report_tool() -> Tool {
 }
 
 /// Construct the full meta-tool list, optionally including stats, webhooks, playbooks, and reload.
+#[allow(clippy::fn_params_excessive_bools)] // 4 feature flags; enum would be over-engineered
 pub(crate) fn build_meta_tools(
     stats_enabled: bool,
     webhooks_enabled: bool,

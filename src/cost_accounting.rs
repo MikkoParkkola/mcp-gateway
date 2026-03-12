@@ -115,7 +115,7 @@ pub struct SessionCost {
     pub session_id: String,
     /// API-key name for this session (if any).
     pub api_key_name: Option<String>,
-    /// All recorded events (append-only; bounded by eviction in CostTracker).
+    /// All recorded events (append-only; bounded by eviction in [`CostTracker`]).
     records: parking_lot::Mutex<Vec<CostRecord>>,
     /// Running token total (fast path).
     total_tokens: AtomicU64,
@@ -289,16 +289,17 @@ impl KeyCost {
 
     /// Produce a serialisable snapshot with all three time windows.
     #[must_use]
+    #[allow(clippy::similar_names)] // cost_24h / cost_7d / cost_30d are intentionally parallel
     pub fn snapshot(&self) -> KeyCostSnapshot {
-        let (tok_24h, cost_24h) = self.window_totals(BudgetWindow::Day.secs());
-        let (tok_7d, cost_7d) = self.window_totals(BudgetWindow::Week.secs());
-        let (tok_30d, cost_30d) = self.window_totals(BudgetWindow::Month.secs());
+        let (tokens_24h, cost_24h) = self.window_totals(BudgetWindow::Day.secs());
+        let (tokens_7d, cost_7d) = self.window_totals(BudgetWindow::Week.secs());
+        let (tokens_30d, cost_30d) = self.window_totals(BudgetWindow::Month.secs());
 
         // Breakdown by tool (all-time records kept in memory)
         let records = self.records.lock();
         let mut by_tool: std::collections::HashMap<String, ToolCost> =
             std::collections::HashMap::new();
-        for r in records.iter() {
+        for r in &*records {
             let key = format!("{}:{}", r.backend, r.tool);
             let e = by_tool.entry(key.clone()).or_insert(ToolCost {
                 tool_key: key,
@@ -314,16 +315,16 @@ impl KeyCost {
 
         KeyCostSnapshot {
             api_key_name: self.name.clone(),
-            window_24h: WindowStats { tokens: tok_24h, cost_usd: cost_24h },
-            window_7d: WindowStats { tokens: tok_7d, cost_usd: cost_7d },
-            window_30d: WindowStats { tokens: tok_30d, cost_usd: cost_30d },
+            window_24h: WindowStats { tokens: tokens_24h, cost_usd: cost_24h },
+            window_7d: WindowStats { tokens: tokens_7d, cost_usd: cost_7d },
+            window_30d: WindowStats { tokens: tokens_30d, cost_usd: cost_30d },
             hard_limit_usd: self.budget.hard_limit_usd,
             budget_status: format!("{:?}", self.budget_status()),
             by_tool: by_tool.into_values().collect(),
         }
     }
 
-    /// Evict events older than 30 days (called periodically by CostTracker).
+    /// Evict events older than 30 days (called periodically by [`CostTracker`]).
     fn evict_old(&self) {
         let cutoff = now_secs().saturating_sub(BudgetWindow::Month.secs());
         let mut records = self.records.lock();
@@ -497,8 +498,7 @@ impl CostTracker {
     pub fn check_budget(&self, api_key_name: &str) -> BudgetStatus {
         self.per_key
             .get(api_key_name)
-            .map(|kc| kc.budget_status())
-            .unwrap_or(BudgetStatus::Ok)
+            .map_or(BudgetStatus::Ok, |kc| kc.budget_status())
     }
 
     /// Snapshot the cost for a session.
@@ -510,7 +510,7 @@ impl CostTracker {
     /// Snapshot all sessions.
     #[must_use]
     pub fn all_sessions(&self) -> Vec<SessionCostSnapshot> {
-        self.per_session.iter().map(|e| e.snapshot()).collect()
+        self.per_session.iter().map(|e| e.value().snapshot()).collect()
     }
 
     /// Snapshot the cost for a single API key.
@@ -522,7 +522,7 @@ impl CostTracker {
     /// Snapshot all API key accumulators.
     #[must_use]
     pub fn all_keys(&self) -> Vec<KeyCostSnapshot> {
-        self.per_key.iter().map(|e| e.snapshot()).collect()
+        self.per_key.iter().map(|e| e.value().snapshot()).collect()
     }
 
     /// Aggregate total across all sessions.
@@ -531,7 +531,7 @@ impl CostTracker {
         let mut total_calls: u64 = 0;
         let mut total_tokens: u64 = 0;
         let mut total_cost: f64 = 0.0;
-        for entry in self.per_session.iter() {
+        for entry in &self.per_session {
             let snap = entry.snapshot();
             total_calls += snap.call_count;
             total_tokens += snap.total_tokens;
@@ -550,7 +550,7 @@ impl CostTracker {
     ///
     /// Call this periodically (e.g., hourly) from a background task.
     pub fn evict_old_records(&self) {
-        for entry in self.per_key.iter() {
+        for entry in &self.per_key {
             entry.evict_old();
         }
     }

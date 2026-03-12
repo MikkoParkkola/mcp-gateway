@@ -601,25 +601,25 @@ fn apply_backend_tool_call_security(
 
     if let Err(e) = validate_tool_name(tool_name) {
         warn!(backend = %backend_name, tool = %tool_name, "Tool name rejected by validation");
-        return Some(Err(backend_security_error(id, e.to_string())));
+        return Some(Err(backend_security_error(id, &e)));
     }
 
     if let Err(e) = state.tool_policy.check(backend_name, tool_name) {
         warn!(backend = %backend_name, tool = %tool_name, "Tool blocked by policy");
-        return Some(Err(backend_security_error(id, e.to_string())));
+        return Some(Err(backend_security_error(id, &e.to_string())));
     }
 
     match sanitize_json_value(params) {
         Ok(sanitized) => Some(Ok(sanitized)),
         Err(e) => {
             warn!(backend = %backend_name, tool = %tool_name, "Input sanitization failed");
-            Some(Err(backend_security_error(id, e.to_string())))
+            Some(Err(backend_security_error(id, &e.to_string())))
         }
     }
 }
 
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
-fn backend_security_error(id: &RequestId, message: String) -> (StatusCode, Json<Value>) {
+fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
     (
         StatusCode::FORBIDDEN,
         Json(json!({

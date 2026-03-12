@@ -344,7 +344,7 @@ impl MetaMcp {
     // ========================================================================
 
     /// `gateway_cost_report` — per-session and per-API-key spend report.
-    #[allow(clippy::unnecessary_wraps)]
+    #[allow(clippy::unnecessary_wraps, clippy::unused_async)]
     pub(super) async fn get_cost_report(
         &self,
         args: &Value,
@@ -393,6 +393,7 @@ impl MetaMcp {
 
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.
+    #[allow(clippy::unused_async)]
     pub(super) async fn get_stats(&self, args: &Value) -> Result<Value> {
         let price_per_million = extract_price_per_million(args);
 
