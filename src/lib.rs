@@ -51,13 +51,17 @@ pub mod registry;
 pub mod routing_profile;
 pub mod secret_injection;
 pub mod secrets;
+pub mod scheduler;
 pub mod security;
+pub mod session_sandbox;
+pub mod simhash;
 pub mod stats;
 pub mod tool_registry;
 pub mod tracing_context;
 pub mod transform;
 pub mod transition;
 pub mod transport;
+pub mod tunnel;
 pub mod validator;
 
 pub use error::{Error, Result};

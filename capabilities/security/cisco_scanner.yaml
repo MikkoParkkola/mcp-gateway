@@ -1,0 +1,100 @@
+fulcrum: "1.0"
+name: cisco_scanner
+description: >
+  Cisco MCP/skill security scanners — scan registered MCP server configurations
+  and agentic skill files for known vulnerability patterns. Integrates Cisco's
+  State of AI Security 2026 scanning tools into the gateway audit pipeline.
+  [keywords: security, scanner, vulnerability, audit, cisco, mcp, skill, compliance]
+
+schema:
+  input:
+    type: object
+    properties:
+      operation:
+        type: string
+        description: "Security scan operation"
+        enum:
+          - scan_mcp_server
+          - scan_skill_file
+          - scan_all_backends
+          - get_vulnerability_report
+          - check_compliance
+      target:
+        type: string
+        description: "MCP server name or skill file path to scan"
+      scan_level:
+        type: string
+        description: "Scan depth level"
+        enum: [quick, standard, deep]
+        default: standard
+      rules:
+        type: array
+        description: "Specific vulnerability rules to check"
+        items:
+          type: string
+    required:
+      - operation
+  output:
+    type: object
+    properties:
+      findings:
+        type: array
+        description: "Vulnerability findings"
+        items:
+          type: object
+          properties:
+            severity:
+              type: string
+              enum: [critical, high, medium, low, info]
+            rule_id:
+              type: string
+            description:
+              type: string
+            location:
+              type: string
+            remediation:
+              type: string
+      summary:
+        type: object
+        properties:
+          total_findings:
+            type: integer
+          critical:
+            type: integer
+          high:
+            type: integer
+          pass:
+            type: boolean
+
+providers:
+  primary:
+    service: mcp
+    cost_per_call: 0
+    timeout: 120
+    config:
+      command: cisco-mcp-scanner
+      transport: stdio
+
+auth:
+  required: false
+  description: >
+    Install Cisco security scanners from https://github.com/cisco/mcp-scanner
+    No API key required (open-source).
+
+cache:
+  strategy: none
+
+metadata:
+  category: security
+  tags:
+    - security
+    - scanner
+    - vulnerability
+    - audit
+    - cisco
+    - mcp
+    - compliance
+  cost_category: free
+  execution_time: slow
+  read_only: true
+  docs: https://github.com/cisco/mcp-scanner

@@ -1,0 +1,113 @@
+fulcrum: "1.0"
+name: cloudflare_manage
+description: >
+  Cloudflare MCP server — manage DNS records, WAF rules, Workers, R2 storage,
+  DDoS protection, and all Cloudflare services. Code Mode compatible with
+  list/create/update/delete operations across zones and accounts.
+  [keywords: cloudflare, dns, waf, workers, r2, cdn, security, infrastructure]
+
+schema:
+  input:
+    type: object
+    properties:
+      operation:
+        type: string
+        description: "Cloudflare operation"
+        enum:
+          - list_zones
+          - list_dns_records
+          - create_dns_record
+          - update_dns_record
+          - delete_dns_record
+          - list_waf_rules
+          - create_waf_rule
+          - list_workers
+          - deploy_worker
+          - list_r2_buckets
+          - list_r2_objects
+          - purge_cache
+      zone_id:
+        type: string
+        description: "Cloudflare zone ID (required for most operations)"
+      record:
+        type: object
+        description: "DNS record details (for create/update)"
+        properties:
+          type:
+            type: string
+            enum: [A, AAAA, CNAME, MX, TXT, SRV, NS, CAA]
+          name:
+            type: string
+          content:
+            type: string
+          ttl:
+            type: integer
+            default: 1
+          proxied:
+            type: boolean
+            default: true
+      record_id:
+        type: string
+        description: "DNS record ID (for update/delete)"
+      worker_name:
+        type: string
+        description: "Worker script name"
+      bucket_name:
+        type: string
+        description: "R2 bucket name"
+    required:
+      - operation
+  output:
+    type: object
+    properties:
+      success:
+        type: boolean
+      result:
+        type: object
+        description: "Operation-specific result"
+      errors:
+        type: array
+        items:
+          type: object
+
+providers:
+  primary:
+    service: mcp
+    cost_per_call: 0
+    timeout: 30
+    config:
+      command: npx
+      args:
+        - "@anthropic/cloudflare-mcp"
+      transport: stdio
+      env:
+        CLOUDFLARE_API_TOKEN: "{env.CLOUDFLARE_API_TOKEN}"
+        CLOUDFLARE_ACCOUNT_ID: "{env.CLOUDFLARE_ACCOUNT_ID}"
+
+auth:
+  required: true
+  type: api_key
+  key: "env:CLOUDFLARE_API_TOKEN"
+  description: >
+    Create API token at https://dash.cloudflare.com/profile/api-tokens
+    with Zone:Read, DNS:Edit, Workers:Edit permissions.
+
+cache:
+  strategy: ttl
+  ttl: 30
+
+metadata:
+  category: infrastructure
+  tags:
+    - cloudflare
+    - dns
+    - waf
+    - workers
+    - r2
+    - cdn
+    - security
+    - infrastructure
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.cloudflare.com/api/

@@ -2,6 +2,7 @@
 
 mod http;
 mod stdio;
+mod websocket;
 
 pub use self::http::HttpTransport;
 pub use self::stdio::StdioTransport;
