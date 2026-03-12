@@ -11,6 +11,7 @@
 //! - [`scope_collision`]: Namespace collision detection + tool name validation
 //! - [`response_scanner`]: Prompt injection pattern detection in tool responses
 
+pub mod data_flow;
 pub mod policy;
 pub mod response_scanner;
 pub mod sanitize;
@@ -18,6 +19,10 @@ pub mod scope_collision;
 pub mod ssrf;
 pub mod tool_integrity;
 
+pub use data_flow::{
+    DataFlowRecord, DataFlowTracer, SanitizationRecord, ToolCategory, audit_sanitization,
+    hash_argument,
+};
 pub use policy::{ToolPolicy, ToolPolicyConfig};
 pub use response_scanner::ResponseScanner;
 pub use sanitize::{
