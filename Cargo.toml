@@ -100,6 +100,7 @@ walkdir = "2.5"
 # Metrics
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", optional = true }
+tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
