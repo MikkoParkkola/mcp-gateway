@@ -107,6 +107,7 @@ tokio-test = "0.4"
 pretty_assertions = "1.4"
 tempfile = "3.14"
 serde_urlencoded = "0.7"
+criterion = { version = "0.7.0", features = ["html_reports"] }
 
 [features]
 default = ["webui"]
@@ -116,6 +117,10 @@ metrics = ["dep:metrics-exporter-prometheus"]
 [[bin]]
 name = "mcp-gateway"
 path = "src/main.rs"
+
+[[bench]]
+name = "gateway_benchmarks"
+harness = false
 
 [profile.dev]
 debug = 0               # No debug symbols — biggest size saver (~50%)

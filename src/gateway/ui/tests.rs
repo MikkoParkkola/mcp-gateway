@@ -47,7 +47,7 @@ fn default_state<'a>(backends: Vec<BackendHealth>) -> DashboardState<'a> {
             total_misses: 100,
         },
         uptime_secs: 3661,
-        version: "2.4.0",
+        version: env!("CARGO_PKG_VERSION"),
     }
 }
 
@@ -153,7 +153,8 @@ fn render_contains_doctype_and_meta_refresh() {
 fn render_contains_version_and_uptime() {
     let ds = default_state(vec![]);
     let html = DashboardRenderer::render(&ds);
-    assert!(html.contains("v2.4.0"));
+    let expected_version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    assert!(html.contains(&expected_version));
     assert!(html.contains("1h 1m")); // 3661 s
 }
 

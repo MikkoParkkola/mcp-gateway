@@ -31,3 +31,10 @@ config.yaml
 .tiers/
 config.yaml
 /dist/
+
+# Local cargo config
+.cargo/
+
+# Internal planning docs and drafts
+docs/plans/
+linkedin-post-draft.md

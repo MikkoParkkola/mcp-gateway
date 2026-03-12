@@ -3,6 +3,8 @@
 //! Provides discovery and installation of pre-built capability definitions
 //! from both local capabilities directory and remote GitHub sources.
 
+pub mod marketplace;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -2,10 +2,11 @@
 
 mod http;
 mod stdio;
-mod websocket;
+pub mod websocket;
 
 pub use self::http::HttpTransport;
 pub use self::stdio::StdioTransport;
+pub use self::websocket::McpFrame;
 
 use async_trait::async_trait;
 use serde_json::Value;
