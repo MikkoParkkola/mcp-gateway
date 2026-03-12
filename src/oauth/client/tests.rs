@@ -76,7 +76,11 @@ fn state_generates_unique_values() {
 fn state_has_sufficient_length() {
     let state = generate_state();
     // 16 random bytes -> 22 base64url chars
-    assert!(state.len() >= 20, "State should be at least 20 chars, got {}", state.len());
+    assert!(
+        state.len() >= 20,
+        "State should be at least 20 chars, got {}",
+        state.len()
+    );
 }
 
 // =========================================================================
@@ -104,9 +108,8 @@ fn client_id_generates_unique_values() {
 
 #[test]
 fn new_client_has_no_valid_token() {
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_no_token")).unwrap(),
-    );
+    let storage =
+        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_no_token")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "test-backend".to_string(),
@@ -120,9 +123,8 @@ fn new_client_has_no_valid_token() {
 
 #[test]
 fn client_with_valid_token_returns_true() {
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_valid_token")).unwrap(),
-    );
+    let storage =
+        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_valid_token")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "test-backend".to_string(),
@@ -147,9 +149,8 @@ fn client_with_valid_token_returns_true() {
 
 #[test]
 fn client_with_expired_token_returns_false() {
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_expired_token")).unwrap(),
-    );
+    let storage =
+        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_expired_token")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "test-backend".to_string(),
@@ -160,13 +161,8 @@ fn client_with_expired_token_returns_false() {
     );
 
     // Inject an expired token
-    let mut token = TokenInfo::from_response(
-        "expired_token".to_string(),
-        None,
-        None,
-        Some(3600),
-        None,
-    );
+    let mut token =
+        TokenInfo::from_response("expired_token".to_string(), None, None, Some(3600), None);
     token.expires_at = Some(0); // expired long ago
     *client.current_token.write() = Some(token);
 
@@ -179,9 +175,8 @@ fn client_with_expired_token_returns_false() {
 
 #[test]
 fn backend_name_returns_configured_name() {
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_backend_name")).unwrap(),
-    );
+    let storage =
+        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_backend_name")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "my-service".to_string(),
@@ -261,6 +256,8 @@ fn needs_proactive_refresh_true_when_within_buffer() {
         refresh_token: None,
         expires_at: Some(now + 200), // only 200s left, buffer is 300s
         scope: None,
+        token_endpoint: None,
+        client_id: None,
     };
     *client.current_token.write() = Some(token);
 

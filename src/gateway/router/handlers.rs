@@ -15,11 +15,11 @@ use super::AppState;
 use super::helpers::{
     build_response, extract_tools_call_params, parse_request, parse_sampling_params,
 };
+use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::streaming::create_sse_response;
 use crate::mtls::CertIdentity;
 use crate::protocol::{ElicitationCreateParams, JsonRpcResponse, RequestId};
 use crate::security::{sanitize_json_value, validate_tool_name, validate_url_not_ssrf};
-use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::streaming::create_sse_response;
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
@@ -203,10 +203,7 @@ pub(super) async fn meta_mcp_handler(
         .cloned();
     // Extract mTLS certificate identity (present when mTLS is active and a valid
     // client certificate was presented during the TLS handshake).
-    let cert_identity = http_request
-        .extensions()
-        .get::<CertIdentity>()
-        .cloned();
+    let cert_identity = http_request.extensions().get::<CertIdentity>().cloned();
 
     // Parse JSON body
     let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
@@ -294,7 +291,9 @@ pub(super) async fn meta_mcp_handler(
         if let Some(resp_id) = request.get("id").and_then(|v| v.as_str()) {
             if resp_id.starts_with("sampling-") || resp_id.starts_with("elicitation-") {
                 debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
-                let resolved = state.proxy_manager.resolve_pending(resp_id, request.clone());
+                let resolved = state
+                    .proxy_manager
+                    .resolve_pending(resp_id, request.clone());
                 if resolved {
                     debug!(id = %resp_id, "Routed proxy response to caller");
                 } else {
@@ -386,9 +385,10 @@ pub(super) async fn meta_mcp_handler(
                         // mTLS certificate-based policy check (defense-in-depth layer)
                         if !state.mtls_policy.is_empty() {
                             use crate::mtls::PolicyDecision;
-                            let decision = state
-                                .mtls_policy
-                                .evaluate(cert_identity.as_ref(), server, tool);
+                            let decision =
+                                state
+                                    .mtls_policy
+                                    .evaluate(cert_identity.as_ref(), server, tool);
                             if decision == PolicyDecision::Deny {
                                 let identity_label = cert_identity
                                     .as_ref()
@@ -458,7 +458,13 @@ pub(super) async fn meta_mcp_handler(
             let api_key_name = client.as_ref().map(|c| c.name.as_str());
             state
                 .meta_mcp
-                .handle_tools_call(id, tool_name, arguments, Some(session_id.as_str()), api_key_name)
+                .handle_tools_call(
+                    id,
+                    tool_name,
+                    arguments,
+                    Some(session_id.as_str()),
+                    api_key_name,
+                )
                 .await
         }
         // Resources
@@ -536,7 +542,11 @@ pub(super) async fn meta_mcp_handler(
                     Ok(ep) => ep,
                     Err(e) => {
                         return build_response(
-                            JsonRpcResponse::error(Some(id), -32602, format!("Invalid elicitation params: {e}")),
+                            JsonRpcResponse::error(
+                                Some(id),
+                                -32602,
+                                format!("Invalid elicitation params: {e}"),
+                            ),
                             &session_id,
                             StatusCode::OK,
                         );
@@ -631,6 +641,7 @@ fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Va
 }
 
 /// Backend handler (POST /mcp/{name})
+#[allow(clippy::too_many_lines)]
 pub(super) async fn backend_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -731,11 +742,18 @@ pub(super) async fn backend_handler(
             Some(Ok(sanitized_params)) => {
                 // Forward the sanitized params to the backend
                 return match backend.request(&method, Some(sanitized_params)).await {
-                    Ok(response) => (StatusCode::OK, Json(serde_json::to_value(response).unwrap())),
+                    Ok(response) => (
+                        StatusCode::OK,
+                        Json(serde_json::to_value(response).unwrap()),
+                    ),
                     Err(e) => {
                         error!(backend = %name, error = %e, "Backend request failed");
-                        let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-                        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::to_value(response).unwrap()))
+                        let response =
+                            JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::to_value(response).unwrap()),
+                        )
                     }
                 };
             }

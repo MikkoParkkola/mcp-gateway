@@ -1,0 +1,126 @@
+fulcrum: "1.0"
+name: confluence_search
+description: Search Confluence pages and spaces using CQL (Confluence Query Language)
+
+schema:
+  input:
+    type: object
+    properties:
+      cql:
+        type: string
+        description: "CQL query string for filtering content (e.g. 'type = page AND space = \"DEV\" AND title ~ \"API\"')"
+        examples:
+          - "type = page AND space = \"ENG\" AND text ~ \"deployment guide\""
+          - "type = blogpost AND creator = currentUser() AND created > \"2024-01-01\""
+          - "ancestor = 12345 AND type = page ORDER BY lastModified DESC"
+      limit:
+        type: integer
+        description: "Maximum number of results to return (default: 25, max: 100)"
+        default: 25
+        minimum: 1
+        maximum: 100
+      start:
+        type: integer
+        description: "Index of first result for pagination (0-based)"
+        default: 0
+      expand:
+        type: string
+        description: "Comma-separated list of fields to expand (e.g. 'body.view,version,space')"
+    required:
+      - cql
+  output:
+    type: object
+    properties:
+      results:
+        type: array
+        description: Array of matching Confluence content objects
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            type:
+              type: string
+              enum: [page, blogpost, attachment, comment]
+            title:
+              type: string
+            space:
+              type: object
+              properties:
+                key:
+                  type: string
+                name:
+                  type: string
+            _links:
+              type: object
+              properties:
+                webui:
+                  type: string
+                  description: Browser URL for this page
+            version:
+              type: object
+              properties:
+                number:
+                  type: integer
+                when:
+                  type: string
+      start:
+        type: integer
+      limit:
+        type: integer
+      size:
+        type: integer
+        description: Number of results in this response
+      totalSize:
+        type: integer
+        description: Total results matching the query
+      _links:
+        type: object
+        properties:
+          next:
+            type: string
+            description: URL for next page of results
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 20
+    config:
+      base_url: https://your-domain.atlassian.net
+      path: /wiki/rest/api/content/search
+      method: GET
+      headers:
+        Authorization: "Basic {env.CONFLUENCE_BASIC_AUTH}"
+        Accept: "application/json"
+      params:
+        cql: "{cql}"
+        limit: "{limit}"
+        start: "{start}"
+        expand: "{expand}"
+
+cache:
+  strategy: ttl
+  ttl: 120
+
+auth:
+  required: true
+  type: basic
+  key: env:CONFLUENCE_BASIC_AUTH
+  description: "Set CONFLUENCE_BASIC_AUTH to base64(email:api_token). Get your API token at https://id.atlassian.com/manage-profile/security/api-tokens. Also set your Atlassian domain in the base_url."
+  header: Authorization
+  prefix: Basic
+
+metadata:
+  category: productivity
+  tags:
+    - confluence
+    - atlassian
+    - wiki
+    - search
+    - knowledge-base
+    - documentation
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-content/#api-wiki-rest-api-content-search-get

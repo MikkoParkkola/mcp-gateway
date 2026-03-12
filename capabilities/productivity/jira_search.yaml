@@ -1,0 +1,106 @@
+fulcrum: "1.0"
+name: jira_search
+description: Search Jira issues using JQL (Jira Query Language) for project management and issue tracking
+
+schema:
+  input:
+    type: object
+    properties:
+      jql:
+        type: string
+        description: "JQL query string (e.g. 'project = MYPROJ AND status = Open ORDER BY created DESC')"
+        examples:
+          - "project = PROJ AND status = 'In Progress' AND assignee = currentUser()"
+          - "created >= -7d AND issuetype = Bug ORDER BY priority DESC"
+          - "sprint in openSprints() AND status != Done"
+      maxResults:
+        type: integer
+        description: "Maximum number of issues to return (default: 20, max: 100)"
+        default: 20
+        minimum: 1
+        maximum: 100
+      startAt:
+        type: integer
+        description: "Index of first issue to return for pagination (0-based)"
+        default: 0
+      fields:
+        type: array
+        description: "Specific fields to include in the response. Omit for defaults."
+        items:
+          type: string
+        examples:
+          - ["summary", "status", "assignee", "priority", "created"]
+    required:
+      - jql
+  output:
+    type: object
+    properties:
+      total:
+        type: integer
+        description: Total number of issues matching the query
+      startAt:
+        type: integer
+        description: Index of first returned issue
+      maxResults:
+        type: integer
+        description: Maximum results requested
+      issues:
+        type: array
+        description: Array of matching Jira issues
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            key:
+              type: string
+              description: "Issue key (e.g. PROJ-123)"
+            self:
+              type: string
+              description: API URL for this issue
+            fields:
+              type: object
+              description: Issue fields (summary, status, assignee, etc.)
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 20
+    config:
+      base_url: https://your-domain.atlassian.net
+      path: /rest/api/3/search
+      method: GET
+      headers:
+        Authorization: "Basic {env.JIRA_BASIC_AUTH}"
+        Accept: "application/json"
+      params:
+        jql: "{jql}"
+        maxResults: "{maxResults}"
+        startAt: "{startAt}"
+
+cache:
+  strategy: ttl
+  ttl: 30
+
+auth:
+  required: true
+  type: basic
+  key: env:JIRA_BASIC_AUTH
+  description: "Set JIRA_BASIC_AUTH to base64(email:api_token). Get token at https://id.atlassian.com/manage-profile/security/api-tokens. Also set JIRA_BASE_URL to your Atlassian domain."
+  header: Authorization
+  prefix: Basic
+
+metadata:
+  category: productivity
+  tags:
+    - jira
+    - atlassian
+    - search
+    - issues
+    - project-management
+    - tickets
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-get

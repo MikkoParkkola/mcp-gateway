@@ -33,6 +33,14 @@ pub struct TokenInfo {
     /// Granted scopes
     #[serde(default)]
     pub scope: Option<String>,
+
+    /// OAuth token endpoint stored with the token for executor-level refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+
+    /// OAuth `client_id` stored alongside the token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 fn default_token_type() -> String {
@@ -62,6 +70,8 @@ impl TokenInfo {
             refresh_token,
             expires_at,
             scope,
+            token_endpoint: None,
+            client_id: None,
         }
     }
 
@@ -263,13 +273,8 @@ mod tests {
 
     #[test]
     fn from_response_preserves_custom_token_type() {
-        let token = TokenInfo::from_response(
-            "tok".to_string(),
-            Some("MAC".to_string()),
-            None,
-            None,
-            None,
-        );
+        let token =
+            TokenInfo::from_response("tok".to_string(), Some("MAC".to_string()), None, None, None);
         assert_eq!(token.token_type, "MAC");
     }
 
@@ -333,6 +338,8 @@ mod tests {
             refresh_token: None,
             expires_at: Some(now + 30),
             scope: None,
+            token_endpoint: None,
+            client_id: None,
         };
         assert!(token.is_expired());
     }
@@ -350,6 +357,8 @@ mod tests {
             refresh_token: None,
             expires_at: Some(now + 120),
             scope: None,
+            token_endpoint: None,
+            client_id: None,
         };
         assert!(!token.is_expired());
     }
@@ -370,6 +379,8 @@ mod tests {
             refresh_token: None,
             expires_at: Some(now + 3600),
             scope: None,
+            token_endpoint: None,
+            client_id: None,
         };
         let ttl = token.time_until_expiry().unwrap();
         assert!(ttl.as_secs() >= 3598 && ttl.as_secs() <= 3601);
@@ -383,6 +394,8 @@ mod tests {
             refresh_token: None,
             expires_at: Some(0), // long expired
             scope: None,
+            token_endpoint: None,
+            client_id: None,
         };
         assert!(token.time_until_expiry().is_none());
     }
@@ -395,6 +408,8 @@ mod tests {
             refresh_token: None,
             expires_at: None,
             scope: None,
+            token_endpoint: None,
+            client_id: None,
         };
         assert!(token.time_until_expiry().is_none());
     }
@@ -464,7 +479,9 @@ mod tests {
             Some("read".to_string()),
         );
 
-        storage.save("mybackend", "http://localhost:8080", &token).unwrap();
+        storage
+            .save("mybackend", "http://localhost:8080", &token)
+            .unwrap();
 
         let loaded = storage.load("mybackend", "http://localhost:8080").unwrap();
         assert_eq!(loaded.access_token, "my_access_token");
@@ -496,7 +513,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
         // Should not error when deleting non-existent token
-        storage.delete("no_such_backend", "http://localhost").unwrap();
+        storage
+            .delete("no_such_backend", "http://localhost")
+            .unwrap();
     }
 
     #[test]
@@ -505,10 +524,14 @@ mod tests {
         let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
 
         let token1 = TokenInfo::from_response("token_v1".to_string(), None, None, None, None);
-        storage.save("backend", "http://localhost", &token1).unwrap();
+        storage
+            .save("backend", "http://localhost", &token1)
+            .unwrap();
 
         let token2 = TokenInfo::from_response("token_v2".to_string(), None, None, None, None);
-        storage.save("backend", "http://localhost", &token2).unwrap();
+        storage
+            .save("backend", "http://localhost", &token2)
+            .unwrap();
 
         let loaded = storage.load("backend", "http://localhost").unwrap();
         assert_eq!(loaded.access_token, "token_v2");

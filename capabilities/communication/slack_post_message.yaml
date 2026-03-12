@@ -1,35 +1,66 @@
 fulcrum: "1.0"
 name: slack_post_message
-description: Post a message to a Slack channel using incoming webhook. Simple and fast, no OAuth required.
+description: Post a message to a Slack channel or direct message
 
 schema:
   input:
     type: object
     properties:
-      text:
-        type: string
-        description: Message text (Markdown supported)
       channel:
         type: string
-        description: Channel to post to (optional if webhook is channel-specific)
-      username:
+        description: "Channel ID or name to post to (e.g. 'C1234567890' or '#general'). Use DM by passing a user ID."
+      text:
         type: string
-        description: Bot username to display
-        default: "Gateway Bot"
-      icon_emoji:
-        type: string
-        description: Emoji to use as icon
-        default: ":robot_face:"
-      attachments:
+        description: "Message text (supports Slack mrkdwn formatting)"
+      blocks:
         type: array
-        description: Rich message attachments
+        description: Slack Block Kit blocks for rich message formatting
         items:
           type: object
+      attachments:
+        type: array
+        description: Legacy Slack message attachments
+        items:
+          type: object
+      thread_ts:
+        type: string
+        description: "Thread timestamp to reply in a thread (e.g. '1629839400.000200')"
+      unfurl_links:
+        type: boolean
+        description: "Whether to automatically unfurl link previews (default: true)"
+        default: true
+      unfurl_media:
+        type: boolean
+        description: "Whether to automatically unfurl media (default: true)"
+        default: true
     required:
+      - channel
       - text
   output:
-    type: string
-    description: Response from Slack (typically "ok")
+    type: object
+    properties:
+      ok:
+        type: boolean
+        description: Whether the API call succeeded
+      channel:
+        type: string
+        description: Channel ID where message was posted
+      ts:
+        type: string
+        description: Message timestamp (unique message ID within the channel)
+      message:
+        type: object
+        description: The posted message object
+        properties:
+          text:
+            type: string
+          ts:
+            type: string
+          type:
+            type: string
+      error:
+        type: string
+        description: Error code if ok is false
 
 providers:
   primary:
@@ -37,15 +68,15 @@ providers:
     cost_per_call: 0
     timeout: 10
     config:
-      endpoint: "{env.SLACK_WEBHOOK_URL}"
+      base_url: https://slack.com
+      path: /api/chat.postMessage
       method: POST
       headers:
-        Content-Type: "application/json"
+        Authorization: "Bearer {env.SLACK_BOT_TOKEN}"
+        Content-Type: "application/json; charset=utf-8"
       body:
-        text: "{text}"
         channel: "{channel}"
-        username: "{username}"
-        icon_emoji: "{icon_emoji}"
+        text: "{text}"
 
 cache:
   strategy: none
@@ -53,19 +84,22 @@ cache:
 
 auth:
   required: true
-  type: webhook
-  key: env:SLACK_WEBHOOK_URL
-  description: Create incoming webhook at https://api.slack.com/messaging/webhooks
+  type: bearer
+  key: env:SLACK_BOT_TOKEN
+  description: "Create a Slack App at https://api.slack.com/apps, add 'chat:write' OAuth scope, install to workspace, and copy the Bot User OAuth Token (xoxb-...)."
+  header: Authorization
+  prefix: Bearer
 
 metadata:
-  category: communication
+  category: productivity
   tags:
     - slack
-    - communication
     - messaging
     - notifications
+    - chat
+    - team-communication
   cost_category: free
   execution_time: fast
   read_only: false
-  rate_limit: 1 req/sec per webhook
-  docs: https://api.slack.com/messaging/webhooks
+  rate_limit: "1 req/sec per channel (Tier 3)"
+  docs: https://api.slack.com/methods/chat.postMessage

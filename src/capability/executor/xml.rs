@@ -17,8 +17,8 @@ use serde_json::Value;
 
 /// Convert an XML string into a `serde_json::Value`.
 pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
-    use quick_xml::events::Event;
     use quick_xml::Reader;
+    use quick_xml::events::Event;
 
     let mut reader = Reader::from_str(xml);
 
@@ -62,9 +62,7 @@ pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
                 let text = e.unescape().unwrap_or_default().trim().to_string();
                 if !text.is_empty() {
                     if let Some(current) = stack.last_mut() {
-                        current
-                            .1
-                            .insert("#text".to_string(), Value::String(text));
+                        current.1.insert("#text".to_string(), Value::String(text));
                     }
                 }
             }
@@ -72,9 +70,7 @@ pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
                 let text = String::from_utf8_lossy(e.as_ref()).trim().to_string();
                 if !text.is_empty() {
                     if let Some(current) = stack.last_mut() {
-                        current
-                            .1
-                            .insert("#text".to_string(), Value::String(text));
+                        current.1.insert("#text".to_string(), Value::String(text));
                     }
                 }
             }
@@ -122,7 +118,9 @@ fn insert_child(parent: &mut serde_json::Map<String, Value>, key: &str, value: V
         }
         Entry::Occupied(mut e) => {
             let existing = e.get_mut();
-            if let Value::Array(arr) = existing { arr.push(value) } else {
+            if let Value::Array(arr) = existing {
+                arr.push(value);
+            } else {
                 let prev = existing.take();
                 *existing = Value::Array(vec![prev, value]);
             }

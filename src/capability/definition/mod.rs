@@ -302,10 +302,7 @@ impl RestConfig {
 
         // Start with static params as base, then overlay caller params on top.
         let mut merged = serde_json::Map::with_capacity(
-            self.static_params.len()
-                + caller_params
-                    .as_object()
-                    .map_or(0, serde_json::Map::len),
+            self.static_params.len() + caller_params.as_object().map_or(0, serde_json::Map::len),
         );
 
         for (k, v) in &self.static_params {
@@ -372,6 +369,14 @@ pub struct AuthConfig {
     /// of an HTTP header.
     #[serde(default)]
     pub param: Option<String>,
+
+    /// OAuth token endpoint URL for the refresh-token grant.
+    ///
+    /// When `key` is `oauth:<provider>` and the stored token is expired,
+    /// the executor will POST `grant_type=refresh_token` here when a
+    /// refresh token is available.
+    #[serde(default)]
+    pub token_endpoint: Option<String>,
 }
 
 /// Cache configuration
@@ -630,7 +635,6 @@ impl CapabilityDefinition {
         self.cache.ttl > 0 && !self.cache.strategy.is_empty() && self.cache.strategy != "none"
     }
 }
-
 
 #[cfg(test)]
 mod tests;

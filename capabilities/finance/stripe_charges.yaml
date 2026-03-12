@@ -1,0 +1,116 @@
+fulcrum: "1.0"
+name: stripe_charges
+description: Create a Stripe charge to collect a payment from a customer
+
+schema:
+  input:
+    type: object
+    properties:
+      amount:
+        type: integer
+        description: "Amount to charge in the smallest currency unit (e.g. cents for USD). Example: 2000 = $20.00"
+        minimum: 1
+      currency:
+        type: string
+        description: "Three-letter ISO 4217 currency code (e.g. 'usd', 'eur', 'gbp')"
+        examples: [usd, eur, gbp, jpy]
+      source:
+        type: string
+        description: "Payment source token (e.g. from Stripe.js: 'tok_visa') or customer ID"
+      customer:
+        type: string
+        description: Customer ID to charge (alternative to source)
+      description:
+        type: string
+        description: Arbitrary description shown on the charge
+      receipt_email:
+        type: string
+        description: Email address to send receipt to
+      metadata:
+        type: object
+        description: "Arbitrary key-value pairs for your own use (max 50 keys)"
+      capture:
+        type: boolean
+        description: "Whether to immediately capture the charge (default: true). Set false to authorize only."
+        default: true
+    required:
+      - amount
+      - currency
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+        description: "Unique charge ID (e.g. 'ch_3MtwBwLkdIwHu7ix28a3tqPa')"
+      object:
+        type: string
+        enum: [charge]
+      amount:
+        type: integer
+      currency:
+        type: string
+      status:
+        type: string
+        enum: [succeeded, pending, failed]
+      paid:
+        type: boolean
+      captured:
+        type: boolean
+      receipt_url:
+        type: string
+        description: URL of the charge receipt
+      created:
+        type: integer
+        description: Unix timestamp of charge creation
+      description:
+        type: string
+      failure_message:
+        type: string
+        description: Human-readable message if the charge failed
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.stripe.com
+      path: /v1/charges
+      method: POST
+      headers:
+        Authorization: "Bearer {env.STRIPE_SECRET_KEY}"
+        Content-Type: "application/x-www-form-urlencoded"
+      params:
+        amount: "{amount}"
+        currency: "{currency}"
+        source: "{source}"
+        customer: "{customer}"
+        description: "{description}"
+        receipt_email: "{receipt_email}"
+        capture: "{capture}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: bearer
+  key: env:STRIPE_SECRET_KEY
+  description: "Get your secret key from https://dashboard.stripe.com/apikeys. Use test keys (sk_test_...) for development."
+  header: Authorization
+  prefix: Bearer
+
+metadata:
+  category: finance
+  tags:
+    - stripe
+    - payments
+    - charge
+    - finance
+    - billing
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  rate_limit: 100 req/sec
+  docs: https://stripe.com/docs/api/charges/create

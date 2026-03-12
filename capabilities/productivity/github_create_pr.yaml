@@ -1,0 +1,119 @@
+fulcrum: "1.0"
+name: github_create_pr
+description: Create a GitHub Pull Request in a repository
+
+schema:
+  input:
+    type: object
+    properties:
+      owner:
+        type: string
+        description: Repository owner (username or organization)
+      repo:
+        type: string
+        description: Repository name
+      title:
+        type: string
+        description: Title of the pull request
+      head:
+        type: string
+        description: "Name of the branch containing the changes (e.g. 'feature/my-branch')"
+      base:
+        type: string
+        description: "Name of the base branch to merge into (e.g. 'main')"
+        default: main
+      body:
+        type: string
+        description: Body text of the pull request (supports Markdown)
+      draft:
+        type: boolean
+        description: Create as a draft pull request
+        default: false
+      maintainer_can_modify:
+        type: boolean
+        description: Allow maintainers to modify the PR branch
+        default: true
+    required:
+      - owner
+      - repo
+      - title
+      - head
+      - base
+  output:
+    type: object
+    properties:
+      number:
+        type: integer
+        description: Pull request number
+      html_url:
+        type: string
+        description: URL to view the pull request in the browser
+      state:
+        type: string
+        enum: [open, closed]
+      title:
+        type: string
+      body:
+        type: string
+      draft:
+        type: boolean
+      created_at:
+        type: string
+      head:
+        type: object
+        properties:
+          ref:
+            type: string
+          sha:
+            type: string
+      base:
+        type: object
+        properties:
+          ref:
+            type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.github.com
+      path: /repos/{owner}/{repo}/pulls
+      method: POST
+      headers:
+        Authorization: "Bearer {env.GITHUB_TOKEN}"
+        Accept: "application/vnd.github+json"
+        X-GitHub-Api-Version: "2022-11-28"
+      body:
+        title: "{title}"
+        head: "{head}"
+        base: "{base}"
+        body: "{body}"
+        draft: "{draft}"
+        maintainer_can_modify: "{maintainer_can_modify}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: bearer
+  key: env:GITHUB_TOKEN
+  description: "Create a Personal Access Token with 'repo' scope at https://github.com/settings/tokens"
+  header: Authorization
+  prefix: Bearer
+
+metadata:
+  category: productivity
+  tags:
+    - github
+    - pull-request
+    - git
+    - code-review
+    - devtools
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request

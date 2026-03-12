@@ -1,0 +1,111 @@
+fulcrum: "1.0"
+name: notion_search
+description: Search Notion pages, databases, and content using the Notion API
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Text to search for across all Notion content
+      filter:
+        type: object
+        description: Filter results by object type
+        properties:
+          value:
+            type: string
+            description: "Object type to filter: page or database"
+            enum: [page, database]
+          property:
+            type: string
+            description: "Property to filter on (always: object)"
+      sort:
+        type: object
+        description: Sort order for results
+        properties:
+          direction:
+            type: string
+            enum: [ascending, descending]
+          timestamp:
+            type: string
+            enum: [last_edited_time]
+      page_size:
+        type: integer
+        description: "Number of results per page (max 100, default: 10)"
+        default: 10
+        minimum: 1
+        maximum: 100
+      start_cursor:
+        type: string
+        description: Pagination cursor from previous response
+    required:
+      - query
+  output:
+    type: object
+    properties:
+      results:
+        type: array
+        description: Array of matching Notion objects
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            object:
+              type: string
+              enum: [page, database]
+            url:
+              type: string
+            created_time:
+              type: string
+            last_edited_time:
+              type: string
+      has_more:
+        type: boolean
+        description: Whether more results are available
+      next_cursor:
+        type: string
+        description: Cursor for fetching the next page
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.notion.com
+      path: /v1/search
+      method: POST
+      headers:
+        Authorization: "Bearer {env.NOTION_API_KEY}"
+        Content-Type: "application/json"
+        Notion-Version: "2022-06-28"
+      body:
+        query: "{query}"
+        page_size: "{page_size}"
+
+cache:
+  strategy: ttl
+  ttl: 60
+
+auth:
+  required: true
+  type: bearer
+  key: env:NOTION_API_KEY
+  description: "Create an integration at https://www.notion.so/my-integrations and copy the Internal Integration Token"
+  header: Authorization
+  prefix: Bearer
+
+metadata:
+  category: productivity
+  tags:
+    - notion
+    - search
+    - knowledge-base
+    - productivity
+    - documents
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developers.notion.com/reference/post-search

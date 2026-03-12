@@ -1,0 +1,77 @@
+fulcrum: "1.0"
+name: salesforce_query
+description: Execute a Salesforce SOQL query to retrieve CRM records
+
+schema:
+  input:
+    type: object
+    properties:
+      q:
+        type: string
+        description: "SOQL query string (e.g. 'SELECT Id, Name, Email FROM Contact WHERE AccountId = \\'001xx000003GYn2AAG\\' LIMIT 10')"
+        examples:
+          - "SELECT Id, Name, Email FROM Lead WHERE Status = 'Open' LIMIT 20"
+          - "SELECT Id, Name, Amount, StageName FROM Opportunity WHERE CloseDate = THIS_QUARTER"
+          - "SELECT Id, Name FROM Account WHERE Type = 'Customer' ORDER BY Name LIMIT 50"
+    required:
+      - q
+  output:
+    type: object
+    properties:
+      totalSize:
+        type: integer
+        description: Total number of records matching the query
+      done:
+        type: boolean
+        description: Whether all records have been returned
+      nextRecordsUrl:
+        type: string
+        description: URL to fetch the next batch of records (if done is false)
+      records:
+        type: array
+        description: Array of records matching the SOQL query
+        items:
+          type: object
+          description: A Salesforce record with requested fields
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 20
+    config:
+      base_url: https://your-instance.salesforce.com
+      path: /services/data/v59.0/query
+      method: GET
+      headers:
+        Authorization: "Bearer {env.SF_ACCESS_TOKEN}"
+        Accept: "application/json"
+      params:
+        q: "{q}"
+
+cache:
+  strategy: ttl
+  ttl: 60
+
+auth:
+  required: true
+  type: bearer
+  key: env:SF_ACCESS_TOKEN
+  description: "Obtain an access token via Salesforce OAuth flow or Connected App. Also set SF_INSTANCE_URL env var to your Salesforce instance URL."
+  header: Authorization
+  prefix: Bearer
+
+metadata:
+  category: productivity
+  tags:
+    - salesforce
+    - crm
+    - soql
+    - query
+    - leads
+    - opportunities
+    - contacts
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/resources_query.htm
