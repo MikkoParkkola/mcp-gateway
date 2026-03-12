@@ -5,12 +5,16 @@
 //! `gateway_list_disabled_capabilities`, `gateway_reload_config`,
 //! `gateway_webhook_status`, and `gateway_run_playbook`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
+use crate::cache_key::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use crate::idempotency::{GuardOutcome, enforce};
 use crate::cache::ResponseCache;
 use crate::playbook::PlaybookEngine;
+use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
 use super::MetaMcp;
@@ -23,6 +27,11 @@ use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_trace, resolve_idempotency_key,
 };
 
+/// Monotonically increasing request counter for load-balanced cache key slot selection.
+///
+/// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 impl MetaMcp {
     /// `gateway_invoke` — invoke a tool on a backend with full tracing, caching,
     /// idempotency, error-budget tracking, and predictive prefetch.
@@ -30,11 +39,12 @@ impl MetaMcp {
         &self,
         args: &Value,
         session_id: Option<&str>,
+        api_key_name: Option<&str>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, &trace_id_clone).await
+            self.invoke_tool_traced(args, session_id, api_key_name, &trace_id_clone).await
         })
         .await
     }
@@ -45,11 +55,20 @@ impl MetaMcp {
         &self,
         args: &Value,
         session_id: Option<&str>,
+        api_key_name: Option<&str>,
         trace_id: &str,
     ) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         let arguments = parse_tool_arguments(args)?;
+
+        // Validate tool name syntax before any work — prevents session corruption
+        // from malformed names injected by compromised backend servers.
+        if let Err(reason) = validate_tool_name(tool) {
+            return Err(Error::Protocol(format!(
+                "Invalid tool name '{tool}': {reason}"
+            )));
+        }
 
         tracing::Span::current().record("trace_id", trace_id);
 
@@ -138,9 +157,53 @@ impl MetaMcp {
 
         debug!(server, tool, trace_id, "Invoking tool");
 
-        let dispatch_result = self.dispatch_to_backend(server, tool, arguments.clone()).await;
+        // Derive a prompt_cache_key for OpenAI-compatible backends.
+        // Priority: explicit _meta.prompt_cache_key from caller > session hash.
+        let prompt_cache_key: Option<String> = args
+            .get("_meta")
+            .and_then(|m| m.get("prompt_cache_key"))
+            .and_then(Value::as_str)
+            .map(CacheKeyDeriver::from_header)
+            .or_else(|| {
+                session_id.map(|sid| {
+                    let deriver = CacheKeyDeriver::with_slots(3);
+                    let base = CacheKeyDeriver::from_context(sid);
+                    let req_idx = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    let slot = deriver.slot_for_request(req_idx);
+                    deriver.key_for_slot(&base, slot)
+                })
+            });
+
+        let dispatch_result = self
+            .dispatch_to_backend(server, tool, arguments.clone(), prompt_cache_key.as_deref())
+            .await;
+
+        // Record prompt-cached tokens from the backend response (if any)
+        if let Ok(ref response) = dispatch_result {
+            let cached_tokens = extract_cached_tokens(response);
+            if cached_tokens > 0 {
+                if let Some(ref stats) = self.stats {
+                    stats.record_cached_tokens(server, session_id, cached_tokens);
+                    debug!(server, tool, cached_tokens, trace_id, "Prompt cache hit recorded");
+                }
+            }
+        }
 
         self.record_error_budget(server, tool, dispatch_result.is_ok());
+
+        // Record cost for successful calls (token count estimated at 0 for non-LLM tools).
+        if dispatch_result.is_ok() {
+            if let Some(sid) = session_id {
+                self.cost_tracker.record(
+                    sid,
+                    api_key_name,
+                    server,
+                    tool,
+                    0, // token_count: 0 for backend tool calls (no model inference)
+                    crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
+                );
+            }
+        }
 
         let result = match dispatch_result {
             Ok(value) => value,
@@ -198,6 +261,11 @@ impl MetaMcp {
     }
 
     /// Record the session transition and return predictions for the current tool.
+    ///
+    /// Side-effects:
+    /// - Records `session_id → tool_key` in the `TransitionTracker`.
+    /// - If a `ToolRegistry` is attached, triggers schema prefetching for the
+    ///   top-N predicted successors (see [`crate::tool_registry::ToolRegistry::prefetch_after`]).
     pub(super) fn record_and_predict(
         &self,
         session_id: Option<&str>,
@@ -212,6 +280,11 @@ impl MetaMcp {
 
         tracker.record_transition(sid, tool_key);
 
+        // Warm registry schemas for predicted-next tools (no-op when no registry).
+        if let Some(registry) = self.get_tool_registry() {
+            registry.prefetch_after(tool_key, &tracker, 0.20, 2);
+        }
+
         tracker
             .predict_next(tool_key, 0.30, 3)
             .into_iter()
@@ -221,12 +294,15 @@ impl MetaMcp {
 
     /// Dispatch a `tools/call` to the capability backend or an MCP backend.
     ///
-    /// Applies secret injection before forwarding.
+    /// Applies secret injection before forwarding. When `prompt_cache_key` is
+    /// `Some`, it is injected into the request `_meta` field so that
+    /// OpenAI-compatible backends can use it for prompt caching.
     async fn dispatch_to_backend(
         &self,
         server: &str,
         tool: &str,
         arguments: Value,
+        prompt_cache_key: Option<&str>,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -243,12 +319,14 @@ impl MetaMcp {
             .get(server)
             .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
-        let response = backend
-            .request(
-                "tools/call",
-                Some(json!({ "name": tool, "arguments": arguments })),
-            )
-            .await?;
+        // Build request params, injecting cache key into _meta when present.
+        let base_params = json!({ "name": tool, "arguments": arguments });
+        let params = match prompt_cache_key {
+            Some(key) => inject_cache_key(Some(base_params), key),
+            None => base_params,
+        };
+
+        let response = backend.request("tools/call", Some(params)).await?;
 
         if let Some(error) = response.error {
             return Err(Error::JsonRpc {
@@ -264,6 +342,54 @@ impl MetaMcp {
     // ========================================================================
     // Operator control meta-tools
     // ========================================================================
+
+    /// `gateway_cost_report` — per-session and per-API-key spend report.
+    #[allow(clippy::unnecessary_wraps)]
+    pub(super) async fn get_cost_report(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
+        let include_all_sessions = args
+            .get("include_all_sessions")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let include_all_keys = args
+            .get("include_all_keys")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        // Resolve target session (explicit arg or current session)
+        let target_session_id = args
+            .get("session_id")
+            .and_then(Value::as_str)
+            .or(session_id);
+
+        let session_report = if include_all_sessions {
+            serde_json::to_value(self.cost_tracker.all_sessions()).unwrap_or(json!([]))
+        } else if let Some(sid) = target_session_id {
+            self.cost_tracker
+                .session_snapshot(sid)
+                .map(|s| serde_json::to_value(s).unwrap_or(json!(null)))
+                .unwrap_or(json!(null))
+        } else {
+            json!(null)
+        };
+
+        let key_report = if include_all_keys {
+            serde_json::to_value(self.cost_tracker.all_keys()).unwrap_or(json!([]))
+        } else {
+            json!(null)
+        };
+
+        let aggregate = serde_json::to_value(self.cost_tracker.aggregate()).unwrap_or(json!(null));
+
+        Ok(json!({
+            "session": session_report,
+            "keys": key_report,
+            "aggregate": aggregate,
+        }))
+    }
 
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.

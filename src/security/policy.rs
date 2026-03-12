@@ -308,23 +308,13 @@ mod tests {
 
     #[test]
     fn allow_overrides_default_deny() {
-        let policy = custom_policy(
-            &["write_file"],
-            &[],
-            PolicyAction::Allow,
-            true,
-        );
+        let policy = custom_policy(&["write_file"], &[], PolicyAction::Allow, true);
         assert!(policy.check("server", "write_file").is_ok());
     }
 
     #[test]
     fn allow_overrides_explicit_deny() {
-        let policy = custom_policy(
-            &["my_tool"],
-            &["my_tool"],
-            PolicyAction::Allow,
-            false,
-        );
+        let policy = custom_policy(&["my_tool"], &["my_tool"], PolicyAction::Allow, false);
         assert!(policy.check("server", "my_tool").is_ok());
     }
 
@@ -332,12 +322,7 @@ mod tests {
 
     #[test]
     fn deny_prefix_pattern() {
-        let policy = custom_policy(
-            &[],
-            &["dangerous_*"],
-            PolicyAction::Allow,
-            false,
-        );
+        let policy = custom_policy(&[], &["dangerous_*"], PolicyAction::Allow, false);
         assert!(policy.check("server", "dangerous_operation").is_err());
         assert!(policy.check("server", "dangerous_write").is_err());
         assert!(policy.check("server", "safe_operation").is_ok());
@@ -345,12 +330,7 @@ mod tests {
 
     #[test]
     fn allow_prefix_pattern() {
-        let policy = custom_policy(
-            &["safe_*"],
-            &[],
-            PolicyAction::Deny,
-            false,
-        );
+        let policy = custom_policy(&["safe_*"], &[], PolicyAction::Deny, false);
         assert!(policy.check("server", "safe_read").is_ok());
         assert!(policy.check("server", "safe_list").is_ok());
         assert!(policy.check("server", "unsafe_write").is_err());
@@ -360,12 +340,7 @@ mod tests {
 
     #[test]
     fn allow_qualified_name() {
-        let policy = custom_policy(
-            &["filesystem:write_file"],
-            &[],
-            PolicyAction::Allow,
-            true,
-        );
+        let policy = custom_policy(&["filesystem:write_file"], &[], PolicyAction::Allow, true);
         // Qualified match overrides default deny
         assert!(policy.check("filesystem", "write_file").is_ok());
         // Different server still denied
@@ -374,12 +349,7 @@ mod tests {
 
     #[test]
     fn deny_qualified_name() {
-        let policy = custom_policy(
-            &[],
-            &["my_server:my_tool"],
-            PolicyAction::Allow,
-            false,
-        );
+        let policy = custom_policy(&[], &["my_server:my_tool"], PolicyAction::Allow, false);
         assert!(policy.check("my_server", "my_tool").is_err());
         assert!(policy.check("other", "my_tool").is_ok());
     }
@@ -388,24 +358,14 @@ mod tests {
 
     #[test]
     fn default_deny_blocks_unknown_tools() {
-        let policy = custom_policy(
-            &["known_tool"],
-            &[],
-            PolicyAction::Deny,
-            false,
-        );
+        let policy = custom_policy(&["known_tool"], &[], PolicyAction::Deny, false);
         assert!(policy.check("server", "known_tool").is_ok());
         assert!(policy.check("server", "unknown_tool").is_err());
     }
 
     #[test]
     fn default_allow_permits_unknown_tools() {
-        let policy = custom_policy(
-            &[],
-            &[],
-            PolicyAction::Allow,
-            false,
-        );
+        let policy = custom_policy(&[], &[], PolicyAction::Allow, false);
         assert!(policy.check("server", "anything").is_ok());
     }
 
@@ -426,12 +386,7 @@ mod tests {
 
     #[test]
     fn no_default_deny_allows_previously_blocked() {
-        let policy = custom_policy(
-            &[],
-            &[],
-            PolicyAction::Allow,
-            false,
-        );
+        let policy = custom_policy(&[], &[], PolicyAction::Allow, false);
         assert!(policy.check("server", "write_file").is_ok());
         assert!(policy.check("server", "run_command").is_ok());
     }
