@@ -2,6 +2,14 @@
 //!
 //! Implements `resources/list`, `resources/read`, `resources/templates/list`,
 //! `resources/subscribe`, and `resources/unsubscribe`.
+//!
+//! # Security
+//!
+//! Resource metadata (URI, title, description) returned by backend servers is
+//! sanitized before being forwarded to the client.  A compromised or malicious
+//! backend could embed prompt-injection strings, template markers (`{}`), or
+//! control characters in these fields.  [`crate::security::sanitize_resource_metadata`]
+//! escapes all such vectors before the data reaches the client prompt.
 
 use std::sync::Arc;
 
@@ -12,14 +20,48 @@ use crate::protocol::{
     JsonRpcResponse, RequestId, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult,
 };
+use crate::security::sanitize_resource_metadata;
 
 use super::MetaMcp;
 
+/// Apply metadata sanitization to a [`Resource`] returned by a backend.
+///
+/// On error (e.g. null byte in URI), the resource is dropped and a warning
+/// is emitted rather than propagating the error or crashing the list handler.
+fn sanitize_resource(r: Resource, backend: &str) -> Option<Resource> {
+    match sanitize_resource_metadata(
+        &r.uri,
+        r.title.as_deref(),
+        r.description.as_deref(),
+    ) {
+        Ok(clean) => Some(Resource {
+            uri: clean.uri,
+            name: r.name,
+            title: clean.title,
+            description: clean.description,
+            mime_type: r.mime_type,
+            size: r.size,
+        }),
+        Err(e) => {
+            warn!(
+                backend = %backend,
+                uri = %r.uri,
+                error = %e,
+                "Dropping resource: metadata sanitization failed"
+            );
+            None
+        }
+    }
+}
+
 impl MetaMcp {
-    /// Handle `resources/list` — aggregate resources from all backends.
+    /// Handle `resources/list` — aggregate and sanitize resources from all backends.
     ///
     /// Builds a URI routing map so that `resources/read` can determine which
     /// backend owns a given resource URI.
+    ///
+    /// All resource metadata is sanitized to prevent prompt injection from
+    /// malicious backends before being returned to the client.
     pub async fn handle_resources_list(
         &self,
         id: RequestId,
@@ -30,7 +72,11 @@ impl MetaMcp {
         for backend in self.backends.all() {
             match backend.get_resources().await {
                 Ok(resources) => {
-                    all_resources.extend(resources);
+                    for resource in resources {
+                        if let Some(clean) = sanitize_resource(resource, &backend.name) {
+                            all_resources.push(clean);
+                        }
+                    }
                 }
                 Err(e) => {
                     warn!(

@@ -20,7 +20,9 @@ pub mod tool_integrity;
 
 pub use policy::{ToolPolicy, ToolPolicyConfig};
 pub use response_scanner::ResponseScanner;
-pub use sanitize::{sanitize_json_value, sanitize_optional_json};
+pub use sanitize::{
+    sanitize_json_value, sanitize_optional_json, sanitize_resource_metadata, SanitizedResourceMeta,
+};
 pub use scope_collision::{detect_collisions, validate_tool_name};
-pub use ssrf::validate_url_not_ssrf;
+pub use ssrf::{check_host_not_ssrf, validate_redirect_chain, validate_url_not_ssrf};
 pub use tool_integrity::ToolIntegrityChecker;
