@@ -359,11 +359,11 @@ mod tests {
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
-    fn dns_san(s: &str) -> SanType {
+    fn _dns_san(s: &str) -> SanType {
         SanType::DnsName(Ia5String::try_from(s).unwrap())
     }
 
-    fn uri_san(s: &str) -> SanType {
+    fn _uri_san(s: &str) -> SanType {
         SanType::URI(Ia5String::try_from(s).unwrap())
     }
 

@@ -135,7 +135,7 @@ mod tests {
     // Full integration tests require a live MCP server; unit tests cover
     // the adapter wiring.
 
-    fn make_provider_name_matches_backend() {
+    fn _make_provider_name_matches_backend() {
         // We cannot create a real Backend without a running process,
         // but we can verify the type constraints compile correctly.
         fn _assert_provider<T: Provider>(_: &T) {}

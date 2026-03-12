@@ -1,5 +1,4 @@
 use super::*;
-use crate::ranking::SearchResult;
 
 // Helper to build a Tool for testing
 fn make_tool(name: &str, description: Option<&str>) -> Tool {
