@@ -143,14 +143,14 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
     }
 }
 
-/// Service types that require a base_url or endpoint.
+/// Service types that require a `base_url` or endpoint.
 ///
-/// Non-REST services (cli, local_binary, local_ml, microfetch, etc.) use
+/// Non-REST services (cli, `local_binary`, `local_ml`, microfetch, etc.) use
 /// other config fields (command, binary, handler) and should not be rejected
 /// for missing URL fields.
 const REST_LIKE_SERVICES: &[&str] = &["rest", "graphql"];
 
-/// Returns true if this service type requires base_url or endpoint.
+/// Returns true if this service type requires `base_url` or endpoint.
 pub(super) fn service_requires_url(service: &str) -> bool {
     REST_LIKE_SERVICES.contains(&service)
 }

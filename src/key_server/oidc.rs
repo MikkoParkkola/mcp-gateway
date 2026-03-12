@@ -14,7 +14,7 @@
 //! - JWKS fetched only over HTTPS (enforced by the `reqwest` TLS requirement).
 //! - Unknown `kid` triggers a single cache refresh before failing; prevents
 //!   indefinite re-fetching if the key truly does not exist.
-//! - Clock leeway of 60 seconds tolerates minor clock skew between the IdP and
+//! - Clock leeway of 60 seconds tolerates minor clock skew between the `IdP` and
 //!   the gateway host.
 //! - `iat` is checked: tokens issued more than `max_token_age` ago are rejected
 //!   to prevent OIDC token replay (default 5 minutes).

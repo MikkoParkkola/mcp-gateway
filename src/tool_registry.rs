@@ -557,7 +557,7 @@ mod tests {
 
         // WHEN: three successful lookups
         for _ in 0..3 {
-            reg.get("s:t");
+            let _ = reg.get("s:t");
         }
 
         // THEN: hit rate = 1.0
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn metrics_miss_increments_on_unknown_key() {
         let reg = ToolRegistry::default();
-        reg.get("nope:nope");
+        let _ = reg.get("nope:nope");
         assert_eq!(reg.metrics.misses.load(Ordering::Relaxed), 1);
     }
 
@@ -576,10 +576,10 @@ mod tests {
         // GIVEN: 3 hits + 1 miss
         let reg = ToolRegistry::default();
         reg.insert("s", make_tool("t"));
-        reg.get("s:t");
-        reg.get("s:t");
-        reg.get("s:t");
-        reg.get("s:missing");
+        let _ = reg.get("s:t");
+        let _ = reg.get("s:t");
+        let _ = reg.get("s:t");
+        let _ = reg.get("s:missing");
 
         // THEN: hit rate = 3/4 = 0.75
         let rate = reg.metrics.hit_rate();
@@ -598,7 +598,7 @@ mod tests {
     fn metrics_records_latency_on_hit() {
         let reg = ToolRegistry::default();
         reg.insert("s", make_tool("t"));
-        reg.get("s:t");
+        let _ = reg.get("s:t");
         // latency should be a very small positive number (sub-millisecond)
         let avg = reg.metrics.avg_latency_ns();
         assert!(avg >= 0.0, "avg_latency_ns must be non-negative");
@@ -611,8 +611,8 @@ mod tests {
     fn metrics_snapshot_reflects_current_state() {
         let reg = ToolRegistry::default();
         reg.insert("s", make_tool("t"));
-        reg.get("s:t");
-        reg.get("s:missing");
+        let _ = reg.get("s:t");
+        let _ = reg.get("s:missing");
 
         let snap = reg.metrics.snapshot();
         assert_eq!(snap.lookups, 2);
@@ -688,7 +688,7 @@ mod tests {
         reg.prefetch_after("s:tool_a", &tracker, 0.20, 2);
 
         // WHEN: tool_b is then looked up
-        reg.get("s:tool_b");
+        let _ = reg.get("s:tool_b");
 
         // THEN: a prefetch hit is credited
         assert_eq!(reg.metrics.prefetch_hits.load(Ordering::Relaxed), 1);

@@ -105,6 +105,7 @@ impl ChainExecutor {
     ///
     /// Returns `Error::Internal` on timeout or when a required step exhausts
     /// all retry attempts.
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     pub async fn execute(
         &self,
         chain: &Chain,
@@ -167,7 +168,7 @@ impl ChainExecutor {
             let step_start = Instant::now();
             let server = step.server.clone();
             let tool = step.tool.clone();
-            let invoker_ref = &*invoker;
+            let invoker_ref = invoker;
 
             let retry_result = retry_step(&self.retry_policy, &step.name, || {
                 let args = interpolated.clone();

@@ -60,7 +60,7 @@ impl ChainCheckpointStore {
     pub fn new(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
         Ok(Self { dir })
     }
 

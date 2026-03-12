@@ -25,6 +25,7 @@ use crate::protocol::Tool;
 /// The primary check in [`validate_tool_name`] is an **allowlist** — only
 /// `[A-Za-z0-9_-]` characters are accepted.  This constant is kept as a
 /// secondary safeguard and for documentation purposes.
+#[allow(dead_code)] // kept as secondary safeguard and documentation
 const DANGEROUS_TOOL_NAME_CHARS: &[char] = &[
     '`', '$', '|', ';', '&', '>', '<', '!', '{', '}', '(', ')', '[', ']', '\'', '"', '\n', '\r',
 ];

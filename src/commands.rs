@@ -545,6 +545,7 @@ async fn cap_list(directory: std::path::PathBuf) -> ExitCode {
     }
 }
 
+#[allow(clippy::unused_async)]
 async fn cap_import(
     spec: std::path::PathBuf,
     output: std::path::PathBuf,

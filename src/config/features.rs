@@ -332,6 +332,7 @@ impl Default for CapabilityConfig {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AgentAuthConfig {
     /// Enable agent auth (default: false).
     pub enabled: bool,
@@ -340,14 +341,6 @@ pub struct AgentAuthConfig {
     pub agents: Vec<AgentDefinitionConfig>,
 }
 
-impl Default for AgentAuthConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            agents: Vec::new(),
-        }
-    }
-}
 
 /// Static agent definition in the configuration file.
 #[derive(Debug, Clone, Serialize, Deserialize)]

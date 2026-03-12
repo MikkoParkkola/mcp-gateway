@@ -1013,8 +1013,7 @@ fn edge_case_sanitize_json_keys_with_control_chars() {
 // bypass mode for fully-trusted internal backends.
 
 use mcp_gateway::backend::Backend;
-use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
-use std::collections::HashMap;
+use mcp_gateway::config::{BackendConfig, FailsafeConfig};
 use std::time::Duration;
 
 /// Build a non-passthrough backend for testing the security flag.

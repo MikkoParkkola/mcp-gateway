@@ -113,9 +113,7 @@ pub fn write_discovered_to_config(
     servers: &[mcp_gateway::discovery::DiscoveredServer],
     config_path: Option<&Path>,
 ) -> mcp_gateway::Result<std::path::PathBuf> {
-    let path = config_path
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("mcp-gateway-discovered.yaml"));
+    let path = config_path.map_or_else(|| std::path::PathBuf::from("mcp-gateway-discovered.yaml"), std::path::Path::to_path_buf);
 
     let mut config = if path.exists() {
         Config::load(Some(&path))?

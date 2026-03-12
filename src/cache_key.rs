@@ -16,6 +16,7 @@
 //! select a key by index using [`CacheKeyDeriver::key_for_slot`].
 
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 use sha2::{Digest, Sha256};
 use serde_json::Value;
@@ -82,8 +83,10 @@ impl CacheKeyDeriver {
         // Take first 16 bytes → 32 hex chars — short enough to fit Anthropic limits
         digest[..16]
             .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+            .fold(String::with_capacity(32), |mut acc, b| {
+                let _ = write!(acc, "{b:02x}");
+                acc
+            })
     }
 
     /// Derive a `prompt_cache_key` from a combination of session and user context.

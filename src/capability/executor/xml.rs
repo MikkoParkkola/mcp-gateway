@@ -122,12 +122,9 @@ fn insert_child(parent: &mut serde_json::Map<String, Value>, key: &str, value: V
         }
         Entry::Occupied(mut e) => {
             let existing = e.get_mut();
-            match existing {
-                Value::Array(arr) => arr.push(value),
-                _ => {
-                    let prev = existing.take();
-                    *existing = Value::Array(vec![prev, value]);
-                }
+            if let Value::Array(arr) = existing { arr.push(value) } else {
+                let prev = existing.take();
+                *existing = Value::Array(vec![prev, value]);
             }
         }
     }

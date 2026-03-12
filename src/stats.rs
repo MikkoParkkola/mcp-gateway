@@ -21,7 +21,7 @@ pub struct UsageStats {
     /// Cumulative prompt-cached tokens returned by backends (key = server name)
     ///
     /// Populated from `usage.cache_read_input_tokens` (Anthropic) or
-    /// `usage.prompt_tokens_details.cached_tokens` (OpenAI) in backend responses.
+    /// `usage.prompt_tokens_details.cached_tokens` (`OpenAI`) in backend responses.
     cached_tokens_by_server: DashMap<String, AtomicU64>,
     /// Cumulative prompt-cached tokens per conversation/session (key = session ID)
     cached_tokens_by_session: DashMap<String, AtomicU64>,

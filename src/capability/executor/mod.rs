@@ -349,8 +349,9 @@ impl CapabilityExecutor {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /// Collect static_params that are not already covered by `config.params`
+    /// Collect `static_params` that are not already covered by `config.params`
     /// or `config.param_map` templates (GET requests only).
+    #[allow(clippy::unused_self)] // method interface kept for future use
     fn build_extra_static_params(
         &self,
         config: &RestConfig,

@@ -179,10 +179,11 @@ impl LiveConfig {
 /// ```
 #[must_use]
 pub fn compute_diff(old: &Config, new: &Config) -> ConfigPatch {
-    let mut patch = ConfigPatch::default();
-
-    patch.server_changed = server_address_changed(&old.server, &new.server);
-    patch.profiles_changed = profiles_changed(old, new);
+    let mut patch = ConfigPatch {
+        server_changed: server_address_changed(&old.server, &new.server),
+        profiles_changed: profiles_changed(old, new),
+        ..ConfigPatch::default()
+    };
 
     classify_backends(old, new, &mut patch);
 

@@ -45,7 +45,7 @@ use std::collections::HashMap;
 
 use super::CapabilityDefinition;
 
-pub(self) mod checks;
+ mod checks;
 
 #[cfg(test)]
 mod tests;

@@ -325,7 +325,7 @@ fn check_admin_auth(
 
     // Constant-time comparison to prevent timing side-channels
     let matches = provided
-        .map_or(false, |p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
+        .is_some_and(|p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
 
     if matches {
         Ok(())

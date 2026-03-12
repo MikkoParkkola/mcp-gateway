@@ -81,6 +81,12 @@ impl ChainRetryPolicy {
     ///
     /// Uses exponential growth capped at `max_backoff`.
     #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     pub fn backoff_for(&self, attempt: u32) -> Duration {
         let exp = self.multiplier.powi(attempt as i32);
         let nanos = (self.initial_backoff.as_nanos() as f64 * exp) as u128;

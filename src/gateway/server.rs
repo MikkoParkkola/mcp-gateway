@@ -88,12 +88,16 @@ impl Gateway {
         })
     }
 
-    /// Run the gateway
+    /// Run the gateway.
     ///
     /// # Errors
     ///
     /// Returns an error if the server cannot bind to the configured address
     /// or if an unrecoverable runtime error occurs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
         let addr = SocketAddr::new(

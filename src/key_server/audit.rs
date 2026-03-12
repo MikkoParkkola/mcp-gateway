@@ -1,7 +1,7 @@
 //! Audit logging for key server token lifecycle events.
 //!
 //! Every event is emitted via `tracing::info!` with structured fields, making
-//! the audit trail queryable by any log aggregator (Loki, CloudWatch, Datadog).
+//! the audit trail queryable by any log aggregator (Loki, `CloudWatch`, Datadog).
 //!
 //! # Events
 //!
