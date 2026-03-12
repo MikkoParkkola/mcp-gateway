@@ -14,7 +14,12 @@ use mcp_gateway::{
         AuthTemplate, CapabilityExecutor, CapabilityLoader, OpenApiConverter,
         parse_capability_file, validate_capability,
     },
-    cli::{CapCommand, Cli, Command, TlsCommand},
+    cli::{
+        CapCommand, Cli, Command, TlsCommand, ToolCommand,
+        completion::{ShellTarget, generate_completion},
+        invoke::{ToolCatalogue, build_completion_tool_names, execute_tool, resolve_args},
+        output::{print_tool_inspect, print_tool_list, print_tool_result},
+    },
     config::Config,
     discovery::AutoDiscovery,
     gateway::Gateway,
@@ -58,6 +63,7 @@ async fn main() -> ExitCode {
             };
             mcp_gateway::validator::cli_handler::run_validate_command(&paths, &config).await
         }
+        Some(Command::Tool(tool_cmd)) => run_tool_command(tool_cmd).await,
         Some(Command::Serve) | None => run_server(cli).await,
     }
 }
@@ -311,6 +317,81 @@ fn run_tls_command(cmd: TlsCommand) -> ExitCode {
                     ExitCode::FAILURE
                 }
             }
+        }
+    }
+}
+
+/// Run `mcp-gateway tool` subcommands (CLI bridge for direct tool invocation).
+async fn run_tool_command(cmd: ToolCommand) -> ExitCode {
+    match cmd {
+        ToolCommand::List { capabilities, format } => {
+            let dir = capabilities.to_string_lossy();
+            match ToolCatalogue::load(&dir).await {
+                Ok(cat) => {
+                    print_tool_list(&cat.list_entries(), format);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: Failed to load capabilities from '{dir}': {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        ToolCommand::Inspect { tool, capabilities, format } => {
+            let dir = capabilities.to_string_lossy();
+            match ToolCatalogue::load(&dir).await {
+                Ok(cat) => if let Some(cap) = cat.find(&tool) {
+                    print_tool_inspect(&cap.name, &cap.description, &cap.schema.input, format);
+                    ExitCode::SUCCESS
+                } else {
+                    eprintln!("Error: Tool '{tool}' not found. Run 'tool list' to see available tools.");
+                    ExitCode::FAILURE
+                },
+                Err(e) => {
+                    eprintln!("Error: Failed to load capabilities from '{dir}': {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        ToolCommand::Invoke { tool, capabilities, args, kv_args, format } => {
+            let dir = capabilities.to_string_lossy();
+            let catalogue = match ToolCatalogue::load(&dir).await {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error: Failed to load capabilities from '{dir}': {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            let resolved = match resolve_args(args.as_deref(), &kv_args, true) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            match execute_tool(&catalogue, &tool, resolved).await {
+                Ok(result) => {
+                    print_tool_result(&result, format);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        ToolCommand::Completions { shell, capabilities } => {
+            let dir = capabilities.to_string_lossy();
+            let tool_names = build_completion_tool_names(&dir).await;
+            let target = ShellTarget::from_shell(shell).unwrap_or(ShellTarget::Bash);
+            let script = generate_completion(target, &tool_names);
+            print!("{script}");
+            ExitCode::SUCCESS
         }
     }
 }

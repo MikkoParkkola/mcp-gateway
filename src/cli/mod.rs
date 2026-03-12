@@ -1,11 +1,40 @@
 //! Command-line interface definitions for `mcp-gateway`.
 //!
 //! Defines the top-level [`Cli`] struct parsed by `clap` and the [`Command`] /
-//! [`CapCommand`] subcommand enums that drive the binary.
+//! [`CapCommand`] / [`ToolCommand`] / [`TlsCommand`] subcommand enums.
+//!
+//! # CLI Bridge
+//!
+//! The `tool` subcommand exposes every registered capability tool as a
+//! composable shell command:
+//!
+//! ```bash
+//! # Invoke any tool directly
+//! mcp-gateway tool invoke weather_current location=London
+//!
+//! # Pipe JSON args from stdin
+//! echo '{"location":"Helsinki"}' | mcp-gateway tool invoke weather_current
+//!
+//! # List available tools
+//! mcp-gateway tool list --format table
+//!
+//! # Inspect a tool's schema
+//! mcp-gateway tool inspect yahoo_stock_quote
+//!
+//! # Generate shell completions
+//! mcp-gateway tool completions zsh > ~/.zsh/completions/_mcp-gateway
+//! ```
+
+pub mod completion;
+pub mod invoke;
+pub mod output;
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
+
+use crate::cli::output::OutputFormat;
 
 /// Universal MCP Gateway - single-port multiplexing for MCP servers and REST APIs
 ///
@@ -117,6 +146,111 @@ pub enum Command {
         /// Disable colored output
         #[arg(long)]
         no_color: bool,
+    },
+
+    /// Invoke gateway tools directly from the shell without a running server
+    ///
+    /// Loads capabilities from the configured directory and exposes them as
+    /// composable CLI commands.  Supports JSON args from stdin for piping:
+    ///
+    ///   `echo '{"location":"London"}' | mcp-gateway tool invoke weather_current`
+    #[command(subcommand, about = "Invoke gateway tools directly from the CLI")]
+    Tool(ToolCommand),
+}
+
+/// Tool CLI subcommands
+///
+/// All subcommands support `--format json|table|plain` for pipe-friendly output.
+#[derive(Subcommand, Debug)]
+pub enum ToolCommand {
+    /// Call a registered tool with JSON arguments
+    ///
+    /// Arguments can be supplied as:
+    /// - A JSON blob via `--args '{"key": "value"}'`
+    /// - Individual `key=value` pairs: `invoke weather_current location=London`
+    /// - JSON piped on stdin: `echo '{"location":"London"}' | mcp-gateway tool invoke weather_current`
+    ///
+    /// Multiple sources are merged; command-line keys override stdin.
+    #[command(about = "Call a tool with JSON arguments")]
+    Invoke {
+        /// Tool name to invoke
+        #[arg(required = true)]
+        tool: String,
+
+        /// Directory containing capability YAML definitions
+        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: PathBuf,
+
+        /// JSON argument blob (merged with key=value pairs)
+        #[arg(short, long)]
+        args: Option<String>,
+
+        /// Additional key=value argument pairs (may be repeated)
+        ///
+        /// Values that look like JSON scalars (numbers, booleans, null,
+        /// arrays, objects) are parsed as JSON; everything else is a string.
+        #[arg(value_name = "KEY=VALUE")]
+        kv_args: Vec<String>,
+
+        /// Output format
+        #[arg(short, long, default_value = "json", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// List all available tools with descriptions
+    ///
+    /// Scans the capabilities directory and prints each tool with its
+    /// description and authentication requirement.
+    #[command(about = "List all available tools")]
+    List {
+        /// Directory containing capability YAML definitions
+        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: PathBuf,
+
+        /// Output format
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Show the input schema for a specific tool
+    ///
+    /// Prints the tool's description and its JSON Schema input definition,
+    /// useful for discovering required/optional parameters before invoking.
+    #[command(about = "Show a tool's input schema")]
+    Inspect {
+        /// Tool name to inspect
+        #[arg(required = true)]
+        tool: String,
+
+        /// Directory containing capability YAML definitions
+        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: PathBuf,
+
+        /// Output format
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Generate shell tab-completion scripts
+    ///
+    /// Outputs a completion script for the requested shell.  Tool names from
+    /// the local capabilities directory are injected as completions for the
+    /// `invoke` and `inspect` subcommands.
+    ///
+    /// # Install
+    ///
+    ///   mcp-gateway tool completions zsh > ~/.zsh/completions/_mcp-gateway
+    ///   mcp-gateway tool completions bash >> ~/.bashrc
+    ///   mcp-gateway tool completions fish > ~/.config/fish/completions/mcp-gateway.fish
+    #[command(about = "Generate shell completions")]
+    Completions {
+        /// Target shell
+        #[arg(required = true, value_enum)]
+        shell: Shell,
+
+        /// Directory containing capability YAML definitions
+        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: PathBuf,
     },
 }
 
