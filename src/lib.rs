@@ -26,6 +26,7 @@
 pub mod autotag;
 pub mod backend;
 pub mod cache;
+pub mod chains;
 pub mod config_reload;
 pub mod capability;
 pub mod provider;

@@ -147,28 +147,37 @@ The `ToolIntegrityChecker` replaces its internal fingerprint store on each `chec
 
 **Risk**: Low. Attacker must control timing of multiple `tools/list` responses and the gateway must poll `tools/list` at least 3 times.
 
-### FINDING-02: Backend handler bypasses tool policy and input sanitization (MEDIUM)
+### FINDING-02: Backend handler bypasses tool policy and input sanitization — **FIXED**
 
-**Severity**: MEDIUM
+**Severity**: MEDIUM → **RESOLVED**
 **Vector**: Gateway Bypass
-**Location**: `src/gateway/router.rs`, lines 657-764 (`backend_handler`)
+**Location**: `src/gateway/router.rs` (`backend_handler`) / `src/config.rs` (`BackendConfig`)
+**Fix commit**: see git history
 
-The direct backend handler at `POST /mcp/{name}` checks `can_access_backend()` for per-client backend restrictions but does **NOT** apply:
+**Original issue**: The direct backend handler at `POST /mcp/{name}` checked `can_access_backend()` for
+per-client backend restrictions but did **NOT** apply:
 - `tool_policy.check()` (global tool access policy)
 - `sanitize_json_value()` (input sanitization)
 - `validate_tool_name()` (tool name validation)
 
-These checks are only applied in the `meta_mcp_handler` path when `tool_name == "gateway_invoke"`.
+**Fix applied**: For every `tools/call` request reaching `backend_handler`, the gateway now runs all
+three checks (in order: name validation → policy → sanitization) via `apply_backend_tool_call_security()`
+before forwarding to the backend. Other methods (`tools/list`, `resources/*`, `prompts/*`, etc.) are
+unaffected — they do not carry tool arguments and are not subject to tool-level policy.
 
-A client that knows the backend name can call `POST /mcp/{backend_name}` with a `tools/call` JSON-RPC request and bypass the tool policy entirely.
+**Pass-through opt-in**: A new per-backend config field `passthrough: bool` (default `false`) explicitly
+opts a backend out of these checks. This must only be set for fully-trusted internal backends where the
+restrictions are harmful (e.g. a backend that legitimately sends binary arguments). Setting `passthrough:
+true` logs a clear security warning in the documentation.
 
-**Mitigating factors**:
-1. Auth middleware (`auth_middleware`) runs on ALL routes, so unauthenticated access is blocked when auth is enabled
-2. Per-client backend restrictions (`can_access_backend`) are enforced
-3. mTLS policy is NOT checked on the direct backend path
-4. The direct backend handler is intended for pass-through MCP proxying (e.g., stdio backends that need full protocol access)
+**Evidence**:
+- 21 new tests in `tests/security_tests.rs` under the `finding02_*` prefix
+- `tests/backend_tests.rs` updated to include `passthrough` field in `BackendConfig` construction
+- `Backend::passthrough()` accessor added to `src/backend/mod.rs`
 
-**Recommendation**: Apply `tool_policy.check()` and `sanitize_json_value()` to `tools/call` requests in `backend_handler`, consistent with the meta-MCP path. If pass-through mode is needed, make it an explicit opt-in per-backend.
+**Residual gap**: mTLS certificate-based policy is still not evaluated on the direct backend path.
+This is acceptable because mTLS provides transport-layer identity assurance that is orthogonal to
+per-tool access control; the tool policy layer now provides the primary enforcement.
 
 ### FINDING-03: Unicode homoglyph tool names not detected (LOW)
 

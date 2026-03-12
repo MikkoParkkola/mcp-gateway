@@ -21,6 +21,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         headers: HashMap::default(),
         oauth: None,
         secrets: Vec::new(),
+        passthrough: false,
     };
 
     let failsafe = FailsafeConfig::default();

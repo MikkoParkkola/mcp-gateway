@@ -489,6 +489,16 @@ impl Backend {
         result
     }
 
+    /// Return `true` if this backend is configured for pass-through mode.
+    ///
+    /// When `true`, the direct `/mcp/{name}` endpoint skips tool policy
+    /// enforcement and input sanitization for `tools/call` requests.
+    /// This must only be enabled for fully-trusted internal backends.
+    #[must_use]
+    pub fn passthrough(&self) -> bool {
+        self.config.passthrough
+    }
+
     /// Return the HTTP URL if this backend uses an HTTP-based transport.
     ///
     /// Returns `None` for stdio backends.

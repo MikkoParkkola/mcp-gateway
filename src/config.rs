@@ -809,6 +809,14 @@ pub struct BackendConfig {
     /// them transparently before forwarding to the backend.
     #[serde(default)]
     pub secrets: Vec<crate::secret_injection::CredentialRule>,
+    /// Pass-through mode: skip gateway tool policy and input sanitization for
+    /// `tools/call` requests on the direct `/mcp/{name}` endpoint.
+    ///
+    /// **Security warning**: enabling this bypasses `tool_policy.check()`,
+    /// `validate_tool_name()`, and `sanitize_json_value()`. Only set this for
+    /// fully-trusted internal backends. Default: `false`.
+    #[serde(default)]
+    pub passthrough: bool,
 }
 
 /// OAuth configuration for a backend
@@ -852,6 +860,7 @@ impl Default for BackendConfig {
             headers: HashMap::new(),
             oauth: None,
             secrets: Vec::new(),
+            passthrough: false,
         }
     }
 }
