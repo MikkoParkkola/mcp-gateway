@@ -23,7 +23,7 @@ use crate::config::StreamingConfig;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::{CertIdentity, MtlsPolicy};
 use crate::protocol::{ElicitationCreateParams, JsonRpcResponse, RequestId, SamplingCreateMessageParams};
-use crate::security::{ToolPolicy, sanitize_json_value, validate_url_not_ssrf};
+use crate::security::{ToolPolicy, sanitize_json_value, validate_tool_name, validate_url_not_ssrf};
 
 /// Shared application state
 pub struct AppState {
@@ -653,6 +653,61 @@ async fn meta_mcp_handler(
     (StatusCode::OK, resp).into_response()
 }
 
+/// Apply tool policy, name validation, and input sanitization to a `tools/call`
+/// request arriving at the direct backend endpoint.
+///
+/// Returns `None` when there are no params or no tool name (nothing to check),
+/// `Some(Ok(sanitized))` when all checks pass, or `Some(Err(response))` when
+/// a check fails and the caller should return an HTTP error immediately.
+///
+/// Order of checks matches `meta_mcp_handler`:
+/// 1. `validate_tool_name` — rejects dangerous names before any policy lookup.
+/// 2. `tool_policy.check` — enforces global allow/deny rules.
+/// 3. `sanitize_json_value` — strips/rejects dangerous byte sequences.
+#[allow(clippy::result_large_err)]
+fn apply_backend_tool_call_security(
+    state: &AppState,
+    backend_name: &str,
+    params: Option<&Value>,
+    id: &RequestId,
+) -> Option<Result<Value, (StatusCode, Json<Value>)>> {
+    let params = params?;
+    let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if tool_name.is_empty() {
+        return None;
+    }
+
+    if let Err(e) = validate_tool_name(tool_name) {
+        warn!(backend = %backend_name, tool = %tool_name, "Tool name rejected by validation");
+        return Some(Err(backend_security_error(id, e.to_string())));
+    }
+
+    if let Err(e) = state.tool_policy.check(backend_name, tool_name) {
+        warn!(backend = %backend_name, tool = %tool_name, "Tool blocked by policy");
+        return Some(Err(backend_security_error(id, e.to_string())));
+    }
+
+    match sanitize_json_value(params) {
+        Ok(sanitized) => Some(Ok(sanitized)),
+        Err(e) => {
+            warn!(backend = %backend_name, tool = %tool_name, "Input sanitization failed");
+            Some(Err(backend_security_error(id, e.to_string())))
+        }
+    }
+}
+
+/// Build a `403 Forbidden` JSON-RPC error response for security rejections.
+fn backend_security_error(id: &RequestId, message: String) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "jsonrpc": "2.0",
+            "error": {"code": -32600, "message": message},
+            "id": serde_json::to_value(id).unwrap_or(Value::Null)
+        })),
+    )
+}
+
 /// Backend handler (POST /mcp/{name})
 async fn backend_handler(
     State(state): State<Arc<AppState>>,
@@ -745,6 +800,27 @@ async fn backend_handler(
 
     // For requests, id is guaranteed to exist
     let id = id.expect("id should exist for non-notification requests");
+
+    // SECURITY: apply tool policy, name validation, and input sanitization to
+    // tools/call requests unless the backend explicitly opts into pass-through
+    // mode (passthrough: true in config — only for fully-trusted internals).
+    if method == "tools/call" && !backend.passthrough() {
+        match apply_backend_tool_call_security(&state, &name, params.as_ref(), &id) {
+            Some(Ok(sanitized_params)) => {
+                // Forward the sanitized params to the backend
+                return match backend.request(&method, Some(sanitized_params)).await {
+                    Ok(response) => (StatusCode::OK, Json(serde_json::to_value(response).unwrap())),
+                    Err(e) => {
+                        error!(backend = %name, error = %e, "Backend request failed");
+                        let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::to_value(response).unwrap()))
+                    }
+                };
+            }
+            Some(Err(rejection)) => return rejection,
+            None => {} // no tool name present; fall through to normal forwarding
+        }
+    }
 
     // Forward to backend
     match backend.request(&method, params).await {
