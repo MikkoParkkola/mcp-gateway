@@ -84,7 +84,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/.well-known/jwks.json", get(jwks_handler))
         .with_state(Arc::clone(&state.gateway_key_pair));
 
-    let mut app = Router::new()
+    #[allow(unused_mut)]
+    let mut routes = Router::new()
         .route("/health", get(handlers::health_handler))
         .route("/api/costs", get(backend_handlers::costs_handler))
         .route(
@@ -99,7 +100,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/sse",
             get(handlers::sse_deprecated_handler).post(handlers::sse_deprecated_handler),
-        )
+        );
+
+    // Merge web UI API routes (auth-aware: admin gets full data, public gets redacted)
+    #[cfg(feature = "webui")]
+    {
+        routes = routes.merge(super::ui::api_router());
+    }
+
+    let mut app = routes
         // Agent JWT scope middleware runs inside the standard auth layer.
         .layer(middleware::from_fn_with_state(
             agent_auth_state,
@@ -119,6 +128,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     // Merge JWKS route (unauthenticated)
     app = app.merge(jwks_route);
+
+    // Merge web UI HTML route (unauthenticated — static HTML, no data)
+    #[cfg(feature = "webui")]
+    {
+        app = app.merge(super::ui::html_router());
+    }
 
     app
 }

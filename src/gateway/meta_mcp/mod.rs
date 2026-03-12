@@ -150,6 +150,28 @@ impl MetaMcp {
     pub fn cost_tracker(&self) -> Arc<CostTracker> {
         Arc::clone(&self.cost_tracker)
     }
+
+    /// Return a [`StatsSnapshot`] for the operator dashboard and other external consumers.
+    ///
+    /// `total_backend_tools` should be the current sum of cached tools across all backends.
+    /// When no stats tracker has been attached (e.g. in tests), a zeroed snapshot is returned.
+    #[must_use]
+    pub fn stats_snapshot(&self, total_backend_tools: usize) -> crate::stats::StatsSnapshot {
+        match self.stats.as_ref() {
+            Some(s) => s.snapshot(total_backend_tools),
+            None => crate::stats::StatsSnapshot {
+                invocations: 0,
+                cache_hits: 0,
+                cache_hit_rate: 0.0,
+                tools_discovered: 0,
+                tools_available: total_backend_tools,
+                tokens_saved: 0,
+                top_tools: vec![],
+                total_cached_tokens: 0,
+                cached_tokens_by_server: vec![],
+            },
+        }
+    }
 }
 
 // ============================================================================

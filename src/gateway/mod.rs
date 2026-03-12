@@ -11,6 +11,8 @@ mod router;
 mod server;
 pub mod streaming;
 pub mod trace;
+#[cfg(feature = "webui")]
+pub mod ui;
 pub mod webhooks;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
