@@ -52,6 +52,8 @@ pub struct AppState {
     pub sanitize_input: bool,
     /// Whether SSRF protection is enabled for outbound URLs
     pub ssrf_protection: bool,
+    /// Configured capability directories (used by import endpoints).
+    pub capability_directories: Vec<String>,
     /// In-flight request tracker for graceful drain.
     /// Each in-flight request holds a permit; shutdown waits for all permits
     /// to be returned.
