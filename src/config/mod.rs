@@ -21,11 +21,11 @@ use crate::{Error, Result};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
-    AgentAuthConfig, AgentDefinitionConfig, ApiKeyConfig, AuthConfig, CacheConfig, CapabilityConfig,
-    CircuitBreakerConfig, CodeModeConfig, FailsafeConfig, HealthCheckConfig, KeyServerConfig,
-    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
-    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RetryConfig, SecurityConfig,
-    StreamingConfig, WebhookConfig,
+    AgentAuthConfig, AgentDefinitionConfig, ApiKeyConfig, AuthConfig, CacheConfig,
+    CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, FailsafeConfig, HealthCheckConfig,
+    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
+    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RetryConfig,
+    SecurityConfig, StreamingConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -339,8 +339,12 @@ pub struct OAuthConfig {
     pub token_refresh_buffer_secs: u64,
 }
 
-fn default_token_refresh_buffer() -> u64 { 300 }
-fn default_true() -> bool { true }
+fn default_token_refresh_buffer() -> u64 {
+    300
+}
+fn default_true() -> bool {
+    true
+}
 
 // ── Transport ─────────────────────────────────────────────────────────────────
 
@@ -385,10 +389,15 @@ impl TransportConfig {
     pub fn transport_type(&self) -> &'static str {
         match self {
             Self::Stdio { .. } => "stdio",
-            Self::Http { http_url, streamable_http: false, .. } if http_url.ends_with("/sse") => {
-                "sse"
-            }
-            Self::Http { streamable_http: true, .. } => "streamable-http",
+            Self::Http {
+                http_url,
+                streamable_http: false,
+                ..
+            } if http_url.ends_with("/sse") => "sse",
+            Self::Http {
+                streamable_http: true,
+                ..
+            } => "streamable-http",
             Self::Http { .. } => "http",
         }
     }

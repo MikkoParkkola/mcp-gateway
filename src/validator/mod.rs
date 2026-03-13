@@ -14,11 +14,11 @@ pub mod rules;
 pub mod rules_schema;
 pub mod sarif;
 
-use crate::protocol::Tool;
 use crate::Result;
+use crate::protocol::Tool;
 
-pub use report::{ValidationReport, ValidationResult, Severity};
-pub use rules::{Rule, ValidationRules, ConflictDetectionRule, NamingConsistencyRule};
+pub use report::{Severity, ValidationReport, ValidationResult};
+pub use rules::{ConflictDetectionRule, NamingConsistencyRule, Rule, ValidationRules};
 
 /// Output format for validation reports
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -162,7 +162,7 @@ mod tests {
         let validator = AgentUxValidator::new();
         let tool = create_test_tool(
             "search_knowledge",
-            "Search the knowledge base for relevant information using semantic search"
+            "Search the knowledge base for relevant information using semantic search",
         );
 
         let results = validator.validate_tool(&tool);
@@ -190,7 +190,7 @@ mod tests {
         let validator = AgentUxValidator::new();
         let good_tool = create_test_tool(
             "github_search_issues",
-            "Find GitHub issues using semantic search with filters"
+            "Find GitHub issues using semantic search with filters",
         );
 
         let results = validator.validate_tool(&good_tool).unwrap();
@@ -201,10 +201,7 @@ mod tests {
     #[test]
     fn test_bad_tool_naming_crud() {
         let validator = AgentUxValidator::new();
-        let bad_tool = create_test_tool(
-            "get_user",
-            "Get user from database"
-        );
+        let bad_tool = create_test_tool("get_user", "Get user from database");
 
         let results = validator.validate_tool(&bad_tool).unwrap();
         let outcome_result = results.iter().find(|r| r.rule_code == "AX-001");

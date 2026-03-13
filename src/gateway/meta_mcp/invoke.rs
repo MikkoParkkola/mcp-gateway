@@ -10,19 +10,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
+use crate::cache::ResponseCache;
 use crate::cache_key::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use crate::idempotency::{GuardOutcome, enforce};
-use crate::cache::ResponseCache;
 use crate::playbook::PlaybookEngine;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
-use super::MetaMcp;
 use super::super::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
     extract_price_per_million, extract_required_str, parse_tool_arguments,
 };
 use super::super::trace;
+use super::MetaMcp;
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_trace, resolve_idempotency_key,
 };
@@ -44,7 +44,8 @@ impl MetaMcp {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, api_key_name, &trace_id_clone).await
+            self.invoke_tool_traced(args, session_id, api_key_name, &trace_id_clone)
+                .await
         })
         .await
     }
@@ -125,7 +126,10 @@ impl MetaMcp {
                     ));
                 }
                 GuardOutcome::Proceed => {
-                    debug!(server, tool, key, trace_id, "Idempotency key registered as in-flight");
+                    debug!(
+                        server,
+                        tool, key, trace_id, "Idempotency key registered as in-flight"
+                    );
                 }
             }
         }
@@ -184,7 +188,10 @@ impl MetaMcp {
             if cached_tokens > 0 {
                 if let Some(ref stats) = self.stats {
                     stats.record_cached_tokens(server, session_id, cached_tokens);
-                    debug!(server, tool, cached_tokens, trace_id, "Prompt cache hit recorded");
+                    debug!(
+                        server,
+                        tool, cached_tokens, trace_id, "Prompt cache hit recorded"
+                    );
                 }
             }
         }
@@ -223,7 +230,10 @@ impl MetaMcp {
 
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
             idem_cache.mark_completed(key, result.clone());
-            debug!(server, tool, key, trace_id, "Idempotency entry marked completed");
+            debug!(
+                server,
+                tool, key, trace_id, "Idempotency entry marked completed"
+            );
         }
 
         let predictions = self.record_and_predict(session_id, &tool_key);
@@ -240,7 +250,8 @@ impl MetaMcp {
         if success {
             self.kill_switch
                 .record_success(server, cfg.window_size, cfg.window_duration);
-            self.kill_switch.record_capability_success(server, tool, &cap_cfg);
+            self.kill_switch
+                .record_capability_success(server, tool, &cap_cfg);
         } else {
             let auto_killed = self.kill_switch.record_failure(
                 server,
@@ -249,13 +260,17 @@ impl MetaMcp {
                 cfg.threshold,
                 cfg.min_samples,
             );
-            let cap_disabled =
-                self.kill_switch.record_capability_failure(server, tool, &cap_cfg);
+            let cap_disabled = self
+                .kill_switch
+                .record_capability_failure(server, tool, &cap_cfg);
             if auto_killed {
                 warn!(server, "Server auto-killed by error budget exhaustion");
             }
             if cap_disabled {
-                warn!(server, tool, "Capability auto-disabled by per-capability error budget");
+                warn!(
+                    server,
+                    tool, "Capability auto-disabled by per-capability error budget"
+                );
             }
         }
     }
@@ -402,8 +417,12 @@ impl MetaMcp {
             .as_ref()
             .ok_or_else(|| Error::json_rpc(-32603, "Statistics not enabled for this gateway"))?;
 
-        let mut total_tools: usize =
-            self.backends.all().iter().map(|b| b.cached_tools_count()).sum();
+        let mut total_tools: usize = self
+            .backends
+            .all()
+            .iter()
+            .map(|b| b.cached_tools_count())
+            .sum();
         if let Some(cap) = self.get_capabilities() {
             total_tools += cap.get_tools().len();
         }

@@ -46,7 +46,11 @@ pub async fn run_plugin_search(
             println!("{} plugin(s) found:", results.len());
             for m in &results {
                 println!("  {} v{}  —  {}", m.name, m.version, m.description);
-                println!("    author: {}  capabilities: {}", m.author, m.capabilities.join(", "));
+                println!(
+                    "    author: {}  capabilities: {}",
+                    m.author,
+                    m.capabilities.join(", ")
+                );
             }
             ExitCode::SUCCESS
         }
@@ -65,8 +69,10 @@ pub async fn run_plugin_install(
     config: &Config,
 ) -> ExitCode {
     let url = resolve_marketplace_url(marketplace_url, &config.marketplace);
-    let dir = plugin_dir
-        .map_or_else(|| resolved_plugin_dir(None, &config.marketplace), Path::to_path_buf);
+    let dir = plugin_dir.map_or_else(
+        || resolved_plugin_dir(None, &config.marketplace),
+        Path::to_path_buf,
+    );
 
     let client = match MarketplaceClient::new(url, &dir) {
         Ok(c) => c,
@@ -83,7 +89,10 @@ pub async fn run_plugin_install(
             if let Err(e) = persist_to_registry(&plugin, &dir) {
                 eprintln!("Warning: plugin installed but registry update failed: {e}");
             }
-            println!("Installed: {} v{}", plugin.manifest.name, plugin.manifest.version);
+            println!(
+                "Installed: {} v{}",
+                plugin.manifest.name, plugin.manifest.version
+            );
             println!("  path:     {}", plugin.install_path.display());
             println!("  caps:     {}", plugin.manifest.capabilities.join(", "));
             ExitCode::SUCCESS
@@ -101,8 +110,10 @@ pub async fn run_plugin_uninstall(
     plugin_dir: Option<&Path>,
     config: &Config,
 ) -> ExitCode {
-    let dir = plugin_dir
-        .map_or_else(|| resolved_plugin_dir(None, &config.marketplace), Path::to_path_buf);
+    let dir = plugin_dir.map_or_else(
+        || resolved_plugin_dir(None, &config.marketplace),
+        Path::to_path_buf,
+    );
 
     match MarketplaceClient::uninstall(name, &dir) {
         Ok(()) => {
@@ -122,8 +133,10 @@ pub async fn run_plugin_uninstall(
 
 /// List installed plugins.
 pub fn run_plugin_list(plugin_dir: Option<&Path>, config: &Config) -> ExitCode {
-    let dir = plugin_dir
-        .map_or_else(|| resolved_plugin_dir(None, &config.marketplace), Path::to_path_buf);
+    let dir = plugin_dir.map_or_else(
+        || resolved_plugin_dir(None, &config.marketplace),
+        Path::to_path_buf,
+    );
 
     match MarketplaceClient::list_installed(&dir) {
         Ok(plugins) if plugins.is_empty() => {
@@ -131,7 +144,11 @@ pub fn run_plugin_list(plugin_dir: Option<&Path>, config: &Config) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(plugins) => {
-            println!("{} plugin(s) installed in {}:", plugins.len(), dir.display());
+            println!(
+                "{} plugin(s) installed in {}:",
+                plugins.len(),
+                dir.display()
+            );
             print_plugin_table(&plugins);
             ExitCode::SUCCESS
         }
@@ -153,8 +170,10 @@ fn resolve_marketplace_url<'a>(cli: Option<&'a str>, cfg: &'a MarketplaceConfig)
 ///
 /// Priority: explicit `cli` arg > config `marketplace.plugin_dir` > default.
 pub fn resolved_plugin_dir(cli: Option<&Path>, cfg: &MarketplaceConfig) -> PathBuf {
-    let raw = cli
-        .map_or_else(|| cfg.plugin_dir.clone(), |p| p.to_string_lossy().into_owned());
+    let raw = cli.map_or_else(
+        || cfg.plugin_dir.clone(),
+        |p| p.to_string_lossy().into_owned(),
+    );
     expand_tilde(&raw)
 }
 
@@ -243,10 +262,7 @@ mod tests {
         let result = resolved_plugin_dir(None, &cfg.marketplace);
         // THEN: ~ is expanded (must not start with '~' in the result)
         let s = result.to_string_lossy();
-        assert!(
-            !s.starts_with('~'),
-            "tilde should be expanded; got: {s}"
-        );
+        assert!(!s.starts_with('~'), "tilde should be expanded; got: {s}");
     }
 
     #[test]
@@ -304,6 +320,9 @@ mod tests {
         // GIVEN: the top-level Config default
         let cfg = Config::default();
         // THEN: marketplace sub-config has default values
-        assert_eq!(cfg.marketplace.marketplace_url, "https://plugins.mcpgateway.io");
+        assert_eq!(
+            cfg.marketplace.marketplace_url,
+            "https://plugins.mcpgateway.io"
+        );
     }
 }

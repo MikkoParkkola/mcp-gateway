@@ -93,7 +93,9 @@ pub fn jaccard_similarity(a: &str, b: &str) -> f64 {
         return 0.0;
     }
     #[allow(clippy::cast_precision_loss)] // tool counts are small (< 2^53)
-    { intersection as f64 / union as f64 }
+    {
+        intersection as f64 / union as f64
+    }
 }
 
 // ============================================================================
@@ -212,9 +214,7 @@ impl SessionCompressor {
             tools.to_vec()
         };
         // Step 2: usage-based pruning
-        if self.config.prune_unused
-            && self.request_count > self.config.min_requests_before_prune
-        {
+        if self.config.prune_unused && self.request_count > self.config.min_requests_before_prune {
             deduped
                 .into_iter()
                 .filter(|t| self.used_tools.contains(&t.name))
@@ -262,11 +262,7 @@ impl SessionCompressor {
                     self.aliases
                         .insert(tool.name.clone(), existing.name.clone());
                     let existing_hash = semantic_hash(existing);
-                    if let Some(grp) = self
-                        .groups
-                        .iter_mut()
-                        .find(|g| g.hash == existing_hash)
-                    {
+                    if let Some(grp) = self.groups.iter_mut().find(|g| g.hash == existing_hash) {
                         if !grp.members.contains(&tool.name) {
                             grp.members.push(tool.name.clone());
                         }
@@ -376,7 +372,9 @@ impl CompressionStats {
             return 1.0;
         }
         #[allow(clippy::cast_precision_loss)] // tool counts are small (< 2^53)
-        { self.output_count as f64 / self.original_count as f64 }
+        {
+            self.output_count as f64 / self.original_count as f64
+        }
     }
 }
 

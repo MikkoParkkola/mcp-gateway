@@ -64,7 +64,12 @@ pub fn print_tool_list(tools: &[(String, String, bool)], format: OutputFormat) {
                 println!("No tools available.");
                 return;
             }
-            let name_width = tools.iter().map(|(n, _, _)| n.len()).max().unwrap_or(4).max(4);
+            let name_width = tools
+                .iter()
+                .map(|(n, _, _)| n.len())
+                .max()
+                .unwrap_or(4)
+                .max(4);
             let auth_col = "AUTH";
             println!(
                 "{:<width$}  {:<4}  DESCRIPTION",
@@ -108,7 +113,10 @@ pub fn print_tool_inspect(name: &str, description: &str, schema: &Value, format:
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 fn print_json(value: &Value) {
-    println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_default()
+    );
 }
 
 fn print_plain(value: &Value) {
@@ -180,10 +188,7 @@ fn value_to_display(v: &Value) -> String {
     }
 }
 
-fn column_widths(
-    rows: &[Value],
-    keys: &[&str],
-) -> Vec<usize> {
+fn column_widths(rows: &[Value], keys: &[&str]) -> Vec<usize> {
     keys.iter()
         .map(|key| {
             let header_len = key.len();
@@ -265,10 +270,7 @@ mod tests {
     #[test]
     fn value_to_display_converts_all_scalars() {
         assert_eq!(value_to_display(&Value::String("hi".into())), "hi");
-        assert_eq!(
-            value_to_display(&serde_json::json!(42)),
-            "42"
-        );
+        assert_eq!(value_to_display(&serde_json::json!(42)), "42");
         assert_eq!(value_to_display(&Value::Bool(true)), "true");
         assert_eq!(value_to_display(&Value::Null), "null");
     }

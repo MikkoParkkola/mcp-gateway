@@ -222,7 +222,11 @@ impl OidcVerifier {
     ///
     /// Returns [`OidcError`] if the token is invalid, expired, from an unknown
     /// issuer, signed with an unknown key, or violates domain restrictions.
-    pub async fn verify(&self, token: &str, config: &KeyServerOidcConfig) -> Result<VerifiedIdentity, OidcError> {
+    pub async fn verify(
+        &self,
+        token: &str,
+        config: &KeyServerOidcConfig,
+    ) -> Result<VerifiedIdentity, OidcError> {
         // Decode header without verification to extract issuer claim for provider lookup
         let header = jsonwebtoken::decode_header(token)?;
 
@@ -312,7 +316,10 @@ impl OidcVerifier {
         jwks_uri: &str,
     ) -> Result<DecodingKey, OidcError> {
         // Try cached JWKS first
-        let jwks = self.jwks_cache.get_or_fetch(issuer, jwks_uri, false).await?;
+        let jwks = self
+            .jwks_cache
+            .get_or_fetch(issuer, jwks_uri, false)
+            .await?;
         if let Some(key) = find_key_in_jwks(&jwks, kid) {
             return Ok(key);
         }
@@ -331,20 +338,18 @@ fn extract_unverified_claims(token: &str) -> Result<IdTokenClaims, OidcError> {
     // Split the JWT into parts; base64-decode the payload
     let parts: Vec<&str> = token.splitn(3, '.').collect();
     if parts.len() < 2 {
-        return Err(OidcError::JwtError(
-            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken),
-        ));
+        return Err(OidcError::JwtError(jsonwebtoken::errors::Error::from(
+            jsonwebtoken::errors::ErrorKind::InvalidToken,
+        )));
     }
 
-    let payload = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        parts[1],
-    )
-    .map_err(|_| {
-        OidcError::JwtError(jsonwebtoken::errors::Error::from(
-            jsonwebtoken::errors::ErrorKind::InvalidToken,
-        ))
-    })?;
+    let payload =
+        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, parts[1])
+            .map_err(|_| {
+                OidcError::JwtError(jsonwebtoken::errors::Error::from(
+                    jsonwebtoken::errors::ErrorKind::InvalidToken,
+                ))
+            })?;
 
     serde_json::from_slice::<IdTokenClaims>(&payload).map_err(|_| {
         OidcError::JwtError(jsonwebtoken::errors::Error::from(
@@ -362,9 +367,7 @@ fn find_key_in_jwks(jwks: &JwkSet, kid: &str) -> Option<DecodingKey> {
         }
 
         return match &jwk.algorithm {
-            AlgorithmParameters::RSA(rsa) => {
-                DecodingKey::from_rsa_components(&rsa.n, &rsa.e).ok()
-            }
+            AlgorithmParameters::RSA(rsa) => DecodingKey::from_rsa_components(&rsa.n, &rsa.e).ok(),
             AlgorithmParameters::EllipticCurve(ec) => {
                 DecodingKey::from_ec_components(&ec.x, &ec.y).ok()
             }
@@ -394,16 +397,12 @@ fn build_validation(header: &Header) -> Validation {
 }
 
 /// Validate that the token's `aud` claim contains one of the expected audiences.
-fn check_audience(
-    aud_claim: &serde_json::Value,
-    expected: &[String],
-) -> Result<(), OidcError> {
+fn check_audience(aud_claim: &serde_json::Value, expected: &[String]) -> Result<(), OidcError> {
     let matches = match aud_claim {
         serde_json::Value::String(s) => expected.iter().any(|e| e == s),
-        serde_json::Value::Array(arr) => arr.iter().any(|v| {
-            v.as_str()
-                .is_some_and(|s| expected.iter().any(|e| e == s))
-        }),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| expected.iter().any(|e| e == s))),
         _ => false,
     };
 
@@ -432,10 +431,7 @@ mod tests {
         let uri = default_jwks_uri("https://accounts.google.com");
 
         // THEN: the standard JWKS discovery path is appended
-        assert_eq!(
-            uri,
-            "https://accounts.google.com/.well-known/jwks.json"
-        );
+        assert_eq!(uri, "https://accounts.google.com/.well-known/jwks.json");
     }
 
     #[test]
@@ -444,10 +440,7 @@ mod tests {
         let uri = default_jwks_uri("https://accounts.google.com/");
 
         // THEN: no double slash
-        assert_eq!(
-            uri,
-            "https://accounts.google.com/.well-known/jwks.json"
-        );
+        assert_eq!(uri, "https://accounts.google.com/.well-known/jwks.json");
     }
 
     #[test]

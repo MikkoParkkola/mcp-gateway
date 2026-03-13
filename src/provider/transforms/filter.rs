@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::protocol::Tool;
-use crate::{provider::Transform, Result};
+use crate::{Result, provider::Transform};
 
 /// Filters the tool set and blocks invocations based on allow/deny patterns.
 ///
@@ -93,11 +93,7 @@ impl Transform for FilterTransform {
             .collect())
     }
 
-    async fn transform_invoke(
-        &self,
-        tool: &str,
-        args: Value,
-    ) -> Result<Option<(String, Value)>> {
+    async fn transform_invoke(&self, tool: &str, args: Value) -> Result<Option<(String, Value)>> {
         if self.is_allowed(tool) {
             Ok(Some((tool.to_string(), args)))
         } else {

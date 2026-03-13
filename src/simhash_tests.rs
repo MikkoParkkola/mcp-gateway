@@ -59,7 +59,10 @@ fn simhash_single_feature_is_nonzero() {
 
 #[test]
 fn hamming_distance_same_hash_is_zero() {
-    assert_eq!(hamming_distance(0xDEAD_BEEF_CAFE_BABE, 0xDEAD_BEEF_CAFE_BABE), 0);
+    assert_eq!(
+        hamming_distance(0xDEAD_BEEF_CAFE_BABE, 0xDEAD_BEEF_CAFE_BABE),
+        0
+    );
 }
 
 #[test]
@@ -154,7 +157,10 @@ fn index_multiple_entries_sorted_by_score() {
     let results = idx.find_similar(query, 0.0);
     assert_eq!(results.len(), 2);
     // Highest score should be first
-    assert!(results[0].1 >= results[1].1, "results must be sorted descending");
+    assert!(
+        results[0].1 >= results[1].1,
+        "results must be sorted descending"
+    );
 }
 
 #[test]
@@ -207,7 +213,10 @@ fn session_fingerprint_similar_toolsets_close() {
     fp2.add_tools(&["read_file", "write_file", "list_dir", "move_file"]);
 
     let score = similarity_score(fp1.compute(), fp2.compute());
-    assert!(score > 0.5, "similar toolsets should have score > 0.5, got {score}");
+    assert!(
+        score > 0.5,
+        "similar toolsets should have score > 0.5, got {score}"
+    );
 }
 
 #[test]
@@ -350,7 +359,10 @@ fn router_similar_sessions_share_partition() {
     // In practice with these similar tools, they should share a partition.
     let score = similarity_score(h1, h2);
     if score >= 0.6 {
-        assert_eq!(p1, p2, "similar sessions (score={score:.2}) should share partition");
+        assert_eq!(
+            p1, p2,
+            "similar sessions (score={score:.2}) should share partition"
+        );
     }
 }
 

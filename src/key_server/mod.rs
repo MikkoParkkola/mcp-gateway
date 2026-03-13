@@ -80,7 +80,10 @@ impl KeyServer {
     ///
     /// Returns the [`AuthenticatedClient`] and the associated [`TemporaryToken`]
     /// if the token is valid and not expired/revoked. Returns `None` otherwise.
-    pub async fn validate_token(&self, token: &str) -> Option<(AuthenticatedClient, TemporaryToken)> {
+    pub async fn validate_token(
+        &self,
+        token: &str,
+    ) -> Option<(AuthenticatedClient, TemporaryToken)> {
         let temp = self.store.get(token).await?;
 
         let client = AuthenticatedClient {

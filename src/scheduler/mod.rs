@@ -148,9 +148,7 @@ impl CronField {
                     .parse()
                     .map_err(|_| Error::Config(format!("invalid cron range end: {s}")))?;
                 if lo > hi {
-                    return Err(Error::Config(format!(
-                        "cron range start {lo} > end {hi}"
-                    )));
+                    return Err(Error::Config(format!("cron range start {lo} > end {hi}")));
                 }
                 if lo < min_val || hi > max_val {
                     return Err(Error::Config(format!(
@@ -189,11 +187,11 @@ impl CronField {
 /// A fully parsed cron expression with five fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronExpression {
-    minute: CronField,   // 0–59
-    hour: CronField,     // 0–23
-    day: CronField,      // 1–31
-    month: CronField,    // 1–12
-    weekday: CronField,  // 0–7 (0 and 7 are both Sunday)
+    minute: CronField,  // 0–59
+    hour: CronField,    // 0–23
+    day: CronField,     // 1–31
+    month: CronField,   // 1–12
+    weekday: CronField, // 0–7 (0 and 7 are both Sunday)
 }
 
 impl CronExpression {
@@ -279,8 +277,7 @@ impl From<ActionConfig> for ScheduleAction {
 // ── JobStatus ─────────────────────────────────────────────────────────────────
 
 /// Outcome of the last execution of a scheduled job.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum JobStatus {
     /// Job has never been run.
     #[default]
@@ -316,7 +313,6 @@ struct EntryTracking {
     run_count: u64,
     last_status: JobStatus,
 }
-
 
 impl ScheduleEntry {
     /// Create a new entry from config.
@@ -485,7 +481,10 @@ impl CronScheduler {
 
     /// Snapshot a single entry by name.
     pub fn snapshot_by_name(&self, name: &str) -> Option<EntrySnapshot> {
-        self.entries.iter().find(|e| e.name == name).map(|e| e.snapshot())
+        self.entries
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.snapshot())
     }
 
     /// Record a successful run for the named entry.

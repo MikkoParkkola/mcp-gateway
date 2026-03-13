@@ -38,7 +38,9 @@ impl ChainObservability {
     /// Create an observer bound to the given chain ID.
     #[must_use]
     pub fn new(chain_id: impl Into<String>) -> Self {
-        Self { chain_id: chain_id.into() }
+        Self {
+            chain_id: chain_id.into(),
+        }
     }
 
     /// Emit an event when a chain begins execution.
@@ -87,7 +89,13 @@ impl ChainObservability {
     }
 
     /// Emit an event when a step completes successfully.
-    pub fn step_completed(&self, step_name: &str, step_index: usize, attempts: u32, duration_ms: u64) {
+    pub fn step_completed(
+        &self,
+        step_name: &str,
+        step_index: usize,
+        attempts: u32,
+        duration_ms: u64,
+    ) {
         info!(
             chain_id = %self.chain_id,
             step = step_name,

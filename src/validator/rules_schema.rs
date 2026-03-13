@@ -3,9 +3,9 @@
 //! These rules validate JSON Schema completeness, detect conflicts across tools,
 //! and enforce naming consistency.
 
-use crate::protocol::Tool;
+use super::{Rule, Severity, ValidationResult};
 use crate::Result;
-use super::{ValidationResult, Severity, Rule};
+use crate::protocol::Tool;
 
 /// AX-007: Schema Completeness
 ///
@@ -29,7 +29,8 @@ impl Rule for SchemaCompletenessRule {
     fn check(&self, tool: &Tool) -> Result<ValidationResult> {
         let mut result = ValidationResult::new(self.code(), self.name(), &tool.name);
 
-        let properties = tool.input_schema
+        let properties = tool
+            .input_schema
             .get("properties")
             .and_then(|p| p.as_object());
 
@@ -50,9 +51,9 @@ impl Rule for SchemaCompletenessRule {
 
         for (name, prop) in props {
             let has_type = prop.get("type").is_some_and(|t| !t.is_null());
-            let has_desc = prop.get("description").is_some_and(|d| {
-                d.as_str().is_some_and(|s| !s.is_empty())
-            });
+            let has_desc = prop
+                .get("description")
+                .is_some_and(|d| d.as_str().is_some_and(|s| !s.is_empty()));
 
             if !has_type {
                 result.add_issue(format!("Property '{name}' missing 'type'"));
@@ -65,9 +66,10 @@ impl Rule for SchemaCompletenessRule {
         }
 
         // Check for required array
-        let has_required = tool.input_schema.get("required").is_some_and(|r| {
-            r.as_array().is_some_and(|a| !a.is_empty())
-        });
+        let has_required = tool
+            .input_schema
+            .get("required")
+            .is_some_and(|r| r.as_array().is_some_and(|a| !a.is_empty()));
 
         if !has_required {
             result.add_issue("Missing 'required' array in input schema");
@@ -82,7 +84,11 @@ impl Rule for SchemaCompletenessRule {
             1.0
         };
 
-        let score = if has_required { completeness } else { (completeness - 0.1).max(0.0) };
+        let score = if has_required {
+            completeness
+        } else {
+            (completeness - 0.1).max(0.0)
+        };
 
         let severity = if score < 0.5 {
             Severity::Fail
@@ -129,8 +135,7 @@ impl Rule for ConflictDetectionRule {
 
         // Check for overly generic names that are likely to conflict
         let generic_names = [
-            "search", "query", "find", "get", "fetch",
-            "send", "create", "update", "delete",
+            "search", "query", "find", "get", "fetch", "send", "create", "update", "delete",
         ];
 
         if generic_names.contains(&tool.name.to_lowercase().as_str()) {
@@ -138,7 +143,9 @@ impl Rule for ConflictDetectionRule {
                 "Name '{}' is too generic and likely to conflict with other tools",
                 tool.name
             ));
-            result.add_suggestion("Use a service-prefixed name (e.g., 'brave_search' instead of 'search')");
+            result.add_suggestion(
+                "Use a service-prefixed name (e.g., 'brave_search' instead of 'search')",
+            );
             return Ok(result.with_score(0.4).with_severity(Severity::Warn));
         }
 
@@ -154,12 +161,17 @@ impl ConflictDetectionRule {
     #[must_use]
     pub fn check_conflicts(tools: &[Tool]) -> Vec<ValidationResult> {
         let mut results = Vec::new();
-        let mut seen_names: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut seen_names: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
 
         // Detect duplicate names
         for (idx, tool) in tools.iter().enumerate() {
             if let Some(&prev_idx) = seen_names.get(tool.name.as_str()) {
-                let mut result = ValidationResult::new("AX-008", "Cross-Capability Conflict Detection", &tool.name);
+                let mut result = ValidationResult::new(
+                    "AX-008",
+                    "Cross-Capability Conflict Detection",
+                    &tool.name,
+                );
                 result.add_issue(format!(
                     "Duplicate tool name '{}' (also at index {prev_idx})",
                     tool.name
@@ -187,11 +199,16 @@ impl ConflictDetectionRule {
                     && parts_a.last() == parts_b.last()
                     && parts_a.len() != parts_b.len()
                 {
-                    let mut result = ValidationResult::new("AX-008", "Cross-Capability Conflict Detection", name_a);
+                    let mut result = ValidationResult::new(
+                        "AX-008",
+                        "Cross-Capability Conflict Detection",
+                        name_a,
+                    );
                     result.add_issue(format!(
                         "Potential overlap: '{name_a}' and '{name_b}' share prefix and suffix"
                     ));
-                    result.add_suggestion("Consider merging or clearly differentiating these tools");
+                    result
+                        .add_suggestion("Consider merging or clearly differentiating these tools");
                     results.push(result.with_score(0.6).with_severity(Severity::Warn));
                 }
             }
@@ -232,9 +249,8 @@ impl Rule for NamingConsistencyRule {
         let has_dash = name.contains('-');
         let has_upper = name.chars().any(char::is_uppercase);
 
-        let convention_count = usize::from(has_underscore)
-            + usize::from(has_dash)
-            + usize::from(has_upper);
+        let convention_count =
+            usize::from(has_underscore) + usize::from(has_dash) + usize::from(has_upper);
 
         if convention_count > 1 {
             result.add_issue(format!(
@@ -255,14 +271,21 @@ impl Rule for NamingConsistencyRule {
 
         // Prefer snake_case
         if has_dash {
-            result.add_issue(format!("Name '{name}' uses kebab-case instead of snake_case"));
-            result.add_suggestion("Use snake_case for MCP tool names (e.g., 'my_tool' not 'my-tool')");
+            result.add_issue(format!(
+                "Name '{name}' uses kebab-case instead of snake_case"
+            ));
+            result.add_suggestion(
+                "Use snake_case for MCP tool names (e.g., 'my_tool' not 'my-tool')",
+            );
             return Ok(result.with_score(0.7).with_severity(Severity::Info));
         }
 
         if has_upper {
-            result.add_issue(format!("Name '{name}' uses camelCase instead of snake_case"));
-            result.add_suggestion("Use snake_case for MCP tool names (e.g., 'my_tool' not 'myTool')");
+            result.add_issue(format!(
+                "Name '{name}' uses camelCase instead of snake_case"
+            ));
+            result
+                .add_suggestion("Use snake_case for MCP tool names (e.g., 'my_tool' not 'myTool')");
             return Ok(result.with_score(0.7).with_severity(Severity::Info));
         }
 
@@ -305,11 +328,7 @@ impl NamingConsistencyRule {
             + usize::from(camel_count > 0);
 
         if conventions_used > 1 {
-            let mut result = ValidationResult::new(
-                "AX-009",
-                "Naming Consistency",
-                "(cross-tool)",
-            );
+            let mut result = ValidationResult::new("AX-009", "Naming Consistency", "(cross-tool)");
             result.add_issue(format!(
                 "Mixed naming conventions across tools: {snake_count} snake_case, {kebab_count} kebab-case, {camel_count} camelCase"
             ));
@@ -324,8 +343,8 @@ impl NamingConsistencyRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::protocol::Tool;
+    use serde_json::json;
 
     fn create_tool(name: &str, description: &str, input_schema: serde_json::Value) -> Tool {
         Tool {
@@ -363,7 +382,11 @@ mod tests {
         );
 
         let result = rule.check(&tool).unwrap();
-        assert!(result.passed, "Expected pass, got issues: {:?}", result.issues);
+        assert!(
+            result.passed,
+            "Expected pass, got issues: {:?}",
+            result.issues
+        );
         assert!(result.score > 0.8);
     }
 
@@ -408,7 +431,12 @@ mod tests {
 
         let result = rule.check(&tool).unwrap();
         assert!(!result.passed);
-        assert!(result.issues.iter().any(|i| i.contains("missing 'description'")));
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|i| i.contains("missing 'description'"))
+        );
     }
 
     #[test]
@@ -436,11 +464,7 @@ mod tests {
     #[test]
     fn schema_completeness_fail_no_properties() {
         let rule = SchemaCompletenessRule;
-        let tool = create_tool(
-            "test_tool",
-            "A tool",
-            json!({"type": "object"}),
-        );
+        let tool = create_tool("test_tool", "A tool", json!({"type": "object"}));
 
         let result = rule.check(&tool).unwrap();
         assert!(!result.passed);
@@ -480,8 +504,16 @@ mod tests {
     #[test]
     fn conflict_detection_cross_tool_duplicate_names() {
         let tools = vec![
-            create_tool("brave_search", "Search A", json!({"type": "object", "properties": {}})),
-            create_tool("brave_search", "Search B", json!({"type": "object", "properties": {}})),
+            create_tool(
+                "brave_search",
+                "Search A",
+                json!({"type": "object", "properties": {}}),
+            ),
+            create_tool(
+                "brave_search",
+                "Search B",
+                json!({"type": "object", "properties": {}}),
+            ),
         ];
 
         let results = ConflictDetectionRule::check_conflicts(&tools);
@@ -492,13 +524,25 @@ mod tests {
     #[test]
     fn conflict_detection_cross_tool_no_duplicates() {
         let tools = vec![
-            create_tool("brave_search", "Search A", json!({"type": "object", "properties": {}})),
-            create_tool("google_search", "Search B", json!({"type": "object", "properties": {}})),
+            create_tool(
+                "brave_search",
+                "Search A",
+                json!({"type": "object", "properties": {}}),
+            ),
+            create_tool(
+                "google_search",
+                "Search B",
+                json!({"type": "object", "properties": {}}),
+            ),
         ];
 
         let results = ConflictDetectionRule::check_conflicts(&tools);
         // No duplicates, possibly no overlap either
-        assert!(results.iter().all(|r| !r.issues.iter().any(|i| i.contains("Duplicate"))));
+        assert!(
+            results
+                .iter()
+                .all(|r| !r.issues.iter().any(|i| i.contains("Duplicate")))
+        );
     }
 
     // ── AX-009: Naming Consistency ──────────────────────────────
@@ -548,8 +592,16 @@ mod tests {
     #[test]
     fn naming_consistency_cross_tool_mixed_conventions() {
         let tools = vec![
-            create_tool("brave_search", "A", json!({"type": "object", "properties": {}})),
-            create_tool("google-search", "B", json!({"type": "object", "properties": {}})),
+            create_tool(
+                "brave_search",
+                "A",
+                json!({"type": "object", "properties": {}}),
+            ),
+            create_tool(
+                "google-search",
+                "B",
+                json!({"type": "object", "properties": {}}),
+            ),
         ];
 
         let results = NamingConsistencyRule::check_consistency(&tools);
@@ -560,8 +612,16 @@ mod tests {
     #[test]
     fn naming_consistency_cross_tool_all_snake_case() {
         let tools = vec![
-            create_tool("brave_search", "A", json!({"type": "object", "properties": {}})),
-            create_tool("google_search", "B", json!({"type": "object", "properties": {}})),
+            create_tool(
+                "brave_search",
+                "A",
+                json!({"type": "object", "properties": {}}),
+            ),
+            create_tool(
+                "google_search",
+                "B",
+                json!({"type": "object", "properties": {}}),
+            ),
         ];
 
         let results = NamingConsistencyRule::check_consistency(&tools);

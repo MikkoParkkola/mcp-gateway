@@ -433,7 +433,11 @@ mod tests {
         multiplexer.reap_expired_sessions(Duration::ZERO);
 
         // THEN
-        assert_eq!(multiplexer.session_count(), 0, "expired abandoned session must be reaped");
+        assert_eq!(
+            multiplexer.session_count(),
+            0,
+            "expired abandoned session must be reaped"
+        );
         assert!(!multiplexer.has_session(&id));
     }
 
@@ -453,7 +457,11 @@ mod tests {
         multiplexer.reap_expired_sessions(Duration::ZERO);
 
         // THEN: session survives because client is still connected
-        assert_eq!(multiplexer.session_count(), 1, "session with active receiver must be preserved");
+        assert_eq!(
+            multiplexer.session_count(),
+            1,
+            "session with active receiver must be preserved"
+        );
         assert!(multiplexer.has_session(&id));
     }
 
@@ -477,8 +485,14 @@ mod tests {
 
         // THEN
         assert_eq!(multiplexer.session_count(), 1);
-        assert!(!multiplexer.has_session(&abandoned_id), "abandoned session must be reaped");
-        assert!(multiplexer.has_session(&active_id), "active session must survive");
+        assert!(
+            !multiplexer.has_session(&abandoned_id),
+            "abandoned session must be reaped"
+        );
+        assert!(
+            multiplexer.has_session(&active_id),
+            "active session must survive"
+        );
     }
 
     /// GIVEN a session with no active receivers but within its TTL
@@ -525,7 +539,11 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // THEN
-        assert_eq!(multiplexer.session_count(), 0, "reaper must have cleaned up expired session");
+        assert_eq!(
+            multiplexer.session_count(),
+            0,
+            "reaper must have cleaned up expired session"
+        );
         assert!(!multiplexer.has_session(&id));
     }
 

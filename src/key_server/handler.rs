@@ -26,7 +26,11 @@
 //! `admin_token` is the value from `key_server.admin.bearer_token` in config.
 //! If no admin token is configured, the endpoints return `503 Service Unavailable`.
 
-use std::{net::IpAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{
+    net::IpAddr,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Json, Router,
@@ -130,7 +134,10 @@ async fn exchange_token(
 
     if body.grant_type != "urn:ietf:params:oauth:grant-type:token-exchange" {
         warn!(grant_type = %body.grant_type, "Invalid grant_type");
-        let ev = AuditEvent::invalid(format!("invalid grant_type: {}", body.grant_type), client_ip);
+        let ev = AuditEvent::invalid(
+            format!("invalid grant_type: {}", body.grant_type),
+            client_ip,
+        );
         audit::emit(&ev);
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -298,10 +305,7 @@ async fn revoke_tokens_by_subject(
 /// The `Err` variant carries an `axum::response::Response` which is large
 /// by design — it wraps the full HTTP response to be returned immediately.
 #[allow(clippy::result_large_err)]
-fn check_admin_auth(
-    ks: &KeyServer,
-    headers: &HeaderMap,
-) -> Result<(), axum::response::Response> {
+fn check_admin_auth(ks: &KeyServer, headers: &HeaderMap) -> Result<(), axum::response::Response> {
     use subtle::ConstantTimeEq;
 
     let Some(ref admin_token) = ks.config.admin_token else {
@@ -324,8 +328,7 @@ fn check_admin_auth(
         });
 
     // Constant-time comparison to prevent timing side-channels
-    let matches = provided
-        .is_some_and(|p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
+    let matches = provided.is_some_and(|p| p.as_bytes().ct_eq(admin_token.as_bytes()).into());
 
     if matches {
         Ok(())
@@ -351,9 +354,17 @@ fn parse_scope_string(scope: &str) -> RequestedScopes {
 
     for part in scope.split_whitespace() {
         if let Some(rest) = part.strip_prefix("backends:") {
-            backends.extend(rest.split(',').filter(|s| !s.is_empty()).map(str::to_string));
+            backends.extend(
+                rest.split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            );
         } else if let Some(rest) = part.strip_prefix("tools:") {
-            tools.extend(rest.split(',').filter(|s| !s.is_empty()).map(str::to_string));
+            tools.extend(
+                rest.split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            );
         }
     }
 
@@ -376,11 +387,7 @@ fn format_scope_string(token: &TemporaryToken) -> String {
 
 /// Create a JSON error response.
 fn error_response(status: StatusCode, error: &str, message: &str) -> axum::response::Response {
-    (
-        status,
-        Json(json!({"error": error, "message": message})),
-    )
-        .into_response()
+    (status, Json(json!({"error": error, "message": message}))).into_response()
 }
 
 #[cfg(test)]
@@ -439,8 +446,14 @@ mod tests {
     #[test]
     fn format_scope_string_empty() {
         // GIVEN: token with empty scopes
-        use crate::key_server::{oidc::VerifiedIdentity, store::{TemporaryToken, TokenScopes}};
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        use crate::key_server::{
+            oidc::VerifiedIdentity,
+            store::{TemporaryToken, TokenScopes},
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let token = TemporaryToken {
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),
@@ -467,8 +480,14 @@ mod tests {
     #[test]
     fn format_scope_string_with_data() {
         // GIVEN: token with specific scopes
-        use crate::key_server::{oidc::VerifiedIdentity, store::{TemporaryToken, TokenScopes}};
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        use crate::key_server::{
+            oidc::VerifiedIdentity,
+            store::{TemporaryToken, TokenScopes},
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let token = TemporaryToken {
             jti: "jti".to_string(),
             token: "mcpgw_test".to_string(),

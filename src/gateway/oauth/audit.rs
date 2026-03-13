@@ -151,21 +151,9 @@ mod tests {
 
     #[test]
     fn entries_serialize_to_json() {
-        let allow_entry = ToolInvocationAudit::allow(
-            "a",
-            "A",
-            "b",
-            "t",
-            vec!["tools:*".to_string()],
-        );
-        let deny_entry = ToolInvocationAudit::deny(
-            "a",
-            "A",
-            "b",
-            "t",
-            vec![],
-            "reason",
-        );
+        let allow_entry =
+            ToolInvocationAudit::allow("a", "A", "b", "t", vec!["tools:*".to_string()]);
+        let deny_entry = ToolInvocationAudit::deny("a", "A", "b", "t", vec![], "reason");
 
         assert!(serde_json::to_string(&allow_entry).is_ok());
         assert!(serde_json::to_string(&deny_entry).is_ok());

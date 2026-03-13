@@ -18,8 +18,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use sha2::{Digest, Sha256};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// Derives and manages `prompt_cache_key` values.
 ///
@@ -445,9 +445,8 @@ mod tests {
 
     #[test]
     fn fingerprint_is_deterministic() {
-        let tools = vec![
-            json!({"name": "x", "input_schema": {"type": "object", "properties": {}}}),
-        ];
+        let tools =
+            vec![json!({"name": "x", "input_schema": {"type": "object", "properties": {}}})];
         let f1 = tool_schema_fingerprint(&tools);
         let f2 = tool_schema_fingerprint(&tools);
         assert_eq!(f1, f2);

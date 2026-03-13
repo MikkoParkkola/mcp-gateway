@@ -46,10 +46,7 @@ pub struct AgentDefinition {
 impl AgentDefinition {
     /// Return the parsed scopes.
     pub fn parsed_scopes(&self) -> Vec<Scope> {
-        self.scopes
-            .iter()
-            .filter_map(|s| Scope::parse(s))
-            .collect()
+        self.scopes.iter().filter_map(|s| Scope::parse(s)).collect()
     }
 }
 
@@ -109,7 +106,10 @@ mod tests {
             name: format!("Agent {id}"),
             hs256_secret: Some("supersecret".to_string()),
             rs256_public_key: None,
-            scopes: vec!["tools:surreal:*".to_string(), "tools:brave:search:read".to_string()],
+            scopes: vec![
+                "tools:surreal:*".to_string(),
+                "tools:brave:search:read".to_string(),
+            ],
             issuer: None,
             audience: None,
         }

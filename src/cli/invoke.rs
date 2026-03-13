@@ -319,7 +319,8 @@ mod tests {
     #[test]
     fn resolve_args_kv_overrides_json_blob() {
         // GIVEN: --args JSON and a kv override
-        let result = resolve_args(Some(r#"{"limit": 5}"#), &["limit=20".to_string()], false).unwrap();
+        let result =
+            resolve_args(Some(r#"{"limit": 5}"#), &["limit=20".to_string()], false).unwrap();
         assert_eq!(result["limit"], json!(20));
     }
 
@@ -359,13 +360,17 @@ mod tests {
 
     #[test]
     fn catalogue_find_returns_none_for_unknown_name() {
-        let cat = ToolCatalogue { capabilities: vec![] };
+        let cat = ToolCatalogue {
+            capabilities: vec![],
+        };
         assert!(cat.find("nonexistent").is_none());
     }
 
     #[test]
     fn catalogue_is_empty_on_empty_vec() {
-        let cat = ToolCatalogue { capabilities: vec![] };
+        let cat = ToolCatalogue {
+            capabilities: vec![],
+        };
         assert!(cat.is_empty());
         assert_eq!(cat.len(), 0);
     }

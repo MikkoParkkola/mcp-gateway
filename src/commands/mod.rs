@@ -3,12 +3,18 @@
 //! Each public function corresponds to a top-level `Command` variant and
 //! returns an `ExitCode` so `main` can remain a thin dispatcher.
 
+mod add_remove;
 mod cap;
+mod doctor;
 mod plugin;
+mod setup;
 mod stats;
 
+pub use add_remove::{run_add_command, run_remove_command};
 pub use cap::run_cap_command;
+pub use doctor::run_doctor_command;
 pub use plugin::{run_plugin_install, run_plugin_list, run_plugin_search, run_plugin_uninstall};
+pub use setup::run_setup_command;
 pub use stats::run_stats_command;
 
 use std::process::ExitCode;

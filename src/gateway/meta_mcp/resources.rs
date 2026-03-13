@@ -29,11 +29,7 @@ use super::MetaMcp;
 /// On error (e.g. null byte in URI), the resource is dropped and a warning
 /// is emitted rather than propagating the error or crashing the list handler.
 fn sanitize_resource(r: Resource, backend: &str) -> Option<Resource> {
-    match sanitize_resource_metadata(
-        &r.uri,
-        r.title.as_deref(),
-        r.description.as_deref(),
-    ) {
+    match sanitize_resource_metadata(&r.uri, r.title.as_deref(), r.description.as_deref()) {
         Ok(clean) => Some(Resource {
             uri: clean.uri,
             name: r.name,
@@ -229,7 +225,10 @@ impl MetaMcp {
     }
 
     /// Find which backend owns a given resource URI by checking cached resources.
-    pub(super) async fn find_resource_owner(&self, uri: &str) -> Option<Arc<crate::backend::Backend>> {
+    pub(super) async fn find_resource_owner(
+        &self,
+        uri: &str,
+    ) -> Option<Arc<crate::backend::Backend>> {
         for backend in self.backends.all() {
             if let Ok(resources) = backend.get_resources().await {
                 if resources.iter().any(|r| r.uri == uri) {

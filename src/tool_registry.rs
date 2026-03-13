@@ -95,7 +95,8 @@ impl RegistryMetrics {
     pub fn record_hit(&self, latency_ns: u64) {
         self.lookups.fetch_add(1, Ordering::Relaxed);
         self.hits.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_ns.fetch_add(latency_ns, Ordering::Relaxed);
+        self.total_latency_ns
+            .fetch_add(latency_ns, Ordering::Relaxed);
         self.latency_samples.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -246,7 +247,11 @@ impl ToolRegistry {
     pub fn insert(&self, server: &str, tool: Tool) {
         let key = format!("{}:{}", server, tool.name);
         let tool_id = fnv1a_64(&key);
-        let entry = RegistryEntry { key: key.clone(), tool_id, tool };
+        let entry = RegistryEntry {
+            key: key.clone(),
+            tool_id,
+            tool,
+        };
         self.index.write().insert(key, entry);
     }
 
@@ -602,7 +607,10 @@ mod tests {
         // latency should be a very small positive number (sub-millisecond)
         let avg = reg.metrics.avg_latency_ns();
         assert!(avg >= 0.0, "avg_latency_ns must be non-negative");
-        assert!(avg < 1_000_000.0, "avg_latency_ns should be sub-millisecond for in-memory lookup");
+        assert!(
+            avg < 1_000_000.0,
+            "avg_latency_ns should be sub-millisecond for in-memory lookup"
+        );
     }
 
     // ── metrics: snapshot ────────────────────────────────────────────────────

@@ -182,11 +182,7 @@ mod tests {
     #[test]
     fn from_der_extracts_organizational_unit() {
         // GIVEN: cert with OU=engineering
-        let der = make_cert_der(
-            "test-agent",
-            Some("engineering"),
-            &[dns_san("test-agent")],
-        );
+        let der = make_cert_der("test-agent", Some("engineering"), &[dns_san("test-agent")]);
         let id = CertIdentity::from_der(&der).unwrap();
         assert_eq!(id.organizational_unit.as_deref(), Some("engineering"));
     }
@@ -206,13 +202,12 @@ mod tests {
     #[test]
     fn from_der_extracts_san_dns_name() {
         // GIVEN: cert with DNS SAN
-        let der = make_cert_der(
-            "server",
-            None,
-            &[dns_san("gateway.company.com")],
-        );
+        let der = make_cert_der("server", None, &[dns_san("gateway.company.com")]);
         let id = CertIdentity::from_der(&der).unwrap();
-        assert!(id.san_dns_names.contains(&"gateway.company.com".to_string()));
+        assert!(
+            id.san_dns_names
+                .contains(&"gateway.company.com".to_string())
+        );
     }
 
     #[test]
@@ -244,11 +239,7 @@ mod tests {
     #[test]
     fn display_name_prefers_spiffe_uri_over_cn() {
         // GIVEN: cert with both CN and SPIFFE URI
-        let der = make_cert_der(
-            "my-cn",
-            None,
-            &[uri_san("spiffe://company.com/agent/foo")],
-        );
+        let der = make_cert_der("my-cn", None, &[uri_san("spiffe://company.com/agent/foo")]);
         let id = CertIdentity::from_der(&der).unwrap();
         assert_eq!(id.display_name, "spiffe://company.com/agent/foo");
     }
@@ -295,11 +286,7 @@ mod tests {
     #[test]
     fn san_lists_reflect_what_cert_contains() {
         // GIVEN: cert with only DNS SANs
-        let der = make_cert_der(
-            "server",
-            None,
-            &[dns_san("gateway.example.com")],
-        );
+        let der = make_cert_der("server", None, &[dns_san("gateway.example.com")]);
         let id = CertIdentity::from_der(&der).unwrap();
         assert!(id.san_uris.is_empty(), "No URI SANs expected");
         assert!(!id.san_dns_names.is_empty());

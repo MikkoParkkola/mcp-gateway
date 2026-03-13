@@ -122,11 +122,7 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
     let required: Vec<&str> = input_schema
         .get("required")
         .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
 
     // Normalise arguments to an object; null / missing → treat as empty object.
@@ -197,8 +193,7 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
             continue;
         }
 
-        let (coerced_value, type_violations) =
-            validate_property(name, raw_value, prop_schema);
+        let (coerced_value, type_violations) = validate_property(name, raw_value, prop_schema);
 
         violations.extend(type_violations);
         coerced_map.insert(name.clone(), coerced_value);
@@ -211,7 +206,10 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
         arguments.clone()
     };
 
-    SchemaValidationResult { violations, coerced }
+    SchemaValidationResult {
+        violations,
+        coerced,
+    }
 }
 
 // ── Per-property validation ───────────────────────────────────────────────────
@@ -245,10 +243,8 @@ fn validate_property(
         // Enum check.
         if let Some(enum_values) = prop_schema.get("enum").and_then(Value::as_array) {
             if !enum_values.contains(&coerced) {
-                let options: Vec<String> = enum_values
-                    .iter()
-                    .map(value_to_display_string)
-                    .collect();
+                let options: Vec<String> =
+                    enum_values.iter().map(value_to_display_string).collect();
                 violations.push(ValidationViolation::new(
                     name,
                     format!("must be one of: {}", options.join(", ")),
@@ -260,18 +256,12 @@ fn validate_property(
         if let Some(num) = coerced.as_f64() {
             if let Some(min) = prop_schema.get("minimum").and_then(Value::as_f64) {
                 if num < min {
-                    violations.push(ValidationViolation::new(
-                        name,
-                        format!("must be >= {min}"),
-                    ));
+                    violations.push(ValidationViolation::new(name, format!("must be >= {min}")));
                 }
             }
             if let Some(max) = prop_schema.get("maximum").and_then(Value::as_f64) {
                 if num > max {
-                    violations.push(ValidationViolation::new(
-                        name,
-                        format!("must be <= {max}"),
-                    ));
+                    violations.push(ValidationViolation::new(name, format!("must be <= {max}")));
                 }
             }
         }
@@ -323,10 +313,7 @@ fn coerce_to_string(value: &Value) -> Result<Value, String> {
         Value::String(_) => Ok(value.clone()),
         Value::Number(n) => Ok(Value::String(n.to_string())),
         Value::Bool(b) => Ok(Value::String(b.to_string())),
-        _ => Err(format!(
-            "expected string, got {}",
-            json_type_name(value)
-        )),
+        _ => Err(format!("expected string, got {}", json_type_name(value))),
     }
 }
 
@@ -347,11 +334,10 @@ fn coerce_to_integer(value: &Value) -> Result<Value, String> {
             .trim()
             .parse::<i64>()
             .map(|i| Value::Number(i.into()))
-            .map_err(|_| format!("expected integer, got string \"{s}\" which is not a valid integer")),
-        _ => Err(format!(
-            "expected integer, got {}",
-            json_type_name(value)
-        )),
+            .map_err(|_| {
+                format!("expected integer, got string \"{s}\" which is not a valid integer")
+            }),
+        _ => Err(format!("expected integer, got {}", json_type_name(value))),
     }
 }
 
@@ -366,10 +352,7 @@ fn coerce_to_number(value: &Value) -> Result<Value, String> {
             .ok_or_else(|| {
                 format!("expected number, got string \"{s}\" which is not a valid number")
             }),
-        _ => Err(format!(
-            "expected number, got {}",
-            json_type_name(value)
-        )),
+        _ => Err(format!("expected number, got {}", json_type_name(value))),
     }
 }
 
@@ -390,30 +373,21 @@ fn coerce_to_boolean(value: &Value) -> Result<Value, String> {
                 "expected boolean, got number {n} — use true or false"
             )),
         },
-        _ => Err(format!(
-            "expected boolean, got {}",
-            json_type_name(value)
-        )),
+        _ => Err(format!("expected boolean, got {}", json_type_name(value))),
     }
 }
 
 fn coerce_to_array(value: &Value) -> Result<Value, String> {
     match value {
         Value::Array(_) => Ok(value.clone()),
-        _ => Err(format!(
-            "expected array, got {}",
-            json_type_name(value)
-        )),
+        _ => Err(format!("expected array, got {}", json_type_name(value))),
     }
 }
 
 fn coerce_to_object(value: &Value) -> Result<Value, String> {
     match value {
         Value::Object(_) => Ok(value.clone()),
-        _ => Err(format!(
-            "expected object, got {}",
-            json_type_name(value)
-        )),
+        _ => Err(format!("expected object, got {}", json_type_name(value))),
     }
 }
 
@@ -452,10 +426,7 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
     props
         .iter()
         .map(|(name, prop)| {
-            let ty = prop
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("any");
+            let ty = prop.get("type").and_then(Value::as_str).unwrap_or("any");
             let desc = prop
                 .get("description")
                 .and_then(Value::as_str)
@@ -474,14 +445,20 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
                 })
                 .unwrap_or_default();
 
-            let info = format!("({ty}{req}){enum_hint}{}", if desc.is_empty() { String::new() } else { format!(" — {desc}") });
+            let info = format!(
+                "({ty}{req}){enum_hint}{}",
+                if desc.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {desc}")
+                }
+            );
             (name.clone(), info)
         })
         .collect()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
-
 
 #[cfg(test)]
 mod tests;

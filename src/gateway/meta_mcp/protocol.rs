@@ -90,10 +90,7 @@ impl MetaMcp {
                 if let Some(error) = resp.error {
                     JsonRpcResponse::error(Some(id), error.code, error.message)
                 } else {
-                    JsonRpcResponse::success(
-                        id,
-                        resp.result.unwrap_or(json!({"messages": []})),
-                    )
+                    JsonRpcResponse::success(id, resp.result.unwrap_or(json!({"messages": []})))
                 }
             }
             Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),

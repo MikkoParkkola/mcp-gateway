@@ -364,7 +364,10 @@ mod tests {
             bearer_methods_supported: vec![],
             scopes_supported: vec![],
         };
-        assert_eq!(meta.authorization_server(), Some("https://auth1.example.com"));
+        assert_eq!(
+            meta.authorization_server(),
+            Some("https://auth1.example.com")
+        );
     }
 
     #[test]
@@ -396,7 +399,10 @@ mod tests {
         }"#;
         let meta: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
         assert_eq!(meta.issuer, "https://auth.example.com");
-        assert_eq!(meta.registration_endpoint, Some("https://auth.example.com/register".to_string()));
+        assert_eq!(
+            meta.registration_endpoint,
+            Some("https://auth.example.com/register".to_string())
+        );
         assert!(meta.supports_pkce());
         assert_eq!(meta.scopes_supported, vec!["read", "write"]);
     }

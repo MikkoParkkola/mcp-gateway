@@ -18,6 +18,10 @@ use mcp_gateway::{
     validator::ValidateConfig,
 };
 
+// ── New command imports ────────────────────────────────────────────────────────
+// These modules live in the binary-only `commands/` tree and are not part of
+// the library crate, so they are imported directly here.
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -31,9 +35,10 @@ async fn main() -> ExitCode {
     let config_path = cli.config.clone();
 
     match cli.command {
-        Some(Command::Init { output, with_examples }) => {
-            commands::run_init_command(&output, with_examples)
-        }
+        Some(Command::Init {
+            output,
+            with_examples,
+        }) => commands::run_init_command(&output, with_examples),
         Some(Command::Cap(cap_cmd)) => commands::run_cap_command(cap_cmd).await,
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Stats { url, price }) => commands::run_stats_command(&url, price).await,
@@ -56,6 +61,33 @@ async fn main() -> ExitCode {
         Some(Command::Plugin(plugin_cmd)) => {
             run_plugin_command(plugin_cmd, config_path.as_deref()).await
         }
+        Some(Command::Setup {
+            yes,
+            output,
+            configure_client,
+        }) => commands::run_setup_command(yes, &output, configure_client).await,
+        Some(Command::Add {
+            name,
+            command,
+            url,
+            description,
+            env_vars,
+            config,
+        }) => {
+            commands::run_add_command(
+                &name,
+                command.as_deref(),
+                url.as_deref(),
+                description.as_deref(),
+                &env_vars,
+                &config,
+            )
+            .await
+        }
+        Some(Command::Remove { name, config }) => commands::run_remove_command(&name, &config),
+        Some(Command::Doctor { fix, config }) => {
+            commands::run_doctor_command(fix, config.as_deref()).await
+        }
         Some(Command::Serve) | None => run_server(cli).await,
     }
 }
@@ -74,10 +106,15 @@ async fn run_plugin_command(cmd: PluginCommand, config_path: Option<&Path>) -> E
     };
 
     match cmd {
-        PluginCommand::Search { query, marketplace_url } => {
-            commands::run_plugin_search(&query, marketplace_url.as_deref(), &config).await
-        }
-        PluginCommand::Install { name, marketplace_url, plugin_dir } => {
+        PluginCommand::Search {
+            query,
+            marketplace_url,
+        } => commands::run_plugin_search(&query, marketplace_url.as_deref(), &config).await,
+        PluginCommand::Install {
+            name,
+            marketplace_url,
+            plugin_dir,
+        } => {
             commands::run_plugin_install(
                 &name,
                 marketplace_url.as_deref(),
@@ -154,7 +191,10 @@ pub fn write_discovered_to_config(
     servers: &[mcp_gateway::discovery::DiscoveredServer],
     config_path: Option<&Path>,
 ) -> mcp_gateway::Result<std::path::PathBuf> {
-    let path = config_path.map_or_else(|| std::path::PathBuf::from("mcp-gateway-discovered.yaml"), std::path::Path::to_path_buf);
+    let path = config_path.map_or_else(
+        || std::path::PathBuf::from("mcp-gateway-discovered.yaml"),
+        std::path::Path::to_path_buf,
+    );
 
     let mut config = if path.exists() {
         Config::load(Some(&path))?
@@ -276,7 +316,9 @@ mod tests {
     #[test]
     fn apply_cli_overrides_preserves_other_config_fields() {
         let mut config = Config::default();
-        config.backends.insert("test".to_string(), BackendConfig::default());
+        config
+            .backends
+            .insert("test".to_string(), BackendConfig::default());
         config.server.request_timeout = std::time::Duration::from_secs(60);
 
         let cli = make_cli(Some(3000), None, false);
@@ -284,7 +326,10 @@ mod tests {
 
         assert_eq!(config.server.port, 3000);
         assert!(config.backends.contains_key("test"));
-        assert_eq!(config.server.request_timeout, std::time::Duration::from_secs(60));
+        assert_eq!(
+            config.server.request_timeout,
+            std::time::Duration::from_secs(60)
+        );
     }
 
     // =====================================================================
@@ -368,7 +413,9 @@ mod tests {
     fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
         use clap::Parser as _;
         // Prepend the binary name that clap expects as argv[0].
-        let full: Vec<&str> = std::iter::once("mcp-gateway").chain(args.iter().copied()).collect();
+        let full: Vec<&str> = std::iter::once("mcp-gateway")
+            .chain(args.iter().copied())
+            .collect();
         Cli::try_parse_from(full)
     }
 
@@ -378,7 +425,10 @@ mod tests {
         let cli = parse_args(&["plugin", "search", "stripe"]).unwrap();
         // THEN: Plugin(Search { query: "stripe", marketplace_url: None })
         match cli.command {
-            Some(Command::Plugin(PluginCommand::Search { query, marketplace_url })) => {
+            Some(Command::Plugin(PluginCommand::Search {
+                query,
+                marketplace_url,
+            })) => {
                 assert_eq!(query, "stripe");
                 assert!(marketplace_url.is_none());
             }
@@ -390,12 +440,17 @@ mod tests {
     fn cli_plugin_search_accepts_marketplace_url_flag() {
         // GIVEN: `plugin search foo --marketplace-url https://example.com`
         let cli = parse_args(&[
-            "plugin", "search", "foo",
-            "--marketplace-url", "https://example.com",
+            "plugin",
+            "search",
+            "foo",
+            "--marketplace-url",
+            "https://example.com",
         ])
         .unwrap();
         match cli.command {
-            Some(Command::Plugin(PluginCommand::Search { marketplace_url, .. })) => {
+            Some(Command::Plugin(PluginCommand::Search {
+                marketplace_url, ..
+            })) => {
                 assert_eq!(marketplace_url.as_deref(), Some("https://example.com"));
             }
             other => panic!("unexpected: {other:?}"),
@@ -407,7 +462,11 @@ mod tests {
         // GIVEN: `plugin install stripe-payments`
         let cli = parse_args(&["plugin", "install", "stripe-payments"]).unwrap();
         match cli.command {
-            Some(Command::Plugin(PluginCommand::Install { name, marketplace_url, plugin_dir })) => {
+            Some(Command::Plugin(PluginCommand::Install {
+                name,
+                marketplace_url,
+                plugin_dir,
+            })) => {
                 assert_eq!(name, "stripe-payments");
                 assert!(marketplace_url.is_none());
                 assert!(plugin_dir.is_none());
@@ -419,14 +478,14 @@ mod tests {
     #[test]
     fn cli_plugin_install_accepts_plugin_dir_flag() {
         // GIVEN: `plugin install foo --plugin-dir /tmp/plugins`
-        let cli = parse_args(&[
-            "plugin", "install", "foo",
-            "--plugin-dir", "/tmp/plugins",
-        ])
-        .unwrap();
+        let cli =
+            parse_args(&["plugin", "install", "foo", "--plugin-dir", "/tmp/plugins"]).unwrap();
         match cli.command {
             Some(Command::Plugin(PluginCommand::Install { plugin_dir, .. })) => {
-                assert_eq!(plugin_dir.as_deref(), Some(std::path::Path::new("/tmp/plugins")));
+                assert_eq!(
+                    plugin_dir.as_deref(),
+                    Some(std::path::Path::new("/tmp/plugins"))
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }

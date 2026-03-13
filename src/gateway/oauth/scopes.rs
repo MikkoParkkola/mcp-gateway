@@ -77,7 +77,11 @@ impl Scope {
         let tool = parts.next().unwrap_or("*").to_string();
         let action = Action::from_str(parts.next().unwrap_or("*"));
 
-        Some(Self { backend, tool, action })
+        Some(Self {
+            backend,
+            tool,
+            action,
+        })
     }
 
     /// Test whether this scope grants access to `(backend, tool, action)`.

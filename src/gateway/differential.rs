@@ -144,10 +144,7 @@ fn common_words(descriptions: &[String]) -> HashSet<String> {
     }
 
     // Build word sets per description.
-    let word_sets: Vec<HashSet<String>> = descriptions
-        .iter()
-        .map(|d| tokenise(d))
-        .collect();
+    let word_sets: Vec<HashSet<String>> = descriptions.iter().map(|d| tokenise(d)).collect();
 
     // Intersection: start from the first set and retain only words present in all.
     let mut common = word_sets[0].clone();
@@ -290,9 +287,8 @@ mod tests {
         // GIVEN: one tool
         // WHEN: detecting families
         // THEN: single-member family (too small for differential)
-        let matches = vec![
-            json!({"server": "srv", "tool": "unique_tool", "description": "Unique"}),
-        ];
+        let matches =
+            vec![json!({"server": "srv", "tool": "unique_tool", "description": "Unique"})];
         let families = detect_families(&matches);
         assert_eq!(families.len(), 1);
         let key = ("srv".to_string(), "unique".to_string());
@@ -305,8 +301,8 @@ mod tests {
         // WHEN: detecting families
         // THEN: skips gracefully, no panic
         let matches = vec![
-            json!({"tool": "gmail_search"}),   // missing server
-            json!({"server": "fulcrum"}),       // missing tool
+            json!({"tool": "gmail_search"}), // missing server
+            json!({"server": "fulcrum"}),    // missing tool
         ];
         let families = detect_families(&matches);
         // Only the entry with both fields forms a family
@@ -492,27 +488,49 @@ mod tests {
         ];
         annotate_differential(&mut matches);
 
-        let search_diff = matches[0]["differential_description"].as_str().unwrap().to_lowercase();
-        let send_diff   = matches[1]["differential_description"].as_str().unwrap().to_lowercase();
-        let batch_diff  = matches[2]["differential_description"].as_str().unwrap().to_lowercase();
+        let search_diff = matches[0]["differential_description"]
+            .as_str()
+            .unwrap()
+            .to_lowercase();
+        let send_diff = matches[1]["differential_description"]
+            .as_str()
+            .unwrap()
+            .to_lowercase();
+        let batch_diff = matches[2]["differential_description"]
+            .as_str()
+            .unwrap()
+            .to_lowercase();
 
         // Each diff should not contain "gmail" or "messages" (universal across all)
         for diff in &[&search_diff, &send_diff, &batch_diff] {
-            assert!(!diff.contains("gmail"), "common word 'gmail' should be removed: {diff}");
-            assert!(!diff.contains("messages"), "common word 'messages' should be removed: {diff}");
+            assert!(
+                !diff.contains("gmail"),
+                "common word 'gmail' should be removed: {diff}"
+            );
+            assert!(
+                !diff.contains("messages"),
+                "common word 'messages' should be removed: {diff}"
+            );
         }
 
         // Each diff should contain at least one distinctive word
         assert!(
-            search_diff.contains("search") || search_diff.contains("query") || search_diff.contains("labels"),
+            search_diff.contains("search")
+                || search_diff.contains("query")
+                || search_diff.contains("labels"),
             "search diff should mention search-specific terms: {search_diff}"
         );
         assert!(
-            send_diff.contains("send") || send_diff.contains("compose") || send_diff.contains("email"),
+            send_diff.contains("send")
+                || send_diff.contains("compose")
+                || send_diff.contains("email"),
             "send diff should mention send-specific terms: {send_diff}"
         );
         assert!(
-            batch_diff.contains("bulk") || batch_diff.contains("archive") || batch_diff.contains("trash") || batch_diff.contains("modify"),
+            batch_diff.contains("bulk")
+                || batch_diff.contains("archive")
+                || batch_diff.contains("trash")
+                || batch_diff.contains("modify"),
             "batch diff should mention bulk-specific terms: {batch_diff}"
         );
     }
@@ -552,9 +570,18 @@ mod tests {
             json!({"server": "cap", "tool": "weather_get",  "description": "Get current weather conditions"}),
         ];
         annotate_differential(&mut matches);
-        assert!(matches[0].get("differential_description").is_some(), "gmail_search should have diff");
-        assert!(matches[1].get("differential_description").is_some(), "gmail_send should have diff");
-        assert!(matches[2].get("differential_description").is_none(), "weather_get should not have diff");
+        assert!(
+            matches[0].get("differential_description").is_some(),
+            "gmail_search should have diff"
+        );
+        assert!(
+            matches[1].get("differential_description").is_some(),
+            "gmail_send should have diff"
+        );
+        assert!(
+            matches[2].get("differential_description").is_none(),
+            "weather_get should not have diff"
+        );
     }
 
     #[test]

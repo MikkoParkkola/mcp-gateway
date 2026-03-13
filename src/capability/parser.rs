@@ -19,9 +19,12 @@ pub fn parse_capability(content: &str) -> Result<CapabilityDefinition> {
 ///
 /// Returns an error if the file cannot be read or the content is not valid YAML.
 pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityDefinition> {
-    let content = tokio::fs::read_to_string(path)
-        .await
-        .map_err(|e| Error::Config(format!("Failed to read capability file {}: {e}", path.display())))?;
+    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
+        Error::Config(format!(
+            "Failed to read capability file {}: {e}",
+            path.display()
+        ))
+    })?;
 
     let mut capability = parse_capability(&content)?;
 

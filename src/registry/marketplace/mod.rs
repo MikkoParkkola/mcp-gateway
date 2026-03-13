@@ -75,7 +75,10 @@ impl PluginRegistry {
             HashMap::new()
         };
 
-        Ok(Self { installed, plugin_dir })
+        Ok(Self {
+            installed,
+            plugin_dir,
+        })
     }
 
     /// List all installed plugins.
@@ -170,7 +173,9 @@ impl MarketplaceClient {
     /// be constructed.
     pub fn new<P: AsRef<Path>>(base_url: &str, cache_dir: P) -> Result<Self> {
         if base_url.is_empty() {
-            return Err(Error::Config("marketplace base_url must not be empty".into()));
+            return Err(Error::Config(
+                "marketplace base_url must not be empty".into(),
+            ));
         }
         let client = reqwest::Client::builder()
             .user_agent(concat!("mcp-gateway/", env!("CARGO_PKG_VERSION")))
@@ -314,12 +319,10 @@ impl MarketplaceClient {
     /// Returns an error on network or parsing failure.
     pub async fn fetch_manifest(&self, name: &str) -> Result<PluginManifest> {
         let url = format!("{}/api/v1/plugins/{}", self.base_url, name);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Transport(format!("failed to fetch manifest for '{name}': {e}")))?;
+        let response =
+            self.client.get(&url).send().await.map_err(|e| {
+                Error::Transport(format!("failed to fetch manifest for '{name}': {e}"))
+            })?;
 
         if !response.status().is_success() {
             return Err(Error::Transport(format!(
@@ -507,13 +510,15 @@ mod tests {
 
     #[test]
     fn client_new_strips_trailing_slash_from_base_url() {
-        let client = MarketplaceClient::new("https://example.com/", std::path::Path::new("/tmp")).unwrap();
+        let client =
+            MarketplaceClient::new("https://example.com/", std::path::Path::new("/tmp")).unwrap();
         assert_eq!(client.base_url(), "https://example.com");
     }
 
     #[test]
     fn client_returns_configured_cache_dir() {
-        let client = MarketplaceClient::new("https://example.com", std::path::Path::new("/cache")).unwrap();
+        let client =
+            MarketplaceClient::new("https://example.com", std::path::Path::new("/cache")).unwrap();
         assert_eq!(client.cache_dir(), std::path::Path::new("/cache"));
     }
 
@@ -574,7 +579,11 @@ mod tests {
             let dir = tmp.path().join(name);
             std::fs::create_dir_all(&dir).unwrap();
             let m = make_manifest_with_checksum(name);
-            std::fs::write(dir.join("manifest.json"), serde_json::to_string(&m).unwrap()).unwrap();
+            std::fs::write(
+                dir.join("manifest.json"),
+                serde_json::to_string(&m).unwrap(),
+            )
+            .unwrap();
         }
 
         let plugins = MarketplaceClient::list_installed(tmp.path()).unwrap();
@@ -590,7 +599,11 @@ mod tests {
         let valid = tmp.path().join("valid-plugin");
         std::fs::create_dir_all(&valid).unwrap();
         let m = make_manifest_with_checksum("valid-plugin");
-        std::fs::write(valid.join("manifest.json"), serde_json::to_string(&m).unwrap()).unwrap();
+        std::fs::write(
+            valid.join("manifest.json"),
+            serde_json::to_string(&m).unwrap(),
+        )
+        .unwrap();
 
         std::fs::create_dir_all(tmp.path().join("no-manifest")).unwrap();
 

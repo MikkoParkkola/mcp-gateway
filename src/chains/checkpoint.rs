@@ -59,8 +59,7 @@ impl ChainCheckpointStore {
     /// Returns `Error::Io` if the directory cannot be created.
     pub fn new(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
-        std::fs::create_dir_all(&dir)
-            .map_err(Error::Io)?;
+        std::fs::create_dir_all(&dir).map_err(Error::Io)?;
         Ok(Self { dir })
     }
 
@@ -82,8 +81,7 @@ impl ChainCheckpointStore {
     /// Returns `Error::Io` on filesystem failure.
     pub async fn append(&self, checkpoint: &ChainCheckpoint) -> Result<()> {
         let path = self.chain_path(&checkpoint.chain_id);
-        let line = serde_json::to_string(checkpoint)
-            .map_err(Error::Json)?;
+        let line = serde_json::to_string(checkpoint).map_err(Error::Json)?;
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -250,8 +248,14 @@ mod tests {
     async fn multiple_steps_preserved_in_order() {
         // GIVEN two steps appended sequentially
         let (_dir, store) = tmp_store();
-        store.append(&make_checkpoint("chain-2", "step_a", json!(1))).await.unwrap();
-        store.append(&make_checkpoint("chain-2", "step_b", json!(2))).await.unwrap();
+        store
+            .append(&make_checkpoint("chain-2", "step_a", json!(1)))
+            .await
+            .unwrap();
+        store
+            .append(&make_checkpoint("chain-2", "step_b", json!(2)))
+            .await
+            .unwrap();
         // WHEN loaded
         let loaded = store.load("chain-2").await.unwrap();
         // THEN both are present in order
@@ -264,8 +268,14 @@ mod tests {
     async fn load_map_returns_keyed_by_step_name() {
         // GIVEN two steps for a chain
         let (_dir, store) = tmp_store();
-        store.append(&make_checkpoint("chain-3", "alpha", json!("x"))).await.unwrap();
-        store.append(&make_checkpoint("chain-3", "beta", json!("y"))).await.unwrap();
+        store
+            .append(&make_checkpoint("chain-3", "alpha", json!("x")))
+            .await
+            .unwrap();
+        store
+            .append(&make_checkpoint("chain-3", "beta", json!("y")))
+            .await
+            .unwrap();
         // WHEN loaded as a map
         let map = store.load_map("chain-3").await.unwrap();
         // THEN both keys are present
@@ -277,7 +287,10 @@ mod tests {
     async fn delete_removes_file() {
         // GIVEN an existing checkpoint
         let (_dir, store) = tmp_store();
-        store.append(&make_checkpoint("chain-4", "step", json!(null))).await.unwrap();
+        store
+            .append(&make_checkpoint("chain-4", "step", json!(null)))
+            .await
+            .unwrap();
         // WHEN deleted
         store.delete("chain-4").await.unwrap();
         // THEN subsequent load is empty
@@ -299,8 +312,14 @@ mod tests {
     async fn list_chain_ids_returns_all_chains() {
         // GIVEN two different chains with checkpoints
         let (_dir, store) = tmp_store();
-        store.append(&make_checkpoint("alpha-chain", "s1", json!(1))).await.unwrap();
-        store.append(&make_checkpoint("beta-chain", "s1", json!(2))).await.unwrap();
+        store
+            .append(&make_checkpoint("alpha-chain", "s1", json!(1)))
+            .await
+            .unwrap();
+        store
+            .append(&make_checkpoint("beta-chain", "s1", json!(2)))
+            .await
+            .unwrap();
         // WHEN listing chain IDs
         let mut ids = store.list_chain_ids().await.unwrap();
         ids.sort();
@@ -324,8 +343,14 @@ mod tests {
     async fn load_map_last_write_wins_for_duplicate_steps() {
         // GIVEN a step that was checkpointed twice (idempotent retry)
         let (_dir, store) = tmp_store();
-        store.append(&make_checkpoint("chain-5", "step", json!("first"))).await.unwrap();
-        store.append(&make_checkpoint("chain-5", "step", json!("second"))).await.unwrap();
+        store
+            .append(&make_checkpoint("chain-5", "step", json!("first")))
+            .await
+            .unwrap();
+        store
+            .append(&make_checkpoint("chain-5", "step", json!("second")))
+            .await
+            .unwrap();
         // WHEN loaded as map
         let map = store.load_map("chain-5").await.unwrap();
         // THEN the last value wins

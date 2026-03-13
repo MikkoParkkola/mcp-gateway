@@ -10,14 +10,16 @@ pub mod proxy;
 mod router;
 mod server;
 pub mod streaming;
-mod ws_listener;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
 pub mod webhooks;
+mod ws_listener;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
-pub use oauth::{AgentAuthState, AgentIdentity, AgentRegistry, GatewayKeyPair, agent_auth_middleware};
+pub use oauth::{
+    AgentAuthState, AgentIdentity, AgentRegistry, GatewayKeyPair, agent_auth_middleware,
+};
 pub use proxy::ProxyManager;
 pub use server::Gateway;
 pub use streaming::{NotificationMultiplexer, TaggedNotification};

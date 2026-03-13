@@ -200,9 +200,8 @@ mod tests {
 
     #[test]
     fn callback_params_success_case() {
-        let params: CallbackParams = serde_urlencoded::from_str(
-            "code=auth_code_123&state=random_state_456"
-        ).unwrap();
+        let params: CallbackParams =
+            serde_urlencoded::from_str("code=auth_code_123&state=random_state_456").unwrap();
         assert_eq!(params.code.as_deref(), Some("auth_code_123"));
         assert_eq!(params.state.as_deref(), Some("random_state_456"));
         assert!(params.error.is_none());
@@ -211,11 +210,14 @@ mod tests {
 
     #[test]
     fn callback_params_error_case() {
-        let params: CallbackParams = serde_urlencoded::from_str(
-            "error=access_denied&error_description=User+denied+access"
-        ).unwrap();
+        let params: CallbackParams =
+            serde_urlencoded::from_str("error=access_denied&error_description=User+denied+access")
+                .unwrap();
         assert_eq!(params.error.as_deref(), Some("access_denied"));
-        assert_eq!(params.error_description.as_deref(), Some("User denied access"));
+        assert_eq!(
+            params.error_description.as_deref(),
+            Some("User denied access")
+        );
         assert!(params.code.is_none());
     }
 
@@ -233,7 +235,9 @@ mod tests {
 
     #[tokio::test]
     async fn callback_server_binds_to_random_port() {
-        let server = start_callback_server("test_state".to_string(), None).await.unwrap();
+        let server = start_callback_server("test_state".to_string(), None)
+            .await
+            .unwrap();
         assert!(server.callback_url.starts_with("http://127.0.0.1:"));
         assert!(server.callback_url.ends_with("/oauth/callback"));
         // Clean up
@@ -243,7 +247,9 @@ mod tests {
     #[tokio::test]
     async fn callback_server_binds_to_specified_port() {
         // Use port 0 as fallback since specific ports might be taken
-        let server = start_callback_server("test_state".to_string(), Some(0)).await.unwrap();
+        let server = start_callback_server("test_state".to_string(), Some(0))
+            .await
+            .unwrap();
         assert!(server.callback_url.starts_with("http://127.0.0.1:"));
         server.server_handle.abort();
     }
@@ -275,7 +281,9 @@ mod tests {
 
     #[tokio::test]
     async fn callback_flow_state_mismatch() {
-        let server = start_callback_server("expected_state".to_string(), None).await.unwrap();
+        let server = start_callback_server("expected_state".to_string(), None)
+            .await
+            .unwrap();
         let callback_url = server.callback_url.clone();
 
         let client = reqwest::Client::new();
@@ -291,12 +299,16 @@ mod tests {
 
     #[tokio::test]
     async fn callback_flow_error_from_provider() {
-        let server = start_callback_server("some_state".to_string(), None).await.unwrap();
+        let server = start_callback_server("some_state".to_string(), None)
+            .await
+            .unwrap();
         let callback_url = server.callback_url.clone();
 
         let client = reqwest::Client::new();
         let _resp = client
-            .get(format!("{callback_url}?error=access_denied&error_description=User+denied"))
+            .get(format!(
+                "{callback_url}?error=access_denied&error_description=User+denied"
+            ))
             .send()
             .await
             .unwrap();
@@ -307,7 +319,9 @@ mod tests {
 
     #[tokio::test]
     async fn callback_flow_missing_code() {
-        let server = start_callback_server("state123".to_string(), None).await.unwrap();
+        let server = start_callback_server("state123".to_string(), None)
+            .await
+            .unwrap();
         let callback_url = server.callback_url.clone();
 
         let client = reqwest::Client::new();

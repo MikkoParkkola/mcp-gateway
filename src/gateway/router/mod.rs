@@ -95,7 +95,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                 .delete(handlers::mcp_delete_handler),
         )
         .route("/mcp/{name}", post(backend_handlers::backend_handler))
-        .route("/mcp/{name}/{*path}", post(backend_handlers::backend_handler))
+        .route(
+            "/mcp/{name}/{*path}",
+            post(backend_handlers::backend_handler),
+        )
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
             "/sse",

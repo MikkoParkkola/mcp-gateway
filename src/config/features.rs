@@ -61,10 +61,18 @@ pub struct KeyServerConfig {
     pub admin_token: Option<String>,
 }
 
-fn default_key_server_token_ttl() -> u64 { 3600 }
-fn default_max_tokens_per_identity() -> u32 { 5 }
-fn default_max_oidc_token_age() -> u64 { 300 }
-fn default_cleanup_interval() -> u64 { 60 }
+fn default_key_server_token_ttl() -> u64 {
+    3600
+}
+fn default_max_tokens_per_identity() -> u32 {
+    5
+}
+fn default_max_oidc_token_age() -> u64 {
+    300
+}
+fn default_cleanup_interval() -> u64 {
+    60
+}
 
 impl Default for KeyServerConfig {
     fn default() -> Self {
@@ -298,8 +306,8 @@ impl Default for CapabilityConfig {
             directories: {
                 let mut dirs = vec!["capabilities".to_string()];
                 if let Some(home) = std::env::var_os("HOME") {
-                    let private_dir = std::path::Path::new(&home)
-                        .join("github/mcp-gateway-private/capabilities");
+                    let private_dir =
+                        std::path::Path::new(&home).join("github/mcp-gateway-private/capabilities");
                     if private_dir.is_dir() {
                         dirs.push(private_dir.to_string_lossy().into_owned());
                     }
@@ -340,7 +348,6 @@ pub struct AgentAuthConfig {
     #[serde(default)]
     pub agents: Vec<AgentDefinitionConfig>,
 }
-
 
 /// Static agent definition in the configuration file.
 #[derive(Debug, Clone, Serialize, Deserialize)]

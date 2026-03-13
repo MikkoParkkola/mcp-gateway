@@ -10,9 +10,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{Provider, ProviderHealth};
+use crate::Result;
 use crate::backend::Backend;
 use crate::protocol::{Resource, Tool};
-use crate::Result;
 
 /// Provider adapter that wraps an existing MCP [`Backend`].
 ///
@@ -65,10 +65,7 @@ impl Provider for McpProvider {
             "arguments": args,
         });
 
-        let response = self
-            .backend
-            .request("tools/call", Some(params))
-            .await?;
+        let response = self.backend.request("tools/call", Some(params)).await?;
 
         // Decode the JSON-RPC result into a ToolsCallResult, then flatten
         // all text content into a single JSON value.
@@ -81,7 +78,9 @@ impl Provider for McpProvider {
                 .filter_map(|c| match c {
                     crate::protocol::Content::Text { text, .. } => {
                         // Try to parse as JSON, fall back to string.
-                        serde_json::from_str(&text).ok().or(Some(Value::String(text)))
+                        serde_json::from_str(&text)
+                            .ok()
+                            .or(Some(Value::String(text)))
                     }
                     crate::protocol::Content::Resource { resource, .. } => {
                         Some(serde_json::to_value(resource).unwrap_or(Value::Null))
@@ -111,10 +110,7 @@ impl Provider for McpProvider {
         if self.backend.is_running() {
             ProviderHealth::Healthy
         } else {
-            ProviderHealth::Unavailable(format!(
-                "Backend '{}' is not running",
-                self.backend.name
-            ))
+            ProviderHealth::Unavailable(format!("Backend '{}' is not running", self.backend.name))
         }
     }
 

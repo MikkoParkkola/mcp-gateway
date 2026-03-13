@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use super::budget::{BudgetWindow, CapabilityErrorBudgetConfig, ErrorBudgetConfig};
 use super::KillSwitch;
+use super::budget::{BudgetWindow, CapabilityErrorBudgetConfig, ErrorBudgetConfig};
 
 // ── KillSwitch::kill / revive / is_killed ────────────────────────────────
 
@@ -109,7 +109,10 @@ fn auto_kill_triggers_at_threshold() {
     let triggered1 = ks.record_failure("srv", size, dur, thresh, NO_MIN);
     let triggered2 = ks.record_failure("srv", size, dur, thresh, NO_MIN);
     // THEN: second failure tips rate to 50% → auto-kill; first does not
-    assert!(!triggered1, "first failure should not yet trigger auto-kill");
+    assert!(
+        !triggered1,
+        "first failure should not yet trigger auto-kill"
+    );
     assert!(triggered2, "second failure should trigger auto-kill");
     assert!(ks.is_killed("srv"));
 }
@@ -127,7 +130,10 @@ fn no_auto_kill_below_threshold() {
         ks.record_failure("srv", size, dur, thresh, NO_MIN);
     }
     // THEN: server is NOT killed
-    assert!(!ks.is_killed("srv"), "40% error rate should not trigger kill");
+    assert!(
+        !ks.is_killed("srv"),
+        "40% error rate should not trigger kill"
+    );
 }
 
 #[test]
@@ -137,14 +143,20 @@ fn auto_kill_does_not_fire_twice() {
     let (size, dur, thresh) = (2, Duration::from_secs(300), 0.5);
     // First failure: rate=100% >= 50% → auto-kills
     let triggered1 = ks.record_failure("srv", size, dur, thresh, NO_MIN);
-    assert!(triggered1, "first failure should trigger auto-kill (100% error rate)");
+    assert!(
+        triggered1,
+        "first failure should trigger auto-kill (100% error rate)"
+    );
     assert!(ks.is_killed("srv"));
     // Second failure: server already killed, must NOT re-trigger
     let triggered2 = ks.record_failure("srv", size, dur, thresh, NO_MIN);
     assert!(!triggered2, "already-killed server must not re-trigger");
     // Third failure: still must not re-trigger
     let triggered3 = ks.record_failure("srv", size, dur, thresh, NO_MIN);
-    assert!(!triggered3, "already-killed server must not re-trigger on 3rd call");
+    assert!(
+        !triggered3,
+        "already-killed server must not re-trigger on 3rd call"
+    );
 }
 
 #[test]
@@ -165,7 +177,10 @@ fn revive_resets_error_budget() {
     ks.record_success("srv", size, dur);
     ks.record_success("srv", size, dur);
     let triggered = ks.record_failure("srv", size, dur, thresh, NO_MIN);
-    assert!(!triggered, "25% error rate after revive must not trigger auto-kill");
+    assert!(
+        !triggered,
+        "25% error rate after revive must not trigger auto-kill"
+    );
     assert!(!ks.is_killed("srv"), "server must remain alive");
 }
 
@@ -181,7 +196,10 @@ fn min_samples_prevents_kill_below_sample_count() {
         assert!(!triggered, "kill must not fire before min_samples reached");
     }
     // THEN: server is alive despite 100% error rate
-    assert!(!ks.is_killed("srv"), "should not be killed before min_samples");
+    assert!(
+        !ks.is_killed("srv"),
+        "should not be killed before min_samples"
+    );
 }
 
 #[test]
@@ -201,7 +219,10 @@ fn min_samples_allows_kill_once_sample_count_reached() {
             );
         } else {
             // 10th sample: 9/10 = 90% >= 80% threshold → auto-kill
-            assert!(triggered, "kill must fire at min_samples when threshold exceeded");
+            assert!(
+                triggered,
+                "kill must fire at min_samples when threshold exceeded"
+            );
         }
     }
     assert!(ks.is_killed("srv"));
@@ -213,7 +234,10 @@ fn min_samples_one_is_equivalent_to_no_guard() {
     let ks = KillSwitch::new();
     let (size, dur, thresh) = (100, Duration::from_secs(300), 0.5);
     let triggered = ks.record_failure("srv", size, dur, thresh, 1);
-    assert!(triggered, "single failure with min_samples=1 must trigger kill");
+    assert!(
+        triggered,
+        "single failure with min_samples=1 must trigger kill"
+    );
     assert!(ks.is_killed("srv"));
 }
 
@@ -321,7 +345,10 @@ fn budget_window_reset_clears_all_entries() {
 #[test]
 fn error_budget_config_default_values() {
     let cfg = ErrorBudgetConfig::default();
-    assert!((cfg.threshold - 0.8).abs() < 1e-10, "default threshold must be 0.8");
+    assert!(
+        (cfg.threshold - 0.8).abs() < 1e-10,
+        "default threshold must be 0.8"
+    );
     assert_eq!(cfg.window_size, 100);
     assert_eq!(cfg.window_duration, Duration::from_secs(300));
     assert_eq!(cfg.min_samples, 10, "default min_samples must be 10");
@@ -332,7 +359,10 @@ fn error_budget_config_default_values() {
 #[test]
 fn capability_error_budget_config_default_values() {
     let cfg = CapabilityErrorBudgetConfig::default();
-    assert!((cfg.threshold - 0.8).abs() < 1e-10, "default threshold must be 0.8");
+    assert!(
+        (cfg.threshold - 0.8).abs() < 1e-10,
+        "default threshold must be 0.8"
+    );
     assert_eq!(cfg.window_size, 50);
     assert_eq!(cfg.window_duration, Duration::from_secs(300));
     assert_eq!(cfg.min_samples, 5, "default min_samples must be 5");
@@ -433,7 +463,10 @@ fn capability_auto_disable_does_not_fire_twice() {
     let cfg = cap_cfg_no_min(2, Duration::from_secs(300), 0.5, Duration::from_secs(300));
 
     let first = ks.record_capability_failure("fulcrum", "tool_c", &cfg);
-    assert!(first, "first failure (100% rate) should trigger auto-disable");
+    assert!(
+        first,
+        "first failure (100% rate) should trigger auto-disable"
+    );
 
     let second = ks.record_capability_failure("fulcrum", "tool_c", &cfg);
     assert!(!second, "already-disabled capability must not re-trigger");
@@ -445,7 +478,13 @@ fn capability_auto_disable_does_not_fire_twice() {
 fn capability_min_samples_prevents_disable_below_sample_count() {
     // GIVEN: 100% failure rate but only 4 calls < min_samples=5
     let ks = KillSwitch::new();
-    let cfg = cap_cfg(50, Duration::from_secs(300), 0.8, 5, Duration::from_secs(300));
+    let cfg = cap_cfg(
+        50,
+        Duration::from_secs(300),
+        0.8,
+        5,
+        Duration::from_secs(300),
+    );
 
     for _ in 0..4 {
         let triggered = ks.record_capability_failure("fulcrum", "tool_d", &cfg);
@@ -458,14 +497,23 @@ fn capability_min_samples_prevents_disable_below_sample_count() {
 fn capability_min_samples_allows_disable_once_reached() {
     // GIVEN: 80% failure rate, min_samples=5
     let ks = KillSwitch::new();
-    let cfg = cap_cfg(50, Duration::from_secs(300), 0.8, 5, Duration::from_secs(300));
+    let cfg = cap_cfg(
+        50,
+        Duration::from_secs(300),
+        0.8,
+        5,
+        Duration::from_secs(300),
+    );
 
     // 1 success + 4 failures = 5 samples, 80% error rate == threshold
     ks.record_capability_success("fulcrum", "tool_e", &cfg);
     for i in 0..4usize {
         let triggered = ks.record_capability_failure("fulcrum", "tool_e", &cfg);
         if i < 3 {
-            assert!(!triggered, "must not trigger before 5th sample (iteration {i})");
+            assert!(
+                !triggered,
+                "must not trigger before 5th sample (iteration {i})"
+            );
         } else {
             // 5th sample: 4/5 = 80% >= threshold
             assert!(triggered, "must trigger at 5th sample when threshold met");
@@ -557,7 +605,10 @@ fn revive_capability_resets_error_budget() {
         ks.record_capability_success("fulcrum", "tool_i", &cfg);
     }
     let retrigger = ks.record_capability_failure("fulcrum", "tool_i", &cfg);
-    assert!(!retrigger, "25% error rate after revive must not re-trigger");
+    assert!(
+        !retrigger,
+        "25% error rate after revive must not re-trigger"
+    );
     assert!(!ks.is_capability_disabled("fulcrum", "tool_i"));
 }
 
@@ -602,7 +653,11 @@ fn disabled_capabilities_purges_expired_entries_on_list() {
 
     // Both should be disabled immediately (use long cooldown for initial check)
     let before = ks.disabled_capabilities(Duration::from_secs(300));
-    assert_eq!(before.len(), 2, "both capabilities should be listed as disabled");
+    assert_eq!(
+        before.len(),
+        2,
+        "both capabilities should be listed as disabled"
+    );
 
     // Wait for both cooldowns to expire
     std::thread::sleep(Duration::from_millis(20));
@@ -655,8 +710,7 @@ fn backend_level_budget_still_kills_when_all_capabilities_fail() {
     // GIVEN: many different capabilities all failing — backend threshold exceeded
     let ks = KillSwitch::new();
     let (backend_ws, backend_wd, thresh, min) = (20, Duration::from_secs(300), 0.8, 1_usize);
-    let cap_cfg_val =
-        cap_cfg_no_min(20, Duration::from_secs(300), 0.8, Duration::from_secs(300));
+    let cap_cfg_val = cap_cfg_no_min(20, Duration::from_secs(300), 0.8, Duration::from_secs(300));
 
     // Flood the backend budget with failures (each represents a different
     // capability, so none individually dominates)

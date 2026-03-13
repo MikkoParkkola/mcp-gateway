@@ -27,8 +27,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tokio::sync::{Mutex, oneshot};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, warn};
@@ -337,7 +337,9 @@ impl WebSocketTransport {
             .await?;
 
         if response.error.is_some() {
-            return Err(Error::Protocol("WebSocket MCP initialize failed".to_string()));
+            return Err(Error::Protocol(
+                "WebSocket MCP initialize failed".to_string(),
+            ));
         }
 
         tokio::task::yield_now().await;

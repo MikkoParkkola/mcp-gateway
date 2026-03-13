@@ -15,8 +15,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::provider::{Provider, ProviderHealth, Transform};
 use crate::protocol::{Resource, Tool};
+use crate::provider::{Provider, ProviderHealth, Transform};
 use crate::{Error, Result};
 
 /// A provider wrapped with an ordered list of transforms.
@@ -143,8 +143,8 @@ impl Provider for TransformChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::Transform;
     use crate::protocol::Tool;
+    use crate::provider::Transform;
     use serde_json::json;
 
     /// Static in-memory provider for tests.

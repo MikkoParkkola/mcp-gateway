@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::protocol::Tool;
-use crate::{provider::Transform, Result};
+use crate::{Result, provider::Transform};
 
 /// Renames individual tools based on a mapping table.
 ///
@@ -66,11 +66,7 @@ impl Transform for RenameTransform {
             .collect())
     }
 
-    async fn transform_invoke(
-        &self,
-        tool: &str,
-        args: Value,
-    ) -> Result<Option<(String, Value)>> {
+    async fn transform_invoke(&self, tool: &str, args: Value) -> Result<Option<(String, Value)>> {
         // If the caller used the new (aliased) name, translate back to original.
         let resolved = self
             .reverse

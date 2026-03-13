@@ -630,7 +630,10 @@ pipenet:
     fn tailscale_identity_extracts_profile_pic() {
         let headers = make_headers(&[
             ("Tailscale-User-Login", "dave@example.com"),
-            ("Tailscale-User-Profile-Pic", "https://cdn.example.com/dave.jpg"),
+            (
+                "Tailscale-User-Profile-Pic",
+                "https://cdn.example.com/dave.jpg",
+            ),
         ]);
         let id = TailscaleIdentity::from_headers(&headers).unwrap();
         assert_eq!(

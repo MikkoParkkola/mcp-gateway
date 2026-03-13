@@ -79,10 +79,7 @@ async fn invoke_tool_trace_id_is_accessible_inside_scope() {
     // GIVEN: a fresh trace ID
     let id = trace::generate();
     // WHEN: inside a with_trace_id scope
-    let observed = trace::with_trace_id(id.clone(), async {
-        trace::current()
-    })
-    .await;
+    let observed = trace::with_trace_id(id.clone(), async { trace::current() }).await;
     // THEN: the same ID is visible inside the scope
     assert_eq!(observed, Some(id));
 }
@@ -116,14 +113,22 @@ fn handle_tools_list_code_mode_disabled_returns_meta_tools() {
     let result = response.result.unwrap();
     let tools = result["tools"].as_array().unwrap();
     // Traditional mode returns 9+ meta-tools (none of which are gateway_search/gateway_execute)
-    assert!(tools.len() >= 9, "Expected at least 9 meta-tools, got {}", tools.len());
+    assert!(
+        tools.len() >= 9,
+        "Expected at least 9 meta-tools, got {}",
+        tools.len()
+    );
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert!(names.contains(&"gateway_invoke"));
     assert!(names.contains(&"gateway_search_tools"));
-    assert!(!names.contains(&"gateway_search"),
-        "gateway_search should NOT appear in traditional mode");
-    assert!(!names.contains(&"gateway_execute"),
-        "gateway_execute should NOT appear in traditional mode");
+    assert!(
+        !names.contains(&"gateway_search"),
+        "gateway_search should NOT appear in traditional mode"
+    );
+    assert!(
+        !names.contains(&"gateway_execute"),
+        "gateway_execute should NOT appear in traditional mode"
+    );
 }
 
 #[test]
@@ -171,12 +176,18 @@ fn handle_tools_list_code_mode_enabled_does_not_include_traditional_tools() {
     let tools = tools.as_array().unwrap();
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     // THEN: traditional meta-tools are absent
-    assert!(!names.contains(&"gateway_invoke"),
-        "gateway_invoke should not appear in code mode");
-    assert!(!names.contains(&"gateway_search_tools"),
-        "gateway_search_tools should not appear in code mode");
-    assert!(!names.contains(&"gateway_list_servers"),
-        "gateway_list_servers should not appear in code mode");
+    assert!(
+        !names.contains(&"gateway_invoke"),
+        "gateway_invoke should not appear in code mode"
+    );
+    assert!(
+        !names.contains(&"gateway_search_tools"),
+        "gateway_search_tools should not appear in code mode"
+    );
+    assert!(
+        !names.contains(&"gateway_list_servers"),
+        "gateway_list_servers should not appear in code mode"
+    );
 }
 
 // ── Code Mode: with_code_mode builder ────────────────────────────────────
@@ -215,8 +226,10 @@ async fn code_mode_execute_missing_tool_parameter_returns_error() {
     // THEN: error about missing 'tool'
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("tool") || msg.contains("Missing"),
-        "Expected error about missing tool, got: {msg}");
+    assert!(
+        msg.contains("tool") || msg.contains("Missing"),
+        "Expected error about missing tool, got: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -245,8 +258,10 @@ async fn code_mode_execute_chain_empty_array_returns_error() {
     // THEN: error about empty chain
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("empty") || msg.contains("Chain"),
-        "Expected error about empty chain, got: {msg}");
+    assert!(
+        msg.contains("empty") || msg.contains("Chain"),
+        "Expected error about empty chain, got: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -300,9 +315,11 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
         .handle_tools_call(RequestId::Number(99), "gateway_search", args, None, None)
         .await;
     // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
-    assert!(response.error.is_none(),
+    assert!(
+        response.error.is_none(),
         "gateway_search should be callable even without code_mode enabled; got: {:?}",
-        response.error);
+        response.error
+    );
 }
 
 #[tokio::test]
@@ -317,8 +334,11 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
     // The response wraps the error as tool content (is_error=true) OR as RPC error
     // Either way, there should not be a -32601 "Unknown tool" error
     if let Some(ref err) = response.error {
-        assert_ne!(err.code, -32601,
-            "Should not be 'Unknown tool' error; got code={}", err.code);
+        assert_ne!(
+            err.code, -32601,
+            "Should not be 'Unknown tool' error; got code={}",
+            err.code
+        );
     }
     // If no RPC error, the tool result should indicate an error condition
 }
@@ -375,7 +395,9 @@ fn list_profiles_includes_description_for_each_profile() {
     let profiles = result["profiles"].as_array().unwrap();
     for profile in profiles {
         assert!(
-            profile["description"].as_str().is_some_and(|s| !s.is_empty()),
+            profile["description"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
             "Profile '{}' missing description",
             profile["name"]
         );
@@ -425,7 +447,9 @@ fn initialize_with_profile_in_params_binds_session() {
     // WHEN: initializing with session_id and profile param
     mm.handle_initialize(id, Some(&params), Some("session-42"), None);
     // THEN: session is bound to "coding"
-    let active = mm.session_profiles.get_profile_name("session-42", "research");
+    let active = mm
+        .session_profiles
+        .get_profile_name("session-42", "research");
     assert_eq!(active, "coding");
 }
 
@@ -438,7 +462,9 @@ fn initialize_with_header_profile_takes_precedence_over_params() {
     // WHEN: header says "coding", params say "research"
     mm.handle_initialize(id, Some(&params), Some("session-99"), Some("coding"));
     // THEN: header wins — session bound to "coding"
-    let active = mm.session_profiles.get_profile_name("session-99", "research");
+    let active = mm
+        .session_profiles
+        .get_profile_name("session-99", "research");
     assert_eq!(active, "coding");
 }
 
@@ -451,7 +477,9 @@ fn initialize_with_unknown_profile_does_not_bind_session() {
     // WHEN: initializing with unknown profile
     mm.handle_initialize(id, Some(&params), Some("session-77"), None);
     // THEN: session is NOT bound (default remains "research")
-    let active = mm.session_profiles.get_profile_name("session-77", "research");
+    let active = mm
+        .session_profiles
+        .get_profile_name("session-77", "research");
     assert_eq!(active, "research");
 }
 
@@ -466,7 +494,9 @@ fn initialize_without_profile_does_not_change_session() {
     // WHEN: initializing without profile hint
     mm.handle_initialize(id, Some(&params), Some("session-5"), None);
     // THEN: existing binding is preserved
-    let active = mm.session_profiles.get_profile_name("session-5", "research");
+    let active = mm
+        .session_profiles
+        .get_profile_name("session-5", "research");
     assert_eq!(active, "coding");
 }
 
@@ -495,10 +525,7 @@ fn gateway_list_profiles_tool_appears_in_tools_list() {
     let v = serde_json::to_value(resp).unwrap();
     // THEN: gateway_list_profiles is in the tool names
     let tools = v["result"]["tools"].as_array().unwrap();
-    let names: Vec<&str> = tools
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert!(
         names.contains(&"gateway_list_profiles"),
         "Expected gateway_list_profiles in tools list, got: {names:?}"

@@ -42,7 +42,10 @@ pub(crate) fn extract_client_version(params: Option<&Value>) -> &str {
 ///
 /// `instructions` is appended after the static preamble; pass an empty string
 /// to get the minimal discovery-only text.
-pub(crate) fn build_initialize_result(negotiated_version: &str, instructions: &str) -> InitializeResult {
+pub(crate) fn build_initialize_result(
+    negotiated_version: &str,
+    instructions: &str,
+) -> InitializeResult {
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
         capabilities: ServerCapabilities {
@@ -103,7 +106,9 @@ pub(crate) fn build_routing_instructions(
         };
 
         let entry = by_category.entry(category).or_default();
-        entry.0.push(format!("{}/{}", capability_backend_name, cap.name));
+        entry
+            .0
+            .push(format!("{}/{}", capability_backend_name, cap.name));
         for tag in &cap.metadata.tags {
             entry.1.insert(tag.clone());
         }
@@ -227,9 +232,9 @@ pub(crate) fn tool_matches_query(tool: &Tool, query: &str) -> bool {
     let name_lower = tool.name.to_lowercase();
     let desc_lower = tool.description.as_deref().unwrap_or("").to_lowercase();
 
-    query.split_whitespace().any(|word| {
-        word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower)
-    })
+    query
+        .split_whitespace()
+        .any(|word| word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower))
 }
 
 /// Return `true` if `word` or any of its synonyms appears as a substring of `text`.
@@ -326,11 +331,7 @@ pub(crate) fn build_match_json_with_chains(
 ///
 /// The tool reference format is `"server:tool_name"` — matching the
 /// `gateway_execute` `"tool"` parameter convention.
-pub(crate) fn build_code_mode_match_json(
-    server: &str,
-    tool: &Tool,
-    include_schema: bool,
-) -> Value {
+pub(crate) fn build_code_mode_match_json(server: &str, tool: &Tool, include_schema: bool) -> Value {
     let description = tool
         .description
         .as_deref()

@@ -8,10 +8,10 @@ use mcp_gateway::capability::{
     AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProvidersConfig,
     SchemaDefinition, WebhookDefinition, WebhookTransform,
 };
-use mcp_gateway::transform::TransformConfig;
 use mcp_gateway::config::StreamingConfig;
 use mcp_gateway::config::WebhookConfig;
 use mcp_gateway::gateway::{NotificationMultiplexer, WebhookRegistry};
+use mcp_gateway::transform::TransformConfig;
 use serde_json::json;
 
 #[tokio::test]

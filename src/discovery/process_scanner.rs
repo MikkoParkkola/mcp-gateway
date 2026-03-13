@@ -157,15 +157,17 @@ impl ProcessScanner {
 
             // Check against patterns
             for pattern in &self.patterns {
-                if command.to_lowercase().contains(&pattern.name_pattern.to_lowercase()) {
+                if command
+                    .to_lowercase()
+                    .contains(&pattern.name_pattern.to_lowercase())
+                {
                     debug!(
                         "Found MCP server process: {} (PID: {:?})",
                         pattern.server_name, pid
                     );
 
                     // Try to extract port from command line
-                    let port = Self::extract_port_from_command(&command)
-                        .or(pattern.default_port);
+                    let port = Self::extract_port_from_command(&command).or(pattern.default_port);
 
                     let transport = if let Some(port) = port {
                         TransportConfig::Http {
@@ -224,14 +226,16 @@ impl ProcessScanner {
 
             // Check against patterns
             for pattern in &self.patterns {
-                if command.to_lowercase().contains(&pattern.name_pattern.to_lowercase()) {
+                if command
+                    .to_lowercase()
+                    .contains(&pattern.name_pattern.to_lowercase())
+                {
                     debug!(
                         "Found MCP server process: {} (PID: {:?})",
                         pattern.server_name, pid
                     );
 
-                    let port = Self::extract_port_from_command(command)
-                        .or(pattern.default_port);
+                    let port = Self::extract_port_from_command(command).or(pattern.default_port);
 
                     let transport = if let Some(port) = port {
                         TransportConfig::Http {

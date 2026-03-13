@@ -9,7 +9,6 @@ use crate::autotag;
 use crate::ranking::json_to_search_result;
 use crate::{Error, Result};
 
-use super::MetaMcp;
 use super::super::differential::annotate_differential;
 use super::super::meta_mcp_helpers::{
     build_code_mode_match_json, build_match_json, build_match_json_with_chains,
@@ -17,6 +16,7 @@ use super::super::meta_mcp_helpers::{
     is_glob_pattern, parse_code_mode_tool_ref, parse_tool_arguments, ranked_results_to_json,
     tool_matches_glob, tool_matches_query,
 };
+use super::MetaMcp;
 use super::support::{
     collect_tool_tags, collect_tool_tags_for_code_mode, json_to_code_mode_search_result,
     ranked_results_to_code_mode_json,
@@ -29,7 +29,11 @@ impl MetaMcp {
     /// - Supports glob patterns (`*`, `?`) on tool names in addition to keyword matching.
     /// - Returns tool references in `"server:tool_name"` format (for use with `gateway_execute`).
     /// - Optionally includes the full `input_schema` for each result (`include_schema`, default `true`).
-    pub(super) async fn code_mode_search(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+    pub(super) async fn code_mode_search(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
         let raw_query = extract_required_str(args, "query")?;
         let query = raw_query.to_lowercase();
         let limit = extract_search_limit(args);
@@ -117,8 +121,10 @@ impl MetaMcp {
         // Apply ranking for keyword queries (not glob — glob already filters precisely)
         if !use_glob {
             if let Some(ref ranker) = self.ranker {
-                let search_results: Vec<_> =
-                    matches.iter().filter_map(json_to_code_mode_search_result).collect();
+                let search_results: Vec<_> = matches
+                    .iter()
+                    .filter_map(json_to_code_mode_search_result)
+                    .collect();
                 let ranked = ranker.rank(search_results, &query);
                 matches = ranked_results_to_code_mode_json(ranked, include_schema, &matches);
             }
@@ -132,7 +138,12 @@ impl MetaMcp {
             Vec::new()
         };
 
-        Ok(build_search_response(&query, &matches, total_found, &suggestions))
+        Ok(build_search_response(
+            &query,
+            &matches,
+            total_found,
+            &suggestions,
+        ))
     }
 
     /// Handle `gateway_execute` — Code Mode single-tool or chain execution.
@@ -142,7 +153,11 @@ impl MetaMcp {
     ///
     /// Chain: requires `"chain"` array of `{tool, arguments}` objects. Each step
     /// is executed sequentially; results flow through naturally.
-    pub(super) async fn code_mode_execute(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+    pub(super) async fn code_mode_execute(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
         // Chain mode: sequential execution
         if let Some(chain) = args.get("chain").and_then(Value::as_array) {
             return self.execute_chain(chain.clone(), session_id).await;
@@ -176,11 +191,7 @@ impl MetaMcp {
     ///
     /// Returns a JSON array of per-step results. Stops at the first error
     /// and surfaces the failing step index in the error message.
-    async fn execute_chain(
-        &self,
-        chain: Vec<Value>,
-        session_id: Option<&str>,
-    ) -> Result<Value> {
+    async fn execute_chain(&self, chain: Vec<Value>, session_id: Option<&str>) -> Result<Value> {
         if chain.is_empty() {
             return Err(Error::json_rpc(-32602, "Chain must not be empty"));
         }
@@ -188,15 +199,9 @@ impl MetaMcp {
         let mut results: Vec<Value> = Vec::with_capacity(chain.len());
 
         for (idx, step) in chain.iter().enumerate() {
-            let tool_ref = step
-                .get("tool")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    Error::json_rpc(
-                        -32602,
-                        format!("Chain step {idx}: missing 'tool' field"),
-                    )
-                })?;
+            let tool_ref = step.get("tool").and_then(Value::as_str).ok_or_else(|| {
+                Error::json_rpc(-32602, format!("Chain step {idx}: missing 'tool' field"))
+            })?;
 
             let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
             let server = server_opt.ok_or_else(|| {
@@ -209,10 +214,7 @@ impl MetaMcp {
                 )
             })?;
 
-            let arguments = step
-                .get("arguments")
-                .cloned()
-                .unwrap_or(json!({}));
+            let arguments = step.get("arguments").cloned().unwrap_or(json!({}));
 
             let invoke_args = json!({
                 "server": server,
@@ -336,9 +338,8 @@ impl MetaMcp {
                     if !profile.tool_allowed(&tool.name) {
                         continue;
                     }
-                    let desc = autotag::enrich_description(
-                        tool.description.as_deref().unwrap_or(""),
-                    );
+                    let desc =
+                        autotag::enrich_description(tool.description.as_deref().unwrap_or(""));
                     let mut entry = json!({
                         "server": backend.name,
                         "name": tool.name,
@@ -369,7 +370,11 @@ impl MetaMcp {
     /// and used to generate related query suggestions.
     ///
     /// Results are filtered by the session's active routing profile.
-    pub(super) async fn search_tools(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+    pub(super) async fn search_tools(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
         let query = extract_required_str(args, "query")?.to_lowercase();
         let limit = extract_search_limit(args);
         let profile = self.active_profile(session_id);
@@ -475,6 +480,11 @@ impl MetaMcp {
             Vec::new()
         };
 
-        Ok(build_search_response(&query, &matches, total_found, &suggestions))
+        Ok(build_search_response(
+            &query,
+            &matches,
+            total_found,
+            &suggestions,
+        ))
     }
 }

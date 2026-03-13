@@ -365,8 +365,7 @@ impl Gateway {
             // Resolve admin token (expand env:VAR_NAME)
             ks_config.admin_token = ks_config.resolve_admin_token();
 
-            let cleanup_interval =
-                std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
+            let cleanup_interval = std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
             let ks = Arc::new(KeyServer::new(ks_config));
 
             spawn_reaper(
@@ -400,10 +399,8 @@ impl Gateway {
                 audience: def.audience.clone(),
             });
         }
-        let agent_auth = AgentAuthState::new(
-            self.config.agent_auth.enabled,
-            Arc::clone(&agent_registry),
-        );
+        let agent_auth =
+            AgentAuthState::new(self.config.agent_auth.enabled, Arc::clone(&agent_registry));
         if self.config.agent_auth.enabled {
             info!(
                 agents = agent_registry.len(),
@@ -473,7 +470,10 @@ impl Gateway {
                 ws_port,
             );
             let ws_shutdown = shutdown_tx.subscribe();
-            tokio::spawn(super::ws_listener::run_websocket_listener(ws_addr, ws_shutdown));
+            tokio::spawn(super::ws_listener::run_websocket_listener(
+                ws_addr,
+                ws_shutdown,
+            ));
             info!(
                 host = %self.config.server.host,
                 port = ws_port,
@@ -535,7 +535,10 @@ impl Gateway {
             let warm_start_list = if self.config.meta_mcp.warm_start.is_empty() {
                 let all_names: Vec<String> =
                     self.backends.all().iter().map(|b| b.name.clone()).collect();
-                info!("Warm-starting ALL {} backends (tool prefetch)", all_names.len());
+                info!(
+                    "Warm-starting ALL {} backends (tool prefetch)",
+                    all_names.len()
+                );
                 all_names
             } else {
                 info!(

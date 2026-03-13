@@ -176,9 +176,7 @@ impl ResponseCache {
 
             if let Some(key) = oldest_key {
                 self.entries.remove(&key);
-                self.stats
-                    .evictions
-                    .fetch_add(1, Ordering::Relaxed);
+                self.stats.evictions.fetch_add(1, Ordering::Relaxed);
             } else {
                 break;
             }

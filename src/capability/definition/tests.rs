@@ -256,7 +256,10 @@ fn to_mcp_tool_with_schema_includes_schema_fields_in_description() {
     let tool = cap.to_mcp_tool();
     let desc = tool.description.unwrap();
     assert!(desc.contains("symbol"), "description must contain 'symbol'");
-    assert!(desc.contains("exchange"), "description must contain 'exchange'");
+    assert!(
+        desc.contains("exchange"),
+        "description must contain 'exchange'"
+    );
     assert!(desc.contains("price"), "description must contain 'price'");
     assert!(desc.contains("volume"), "description must contain 'volume'");
 }

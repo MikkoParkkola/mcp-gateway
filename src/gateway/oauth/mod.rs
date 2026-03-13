@@ -24,8 +24,8 @@
 
 pub mod agents;
 pub mod audit;
-pub mod jwt;
 pub mod jwks;
+pub mod jwt;
 pub mod scopes;
 
 use std::sync::Arc;
@@ -43,8 +43,8 @@ use tracing::{debug, warn};
 
 pub use agents::{AgentDefinition, AgentRegistry};
 pub use audit::{Decision, ToolInvocationAudit, emit as emit_audit};
+pub use jwks::{GatewayKeyPair, Jwk, JwkSet};
 pub use jwt::{AgentClaims, JwtError, ValidatedToken, validate_agent_token};
-pub use jwks::{GatewayKeyPair, JwkSet, Jwk};
 pub use scopes::{Action, Scope, check_scopes};
 
 /// Extension type inserted into the request by the agent auth middleware.
@@ -107,7 +107,9 @@ pub async fn agent_auth_middleware(
 
     let Some(token_str) = token_str else {
         warn!(path = %request.uri().path(), "Agent auth: missing Authorization header");
-        return agent_unauthorized("Missing Authorization header. Use: Authorization: Bearer <token>");
+        return agent_unauthorized(
+            "Missing Authorization header. Use: Authorization: Bearer <token>",
+        );
     };
 
     // Validate the agent JWT.
@@ -227,9 +229,7 @@ fn agent_forbidden(message: &str) -> Response {
 ///
 /// Returns the gateway's own RSA public key in JWK Set format so that
 /// backends can independently verify tokens signed by the gateway.
-pub async fn jwks_handler(
-    State(key_pair): State<Arc<GatewayKeyPair>>,
-) -> impl IntoResponse {
+pub async fn jwks_handler(State(key_pair): State<Arc<GatewayKeyPair>>) -> impl IntoResponse {
     let jwks = key_pair.jwks();
     (
         StatusCode::OK,
@@ -261,42 +261,30 @@ mod tests {
     #[test]
     fn allows_matching_scope() {
         let identity = make_agent_identity(vec!["tools:surreal:*"]);
-        let result = check_agent_scope_and_audit(
-            &identity,
-            "surreal",
-            "query",
-            &Action::Read,
-        );
+        let result = check_agent_scope_and_audit(&identity, "surreal", "query", &Action::Read);
         assert!(result.is_ok());
     }
 
     #[test]
     fn denies_non_matching_scope() {
         let identity = make_agent_identity(vec!["tools:surreal:query:read"]);
-        let result = check_agent_scope_and_audit(
-            &identity,
-            "brave",
-            "search",
-            &Action::Execute,
-        );
+        let result = check_agent_scope_and_audit(&identity, "brave", "search", &Action::Execute);
         assert!(result.is_err());
     }
 
     #[test]
     fn full_wildcard_allows_anything() {
         let identity = make_agent_identity(vec!["tools:*"]);
-        assert!(check_agent_scope_and_audit(&identity, "any-backend", "any-tool", &Action::Execute).is_ok());
+        assert!(
+            check_agent_scope_and_audit(&identity, "any-backend", "any-tool", &Action::Execute)
+                .is_ok()
+        );
     }
 
     #[test]
     fn empty_scopes_denies_everything() {
         let identity = make_agent_identity(vec![]);
-        let result = check_agent_scope_and_audit(
-            &identity,
-            "surreal",
-            "query",
-            &Action::Read,
-        );
+        let result = check_agent_scope_and_audit(&identity, "surreal", "query", &Action::Read);
         assert!(result.is_err());
     }
 

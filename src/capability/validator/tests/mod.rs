@@ -1,10 +1,10 @@
 mod yaml_roundtrip;
 
-use super::*;
 use super::checks::extract_placeholders;
+use super::*;
 use crate::capability::{
-    AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProvidersConfig,
-    ProviderConfig, RestConfig, SchemaDefinition,
+    AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProviderConfig,
+    ProvidersConfig, RestConfig, SchemaDefinition,
 };
 use crate::transform::TransformConfig;
 use serde_json::json;
@@ -42,7 +42,10 @@ pub(super) fn providers_with_base_url(base_url: &str) -> ProvidersConfig {
             },
         },
     );
-    ProvidersConfig { named, fallback: vec![] }
+    ProvidersConfig {
+        named,
+        fallback: vec![],
+    }
 }
 
 pub(super) fn providers_with_path(base_url: &str, path: &str) -> ProvidersConfig {
@@ -60,7 +63,10 @@ pub(super) fn providers_with_path(base_url: &str, path: &str) -> ProvidersConfig
             },
         },
     );
-    ProvidersConfig { named, fallback: vec![] }
+    ProvidersConfig {
+        named,
+        fallback: vec![],
+    }
 }
 
 pub(super) fn with_input_schema(
@@ -72,11 +78,19 @@ pub(super) fn with_input_schema(
 }
 
 pub(super) fn errors_of(issues: &[Issue]) -> Vec<Issue> {
-    issues.iter().filter(|i| i.severity == IssueSeverity::Error).cloned().collect()
+    issues
+        .iter()
+        .filter(|i| i.severity == IssueSeverity::Error)
+        .cloned()
+        .collect()
 }
 
 pub(super) fn warnings_of(issues: &[Issue]) -> Vec<Issue> {
-    issues.iter().filter(|i| i.severity == IssueSeverity::Warning).cloned().collect()
+    issues
+        .iter()
+        .filter(|i| i.severity == IssueSeverity::Warning)
+        .cloned()
+        .collect()
 }
 
 pub(super) fn has_code(issues: &[Issue], code: &str) -> bool {
@@ -92,7 +106,11 @@ fn name_valid_passes() {
     // THEN: no issues
     let cap = minimal_cap("web_search_v2");
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&issues, "CAP-001"), "unexpected CAP-001: {:?}", issues);
+    assert!(
+        !has_code(&issues, "CAP-001"),
+        "unexpected CAP-001: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -102,7 +120,10 @@ fn name_empty_is_error() {
     // THEN: CAP-001 error
     let cap = minimal_cap("");
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-001"), "expected CAP-001 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-001"),
+        "expected CAP-001 error"
+    );
 }
 
 #[test]
@@ -112,7 +133,10 @@ fn name_with_uppercase_is_error() {
     // THEN: CAP-001 error
     let cap = minimal_cap("WebSearch");
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-001"), "expected CAP-001 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-001"),
+        "expected CAP-001 error"
+    );
 }
 
 #[test]
@@ -122,7 +146,10 @@ fn name_with_hyphen_is_error() {
     // THEN: CAP-001 error
     let cap = minimal_cap("web-search");
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-001"), "expected CAP-001 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-001"),
+        "expected CAP-001 error"
+    );
 }
 
 #[test]
@@ -132,7 +159,10 @@ fn name_with_space_is_error() {
     // THEN: CAP-001 error
     let cap = minimal_cap("web search");
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-001"), "expected CAP-001 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-001"),
+        "expected CAP-001 error"
+    );
 }
 
 // ── CAP-002: description validation ──────────────────────────────────────────
@@ -155,7 +185,10 @@ fn description_empty_is_warning() {
     let mut cap = minimal_cap("my_tool");
     cap.description = String::new();
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&warnings_of(&issues), "CAP-002"), "expected CAP-002 warning");
+    assert!(
+        has_code(&warnings_of(&issues), "CAP-002"),
+        "expected CAP-002 warning"
+    );
 }
 
 #[test]
@@ -166,7 +199,10 @@ fn description_over_500_chars_is_warning() {
     let mut cap = minimal_cap("my_tool");
     cap.description = "x".repeat(501);
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&warnings_of(&issues), "CAP-002"), "expected CAP-002 warning");
+    assert!(
+        has_code(&warnings_of(&issues), "CAP-002"),
+        "expected CAP-002 warning"
+    );
 }
 
 #[test]
@@ -202,7 +238,10 @@ fn schema_input_wrong_type_is_error() {
     // THEN: CAP-003 error
     let cap = with_input_schema(minimal_cap("my_tool"), json!({"type": "array"}));
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-003"), "expected CAP-003 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-003"),
+        "expected CAP-003 error"
+    );
 }
 
 #[test]
@@ -215,7 +254,10 @@ fn schema_input_properties_as_array_is_error() {
         json!({"type": "object", "properties": [{"name": "q"}]}),
     );
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-003"), "expected CAP-003 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-003"),
+        "expected CAP-003 error"
+    );
 }
 
 // ── CAP-005: provider validation ──────────────────────────────────────────────
@@ -238,7 +280,10 @@ fn no_providers_and_no_webhooks_is_error() {
     let mut cap = minimal_cap("my_tool");
     cap.providers = ProvidersConfig::default();
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-005"), "expected CAP-005 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-005"),
+        "expected CAP-005 error"
+    );
 }
 
 #[test]
@@ -257,9 +302,15 @@ fn provider_missing_url_is_error() {
         },
     );
     let mut cap = minimal_cap("my_tool");
-    cap.providers = ProvidersConfig { named, fallback: vec![] };
+    cap.providers = ProvidersConfig {
+        named,
+        fallback: vec![],
+    };
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-005"), "expected CAP-005 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-005"),
+        "expected CAP-005 error"
+    );
 }
 
 // ── CAP-006: dangling placeholders ────────────────────────────────────────────
@@ -285,7 +336,11 @@ fn placeholder_with_schema_property_passes() {
         json!({"type": "object", "properties": {"id": {"type": "string"}}}),
     );
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-006"),
+        "unexpected CAP-006: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -309,7 +364,10 @@ fn placeholder_without_schema_property_is_error() {
         json!({"type": "object", "properties": {"id": {"type": "string"}}}),
     );
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-006"), "expected CAP-006 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-006"),
+        "expected CAP-006 error"
+    );
 }
 
 #[test]
@@ -333,7 +391,10 @@ fn env_placeholder_in_url_is_ignored() {
         json!({"type": "object", "properties": {}}),
     );
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006");
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-006"),
+        "unexpected CAP-006"
+    );
 }
 
 // ── CAP-007: static_params overlap ───────────────────────────────────────────
@@ -359,7 +420,10 @@ fn static_params_overlap_with_params_is_warning() {
                 },
                 static_params: {
                     let mut m = HashMap::new();
-                    m.insert("format".to_string(), serde_json::Value::String("xml".to_string()));
+                    m.insert(
+                        "format".to_string(),
+                        serde_json::Value::String("xml".to_string()),
+                    );
                     m
                 },
                 ..RestConfig::default()
@@ -367,9 +431,15 @@ fn static_params_overlap_with_params_is_warning() {
         },
     );
     let mut cap = minimal_cap("my_tool");
-    cap.providers = ProvidersConfig { named, fallback: vec![] };
+    cap.providers = ProvidersConfig {
+        named,
+        fallback: vec![],
+    };
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&warnings_of(&issues), "CAP-007"), "expected CAP-007 warning");
+    assert!(
+        has_code(&warnings_of(&issues), "CAP-007"),
+        "expected CAP-007 warning"
+    );
 }
 
 #[test]
@@ -393,7 +463,10 @@ fn static_params_no_overlap_passes() {
                 },
                 static_params: {
                     let mut m = HashMap::new();
-                    m.insert("format".to_string(), serde_json::Value::String("json".to_string()));
+                    m.insert(
+                        "format".to_string(),
+                        serde_json::Value::String("json".to_string()),
+                    );
                     m
                 },
                 ..RestConfig::default()
@@ -401,7 +474,10 @@ fn static_params_no_overlap_passes() {
         },
     );
     let mut cap = minimal_cap("my_tool");
-    cap.providers = ProvidersConfig { named, fallback: vec![] };
+    cap.providers = ProvidersConfig {
+        named,
+        fallback: vec![],
+    };
     let issues = validate_capability_definition(&cap, None);
     assert!(!has_code(&warnings_of(&issues), "CAP-007"));
 }
@@ -420,7 +496,10 @@ fn invalid_base_url_is_error() {
         ..cap
     };
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-008"), "expected CAP-008 error");
+    assert!(
+        has_code(&errors_of(&issues), "CAP-008"),
+        "expected CAP-008 error"
+    );
 }
 
 #[test]
@@ -454,7 +533,10 @@ fn path_without_leading_slash_is_warning() {
         json!({"type": "object"}),
     );
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&warnings_of(&issues), "CAP-008"), "expected CAP-008 warning");
+    assert!(
+        has_code(&warnings_of(&issues), "CAP-008"),
+        "expected CAP-008 warning"
+    );
 }
 
 // ── CAP-009: duplicate names ──────────────────────────────────────────────────
@@ -465,12 +547,25 @@ fn duplicate_capability_names_are_warned() {
     // WHEN: validate_capabilities is called
     // THEN: CAP-009 warning for the second file
     let caps = vec![
-        ("capabilities/a/tool.yaml".to_string(), minimal_cap("my_tool")),
-        ("capabilities/b/tool.yaml".to_string(), minimal_cap("my_tool")),
+        (
+            "capabilities/a/tool.yaml".to_string(),
+            minimal_cap("my_tool"),
+        ),
+        (
+            "capabilities/b/tool.yaml".to_string(),
+            minimal_cap("my_tool"),
+        ),
     ];
     let results = validate_capabilities(&caps);
-    let second_issues = results.get("capabilities/b/tool.yaml").map(Vec::as_slice).unwrap_or(&[]);
-    assert!(has_code(second_issues, "CAP-009"), "expected CAP-009 warning: {:?}", second_issues);
+    let second_issues = results
+        .get("capabilities/b/tool.yaml")
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    assert!(
+        has_code(second_issues, "CAP-009"),
+        "expected CAP-009 warning: {:?}",
+        second_issues
+    );
 }
 
 #[test]
@@ -479,8 +574,14 @@ fn unique_capability_names_pass_duplicate_check() {
     // WHEN: validate_capabilities is called
     // THEN: no CAP-009 warnings
     let caps = vec![
-        ("capabilities/a/tool_a.yaml".to_string(), minimal_cap("tool_a")),
-        ("capabilities/b/tool_b.yaml".to_string(), minimal_cap("tool_b")),
+        (
+            "capabilities/a/tool_a.yaml".to_string(),
+            minimal_cap("tool_a"),
+        ),
+        (
+            "capabilities/b/tool_b.yaml".to_string(),
+            minimal_cap("tool_b"),
+        ),
     ];
     let results = validate_capabilities(&caps);
     let all_issues: Vec<Issue> = results.into_values().flatten().collect();

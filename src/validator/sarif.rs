@@ -227,7 +227,13 @@ mod tests {
     use super::*;
     use crate::validator::report::ValidationReport;
 
-    fn make_result(code: &str, name: &str, tool: &str, passed: bool, severity: Severity) -> ValidationResult {
+    fn make_result(
+        code: &str,
+        name: &str,
+        tool: &str,
+        passed: bool,
+        severity: Severity,
+    ) -> ValidationResult {
         let mut r = ValidationResult::new(code, name, tool);
         if !passed {
             r.add_issue("Test issue");
@@ -238,9 +244,16 @@ mod tests {
 
     #[test]
     fn sarif_report_has_correct_version() {
-        let report = ValidationReport::from_results(1, vec![
-            make_result("AX-001", "Rule 1", "tool1", true, Severity::Pass),
-        ]);
+        let report = ValidationReport::from_results(
+            1,
+            vec![make_result(
+                "AX-001",
+                "Rule 1",
+                "tool1",
+                true,
+                Severity::Pass,
+            )],
+        );
 
         let sarif = to_sarif(&report, "test.yaml");
         assert_eq!(sarif.version, "2.1.0");
@@ -249,11 +262,14 @@ mod tests {
 
     #[test]
     fn sarif_report_includes_only_failures() {
-        let report = ValidationReport::from_results(1, vec![
-            make_result("AX-001", "Rule 1", "tool1", true, Severity::Pass),
-            make_result("AX-002", "Rule 2", "tool1", false, Severity::Fail),
-            make_result("AX-003", "Rule 3", "tool1", false, Severity::Warn),
-        ]);
+        let report = ValidationReport::from_results(
+            1,
+            vec![
+                make_result("AX-001", "Rule 1", "tool1", true, Severity::Pass),
+                make_result("AX-002", "Rule 2", "tool1", false, Severity::Fail),
+                make_result("AX-003", "Rule 3", "tool1", false, Severity::Warn),
+            ],
+        );
 
         let sarif = to_sarif(&report, "test.yaml");
         assert_eq!(sarif.runs[0].results.len(), 2);
@@ -269,9 +285,16 @@ mod tests {
 
     #[test]
     fn sarif_result_has_file_location() {
-        let report = ValidationReport::from_results(1, vec![
-            make_result("AX-001", "Rule 1", "tool1", false, Severity::Fail),
-        ]);
+        let report = ValidationReport::from_results(
+            1,
+            vec![make_result(
+                "AX-001",
+                "Rule 1",
+                "tool1",
+                false,
+                Severity::Fail,
+            )],
+        );
 
         let sarif = to_sarif(&report, "capabilities/search/brave.yaml");
         let result = &sarif.runs[0].results[0];
@@ -283,10 +306,13 @@ mod tests {
 
     #[test]
     fn sarif_rule_descriptors_are_unique() {
-        let report = ValidationReport::from_results(2, vec![
-            make_result("AX-001", "Rule 1", "tool1", false, Severity::Fail),
-            make_result("AX-001", "Rule 1", "tool2", false, Severity::Fail),
-        ]);
+        let report = ValidationReport::from_results(
+            2,
+            vec![
+                make_result("AX-001", "Rule 1", "tool1", false, Severity::Fail),
+                make_result("AX-001", "Rule 1", "tool2", false, Severity::Fail),
+            ],
+        );
 
         let sarif = to_sarif(&report, "test.yaml");
         assert_eq!(sarif.runs[0].tool.driver.rules.len(), 1);
@@ -294,17 +320,22 @@ mod tests {
 
     #[test]
     fn sarif_multi_aggregates_files() {
-        let results_a = vec![
-            make_result("AX-001", "Rule 1", "tool1", false, Severity::Fail),
-        ];
-        let results_b = vec![
-            make_result("AX-002", "Rule 2", "tool2", false, Severity::Warn),
-        ];
+        let results_a = vec![make_result(
+            "AX-001",
+            "Rule 1",
+            "tool1",
+            false,
+            Severity::Fail,
+        )];
+        let results_b = vec![make_result(
+            "AX-002",
+            "Rule 2",
+            "tool2",
+            false,
+            Severity::Warn,
+        )];
 
-        let sarif = to_sarif_multi(&[
-            ("file_a.yaml", &results_a),
-            ("file_b.yaml", &results_b),
-        ]);
+        let sarif = to_sarif_multi(&[("file_a.yaml", &results_a), ("file_b.yaml", &results_b)]);
 
         assert_eq!(sarif.runs[0].results.len(), 2);
         assert_eq!(sarif.runs[0].tool.driver.rules.len(), 2);
@@ -312,9 +343,16 @@ mod tests {
 
     #[test]
     fn sarif_serializes_to_valid_json() {
-        let report = ValidationReport::from_results(1, vec![
-            make_result("AX-001", "Rule 1", "tool1", false, Severity::Fail),
-        ]);
+        let report = ValidationReport::from_results(
+            1,
+            vec![make_result(
+                "AX-001",
+                "Rule 1",
+                "tool1",
+                false,
+                Severity::Fail,
+            )],
+        );
 
         let sarif = to_sarif(&report, "test.yaml");
         let json = serde_json::to_string_pretty(&sarif);

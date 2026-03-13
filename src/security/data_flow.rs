@@ -118,19 +118,8 @@ const EXECUTE_EXACT: &[&str] = &["eval", "exec", "shell_exec", "run_script"];
 const EXECUTE_PREFIXES: &[&str] = &["run_", "execute_", "spawn_", "launch_"];
 
 const WRITE_PREFIXES: &[&str] = &[
-    "write_",
-    "create_",
-    "insert_",
-    "update_",
-    "delete_",
-    "remove_",
-    "move_",
-    "rename_",
-    "append_",
-    "patch_",
-    "put_",
-    "post_",
-    "upsert_",
+    "write_", "create_", "insert_", "update_", "delete_", "remove_", "move_", "rename_", "append_",
+    "patch_", "put_", "post_", "upsert_",
 ];
 const WRITE_EXACT: &[&str] = &["save", "store", "persist", "commit", "push", "upload"];
 
@@ -147,9 +136,7 @@ const WRITE_EXACT: &[&str] = &["save", "store", "persist", "commit", "push", "up
 pub fn hash_argument(value: &Value) -> String {
     let repr = match value {
         // Compact canonical JSON for objects/arrays; raw for scalars.
-        Value::Object(_) | Value::Array(_) => {
-            serde_json::to_string(value).unwrap_or_default()
-        }
+        Value::Object(_) | Value::Array(_) => serde_json::to_string(value).unwrap_or_default(),
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
         Value::Bool(b) => b.to_string(),
@@ -579,8 +566,7 @@ mod tests {
     fn audit_sanitization_detects_modification() {
         let orig = json!({"q": "hello\x07world"});
         let san = json!({"q": "helloworld"});
-        let records =
-            audit_sanitization(orig.as_object().unwrap(), san.as_object().unwrap());
+        let records = audit_sanitization(orig.as_object().unwrap(), san.as_object().unwrap());
         assert_eq!(records.len(), 1);
         assert!(records[0].was_modified);
         assert_eq!(records[0].key, "q");
@@ -590,8 +576,7 @@ mod tests {
     fn audit_sanitization_pass_through_not_modified() {
         let orig = json!({"q": "clean input"});
         let san = json!({"q": "clean input"});
-        let records =
-            audit_sanitization(orig.as_object().unwrap(), san.as_object().unwrap());
+        let records = audit_sanitization(orig.as_object().unwrap(), san.as_object().unwrap());
         assert_eq!(records.len(), 1);
         assert!(!records[0].was_modified);
         assert_eq!(records[0].transformation, "pass-through");
@@ -601,8 +586,7 @@ mod tests {
     fn audit_sanitization_multiple_keys() {
         let orig = json!({"a": "ok", "b": "bad\x00val"});
         let san = json!({"a": "ok", "b": Value::Null});
-        let records =
-            audit_sanitization(orig.as_object().unwrap(), san.as_object().unwrap());
+        let records = audit_sanitization(orig.as_object().unwrap(), san.as_object().unwrap());
         assert_eq!(records.len(), 2);
         let b_rec = records.iter().find(|r| r.key == "b").unwrap();
         assert!(b_rec.was_modified);
@@ -612,8 +596,7 @@ mod tests {
 
     #[test]
     fn tracer_classifies_tool_correctly() {
-        let record = DataFlowTracer::new("tid", "server", "write_file", None)
-            .finish();
+        let record = DataFlowTracer::new("tid", "server", "write_file", None).finish();
         assert_eq!(record.category, ToolCategory::Write);
     }
 

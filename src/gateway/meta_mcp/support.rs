@@ -5,9 +5,9 @@
 
 use serde_json::{Value, json};
 
+use crate::Result;
 use crate::idempotency::{IdempotencyCache, derive_key};
 use crate::playbook::ToolInvoker;
-use crate::{Result};
 
 use super::MetaMcp;
 
@@ -163,10 +163,7 @@ pub(super) fn augment_with_predictions(mut result: Value, predictions: Vec<Value
         return result;
     }
     if let Value::Object(ref mut map) = result {
-        map.insert(
-            "predicted_next".to_string(),
-            Value::Array(predictions),
-        );
+        map.insert("predicted_next".to_string(), Value::Array(predictions));
     }
     result
 }

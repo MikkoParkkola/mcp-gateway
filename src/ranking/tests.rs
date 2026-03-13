@@ -258,14 +258,24 @@ fn score_text_relevance_full_query_in_description_scores_2() {
     // WHEN: scoring
     // THEN: score is 2
     let words = vec!["forecast"];
-    let score = score_text_relevance("weather_api", "Get weather forecast data", "forecast", &words);
+    let score = score_text_relevance(
+        "weather_api",
+        "Get weather forecast data",
+        "forecast",
+        &words,
+    );
     assert!((score - 2.0).abs() < f64::EPSILON);
 }
 
 #[test]
 fn score_text_relevance_no_match_scores_0() {
     let words = vec!["unrelated"];
-    let score = score_text_relevance("weather_api", "Get current temperature", "unrelated", &words);
+    let score = score_text_relevance(
+        "weather_api",
+        "Get current temperature",
+        "unrelated",
+        &words,
+    );
     assert!((score - 0.0).abs() < f64::EPSILON);
 }
 
@@ -274,8 +284,8 @@ fn ranking_multi_word_query_all_words_in_name_beats_partial() {
     // GIVEN: "batch search" query, two results
     let search_ranker = SearchRanker::new();
     let results = vec![
-        sr("search_only", "Does searching"),             // only "search" in name -> score 7
-        sr("batch_search_runner", "Multi-batch tool"),   // both words in name -> score 15
+        sr("search_only", "Does searching"), // only "search" in name -> score 7
+        sr("batch_search_runner", "Multi-batch tool"), // both words in name -> score 15
     ];
     // WHEN: ranking
     let ranked = search_ranker.rank(results, "batch search");
@@ -288,7 +298,7 @@ fn ranking_keyword_tag_scores_above_description_substring() {
     // GIVEN: "brave" query, one tool with keyword tag, one with desc substring
     let search_ranker = SearchRanker::new();
     let results = vec![
-        sr("query_tool", "Use brave API to query stuff"),          // desc contains -> 2
+        sr("query_tool", "Use brave API to query stuff"), // desc contains -> 2
         sr("web_tool", "Web search [keywords: search, web, brave]"), // keyword match -> 8
     ];
     let ranked = search_ranker.rank(results, "brave");
@@ -311,7 +321,10 @@ fn is_keyword_match_finds_exact_tag() {
 
 #[test]
 fn is_keyword_match_no_keywords_section_returns_false() {
-    assert!(!is_keyword_match("plain description with no tags", "search"));
+    assert!(!is_keyword_match(
+        "plain description with no tags",
+        "search"
+    ));
 }
 
 // ── expand_synonyms ──────────────────────────────────────────────────
@@ -349,8 +362,8 @@ fn expand_synonyms_returns_empty_for_unknown_word() {
 fn expand_synonyms_all_groups_are_bidirectional() {
     // Every word in a returned group should map back to the same group.
     let seeds = [
-        "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research",
-        "send", "delete", "list", "convert",
+        "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research", "send",
+        "delete", "list", "convert",
     ];
     for seed in seeds {
         let group = expand_synonyms(seed);
@@ -405,12 +418,7 @@ fn score_text_relevance_synonym_keyword_match_applies_discount() {
     // WHEN: scoring
     // THEN: 1-word keyword match = 8, discounted to 8 * 0.8 = 6.4
     let words = vec!["find"];
-    let score = score_text_relevance(
-        "tool",
-        "Does stuff [keywords: search, web]",
-        "find",
-        &words,
-    );
+    let score = score_text_relevance("tool", "Does stuff [keywords: search, web]", "find", &words);
     let expected = 8.0 * SYNONYM_MULTIPLIER;
     assert!(
         (score - expected).abs() < 0.01,
@@ -435,13 +443,21 @@ fn ranking_synonym_query_finds_matching_tools() {
     // WHEN: ranking against a tool with "search" in its name
     let search_ranker = SearchRanker::new();
     let results = vec![
-        sr("company_search", "Search for companies [keywords: search, company]"),
+        sr(
+            "company_search",
+            "Search for companies [keywords: search, company]",
+        ),
         sr("weather_api", "Get current temperature"),
     ];
     let ranked = search_ranker.rank(results, "find companies");
     // THEN: the search tool should score above 0 due to synonym expansion
     assert!(
-        ranked.iter().find(|r| r.tool == "company_search").unwrap().score > 0.0,
+        ranked
+            .iter()
+            .find(|r| r.tool == "company_search")
+            .unwrap()
+            .score
+            > 0.0,
         "synonym-expanded query should match"
     );
     assert_eq!(ranked[0].tool, "company_search");
@@ -452,7 +468,7 @@ fn ranking_exact_match_beats_synonym_match() {
     // GIVEN: one tool has exact word "search", another only matches via "find" synonym
     let search_ranker = SearchRanker::new();
     let results = vec![
-        sr("find_companies", "Discovers companies"),  // exact "find" in name
+        sr("find_companies", "Discovers companies"), // exact "find" in name
         sr("search_companies", "Searches companies"), // synonym of "find"
     ];
     let ranked = search_ranker.rank(results, "find");
@@ -530,7 +546,10 @@ fn score_text_relevance_single_schema_field_scores_6() {
         "symbol",
         &words,
     );
-    assert!((score - 6.0).abs() < f64::EPSILON, "expected 6.0, got {score}");
+    assert!(
+        (score - 6.0).abs() < f64::EPSILON,
+        "expected 6.0, got {score}"
+    );
 }
 
 #[test]
@@ -560,7 +579,10 @@ fn score_text_relevance_two_schema_fields_scores_above_single_schema_field() {
         score_two >= score_one,
         "two-field query ({score_two}) should score ≥ one-field query ({score_one})"
     );
-    assert!(score_two >= 8.0, "two-field match should score ≥ 8.0, got {score_two}");
+    assert!(
+        score_two >= 8.0,
+        "two-field match should score ≥ 8.0, got {score_two}"
+    );
 }
 
 #[test]
@@ -629,11 +651,18 @@ fn ranking_schema_fields_find_stock_symbol_tool() {
     ];
     let ranked = search_ranker.rank(results, "stock symbol");
     assert_eq!(
-        ranked[0].tool, "market_data",
+        ranked[0].tool,
+        "market_data",
         "market_data should rank first; got {:?}",
-        ranked.iter().map(|r| (&r.tool, r.score)).collect::<Vec<_>>()
+        ranked
+            .iter()
+            .map(|r| (&r.tool, r.score))
+            .collect::<Vec<_>>()
     );
-    assert!(ranked[0].score > 0.0, "schema match should produce positive score");
+    assert!(
+        ranked[0].score > 0.0,
+        "schema match should produce positive score"
+    );
 }
 
 #[test]
@@ -648,7 +677,10 @@ fn ranking_schema_field_tool_scores_above_zero_for_field_query() {
     // The test asserts the schema tool is correctly matched with a meaningful score.
     let search_ranker = SearchRanker::new();
     let results = vec![
-        sr("schema_tool", "Financial data [schema: symbol, exchange, price]"),
+        sr(
+            "schema_tool",
+            "Financial data [schema: symbol, exchange, price]",
+        ),
         sr("unrelated_tool", "Send emails and notifications"),
     ];
     let ranked = search_ranker.rank(results, "symbol exchange");
@@ -676,9 +708,13 @@ fn ranking_query_stock_symbol_finds_tool_with_symbol_schema_field() {
     ];
     let ranked = search_ranker.rank(results, "stock symbol");
     assert_eq!(
-        ranked[0].tool, "get_quote",
+        ranked[0].tool,
+        "get_quote",
         "get_quote must rank first for 'stock symbol'; scores: {:?}",
-        ranked.iter().map(|r| (&r.tool, r.score)).collect::<Vec<_>>()
+        ranked
+            .iter()
+            .map(|r| (&r.tool, r.score))
+            .collect::<Vec<_>>()
     );
 }
 

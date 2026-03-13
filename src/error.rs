@@ -84,9 +84,7 @@ impl Error {
             Self::Json(_) => -32700,     // Parse error
             Self::Protocol(_) => -32600, // Invalid request
             Self::BackendNotFound(_) => -32001,
-            Self::BackendUnavailable(_)
-            | Self::BackendTimeout(_)
-            | Self::Transport(_) => -32000,
+            Self::BackendUnavailable(_) | Self::BackendTimeout(_) | Self::Transport(_) => -32000,
             _ => -32603, // Internal error
         }
     }

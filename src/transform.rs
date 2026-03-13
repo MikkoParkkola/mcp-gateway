@@ -146,7 +146,10 @@ pub fn resolve_path(value: &Value, path: &[JsonPathSegment]) -> Vec<Value> {
             None => vec![],
         },
         JsonPathSegment::ArrayWildcard => match value.as_array() {
-            Some(arr) => arr.iter().flat_map(|v| resolve_path(v, &path[1..])).collect(),
+            Some(arr) => arr
+                .iter()
+                .flat_map(|v| resolve_path(v, &path[1..]))
+                .collect(),
             None => vec![],
         },
         JsonPathSegment::ArrayIndex(idx) => match value.as_array() {

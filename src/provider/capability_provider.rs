@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{Provider, ProviderHealth};
+use crate::Result;
 use crate::capability::CapabilityBackend;
 use crate::protocol::Tool;
-use crate::Result;
 
 /// Provider adapter that wraps an existing [`CapabilityBackend`].
 ///
@@ -65,9 +65,9 @@ impl Provider for CapabilityProvider {
             .content
             .into_iter()
             .filter_map(|c| match c {
-                crate::protocol::Content::Text { text, .. } => {
-                    serde_json::from_str(&text).ok().or(Some(Value::String(text)))
-                }
+                crate::protocol::Content::Text { text, .. } => serde_json::from_str(&text)
+                    .ok()
+                    .or(Some(Value::String(text))),
                 _ => None,
             })
             .collect();

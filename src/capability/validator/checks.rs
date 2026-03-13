@@ -18,7 +18,9 @@ pub(super) fn check_name(name: &str, issues: &mut Vec<Issue>) {
         return;
     }
 
-    let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    let valid = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
     if !valid {
         issues.push(Issue::error(
             "CAP-001",
@@ -38,8 +40,11 @@ const MAX_DESCRIPTION_LEN: usize = 500;
 pub(super) fn check_description(description: &str, issues: &mut Vec<Issue>) {
     if description.trim().is_empty() {
         issues.push(
-            Issue::warning("CAP-002", "description is empty; add a meaningful description")
-                .with_field("description"),
+            Issue::warning(
+                "CAP-002",
+                "description is empty; add a meaningful description",
+            )
+            .with_field("description"),
         );
         return;
     }
@@ -67,10 +72,13 @@ pub(super) fn check_schema_input(input: &serde_json::Value, issues: &mut Vec<Iss
 
     if let Some(t) = input.get("type").and_then(|v| v.as_str()) {
         if t != "object" {
-            issues.push(Issue::error(
-                "CAP-003",
-                format!("schema.input.type must be 'object', got '{t}'"),
-            ).with_field("schema.input.type"));
+            issues.push(
+                Issue::error(
+                    "CAP-003",
+                    format!("schema.input.type must be 'object', got '{t}'"),
+                )
+                .with_field("schema.input.type"),
+            );
         }
     } else if input.is_object() {
         // Tolerate missing type when the value is an object (some YAMLs omit it).
@@ -79,10 +87,13 @@ pub(super) fn check_schema_input(input: &serde_json::Value, issues: &mut Vec<Iss
     // Properties must be an object, not an array.
     if let Some(props) = input.get("properties") {
         if !props.is_object() {
-            issues.push(Issue::error(
-                "CAP-003",
-                "schema.input.properties must be a YAML mapping (object), not an array",
-            ).with_field("schema.input.properties"));
+            issues.push(
+                Issue::error(
+                    "CAP-003",
+                    "schema.input.properties must be a YAML mapping (object), not an array",
+                )
+                .with_field("schema.input.properties"),
+            );
         }
     }
 }
@@ -97,19 +108,25 @@ pub(super) fn check_schema_output(output: &serde_json::Value, issues: &mut Vec<I
 
     if let Some(t) = output.get("type").and_then(|v| v.as_str()) {
         if t != "object" {
-            issues.push(Issue::warning(
-                "CAP-004",
-                format!("schema.output.type should be 'object', got '{t}'"),
-            ).with_field("schema.output.type"));
+            issues.push(
+                Issue::warning(
+                    "CAP-004",
+                    format!("schema.output.type should be 'object', got '{t}'"),
+                )
+                .with_field("schema.output.type"),
+            );
         }
     }
 
     if let Some(props) = output.get("properties") {
         if !props.is_object() {
-            issues.push(Issue::error(
-                "CAP-004",
-                "schema.output.properties must be a YAML mapping (object), not an array",
-            ).with_field("schema.output.properties"));
+            issues.push(
+                Issue::error(
+                    "CAP-004",
+                    "schema.output.properties must be a YAML mapping (object), not an array",
+                )
+                .with_field("schema.output.properties"),
+            );
         }
     }
 }
@@ -134,12 +151,24 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
 
     for (provider_name, provider) in &cap.providers.named {
         let ctx = format!("providers.{provider_name}");
-        check_rest_config(&provider.config, &provider.service, &ctx, &schema_props, issues);
+        check_rest_config(
+            &provider.config,
+            &provider.service,
+            &ctx,
+            &schema_props,
+            issues,
+        );
     }
 
     for (idx, provider) in cap.providers.fallback.iter().enumerate() {
         let ctx = format!("providers.fallback[{idx}]");
-        check_rest_config(&provider.config, &provider.service, &ctx, &schema_props, issues);
+        check_rest_config(
+            &provider.config,
+            &provider.service,
+            &ctx,
+            &schema_props,
+            issues,
+        );
     }
 }
 
@@ -181,17 +210,29 @@ fn check_rest_config(
     // Skip validation when URL contains template references (e.g. {env.VAR})
     // since these are resolved at runtime, not parse-time.
     let contains_template = |s: &str| s.contains('{');
-    if has_base_url && !contains_template(&config.base_url) && url::Url::parse(&config.base_url).is_err() {
+    if has_base_url
+        && !contains_template(&config.base_url)
+        && url::Url::parse(&config.base_url).is_err()
+    {
         issues.push(Issue::error(
             "CAP-008",
-            format!("{context}: base_url '{}' is not a valid URL", config.base_url),
+            format!(
+                "{context}: base_url '{}' is not a valid URL",
+                config.base_url
+            ),
         ));
     }
 
-    if has_endpoint && !contains_template(&config.endpoint) && url::Url::parse(&config.endpoint).is_err() {
+    if has_endpoint
+        && !contains_template(&config.endpoint)
+        && url::Url::parse(&config.endpoint).is_err()
+    {
         issues.push(Issue::error(
             "CAP-008",
-            format!("{context}: endpoint '{}' is not a valid URL", config.endpoint),
+            format!(
+                "{context}: endpoint '{}' is not a valid URL",
+                config.endpoint
+            ),
         ));
     }
 
@@ -209,11 +250,23 @@ fn check_rest_config(
     check_placeholders_in_text(&config.endpoint, context, "endpoint", schema_props, issues);
 
     for (key, value) in &config.params {
-        check_placeholders_in_text(value, context, &format!("params.{key}"), schema_props, issues);
+        check_placeholders_in_text(
+            value,
+            context,
+            &format!("params.{key}"),
+            schema_props,
+            issues,
+        );
     }
 
     for (key, value) in &config.headers {
-        check_placeholders_in_text(value, context, &format!("headers.{key}"), schema_props, issues);
+        check_placeholders_in_text(
+            value,
+            context,
+            &format!("headers.{key}"),
+            schema_props,
+            issues,
+        );
     }
 
     // CAP-007: static_params must not overlap with params.
@@ -249,7 +302,11 @@ fn check_placeholders_in_text(
         // timestamp — computed auth timestamp
         // *_auth_header — computed HMAC/auth headers
         const RUNTIME_PLACEHOLDERS: &[&str] = &[
-            "access_token", "refresh_token", "api_key", "bearer_token", "auth_token",
+            "access_token",
+            "refresh_token",
+            "api_key",
+            "bearer_token",
+            "auth_token",
             "timestamp",
         ];
         if placeholder.starts_with("env.")

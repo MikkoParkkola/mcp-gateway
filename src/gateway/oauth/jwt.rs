@@ -130,8 +130,7 @@ pub fn validate_agent_token(
     validation.validate_aud = false;
 
     // 5. Verify signature + exp.
-    let token_data =
-        jsonwebtoken::decode::<AgentClaims>(token, &decoding_key, &validation)?;
+    let token_data = jsonwebtoken::decode::<AgentClaims>(token, &decoding_key, &validation)?;
     let claims = token_data.claims;
 
     // 6. Manual audience check.
@@ -145,7 +144,11 @@ pub fn validate_agent_token(
     //    registration-time definition.
     let scopes = agent.parsed_scopes();
 
-    Ok(ValidatedToken { claims, agent, scopes })
+    Ok(ValidatedToken {
+        claims,
+        agent,
+        scopes,
+    })
 }
 
 /// Extract the `sub` claim from a JWT without verifying the signature.
@@ -186,45 +189,38 @@ fn extract_sub_unverified(token: &str) -> Result<String, JwtError> {
 }
 
 /// Build a [`DecodingKey`] from the agent's key material for the given algorithm.
-fn build_decoding_key(
-    agent: &AgentDefinition,
-    alg: Algorithm,
-) -> Result<DecodingKey, JwtError> {
+fn build_decoding_key(agent: &AgentDefinition, alg: Algorithm) -> Result<DecodingKey, JwtError> {
     match alg {
         Algorithm::HS256 => {
-            let secret = agent.hs256_secret.as_deref().ok_or_else(|| {
-                JwtError::MissingKey {
+            let secret = agent
+                .hs256_secret
+                .as_deref()
+                .ok_or_else(|| JwtError::MissingKey {
                     agent: agent.client_id.clone(),
                     alg,
-                }
-            })?;
+                })?;
             Ok(DecodingKey::from_secret(secret.as_bytes()))
         }
         Algorithm::RS256 => {
-            let pem = agent.rs256_public_key.as_deref().ok_or_else(|| {
-                JwtError::MissingKey {
+            let pem = agent
+                .rs256_public_key
+                .as_deref()
+                .ok_or_else(|| JwtError::MissingKey {
                     agent: agent.client_id.clone(),
                     alg,
-                }
-            })?;
-            DecodingKey::from_rsa_pem(pem.as_bytes()).map_err(|e| {
-                JwtError::InvalidPublicKey(agent.client_id.clone(), e.to_string())
-            })
+                })?;
+            DecodingKey::from_rsa_pem(pem.as_bytes())
+                .map_err(|e| JwtError::InvalidPublicKey(agent.client_id.clone(), e.to_string()))
         }
         other => Err(JwtError::UnsupportedAlgorithm(other)),
     }
 }
 
 /// Validate the `aud` claim against an expected audience string.
-fn check_audience_claim(
-    aud: Option<&serde_json::Value>,
-    expected: &str,
-) -> Result<(), JwtError> {
+fn check_audience_claim(aud: Option<&serde_json::Value>, expected: &str) -> Result<(), JwtError> {
     let matches = match aud {
         Some(serde_json::Value::String(s)) => s == expected,
-        Some(serde_json::Value::Array(arr)) => {
-            arr.iter().any(|v| v.as_str() == Some(expected))
-        }
+        Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(expected)),
         _ => false,
     };
 
@@ -232,9 +228,7 @@ fn check_audience_claim(
         Ok(())
     } else {
         Err(JwtError::JwtVerification(
-            jsonwebtoken::errors::Error::from(
-                jsonwebtoken::errors::ErrorKind::InvalidAudience,
-            ),
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidAudience),
         ))
     }
 }

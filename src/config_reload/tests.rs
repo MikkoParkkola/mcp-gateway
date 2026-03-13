@@ -50,14 +50,21 @@ fn diff_identical_configs_returns_empty_patch() {
     // WHEN: diff is computed
     let patch = compute_diff(&old, &new);
     // THEN: patch is empty
-    assert!(patch.is_empty(), "expected empty patch, got: {}", patch.summary());
+    assert!(
+        patch.is_empty(),
+        "expected empty patch, got: {}",
+        patch.summary()
+    );
 }
 
 #[test]
 fn diff_same_backends_returns_empty_patch() {
     // GIVEN: two configs with identical backends
     let mut backends = HashMap::new();
-    backends.insert("alpha".to_string(), http_backend("http://localhost:8001/mcp"));
+    backends.insert(
+        "alpha".to_string(),
+        http_backend("http://localhost:8001/mcp"),
+    );
     let old = config_with_backends(backends.clone());
     let new = config_with_backends(backends);
     // WHEN
@@ -75,7 +82,10 @@ fn diff_detects_added_backend() {
     // GIVEN: old has no backends, new has one
     let old = Config::default();
     let mut backends = HashMap::new();
-    backends.insert("new-svc".to_string(), http_backend("http://localhost:9000/mcp"));
+    backends.insert(
+        "new-svc".to_string(),
+        http_backend("http://localhost:9000/mcp"),
+    );
     let new = config_with_backends(backends);
     // WHEN
     let patch = compute_diff(&old, &new);
@@ -91,7 +101,10 @@ fn diff_disabled_backend_not_treated_as_added() {
     // GIVEN: old has no backends, new has one but it is disabled
     let old = Config::default();
     let mut backends = HashMap::new();
-    backends.insert("ghost".to_string(), disabled_backend("http://localhost:9001/mcp"));
+    backends.insert(
+        "ghost".to_string(),
+        disabled_backend("http://localhost:9001/mcp"),
+    );
     let new = config_with_backends(backends);
     // WHEN
     let patch = compute_diff(&old, &new);
@@ -107,7 +120,10 @@ fn diff_disabled_backend_not_treated_as_added() {
 fn diff_detects_removed_backend() {
     // GIVEN: old has a backend, new has none
     let mut backends = HashMap::new();
-    backends.insert("legacy".to_string(), http_backend("http://localhost:8002/mcp"));
+    backends.insert(
+        "legacy".to_string(),
+        http_backend("http://localhost:8002/mcp"),
+    );
     let old = config_with_backends(backends);
     let new = Config::default();
     // WHEN
@@ -127,7 +143,10 @@ fn diff_backend_disabled_counts_as_removed() {
     let old = config_with_backends(old_backends);
 
     let mut new_backends = HashMap::new();
-    new_backends.insert("svc".to_string(), disabled_backend("http://localhost:8003/mcp"));
+    new_backends.insert(
+        "svc".to_string(),
+        disabled_backend("http://localhost:8003/mcp"),
+    );
     let new = config_with_backends(new_backends);
     // WHEN
     let patch = compute_diff(&old, &new);
@@ -357,7 +376,7 @@ fn resolve_env_file_paths_empty_input_returns_empty() {
 
 #[test]
 fn is_config_event_matches_modify_on_exact_path() {
-    use notify::{event::ModifyKind, EventKind};
+    use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: a Modify event on the watched path
     let config_path = std::path::PathBuf::from("/tmp/config.yaml");
@@ -372,7 +391,7 @@ fn is_config_event_matches_modify_on_exact_path() {
 
 #[test]
 fn is_config_event_does_not_match_different_path() {
-    use notify::{event::ModifyKind, EventKind};
+    use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: a Modify event on a different path
     let config_path = std::path::PathBuf::from("/tmp/config.yaml");
@@ -388,7 +407,7 @@ fn is_config_event_does_not_match_different_path() {
 
 #[test]
 fn is_config_event_does_not_match_remove_event() {
-    use notify::{event::RemoveKind, EventKind};
+    use notify::{EventKind, event::RemoveKind};
 
     // GIVEN: a Remove event on the exact path
     let config_path = std::path::PathBuf::from("/tmp/config.yaml");
@@ -407,7 +426,7 @@ fn is_config_event_does_not_match_remove_event() {
 
 #[test]
 fn matching_env_file_returns_path_when_event_matches_watched_env_file() {
-    use notify::{event::ModifyKind, EventKind};
+    use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: an event for a watched env file
     let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
@@ -424,7 +443,7 @@ fn matching_env_file_returns_path_when_event_matches_watched_env_file() {
 
 #[test]
 fn matching_env_file_returns_none_when_path_not_in_watch_list() {
-    use notify::{event::ModifyKind, EventKind};
+    use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: an event for a file not in the watch list
     let watched = std::path::PathBuf::from("/home/user/.claude/secrets.env");
@@ -440,7 +459,7 @@ fn matching_env_file_returns_none_when_path_not_in_watch_list() {
 
 #[test]
 fn matching_env_file_returns_none_for_remove_event() {
-    use notify::{event::RemoveKind, EventKind};
+    use notify::{EventKind, event::RemoveKind};
 
     // GIVEN: a Remove event on a watched env file
     let env_path = std::path::PathBuf::from("/home/user/.claude/secrets.env");
@@ -455,7 +474,7 @@ fn matching_env_file_returns_none_for_remove_event() {
 
 #[test]
 fn matching_env_file_returns_first_matching_path_among_multiple() {
-    use notify::{event::ModifyKind, EventKind};
+    use notify::{EventKind, event::ModifyKind};
 
     // GIVEN: multiple watched env files, event hits the second
     let path_a = std::path::PathBuf::from("/tmp/a.env");

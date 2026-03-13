@@ -234,8 +234,7 @@ deny:
 
     #[test]
     fn spiffe_san_uri_preserved_in_config() {
-        let yaml =
-            "match:\n  san_uri: \"spiffe://company.com/agent/*\"\nallow:\n  tools: [\"*\"]";
+        let yaml = "match:\n  san_uri: \"spiffe://company.com/agent/*\"\nallow:\n  tools: [\"*\"]";
         let rule: PolicyRuleConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             rule.match_criteria.san_uri.as_deref(),

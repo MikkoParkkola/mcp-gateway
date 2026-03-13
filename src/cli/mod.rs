@@ -93,7 +93,10 @@ pub enum Command {
     Cap(CapCommand),
 
     /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
-    #[command(subcommand, about = "Certificate lifecycle management (init-ca, issue-server, issue-client)")]
+    #[command(
+        subcommand,
+        about = "Certificate lifecycle management (init-ca, issue-server, issue-client)"
+    )]
     Tls(TlsCommand),
 
     /// Generate a starter gateway.yaml with sensible defaults
@@ -163,6 +166,85 @@ pub enum Command {
     /// remote plugin marketplace.
     #[command(subcommand, about = "Plugin marketplace management")]
     Plugin(PluginCommand),
+
+    /// Interactive setup wizard — scan AI clients and import MCP servers
+    ///
+    /// Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex and
+    /// running processes for existing MCP servers, lets you pick which ones to
+    /// import into the gateway config, and optionally writes the gateway entry
+    /// back into each AI client so they point at the gateway instead.
+    #[command(about = "Interactive setup wizard — import existing MCP servers")]
+    Setup {
+        /// Skip all interactive prompts and import every discovered server
+        #[arg(long)]
+        yes: bool,
+
+        /// Path to write (or update) the gateway configuration file
+        #[arg(short, long, default_value = "gateway.yaml")]
+        output: PathBuf,
+
+        /// Also write the gateway URL into each detected AI client config
+        #[arg(long)]
+        configure_client: bool,
+    },
+
+    /// Add an MCP backend to the gateway configuration
+    ///
+    /// If `name` matches a known server in the built-in registry the command
+    /// uses its default `npx` command and env-var template — no flags needed.
+    /// Pass `--command` or `--url` to add a completely custom server.
+    #[command(about = "Add an MCP backend to gateway.yaml")]
+    Add {
+        /// Name for the new backend (used as the config key and registry lookup)
+        name: String,
+
+        /// Shell command to launch the server (stdio transport)
+        #[arg(long)]
+        command: Option<String>,
+
+        /// HTTP URL for the server (HTTP/SSE transport)
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Human-readable description (defaults to registry description when available)
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Environment variable to inject, may be repeated (KEY=VALUE)
+        #[arg(long = "env", value_name = "KEY=VALUE")]
+        env_vars: Vec<String>,
+
+        /// Gateway config file to modify
+        #[arg(short, long, default_value = "gateway.yaml")]
+        config: PathBuf,
+    },
+
+    /// Remove an MCP backend from the gateway configuration
+    #[command(about = "Remove an MCP backend from gateway.yaml")]
+    Remove {
+        /// Name of the backend to remove
+        name: String,
+
+        /// Gateway config file to modify
+        #[arg(short, long, default_value = "gateway.yaml")]
+        config: PathBuf,
+    },
+
+    /// Diagnose gateway and backend health
+    ///
+    /// Checks configuration, port availability, required env vars, HTTP
+    /// reachability for HTTP backends, and whether any AI client is already
+    /// pointed at the gateway.
+    #[command(about = "Check gateway configuration and backend health")]
+    Doctor {
+        /// Attempt to auto-fix issues where possible (e.g. create missing dirs)
+        #[arg(long)]
+        fix: bool,
+
+        /// Gateway config file to inspect (auto-detected when omitted)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
 }
 
 /// Tool CLI subcommands
@@ -185,7 +267,12 @@ pub enum ToolCommand {
         tool: String,
 
         /// Directory containing capability YAML definitions
-        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
         capabilities: PathBuf,
 
         /// JSON argument blob (merged with key=value pairs)
@@ -211,7 +298,12 @@ pub enum ToolCommand {
     #[command(about = "List all available tools")]
     List {
         /// Directory containing capability YAML definitions
-        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
         capabilities: PathBuf,
 
         /// Output format
@@ -230,7 +322,12 @@ pub enum ToolCommand {
         tool: String,
 
         /// Directory containing capability YAML definitions
-        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
         capabilities: PathBuf,
 
         /// Output format
@@ -256,7 +353,12 @@ pub enum ToolCommand {
         shell: Shell,
 
         /// Directory containing capability YAML definitions
-        #[arg(short = 'C', long, default_value = "capabilities", env = "MCP_GATEWAY_CAPABILITIES")]
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
         capabilities: PathBuf,
     },
 }

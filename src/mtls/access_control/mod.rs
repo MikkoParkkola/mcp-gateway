@@ -217,10 +217,7 @@ impl CompiledCriteria {
         // At least one criterion must have been specified (otherwise it's a
         // vacuously-true rule with no match fields — we treat as no-match to
         // avoid accidental allow-all from an empty `match:` block).
-        self.cn.is_some()
-            || self.ou.is_some()
-            || self.san_uri.is_some()
-            || self.san_dns.is_some()
+        self.cn.is_some() || self.ou.is_some() || self.san_uri.is_some() || self.san_dns.is_some()
     }
 }
 
@@ -303,7 +300,6 @@ impl GlobPattern {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
-
 
 #[cfg(test)]
 mod tests;

@@ -151,8 +151,7 @@ impl GatewayKeyPair {
 /// Generate a fresh ECDSA P-256 key pair and extract its public-key components.
 fn generate_key_info() -> Result<GatewayKeyInfo, String> {
     // `KeyPair::generate()` defaults to ECDSA P-256 in rcgen 0.13.
-    let key_pair = RcgenKeyPair::generate()
-        .map_err(|e| format!("Key generation failed: {e}"))?;
+    let key_pair = RcgenKeyPair::generate().map_err(|e| format!("Key generation failed: {e}"))?;
 
     let kid = Uuid::new_v4().to_string();
     let private_key_pem = key_pair.serialize_pem();
@@ -229,17 +228,23 @@ fn der_read_tlv(data: &[u8]) -> Option<(u8, &[u8], &[u8])> {
 /// Skip over the `AlgorithmIdentifier` sequence and return the BIT STRING payload.
 fn parse_spki_bitstring_payload(der: &[u8]) -> Option<&[u8]> {
     let (tag, outer, _) = der_read_tlv(der)?;
-    if tag != 0x30 { return None; } // outer SEQUENCE
+    if tag != 0x30 {
+        return None;
+    } // outer SEQUENCE
 
     // Skip `AlgorithmIdentifier` SEQUENCE.
     let (_, _alg_seq, rest) = der_read_tlv(outer)?;
 
     // BIT STRING
     let (tag2, bit_string, _) = der_read_tlv(rest)?;
-    if tag2 != 0x03 { return None; }
+    if tag2 != 0x03 {
+        return None;
+    }
 
     // First byte of BIT STRING is the number of unused bits (always 0 for EC).
-    if bit_string.is_empty() { return None; }
+    if bit_string.is_empty() {
+        return None;
+    }
     Some(&bit_string[1..])
 }
 

@@ -150,7 +150,11 @@ impl CircuitBreaker {
             }
             CircuitState::HalfOpen => {
                 let successes = self.successes.fetch_add(1, Ordering::Relaxed) + 1;
-                tracing::debug!(successes, threshold = self.success_threshold, "Success in half-open state");
+                tracing::debug!(
+                    successes,
+                    threshold = self.success_threshold,
+                    "Success in half-open state"
+                );
                 if successes >= self.success_threshold {
                     self.transition_to(CircuitState::Closed);
                 }
@@ -173,7 +177,11 @@ impl CircuitBreaker {
         match state {
             CircuitState::Closed => {
                 let failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
-                tracing::warn!(failures, threshold = self.failure_threshold, "Failure in closed state");
+                tracing::warn!(
+                    failures,
+                    threshold = self.failure_threshold,
+                    "Failure in closed state"
+                );
                 if failures >= self.failure_threshold {
                     self.transition_to(CircuitState::Open);
                 }
@@ -394,8 +402,14 @@ mod tests {
         cb.record_failure();
         let s = cb.stats();
         assert_eq!(s.state, CircuitState::Open);
-        assert!(s.retry_after_ms > 0, "retry_after_ms should be >0 when open");
-        assert!(s.retry_after_ms <= 60_000, "retry_after_ms must not exceed reset_timeout");
+        assert!(
+            s.retry_after_ms > 0,
+            "retry_after_ms should be >0 when open"
+        );
+        assert!(
+            s.retry_after_ms <= 60_000,
+            "retry_after_ms must not exceed reset_timeout"
+        );
     }
 
     #[test]
@@ -470,7 +484,10 @@ mod tests {
         // THEN: it mentions the state but no retry probe timing
         assert!(msg.contains("my-backend"));
         assert!(msg.contains("half_open"));
-        assert!(!msg.contains("Retry probe"), "half_open does not need retry timing");
+        assert!(
+            !msg.contains("Retry probe"),
+            "half_open does not need retry timing"
+        );
     }
 
     #[test]

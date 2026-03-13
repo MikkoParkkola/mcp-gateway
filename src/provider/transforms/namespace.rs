@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::protocol::Tool;
-use crate::{provider::Transform, Result};
+use crate::{Result, provider::Transform};
 
 /// Adds a namespace prefix to all tool names.
 ///
@@ -56,9 +56,7 @@ impl NamespaceTransform {
     /// Strip the prefix if present; return original if not.
     fn strip(&self, name: &str) -> String {
         let full_prefix = format!("{}{}", self.prefix, self.separator);
-        name.strip_prefix(&full_prefix)
-            .unwrap_or(name)
-            .to_string()
+        name.strip_prefix(&full_prefix).unwrap_or(name).to_string()
     }
 }
 
@@ -74,11 +72,7 @@ impl Transform for NamespaceTransform {
             .collect())
     }
 
-    async fn transform_invoke(
-        &self,
-        tool: &str,
-        args: Value,
-    ) -> Result<Option<(String, Value)>> {
+    async fn transform_invoke(&self, tool: &str, args: Value) -> Result<Option<(String, Value)>> {
         // Strip namespace prefix before forwarding to inner provider.
         Ok(Some((self.strip(tool), args)))
     }
@@ -145,10 +139,7 @@ mod tests {
         let t = NamespaceTransform::new("gmail");
 
         // WHEN: invoking a tool without the prefix
-        let result = t
-            .transform_invoke("search", json!({}))
-            .await
-            .unwrap();
+        let result = t.transform_invoke("search", json!({})).await.unwrap();
 
         // THEN: name unchanged (already stripped / never had prefix)
         let (tool, _) = result.unwrap();
