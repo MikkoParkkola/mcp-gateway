@@ -61,6 +61,9 @@ tr:hover td { background: var(--bg3); }
 .btn:hover { opacity: 0.9; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-danger { background: var(--red); }
+.btn-sm { padding: 0.3rem 0.65rem; font-size: 0.8rem; }
+.btn-secondary { background: var(--bg3); color: var(--fg); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--border); }
 
 /* Config display */
 .config-block { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; line-height: 1.6; overflow-x: auto; }
@@ -83,6 +86,63 @@ tr:hover td { background: var(--bg3); }
 
 /* Uptime */
 .uptime { font-size: 0.85rem; color: var(--fg2); }
+
+/* Form styles */
+.form-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.5rem; }
+.form-panel h2 { margin-bottom: 1rem; }
+.form-row { display: flex; gap: 0.75rem; margin-bottom: 0.75rem; align-items: flex-start; flex-wrap: wrap; }
+.form-group { display: flex; flex-direction: column; gap: 0.3rem; flex: 1; min-width: 160px; }
+.form-group label { font-size: 0.8rem; color: var(--fg2); font-weight: 500; }
+.form-group input, .form-group select, .form-group textarea {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--fg); padding: 0.45rem 0.65rem; font-size: 0.875rem; font-family: inherit;
+}
+.form-group input::placeholder, .form-group textarea::placeholder { color: var(--fg2); }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+.form-group select option { background: var(--bg3); }
+.form-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: center; }
+.form-msg { font-size: 0.85rem; margin-left: 0.5rem; }
+.form-msg.ok { color: var(--green); }
+.form-msg.err { color: var(--red); }
+.mode-toggle { display: flex; gap: 0; margin-bottom: 1rem; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; width: fit-content; }
+.mode-toggle button { background: var(--bg3); color: var(--fg2); border: none; padding: 0.4rem 1rem; font-size: 0.8rem; cursor: pointer; }
+.mode-toggle button.active { background: var(--accent); color: #fff; font-weight: 600; }
+.env-rows { display: flex; flex-direction: column; gap: 0.4rem; }
+.env-row { display: flex; gap: 0.5rem; align-items: center; }
+.env-row input { flex: 1; }
+.env-row .btn-sm { flex-shrink: 0; }
+
+/* Servers tab header */
+.tab-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+.tab-header h1 { margin-bottom: 0; }
+
+/* Capabilities */
+.cap-list { display: flex; flex-direction: column; gap: 0.75rem; }
+.cap-item { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.cap-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; cursor: pointer; }
+.cap-header:hover { background: var(--bg3); }
+.cap-title { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; }
+.cap-meta { font-size: 0.8rem; color: var(--fg2); }
+.cap-body { display: none; padding: 1rem; border-top: 1px solid var(--border); }
+.cap-body.open { display: block; }
+.cap-body textarea {
+  width: 100%; min-height: 200px; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--radius); color: var(--fg); padding: 0.75rem; font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem; line-height: 1.5; resize: vertical;
+}
+.cap-body textarea:focus { outline: none; border-color: var(--accent); }
+.cap-body-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: center; }
+
+/* Registry search */
+.reg-search-wrap { position: relative; }
+.reg-search-wrap input { width: 100%; padding-right: 2rem; }
+.reg-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 50; background: var(--bg2); border: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); max-height: 220px; overflow-y: auto; }
+.reg-dropdown .reg-opt { padding: 0.5rem 0.75rem; font-size: 0.875rem; cursor: pointer; border-bottom: 1px solid var(--border); }
+.reg-dropdown .reg-opt:last-child { border-bottom: none; }
+.reg-dropdown .reg-opt:hover { background: var(--bg3); }
+.reg-dropdown .reg-opt .reg-desc { font-size: 0.75rem; color: var(--fg2); }
 
 /* Responsive */
 @media (max-width: 768px) {
@@ -110,11 +170,12 @@ tr:hover td { background: var(--bg3); }
     <a href="#dashboard" class="nav-link active" data-page="dashboard">Dashboard</a>
     <a href="#tools" class="nav-link" data-page="tools">Tools</a>
     <a href="#servers" class="nav-link" data-page="servers">Servers</a>
+    <a href="#capabilities" class="nav-link" data-page="capabilities">Capabilities</a>
     <a href="#config" class="nav-link" data-page="config">Config</a>
   </nav>
 
   <main>
-    <!-- ═══ Dashboard ═══ -->
+    <!-- Dashboard -->
     <div id="page-dashboard" class="page active">
       <h1>Dashboard</h1>
       <div id="dashboard-content">
@@ -133,7 +194,7 @@ tr:hover td { background: var(--bg3); }
       </div>
     </div>
 
-    <!-- ═══ Tools ═══ -->
+    <!-- Tools -->
     <div id="page-tools" class="page">
       <h1>Tools</h1>
       <div class="search-bar">
@@ -148,18 +209,102 @@ tr:hover td { background: var(--bg3); }
       </div>
     </div>
 
-    <!-- ═══ Servers ═══ -->
+    <!-- Servers -->
     <div id="page-servers" class="page">
-      <h1>Servers</h1>
+      <div class="tab-header">
+        <h1>Servers</h1>
+        <button class="btn btn-sm" onclick="toggleAddServerForm()">+ Add Server</button>
+      </div>
+
+      <!-- Add Server form (hidden by default) -->
+      <div id="add-server-form" class="form-panel" style="display:none">
+        <h2>Add Server</h2>
+        <div class="mode-toggle">
+          <button id="mode-registry" class="active" onclick="setServerMode('registry')">From Registry</button>
+          <button id="mode-custom" onclick="setServerMode('custom')">Custom</button>
+        </div>
+
+        <!-- Registry mode -->
+        <div id="server-registry-fields">
+          <div class="form-group" style="margin-bottom:0.75rem">
+            <label>Search Registry</label>
+            <div class="reg-search-wrap">
+              <input type="text" id="reg-search-input" placeholder="Search 48+ built-in servers..."
+                autocomplete="off" oninput="onRegSearch(this.value)" onfocus="onRegSearch(this.value)">
+              <div id="reg-dropdown" class="reg-dropdown" style="display:none"></div>
+            </div>
+          </div>
+          <div id="reg-selected-info" style="display:none;margin-bottom:0.75rem">
+            <div class="form-group">
+              <label>Override Name (optional)</label>
+              <input type="text" id="reg-name-override" placeholder="Leave blank to use registry name">
+            </div>
+          </div>
+        </div>
+
+        <!-- Custom mode -->
+        <div id="server-custom-fields" style="display:none">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Name <span style="color:var(--red)">*</span></label>
+              <input type="text" id="custom-name" placeholder="my-server">
+            </div>
+            <div class="form-group">
+              <label>Transport</label>
+              <select id="custom-transport" onchange="onTransportChange()">
+                <option value="stdio">stdio (command)</option>
+                <option value="http">HTTP/SSE (URL)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row" id="custom-command-row">
+            <div class="form-group" style="flex:2">
+              <label>Command</label>
+              <input type="text" id="custom-command" placeholder="npx -y @modelcontextprotocol/server-foo">
+            </div>
+          </div>
+          <div class="form-row" id="custom-url-row" style="display:none">
+            <div class="form-group" style="flex:2">
+              <label>URL</label>
+              <input type="text" id="custom-url" placeholder="http://localhost:8080/sse">
+            </div>
+          </div>
+          <div style="margin-bottom:0.75rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+              <label style="font-size:0.8rem;color:var(--fg2);font-weight:500">Environment Variables</label>
+              <button class="btn btn-sm btn-secondary" onclick="addEnvRow()">+ Add</button>
+            </div>
+            <div class="env-rows" id="env-rows"></div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn" onclick="submitAddServer()">Add Server</button>
+          <button class="btn btn-secondary" onclick="toggleAddServerForm()">Cancel</button>
+          <span id="add-server-msg" class="form-msg"></span>
+        </div>
+      </div>
+
       <div id="servers-table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Transport</th><th>Status</th><th>Circuit</th><th>Requests</th><th>Success</th><th>Failures</th><th>P50</th><th>P95</th></tr></thead>
-          <tbody id="servers-tbody"><tr><td colspan="9" style="color:var(--fg2)">Loading...</td></tr></tbody>
+          <thead><tr><th>Name</th><th>Transport</th><th>Status</th><th>Circuit</th><th>Requests</th><th>Success</th><th>Failures</th><th>P50</th><th>P95</th><th></th></tr></thead>
+          <tbody id="servers-tbody"><tr><td colspan="10" style="color:var(--fg2)">Loading...</td></tr></tbody>
         </table>
       </div>
     </div>
 
-    <!-- ═══ Config ═══ -->
+    <!-- Capabilities -->
+    <div id="page-capabilities" class="page">
+      <div class="tab-header">
+        <h1>Capabilities</h1>
+        <button class="btn btn-sm" onclick="newCapability()">+ New Capability</button>
+      </div>
+      <div id="cap-list" class="cap-list">
+        <div style="color:var(--fg2);font-size:0.9rem">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Config -->
     <div id="page-config" class="page">
       <h1>Configuration</h1>
       <div style="margin-bottom:1rem">
@@ -172,7 +317,7 @@ tr:hover td { background: var(--bg3); }
 </div>
 
 <script>
-// ── Auth ──
+// Auth
 let apiKey = localStorage.getItem('mcpgw_key') || '';
 const authDot = document.getElementById('auth-dot');
 const authLabel = document.getElementById('auth-label');
@@ -215,7 +360,7 @@ async function apiFetch(url, opts = {}) {
   return r.json();
 }
 
-// ── Router ──
+// Router
 function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
@@ -230,10 +375,11 @@ function onHash() {
   showPage(hash);
   if (hash === 'tools') refreshTools();
   if (hash === 'config') refreshConfig();
+  if (hash === 'capabilities') refreshCapabilities();
 }
 window.addEventListener('hashchange', onHash);
 
-// ── Format helpers ──
+// Format helpers
 function fmtUptime(secs) {
   if (!secs && secs !== 0) return '-';
   const d = Math.floor(secs / 86400);
@@ -264,7 +410,7 @@ function truncate(s, n) {
   return s.length > n ? s.substring(0, n) + '...' : s;
 }
 
-// ── Dashboard ──
+// Dashboard
 async function refreshDashboard() {
   try {
     const d = await apiFetch('/ui/api/status');
@@ -277,18 +423,17 @@ async function refreshDashboard() {
       document.getElementById('d-cb-open').textContent = d.circuit_breakers.open ?? 0;
       document.getElementById('d-cb-half').textContent = d.circuit_breakers.half_open ?? 0;
     }
-    // Also refresh servers table if visible
     if (d.servers) refreshServersTable(d.servers);
   } catch (e) {
     console.warn('Status fetch failed:', e);
   }
 }
 
-// ── Servers ──
+// Servers
 function refreshServersTable(servers) {
   const tbody = document.getElementById('servers-tbody');
   if (!servers || servers.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--fg2)">No servers</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="color:var(--fg2)">No servers</td></tr>';
     return;
   }
   tbody.innerHTML = servers.map(s => `<tr>
@@ -301,10 +446,187 @@ function refreshServersTable(servers) {
     <td>${s.failure_count}</td>
     <td>${fmtMs(s.latency_p50_ms)}</td>
     <td>${fmtMs(s.latency_p95_ms)}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="removeServer(${JSON.stringify(esc(s.name))})">Remove</button></td>
   </tr>`).join('');
 }
 
-// ── Tools ──
+async function removeServer(name) {
+  if (!confirm(`Remove server "${name}"? This will update the config and hot-reload.`)) return;
+  try {
+    const r = await fetch(`/ui/api/backends/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    refreshDashboard();
+  } catch (e) {
+    alert('Failed to remove server: ' + e.message);
+  }
+}
+
+// Add Server form
+let serverMode = 'registry';
+let regAllServers = [];
+let regSelected = null;
+
+function toggleAddServerForm() {
+  const form = document.getElementById('add-server-form');
+  const visible = form.style.display !== 'none';
+  form.style.display = visible ? 'none' : 'block';
+  if (!visible) {
+    resetAddServerForm();
+    loadRegistry();
+  }
+}
+
+function resetAddServerForm() {
+  serverMode = 'registry';
+  regSelected = null;
+  document.getElementById('mode-registry').classList.add('active');
+  document.getElementById('mode-custom').classList.remove('active');
+  document.getElementById('server-registry-fields').style.display = '';
+  document.getElementById('server-custom-fields').style.display = 'none';
+  document.getElementById('reg-search-input').value = '';
+  document.getElementById('reg-dropdown').style.display = 'none';
+  document.getElementById('reg-selected-info').style.display = 'none';
+  document.getElementById('reg-name-override').value = '';
+  document.getElementById('custom-name').value = '';
+  document.getElementById('custom-command').value = '';
+  document.getElementById('custom-url').value = '';
+  document.getElementById('env-rows').innerHTML = '';
+  document.getElementById('add-server-msg').textContent = '';
+  document.getElementById('custom-transport').value = 'stdio';
+  document.getElementById('custom-command-row').style.display = '';
+  document.getElementById('custom-url-row').style.display = 'none';
+}
+
+function setServerMode(mode) {
+  serverMode = mode;
+  document.getElementById('mode-registry').classList.toggle('active', mode === 'registry');
+  document.getElementById('mode-custom').classList.toggle('active', mode === 'custom');
+  document.getElementById('server-registry-fields').style.display = mode === 'registry' ? '' : 'none';
+  document.getElementById('server-custom-fields').style.display = mode === 'custom' ? '' : 'none';
+}
+
+function onTransportChange() {
+  const t = document.getElementById('custom-transport').value;
+  document.getElementById('custom-command-row').style.display = t === 'stdio' ? '' : 'none';
+  document.getElementById('custom-url-row').style.display = t === 'http' ? '' : 'none';
+}
+
+async function loadRegistry() {
+  if (regAllServers.length > 0) return;
+  try {
+    const d = await apiFetch('/ui/api/registry');
+    regAllServers = d.servers || d || [];
+  } catch (e) {
+    console.warn('Registry load failed:', e);
+  }
+}
+
+function onRegSearch(q) {
+  const dd = document.getElementById('reg-dropdown');
+  const lower = q.toLowerCase();
+  const matches = q.length === 0
+    ? regAllServers.slice(0, 30)
+    : regAllServers.filter(s =>
+        (s.name || '').toLowerCase().includes(lower) ||
+        (s.description || '').toLowerCase().includes(lower)
+      ).slice(0, 30);
+
+  if (matches.length === 0) { dd.style.display = 'none'; return; }
+  dd.innerHTML = matches.map(s => `
+    <div class="reg-opt" onclick="selectRegServer(${JSON.stringify(JSON.stringify(s))})">
+      <div>${esc(s.name)}</div>
+      <div class="reg-desc">${esc(truncate(s.description || '', 80))}</div>
+    </div>`).join('');
+  dd.style.display = 'block';
+}
+
+function selectRegServer(sJson) {
+  regSelected = JSON.parse(sJson);
+  document.getElementById('reg-search-input').value = regSelected.name;
+  document.getElementById('reg-dropdown').style.display = 'none';
+  document.getElementById('reg-selected-info').style.display = '';
+}
+
+// Hide registry dropdown when clicking outside
+document.addEventListener('click', e => {
+  if (!e.target.closest('.reg-search-wrap')) {
+    document.getElementById('reg-dropdown').style.display = 'none';
+  }
+});
+
+function addEnvRow(k = '', v = '') {
+  const row = document.createElement('div');
+  row.className = 'env-row';
+  row.innerHTML = `
+    <input type="text" placeholder="KEY" value="${esc(k)}" style="flex:1;min-width:100px">
+    <span style="color:var(--fg2);font-size:0.85rem">=</span>
+    <input type="text" placeholder="value" value="${esc(v)}" style="flex:2">
+    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">x</button>`;
+  document.getElementById('env-rows').appendChild(row);
+}
+
+function collectEnvVars() {
+  const env = {};
+  document.getElementById('env-rows').querySelectorAll('.env-row').forEach(row => {
+    const inputs = row.querySelectorAll('input');
+    const k = inputs[0].value.trim();
+    const v = inputs[1].value;
+    if (k) env[k] = v;
+  });
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+async function submitAddServer() {
+  const msg = document.getElementById('add-server-msg');
+  msg.textContent = '';
+
+  let body;
+  if (serverMode === 'registry') {
+    if (!regSelected) { msg.textContent = 'Select a server from the registry first.'; msg.className = 'form-msg err'; return; }
+    body = { name: document.getElementById('reg-name-override').value.trim() || regSelected.name };
+    if (regSelected.command) body.command = regSelected.command;
+    if (regSelected.url) body.url = regSelected.url;
+    if (regSelected.env) body.env = regSelected.env;
+    if (regSelected.description) body.description = regSelected.description;
+  } else {
+    const name = document.getElementById('custom-name').value.trim();
+    if (!name) { msg.textContent = 'Name is required.'; msg.className = 'form-msg err'; return; }
+    const transport = document.getElementById('custom-transport').value;
+    body = { name };
+    if (transport === 'stdio') {
+      const cmd = document.getElementById('custom-command').value.trim();
+      if (cmd) body.command = cmd;
+    } else {
+      const url = document.getElementById('custom-url').value.trim();
+      if (url) body.url = url;
+    }
+    const env = collectEnvVars();
+    if (env) body.env = env;
+  }
+
+  try {
+    await apiFetch('/ui/api/backends', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    msg.textContent = 'Server added successfully.';
+    msg.className = 'form-msg ok';
+    setTimeout(() => {
+      document.getElementById('add-server-form').style.display = 'none';
+      resetAddServerForm();
+      refreshDashboard();
+    }, 1000);
+  } catch (e) {
+    msg.textContent = 'Failed: ' + e.message;
+    msg.className = 'form-msg err';
+  }
+}
+
+// Tools
 let allTools = [];
 async function refreshTools() {
   try {
@@ -362,7 +684,7 @@ function toggleToolDetail(row) {
 document.getElementById('tool-search').addEventListener('input', filterAndRenderTools);
 document.getElementById('tool-server-filter').addEventListener('change', filterAndRenderTools);
 
-// ── Config ──
+// Config
 async function refreshConfig() {
   try {
     const d = await apiFetch('/ui/api/config');
@@ -387,7 +709,184 @@ async function doReload() {
   btn.disabled = false;
 }
 
-// ── XSS escape ──
+// Capabilities
+let capabilitiesData = [];
+
+async function refreshCapabilities() {
+  const list = document.getElementById('cap-list');
+  list.innerHTML = '<div style="color:var(--fg2);font-size:0.9rem">Loading...</div>';
+  try {
+    const d = await apiFetch('/ui/api/capabilities');
+    capabilitiesData = d.capabilities || d || [];
+    renderCapabilities();
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--red);font-size:0.9rem">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderCapabilities() {
+  const list = document.getElementById('cap-list');
+  if (capabilitiesData.length === 0) {
+    list.innerHTML = '<div style="color:var(--fg2);font-size:0.9rem">No capability files found. Click "+ New Capability" to create one.</div>';
+    return;
+  }
+  list.innerHTML = capabilitiesData.map(cap => {
+    const name = cap.name || cap;
+    const toolCount = cap.tool_count != null ? cap.tool_count : '';
+    return `<div class="cap-item" id="cap-item-${esc(name)}">
+      <div class="cap-header" onclick="toggleCap(${JSON.stringify(name)})">
+        <div class="cap-title">
+          <span>${esc(name)}</span>
+          ${toolCount !== '' ? `<span class="badge badge-running">${toolCount} tool${toolCount !== 1 ? 's' : ''}</span>` : ''}
+        </div>
+        <span class="cap-meta" id="cap-chevron-${esc(name)}">&#9660;</span>
+      </div>
+      <div class="cap-body" id="cap-body-${esc(name)}">
+        <textarea id="cap-editor-${esc(name)}" spellcheck="false" placeholder="Loading YAML..."
+          onkeydown="capTabIndent(event)"></textarea>
+        <div class="cap-body-actions">
+          <button class="btn btn-sm" onclick="saveCap(${JSON.stringify(name)})">Save</button>
+          <button class="btn btn-sm btn-secondary" onclick="revertCap(${JSON.stringify(name)})">Revert</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteCap(${JSON.stringify(name)})">Delete</button>
+          <span id="cap-msg-${esc(name)}" class="form-msg"></span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleCap(name) {
+  const body = document.getElementById('cap-body-' + name);
+  const chevron = document.getElementById('cap-chevron-' + name);
+  const isOpen = body.classList.contains('open');
+  if (isOpen) {
+    body.classList.remove('open');
+    chevron.innerHTML = '&#9660;';
+  } else {
+    body.classList.add('open');
+    chevron.innerHTML = '&#9650;';
+    await loadCapContent(name);
+  }
+}
+
+async function loadCapContent(name) {
+  const ta = document.getElementById('cap-editor-' + name);
+  if (ta.dataset.loaded) return;
+  ta.value = 'Loading...';
+  try {
+    const r = await fetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, { headers: authHeaders() });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    const text = await r.text();
+    ta.value = text;
+    ta.dataset.loaded = '1';
+    ta.dataset.original = text;
+  } catch (e) {
+    ta.value = '# Error loading: ' + e.message;
+  }
+}
+
+async function revertCap(name) {
+  const ta = document.getElementById('cap-editor-' + name);
+  const msg = document.getElementById('cap-msg-' + name);
+  ta.dataset.loaded = '';
+  msg.textContent = '';
+  await loadCapContent(name);
+}
+
+async function saveCap(name) {
+  const ta = document.getElementById('cap-editor-' + name);
+  const msg = document.getElementById('cap-msg-' + name);
+  msg.textContent = 'Saving...';
+  msg.className = 'form-msg';
+  try {
+    const r = await fetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml' },
+      body: ta.value,
+    });
+    if (!r.ok) {
+      const errData = await r.json().catch(() => ({ error: r.statusText }));
+      throw new Error(errData.error || errData.message || r.statusText);
+    }
+    msg.textContent = 'Saved.';
+    msg.className = 'form-msg ok';
+    ta.dataset.original = ta.value;
+    setTimeout(() => { msg.textContent = ''; }, 2000);
+    refreshCapabilities();
+  } catch (e) {
+    msg.textContent = 'Error: ' + e.message;
+    msg.className = 'form-msg err';
+  }
+}
+
+async function deleteCap(name) {
+  if (!confirm(`Delete capability file "${name}"? This cannot be undone.`)) return;
+  const msg = document.getElementById('cap-msg-' + name);
+  try {
+    const r = await fetch(`/ui/api/capabilities/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    refreshCapabilities();
+  } catch (e) {
+    msg.textContent = 'Error: ' + e.message;
+    msg.className = 'form-msg err';
+  }
+}
+
+const CAP_TEMPLATE = `# Capability definition
+# See https://github.com/modelcontextprotocol/mcp-gateway for schema
+tools:
+  - name: example_tool
+    description: An example tool
+    input_schema:
+      type: object
+      properties:
+        input:
+          type: string
+          description: Input value
+      required:
+        - input
+`;
+
+async function newCapability() {
+  const rawName = prompt('Enter capability file name (e.g. "my-tools"):');
+  if (rawName === null) return;
+  const name = rawName.trim().replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
+  if (!name) { alert('Invalid name.'); return; }
+
+  const msg_id = 'cap-new-msg';
+  try {
+    const r = await fetch('/ui/api/capabilities', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, content: CAP_TEMPLATE }),
+    });
+    if (!r.ok) {
+      const errData = await r.json().catch(() => ({ error: r.statusText }));
+      throw new Error(errData.error || r.statusText);
+    }
+    await refreshCapabilities();
+    // Auto-open the newly created capability
+    const body = document.getElementById('cap-body-' + name);
+    if (body && !body.classList.contains('open')) await toggleCap(name);
+  } catch (e) {
+    alert('Failed to create capability: ' + e.message);
+  }
+}
+
+function capTabIndent(e) {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  const ta = e.target;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+  ta.selectionStart = ta.selectionEnd = start + 2;
+}
+
+// XSS escape
 function esc(s) {
   if (s == null) return '';
   const d = document.createElement('div');
@@ -395,7 +894,7 @@ function esc(s) {
   return d.innerHTML;
 }
 
-// ── Auto-refresh ──
+// Auto-refresh
 function refreshAll() {
   refreshDashboard();
 }
