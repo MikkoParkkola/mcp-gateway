@@ -123,8 +123,17 @@ impl Backend {
         info!(backend = %self.name, "Starting backend");
 
         let transport: Arc<dyn Transport> = match &self.config.transport {
-            TransportConfig::Stdio { command, cwd } => {
-                let transport = StdioTransport::new(command, self.config.env.clone(), cwd.clone());
+            TransportConfig::Stdio {
+                command,
+                cwd,
+                protocol_version,
+            } => {
+                let transport = StdioTransport::new(
+                    command,
+                    self.config.env.clone(),
+                    cwd.clone(),
+                    protocol_version.clone(),
+                );
                 transport.start().await?;
                 transport
             }

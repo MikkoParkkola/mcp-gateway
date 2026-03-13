@@ -337,6 +337,7 @@ impl ConfigScanner {
                     cwd: working_dir
                         .as_ref()
                         .map(|p| p.to_string_lossy().into_owned()),
+                    protocol_version: None,
                 },
                 metadata: ServerMetadata {
                     config_path: Some(config_path.to_path_buf()),
@@ -520,6 +521,7 @@ impl ConfigScanner {
             transport: TransportConfig::Stdio {
                 command: full_command.clone(),
                 cwd: None,
+                protocol_version: None,
             },
             metadata: ServerMetadata {
                 config_path: Some(config_path.to_path_buf()),

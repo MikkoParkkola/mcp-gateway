@@ -106,6 +106,7 @@ fn resolve_transport(
             TransportConfig::Stdio {
                 command: command.to_string(),
                 cwd: None,
+                protocol_version: None,
             },
             desc.unwrap_or("").to_string(),
         ));
@@ -129,6 +130,7 @@ fn resolve_transport(
             server_registry::Transport::Stdio => TransportConfig::Stdio {
                 command: entry.command.to_string(),
                 cwd: None,
+                protocol_version: None,
             },
             server_registry::Transport::Http { default_url } => TransportConfig::Http {
                 http_url: default_url.to_string(),

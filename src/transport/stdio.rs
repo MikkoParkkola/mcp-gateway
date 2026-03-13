@@ -1,4 +1,10 @@
 //! Stdio transport implementation (subprocess)
+//!
+//! Spawns an MCP server as a child process and communicates via JSON-RPC over
+//! stdin/stdout.  Supports automatic protocol version negotiation: if the
+//! server rejects the gateway's preferred version, the transport parses the
+//! error for supported versions and retries with the highest mutually
+//! supported version.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -6,14 +12,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
+use parking_lot::RwLock;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 use super::Transport;
-use crate::protocol::{JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId};
+use crate::protocol::{
+    JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
+};
 use crate::{Error, Result};
 
 /// Stdio transport for subprocess MCP servers
@@ -34,12 +44,23 @@ pub struct StdioTransport {
     cwd: Option<String>,
     /// Writer handle
     writer: Mutex<Option<tokio::process::ChildStdin>>,
+    /// Negotiated protocol version (config override or auto-negotiated)
+    protocol_version: RwLock<Option<String>>,
 }
 
 impl StdioTransport {
     /// Create a new stdio transport
+    ///
+    /// If `protocol_version` is `Some`, that version is used for the
+    /// initialize handshake.  Otherwise the gateway attempts its latest
+    /// version and auto-negotiates downward on rejection.
     #[must_use]
-    pub fn new(command: &str, env: HashMap<String, String>, cwd: Option<String>) -> Arc<Self> {
+    pub fn new(
+        command: &str,
+        env: HashMap<String, String>,
+        cwd: Option<String>,
+        protocol_version: Option<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             child: Mutex::new(None),
             pending: dashmap::DashMap::new(),
@@ -49,6 +70,7 @@ impl StdioTransport {
             env,
             cwd,
             writer: Mutex::new(None),
+            protocol_version: RwLock::new(protocol_version),
         })
     }
 
@@ -129,32 +151,134 @@ impl StdioTransport {
             debug!("Stdio reader task ended");
         });
 
-        // Initialize
+        // Initialize with protocol version negotiation
         self.initialize().await?;
 
         Ok(())
     }
 
-    /// Initialize the MCP connection
+    /// Build the JSON-RPC initialize params for a given protocol version.
+    fn build_init_params(version: &str) -> Value {
+        serde_json::json!({
+            "protocolVersion": version,
+            "capabilities": {},
+            "clientInfo": {
+                "name": "mcp-gateway",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        })
+    }
+
+    /// Initialize the MCP connection with automatic version negotiation.
+    ///
+    /// 1. Sends `initialize` with the configured or latest protocol version.
+    /// 2. On success, checks if the server responded with a different version
+    ///    (spec-compliant negotiation) and records it.
+    /// 3. On error containing version info, parses supported versions and
+    ///    retries with the highest mutually supported version.
     async fn initialize(&self) -> Result<()> {
+        let version = self
+            .protocol_version
+            .read()
+            .clone()
+            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+
+        debug!(
+            command = %self.command,
+            version = %version,
+            "Sending MCP initialize"
+        );
+
         let response = self
-            .request(
-                "initialize",
-                Some(serde_json::json!({
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "mcp-gateway",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                })),
-            )
+            .request("initialize", Some(Self::build_init_params(&version)))
             .await?;
 
-        if response.error.is_some() {
-            return Err(Error::Protocol("Initialize failed".to_string()));
+        if let Some(ref error) = response.error {
+            let error_msg = &error.message;
+
+            // Protocol version mismatch — attempt negotiation
+            if is_version_mismatch_error(error_msg) {
+                return self.negotiate_and_retry(&version, error_msg).await;
+            }
+
+            return Err(Error::Protocol(format!(
+                "Initialize failed for '{}': {error_msg}",
+                self.command
+            )));
         }
 
+        // Success — check if server negotiated a different version
+        if let Some(ref result) = response.result {
+            if let Some(server_version) = result.get("protocolVersion").and_then(Value::as_str) {
+                if server_version == version {
+                    debug!(
+                        command = %self.command,
+                        version = %server_version,
+                        "Protocol version accepted"
+                    );
+                } else {
+                    info!(
+                        command = %self.command,
+                        requested = %version,
+                        negotiated = %server_version,
+                        "Server negotiated different protocol version"
+                    );
+                    *self.protocol_version.write() = Some(server_version.to_string());
+                }
+            }
+        }
+
+        self.finish_initialization().await
+    }
+
+    /// Parse the error for supported versions, find a match, and retry.
+    async fn negotiate_and_retry(&self, rejected_version: &str, error_msg: &str) -> Result<()> {
+        let server_versions = parse_supported_versions_from_error(error_msg);
+
+        let negotiated = server_versions
+            .as_deref()
+            .and_then(|sv| negotiate_best_version(sv));
+
+        let Some(negotiated) = negotiated else {
+            return Err(Error::Protocol(format!(
+                "Protocol version negotiation failed for '{}': server rejected {rejected_version}, \
+                 no compatible version found (server said: {error_msg})",
+                self.command
+            )));
+        };
+
+        warn!(
+            command = %self.command,
+            rejected = %rejected_version,
+            negotiated = %negotiated,
+            "Retrying initialize with negotiated protocol version"
+        );
+
+        // Retry with negotiated version
+        let retry_response = self
+            .request("initialize", Some(Self::build_init_params(negotiated)))
+            .await?;
+
+        if let Some(ref error) = retry_response.error {
+            return Err(Error::Protocol(format!(
+                "Initialize failed for '{}' even with negotiated version {negotiated}: {}",
+                self.command, error.message
+            )));
+        }
+
+        *self.protocol_version.write() = Some(negotiated.to_string());
+
+        info!(
+            command = %self.command,
+            version = %negotiated,
+            "Successfully negotiated protocol version"
+        );
+
+        self.finish_initialization().await
+    }
+
+    /// Complete the initialization handshake (send `initialized` notification).
+    async fn finish_initialization(&self) -> Result<()> {
         // Yield to ensure I/O is processed before sending notification
         tokio::task::yield_now().await;
 
@@ -171,7 +295,13 @@ impl StdioTransport {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
         self.connected.store(true, Ordering::Relaxed);
-        debug!(command = %self.command, "Stdio transport initialized");
+
+        let negotiated = self.protocol_version.read().clone();
+        info!(
+            command = %self.command,
+            version = negotiated.as_deref().unwrap_or(PROTOCOL_VERSION),
+            "Stdio transport initialized"
+        );
 
         Ok(())
     }
@@ -296,7 +426,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_transport(cmd: &str) -> Arc<StdioTransport> {
-        StdioTransport::new(cmd, HashMap::new(), None)
+        StdioTransport::new(cmd, HashMap::new(), None, None)
     }
 
     // =========================================================================
@@ -310,15 +440,30 @@ mod tests {
         assert!(!t.is_connected());
         assert!(t.env.is_empty());
         assert!(t.cwd.is_none());
+        assert!(t.protocol_version.read().is_none());
     }
 
     #[test]
     fn new_with_env_and_cwd() {
         let mut env = HashMap::new();
         env.insert("NODE_ENV".to_string(), "test".to_string());
-        let t = StdioTransport::new("node index.js", env, Some("/tmp".to_string()));
+        let t = StdioTransport::new("node index.js", env, Some("/tmp".to_string()), None);
         assert_eq!(t.env.get("NODE_ENV").unwrap(), "test");
         assert_eq!(t.cwd.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn new_with_explicit_protocol_version() {
+        let t = StdioTransport::new(
+            "echo",
+            HashMap::new(),
+            None,
+            Some("2025-06-18".to_string()),
+        );
+        assert_eq!(
+            *t.protocol_version.read(),
+            Some("2025-06-18".to_string())
+        );
     }
 
     // =========================================================================
@@ -400,6 +545,17 @@ mod tests {
         let t = make_transport("echo");
         let result = t.handle_response("not valid json");
         assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // build_init_params
+    // =========================================================================
+
+    #[test]
+    fn build_init_params_contains_version() {
+        let params = StdioTransport::build_init_params("2025-06-18");
+        assert_eq!(params["protocolVersion"], "2025-06-18");
+        assert_eq!(params["clientInfo"]["name"], "mcp-gateway");
     }
 
     // =========================================================================

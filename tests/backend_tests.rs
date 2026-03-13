@@ -14,6 +14,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         transport: TransportConfig::Stdio {
             command: command.to_string(),
             cwd: None,
+            protocol_version: None,
         },
         idle_timeout: Duration::from_secs(60),
         timeout: Duration::from_secs(30),
@@ -40,6 +41,7 @@ fn test_backend_transport_type() {
     let stdio_config = TransportConfig::Stdio {
         command: "echo".to_string(),
         cwd: None,
+        protocol_version: None,
     };
     assert_eq!(stdio_config.transport_type(), "stdio");
 

@@ -59,43 +59,46 @@ fn new_with_oauth_and_protocol_version() {
 // parse_supported_versions
 // =========================================================================
 
+// Version parsing tests moved to protocol::negotiate module.
+// These tests verify HttpTransport delegates correctly.
+
 #[test]
 fn parse_supported_versions_from_paren_format() {
-    let t = make_transport("http://localhost");
+    use crate::protocol::parse_supported_versions_from_error;
     let msg = "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05)";
-    let versions = t.parse_supported_versions(msg).unwrap();
+    let versions = parse_supported_versions_from_error(msg).unwrap();
     assert_eq!(versions, vec!["2025-06-18", "2025-03-26", "2024-11-05"]);
 }
 
 #[test]
 fn parse_supported_versions_from_supported_colon() {
-    let t = make_transport("http://localhost");
+    use crate::protocol::parse_supported_versions_from_error;
     let msg = "Supported: 2024-11-05, 2024-10-07";
-    let versions = t.parse_supported_versions(msg).unwrap();
+    let versions = parse_supported_versions_from_error(msg).unwrap();
     assert_eq!(versions, vec!["2024-11-05", "2024-10-07"]);
 }
 
 #[test]
 fn parse_supported_versions_case_insensitive() {
-    let t = make_transport("http://localhost");
+    use crate::protocol::parse_supported_versions_from_error;
     let msg = "SUPPORTED VERSIONS: 2025-03-26";
-    let versions = t.parse_supported_versions(msg).unwrap();
+    let versions = parse_supported_versions_from_error(msg).unwrap();
     assert_eq!(versions, vec!["2025-03-26"]);
 }
 
 #[test]
 fn parse_supported_versions_returns_none_for_no_match() {
-    let t = make_transport("http://localhost");
+    use crate::protocol::parse_supported_versions_from_error;
     let msg = "Some random error message without versions";
-    assert!(t.parse_supported_versions(msg).is_none());
+    assert!(parse_supported_versions_from_error(msg).is_none());
 }
 
 #[test]
 fn parse_supported_versions_empty_after_colon() {
-    let t = make_transport("http://localhost");
+    use crate::protocol::parse_supported_versions_from_error;
     let msg = "supported versions:)";
     // After colon there's ")" which yields an empty string before it
-    assert!(t.parse_supported_versions(msg).is_none());
+    assert!(parse_supported_versions_from_error(msg).is_none());
 }
 
 // =========================================================================

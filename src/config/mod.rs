@@ -359,6 +359,9 @@ pub enum TransportConfig {
         /// Working directory.
         #[serde(default)]
         cwd: Option<String>,
+        /// Override protocol version (auto-negotiated if `None`).
+        #[serde(default)]
+        protocol_version: Option<String>,
     },
     /// HTTP transport.
     Http {
