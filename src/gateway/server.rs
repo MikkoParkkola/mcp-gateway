@@ -32,6 +32,8 @@ use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
 use crate::security::ToolPolicy;
+#[cfg(feature = "firewall")]
+use crate::security::firewall::Firewall;
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
@@ -465,6 +467,25 @@ impl Gateway {
             }
         });
 
+        // Construct security firewall (RFC-0071).
+        // The transition tracker is only used when anomaly_detection=true; pass
+        // a fresh tracker so the firewall has its own dedicated state.
+        #[cfg(feature = "firewall")]
+        let firewall_arc: Option<Arc<Firewall>> = {
+            let fw_cfg = self.config.security.firewall.clone();
+            let fw_enabled = fw_cfg.enabled;
+            let tt = if fw_cfg.anomaly_detection {
+                Some(Arc::new(TransitionTracker::new()))
+            } else {
+                None
+            };
+            let fw = Arc::new(Firewall::from_config(fw_cfg, tt));
+            if fw_enabled {
+                info!("Security firewall enabled (RFC-0071)");
+            }
+            Some(fw)
+        };
+
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
@@ -491,6 +512,8 @@ impl Gateway {
                 Vec::new()
             },
             config_path: self.config_path.clone(),
+            #[cfg(feature = "firewall")]
+            firewall: firewall_arc,
         });
 
         // Create router

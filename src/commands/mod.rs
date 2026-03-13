@@ -7,6 +7,8 @@ mod add_remove;
 mod cap;
 #[cfg(feature = "config-export")]
 mod config_export;
+#[cfg(feature = "discovery")]
+pub(crate) mod discover;
 mod doctor;
 pub mod paths;
 mod plugin;

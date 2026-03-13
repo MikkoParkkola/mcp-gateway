@@ -1,0 +1,627 @@
+//! MCP Security Firewall — unified request/response inspection layer.
+//!
+//! Composes existing security modules (`sanitize`, `response_scanner`, `policy`,
+//! `ssrf`, `data_flow`, `tool_integrity`) into a single enforcement point with
+//! configurable actions and structured audit logging.
+//!
+//! # Pipeline
+//!
+//! ```text
+//! Pre-invocation:  InputScanner → AnomalyDetector → resolve_action → AuditLogger
+//! Post-invocation: ResponseScanner → Redactor     → resolve_action → AuditLogger
+//! ```
+//!
+//! # Feature gate
+//!
+//! All items in this module are gated behind `#[cfg(feature = "firewall")]`.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::security::ResponseScanner;
+use crate::transition::TransitionTracker;
+
+pub mod anomaly;
+pub mod audit;
+pub mod input_scanner;
+pub mod redactor;
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+
+/// Firewall configuration, loaded from `gateway.yaml` under `security.firewall`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+// Multiple boolean flags are intentional here: each represents a distinct
+// independent feature that operators may enable or disable separately.
+// An enum state machine would not capture the combinatorial semantics.
+#[allow(clippy::struct_excessive_bools)]
+pub struct FirewallConfig {
+    /// Master enable switch.
+    pub enabled: bool,
+    /// Scan tool invocation arguments for injection patterns.
+    pub scan_requests: bool,
+    /// Scan tool response content for credentials, PII, prompt injection.
+    pub scan_responses: bool,
+    /// Detect prompt injection patterns in tool outputs.
+    pub prompt_injection_detection: bool,
+    /// Detect and optionally redact credentials in responses.
+    pub credential_redaction: bool,
+    /// Use tool sequence data for anomaly detection (warn-only).
+    pub anomaly_detection: bool,
+    /// Path to the NDJSON audit log file.
+    pub audit_log: Option<PathBuf>,
+    /// Per-tool/per-pattern policy overrides (first match wins).
+    #[serde(default)]
+    pub rules: Vec<FirewallRule>,
+    /// Minimum anomaly score (0.0–1.0) to emit a warning.
+    #[serde(default = "default_anomaly_threshold")]
+    pub anomaly_threshold: f64,
+}
+
+fn default_anomaly_threshold() -> f64 {
+    0.7
+}
+
+impl Default for FirewallConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scan_requests: true,
+            scan_responses: true,
+            prompt_injection_detection: true,
+            credential_redaction: true,
+            anomaly_detection: false, // opt-in: needs accumulated transition data
+            audit_log: None,
+            rules: Vec::new(),
+            anomaly_threshold: default_anomaly_threshold(),
+        }
+    }
+}
+
+/// A firewall rule: match tool name with a glob pattern and override the
+/// default severity-based action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallRule {
+    /// Glob pattern matching tool names (e.g., `"exec_*"`, `"*_delete*"`, `"*"`).
+    ///
+    /// Uses the `glob` crate — supports `*`, `?`, `[abc]`, `[!abc]`.
+    #[serde(rename = "match")]
+    pub tool_match: String,
+    /// Action to take when a threat is detected for a matching tool.
+    pub action: FirewallAction,
+    /// Optional human-readable reason for the rule (logged in audit entries).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Which scan types to apply to matching tools. Empty = all scans.
+    #[serde(default)]
+    pub scan: Vec<ScanType>,
+}
+
+/// Action the firewall takes when a threat is detected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirewallAction {
+    /// Allow the request/response (audit log only).
+    Allow,
+    /// Allow but emit a warning in logs and response annotations.
+    Warn,
+    /// Block the request and return an error to the client.
+    Block,
+}
+
+/// Types of scans that can be applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanType {
+    /// Scan for credential patterns (AWS keys, API tokens, etc.)
+    Credentials,
+    /// Scan for PII patterns (emails, phone numbers, SSNs).
+    Pii,
+    /// Scan for prompt injection patterns in tool responses.
+    PromptInjection,
+    /// Scan for shell injection in request arguments.
+    ShellInjection,
+    /// Scan for path traversal in request arguments.
+    PathTraversal,
+    /// Scan for SQL injection in request arguments.
+    SqlInjection,
+    /// Anomaly detected in tool call sequence.
+    SequenceAnomaly,
+}
+
+// ─── Runtime types ───────────────────────────────────────────────────────────
+
+/// Compiled firewall engine — the runtime enforcement point.
+///
+/// Created once at gateway startup from `FirewallConfig`. Thread-safe via
+/// interior immutability; all mutable state lives in sub-modules behind locks.
+pub struct Firewall {
+    config: FirewallConfig,
+    /// Compiled tool-match rules (glob → action).
+    rules: Vec<CompiledRule>,
+    /// Reuse existing response scanner for prompt injection.
+    response_scanner: ResponseScanner,
+    /// Input pattern scanner for request arguments.
+    input_scanner: input_scanner::InputScanner,
+    /// Credential/PII redactor for response content.
+    redactor: redactor::Redactor,
+    /// Anomaly detector using transition data.
+    anomaly: Option<anomaly::AnomalyDetector>,
+    /// Structured audit logger.
+    audit: Option<audit::AuditLogger>,
+}
+
+/// A compiled firewall rule with a pre-processed glob pattern.
+struct CompiledRule {
+    pattern: glob::Pattern,
+    action: FirewallAction,
+    #[allow(dead_code)]
+    scans: Vec<ScanType>,
+    #[allow(dead_code)]
+    reason: Option<String>,
+}
+
+/// Verdict from the firewall for a single tool invocation.
+#[derive(Debug, Clone)]
+pub struct FirewallVerdict {
+    /// Whether the request is allowed to proceed.
+    pub allowed: bool,
+    /// Action taken (for logging/response annotation).
+    pub action: FirewallAction,
+    /// Findings from all scans.
+    pub findings: Vec<Finding>,
+    /// Anomaly score if anomaly detection is enabled.
+    pub anomaly_score: Option<f64>,
+}
+
+/// A single finding from a scan.
+#[derive(Debug, Clone, Serialize)]
+pub struct Finding {
+    /// Which scan produced this finding.
+    pub scan_type: ScanType,
+    /// Severity: high (block), medium (warn), low (log).
+    pub severity: Severity,
+    /// Human-readable description of the finding.
+    pub description: String,
+    /// The matched pattern or fragment (truncated for logging).
+    pub matched: String,
+    /// Where the finding was detected.
+    pub location: FindingLocation,
+}
+
+/// Finding severity, which drives the default action when no rule matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Deterministic pattern — block by default.
+    High,
+    /// Heuristic pattern — warn by default.
+    Medium,
+    /// Statistical anomaly — log only by default.
+    Low,
+}
+
+/// Where a finding was detected in the invocation flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingLocation {
+    /// Found in tool invocation arguments.
+    RequestArgs,
+    /// Found in tool response content.
+    ResponseContent,
+    /// Derived from tool call sequence patterns.
+    SequenceAnomaly,
+}
+
+// ─── Firewall impl ───────────────────────────────────────────────────────────
+
+impl Firewall {
+    /// Create a new firewall from config.
+    ///
+    /// Compiles all rules, initialises scanners, and opens the audit log if
+    /// configured. Falls back to stderr logging when the log file cannot be
+    /// opened.
+    pub fn from_config(
+        config: FirewallConfig,
+        transition_tracker: Option<Arc<TransitionTracker>>,
+    ) -> Self {
+        let rules = config.rules.iter().map(compile_rule).collect();
+        let response_scanner = ResponseScanner::new();
+        let input_scanner = input_scanner::InputScanner::new();
+        let redactor = redactor::Redactor::new();
+        let anomaly = if config.anomaly_detection {
+            transition_tracker.map(|tt| anomaly::AnomalyDetector::new(tt, config.anomaly_threshold))
+        } else {
+            None
+        };
+        let audit = config.audit_log.as_ref().map(|path| {
+            audit::AuditLogger::new(path).unwrap_or_else(|e| {
+                tracing::warn!("Cannot open audit log {}: {e}", path.display());
+                audit::AuditLogger::stderr()
+            })
+        });
+
+        Self {
+            config,
+            rules,
+            response_scanner,
+            input_scanner,
+            redactor,
+            anomaly,
+            audit,
+        }
+    }
+
+    /// Pre-invocation check: scan request arguments for threats.
+    ///
+    /// Returns a verdict. If `allowed` is `false`, the caller **must not**
+    /// forward the request to the backend.
+    pub fn check_request(
+        &self,
+        session_id: &str,
+        server: &str,
+        tool: &str,
+        args: &Value,
+        caller: &str,
+    ) -> FirewallVerdict {
+        if !self.config.enabled || !self.config.scan_requests {
+            return FirewallVerdict::allow();
+        }
+
+        let mut findings = Vec::new();
+
+        // 1. Input pattern scan (shell injection, path traversal, SQL).
+        if let Value::Object(map) = args {
+            findings.extend(self.input_scanner.scan_args(map));
+        }
+
+        // 2. Anomaly detection — score how unusual this tool call sequence is.
+        let anomaly_score = self
+            .anomaly
+            .as_ref()
+            .map(|a| a.score_transition(session_id, server, tool));
+
+        if let Some(score) = anomaly_score {
+            if score >= self.config.anomaly_threshold {
+                findings.push(Finding {
+                    scan_type: ScanType::SequenceAnomaly,
+                    severity: Severity::Low,
+                    description: format!("Unusual tool sequence (anomaly score: {score:.2})"),
+                    matched: format!("{server}:{tool}"),
+                    location: FindingLocation::SequenceAnomaly,
+                });
+            }
+        }
+
+        // 3. Determine action from rules + finding severity.
+        let action = self.resolve_action(tool, &findings);
+        let allowed = action != FirewallAction::Block;
+
+        let verdict = FirewallVerdict {
+            allowed,
+            action,
+            findings,
+            anomaly_score,
+        };
+
+        // 4. Audit log every request (including clean ones).
+        if let Some(ref audit) = self.audit {
+            audit.log_request(session_id, server, tool, caller, args, &verdict);
+        }
+
+        verdict
+    }
+
+    /// Post-invocation check: scan response content for credentials/injection.
+    ///
+    /// May redact credentials/PII from the response value in place (returns
+    /// the potentially-modified value).
+    pub fn check_response(
+        &self,
+        session_id: &str,
+        server: &str,
+        tool: &str,
+        response: &mut Value,
+        caller: &str,
+    ) -> FirewallVerdict {
+        if !self.config.enabled || !self.config.scan_responses {
+            return FirewallVerdict::allow();
+        }
+
+        let mut findings = Vec::new();
+
+        // 1. Prompt injection detection (reuse ResponseScanner).
+        //    Immutable borrow must complete before the mutable borrow in step 2.
+        if self.config.prompt_injection_detection {
+            let pi_matches = self
+                .response_scanner
+                .scan_response(server, tool, &*response);
+            for m in pi_matches {
+                findings.push(Finding {
+                    scan_type: ScanType::PromptInjection,
+                    severity: Severity::Medium,
+                    description: m.pattern_description,
+                    matched: m.matched_fragment,
+                    location: FindingLocation::ResponseContent,
+                });
+            }
+        }
+
+        // 2. Credential detection + redaction (takes `&mut Value` for in-place replacement).
+        if self.config.credential_redaction {
+            let cred_findings = self.redactor.scan_and_redact(response);
+            findings.extend(cred_findings);
+        }
+
+        // 3. Determine action.
+        let action = self.resolve_action(tool, &findings);
+        let allowed = action != FirewallAction::Block;
+
+        let verdict = FirewallVerdict {
+            allowed,
+            action,
+            findings,
+            anomaly_score: None,
+        };
+
+        // 4. Audit log.
+        if let Some(ref audit) = self.audit {
+            audit.log_response(session_id, server, tool, caller, &verdict);
+        }
+
+        verdict
+    }
+
+    /// Match tool name against rules; fall back to severity-based default action.
+    ///
+    /// First matching rule wins. When no rule matches, the highest-severity
+    /// finding determines the action: High→Block, Medium→Warn, Low→Allow.
+    fn resolve_action(&self, tool: &str, findings: &[Finding]) -> FirewallAction {
+        if findings.is_empty() {
+            return FirewallAction::Allow;
+        }
+
+        // First matching rule overrides severity-based default.
+        for rule in &self.rules {
+            if rule_matches(rule, tool) {
+                return rule.action;
+            }
+        }
+
+        // Default: highest-severity finding drives the action.
+        let max_severity = findings.iter().map(|f| f.severity).min_by_key(|s| match s {
+            Severity::High => 0,
+            Severity::Medium => 1,
+            Severity::Low => 2,
+        });
+
+        match max_severity {
+            Some(Severity::High) => FirewallAction::Block,
+            Some(Severity::Medium) => FirewallAction::Warn,
+            _ => FirewallAction::Allow,
+        }
+    }
+
+    /// Clean up per-session state in the anomaly detector.
+    ///
+    /// Must be called (via the `SessionLifecycle` hook) when a session
+    /// disconnects to prevent unbounded memory growth.
+    pub fn on_session_end(&self, session_id: &str) {
+        if let Some(ref a) = self.anomaly {
+            a.remove_session(session_id);
+        }
+    }
+}
+
+impl FirewallVerdict {
+    /// Construct an unconditional allow verdict (used when scanning is disabled).
+    fn allow() -> Self {
+        Self {
+            allowed: true,
+            action: FirewallAction::Allow,
+            findings: Vec::new(),
+            anomaly_score: None,
+        }
+    }
+}
+
+// ─── Rule helpers ─────────────────────────────────────────────────────────────
+
+fn compile_rule(rule: &FirewallRule) -> CompiledRule {
+    let pattern = glob::Pattern::new(&rule.tool_match)
+        .unwrap_or_else(|_| glob::Pattern::new("*").expect("fallback pattern compiles"));
+    CompiledRule {
+        pattern,
+        action: rule.action,
+        scans: rule.scan.clone(),
+        reason: rule.reason.clone(),
+    }
+}
+
+fn rule_matches(rule: &CompiledRule, tool: &str) -> bool {
+    rule.pattern.matches(tool)
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn default_firewall() -> Firewall {
+        Firewall::from_config(FirewallConfig::default(), None)
+    }
+
+    // ── FirewallConfig defaults ───────────────────────────────────────────────
+
+    #[test]
+    fn disabled_firewall_allows_everything() {
+        let mut cfg = FirewallConfig::default();
+        cfg.enabled = false;
+        let fw = Firewall::from_config(cfg, None);
+        let args = json!({ "cmd": "; rm -rf /" });
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
+        assert!(verdict.allowed);
+        assert_eq!(verdict.action, FirewallAction::Allow);
+        assert!(verdict.findings.is_empty());
+    }
+
+    #[test]
+    fn scan_requests_disabled_allows_injection() {
+        let mut cfg = FirewallConfig::default();
+        cfg.scan_requests = false;
+        let fw = Firewall::from_config(cfg, None);
+        let args = json!({ "cmd": "; rm -rf /" });
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
+        assert!(verdict.allowed);
+    }
+
+    #[test]
+    fn scan_responses_disabled_skips_response_scan() {
+        let mut cfg = FirewallConfig::default();
+        cfg.scan_responses = false;
+        let fw = Firewall::from_config(cfg, None);
+        let mut response = json!({ "text": "AKIAIOSFODNN7EXAMPLE12345" });
+        let verdict = fw.check_response("s1", "srv", "tool", &mut response, "caller");
+        assert!(verdict.allowed);
+        assert!(verdict.findings.is_empty());
+    }
+
+    // ── Severity → action mapping ─────────────────────────────────────────────
+
+    #[test]
+    fn high_severity_finding_blocks() {
+        let fw = default_firewall();
+        // Shell injection is HIGH severity
+        let args = json!({ "cmd": "; rm -rf / " });
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
+        assert!(!verdict.allowed);
+        assert_eq!(verdict.action, FirewallAction::Block);
+    }
+
+    #[test]
+    fn medium_severity_finding_warns() {
+        let fw = default_firewall();
+        // SQL injection is MEDIUM severity
+        let args = json!({ "q": "' OR 1=1" });
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
+        assert!(verdict.allowed);
+        assert_eq!(verdict.action, FirewallAction::Warn);
+    }
+
+    #[test]
+    fn clean_args_produce_allow_verdict() {
+        let fw = default_firewall();
+        let args = json!({ "name": "hello", "count": 42 });
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
+        assert!(verdict.allowed);
+        assert_eq!(verdict.action, FirewallAction::Allow);
+        assert!(verdict.findings.is_empty());
+    }
+
+    // ── Rule override ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn rule_overrides_default_action_to_block() {
+        let mut cfg = FirewallConfig::default();
+        cfg.rules = vec![FirewallRule {
+            tool_match: "exec_*".to_string(),
+            action: FirewallAction::Block,
+            reason: Some("Shell execution blocked".to_string()),
+            scan: vec![],
+        }];
+        let fw = Firewall::from_config(cfg, None);
+        // SQL injection is normally MEDIUM (warn), but exec_* rule blocks it
+        let args = json!({ "q": "' OR 1=1" });
+        let verdict = fw.check_request("s1", "srv", "exec_command", &args, "caller");
+        assert!(!verdict.allowed);
+        assert_eq!(verdict.action, FirewallAction::Block);
+    }
+
+    #[test]
+    fn rule_overrides_default_action_to_warn() {
+        let mut cfg = FirewallConfig::default();
+        cfg.rules = vec![FirewallRule {
+            tool_match: "safe_shell".to_string(),
+            action: FirewallAction::Warn,
+            reason: None,
+            scan: vec![],
+        }];
+        let fw = Firewall::from_config(cfg, None);
+        // Shell injection is normally HIGH (block), but safe_shell rule warns only
+        let args = json!({ "cmd": "; rm -rf / " });
+        let verdict = fw.check_request("s1", "srv", "safe_shell", &args, "caller");
+        assert!(verdict.allowed);
+        assert_eq!(verdict.action, FirewallAction::Warn);
+    }
+
+    #[test]
+    fn glob_rule_matches_prefix() {
+        let mut cfg = FirewallConfig::default();
+        cfg.rules = vec![FirewallRule {
+            tool_match: "exec_*".to_string(),
+            action: FirewallAction::Block,
+            reason: None,
+            scan: vec![],
+        }];
+        let fw = Firewall::from_config(cfg, None);
+        assert!(rule_matches(&fw.rules[0], "exec_command"));
+        assert!(rule_matches(&fw.rules[0], "exec_shell"));
+        assert!(!rule_matches(&fw.rules[0], "list_tools"));
+    }
+
+    #[test]
+    fn wildcard_rule_matches_all_tools() {
+        let mut cfg = FirewallConfig::default();
+        cfg.rules = vec![FirewallRule {
+            tool_match: "*".to_string(),
+            action: FirewallAction::Allow,
+            reason: None,
+            scan: vec![],
+        }];
+        let fw = Firewall::from_config(cfg, None);
+        // Shell injection would normally block, but * rule overrides to Allow
+        let args = json!({ "cmd": "; rm -rf / " });
+        let verdict = fw.check_request("s1", "srv", "any_tool", &args, "caller");
+        assert!(verdict.allowed);
+        assert_eq!(verdict.action, FirewallAction::Allow);
+    }
+
+    // ── Response scan ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn verdict_contains_all_findings() {
+        let fw = default_firewall();
+        let args = json!({
+            "cmd": "; rm -rf / ",
+            "q": "' OR 1=1"
+        });
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
+        assert!(verdict.findings.len() >= 2);
+    }
+
+    #[test]
+    fn response_scan_detects_credential() {
+        let fw = default_firewall();
+        let mut response = json!({ "output": "token: ghp_abcdefghijklmnopqrstuvwxyz1234567890" });
+        let verdict = fw.check_response("s1", "srv", "tool", &mut response, "caller");
+        assert!(
+            verdict
+                .findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::Credentials)
+        );
+    }
+
+    // ── on_session_end ────────────────────────────────────────────────────────
+
+    #[test]
+    fn session_end_is_noop_without_anomaly_detector() {
+        let fw = default_firewall();
+        fw.on_session_end("session-xyz"); // must not panic
+    }
+}

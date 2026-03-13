@@ -629,6 +629,43 @@ pub enum CapCommand {
         #[arg(short = 'c', long, default_value = "capabilities")]
         capabilities: PathBuf,
     },
+
+    /// Probe a URL for an `OpenAPI` or GraphQL spec and generate capability files
+    ///
+    /// Runs SSRF validation, discovers the spec via parallel probing, converts
+    /// it to capability YAML files, deduplicates against the output directory,
+    /// and writes the results.
+    #[cfg(feature = "discovery")]
+    #[command(name = "import-url", about = "Import API capabilities from a URL")]
+    ImportUrl {
+        /// URL to probe for an API specification
+        #[arg(required = true)]
+        url: String,
+
+        /// String prepended to every generated capability name (e.g. "stripe")
+        #[arg(short, long)]
+        prefix: Option<String>,
+
+        /// Directory to write the generated capability files into
+        #[arg(short, long, default_value = "capabilities")]
+        output: PathBuf,
+
+        /// Bearer token or credential reference for authenticated specs (e.g. `env:API_KEY`)
+        #[arg(long)]
+        auth: Option<String>,
+
+        /// Maximum number of endpoints to generate capabilities for
+        #[arg(long, default_value_t = 50)]
+        max_endpoints: usize,
+
+        /// Print what would be generated without writing any files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Cost per API call in USD (annotated in generated capability metadata)
+        #[arg(long)]
+        cost_per_call: Option<f64>,
+    },
 }
 
 /// Plugin marketplace subcommands

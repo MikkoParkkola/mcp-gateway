@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use parking_lot::RwLock;
-use rand::Rng;
+use rand::RngExt;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

@@ -43,6 +43,27 @@ pub async fn run_cap_command(cmd: CapCommand) -> ExitCode {
             capabilities,
         } => cap_search(query, capabilities).await,
         CapCommand::RegistryList { capabilities } => cap_registry_list(capabilities).await,
+        #[cfg(feature = "discovery")]
+        CapCommand::ImportUrl {
+            url,
+            prefix,
+            output,
+            auth,
+            max_endpoints,
+            dry_run,
+            cost_per_call,
+        } => {
+            super::discover::cap_import_url(
+                url,
+                prefix,
+                output,
+                auth,
+                max_endpoints,
+                dry_run,
+                cost_per_call,
+            )
+            .await
+        }
     }
 }
 

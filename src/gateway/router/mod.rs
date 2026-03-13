@@ -18,6 +18,8 @@ use crate::config::StreamingConfig;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
 use crate::security::ToolPolicy;
+#[cfg(feature = "firewall")]
+use crate::security::firewall::Firewall;
 
 mod backend_handlers;
 mod handlers;
@@ -66,6 +68,9 @@ pub struct AppState {
     /// Path to the gateway config file on disk (enables API-driven config writes).
     /// `None` when the gateway was started without a config file path.
     pub config_path: Option<std::path::PathBuf>,
+    /// Security firewall — bidirectional request/response scanning (RFC-0071).
+    #[cfg(feature = "firewall")]
+    pub firewall: Option<Arc<Firewall>>,
 }
 
 /// Create the router.

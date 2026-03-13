@@ -272,6 +272,10 @@ pub struct SecurityConfig {
     pub ssrf_protection: bool,
     /// Tool allow/deny policy.
     pub tool_policy: ToolPolicyConfig,
+    /// Security firewall — bidirectional request/response scanning (RFC-0071).
+    #[cfg(feature = "firewall")]
+    #[serde(default)]
+    pub firewall: crate::security::firewall::FirewallConfig,
 }
 
 impl Default for SecurityConfig {
@@ -280,6 +284,8 @@ impl Default for SecurityConfig {
             sanitize_input: true,
             ssrf_protection: true,
             tool_policy: ToolPolicyConfig::default(),
+            #[cfg(feature = "firewall")]
+            firewall: crate::security::firewall::FirewallConfig::default(),
         }
     }
 }
@@ -428,7 +434,7 @@ impl AuthConfig {
     pub fn resolve_bearer_token(&self) -> Option<String> {
         self.bearer_token.as_ref().map(|token| {
             if token == "auto" {
-                use rand::Rng;
+                use rand::RngExt;
                 let random_bytes: [u8; 32] = rand::rng().random();
                 format!(
                     "mcp_{}",
