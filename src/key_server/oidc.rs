@@ -170,12 +170,11 @@ impl JwksCache {
         jwks_uri: &str,
         force_refresh: bool,
     ) -> Result<JwkSet, OidcError> {
-        if !force_refresh {
-            if let Some(cached) = self.inner.get(issuer) {
-                if !cached.is_stale() {
-                    return Ok(cached.keys.clone());
-                }
-            }
+        if !force_refresh
+            && let Some(cached) = self.inner.get(issuer)
+            && !cached.is_stale()
+        {
+            return Ok(cached.keys.clone());
         }
 
         debug!(issuer = %issuer, "Fetching JWKS from {jwks_uri}");

@@ -60,18 +60,18 @@ pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
             }
             Ok(Event::Text(ref e)) => {
                 let text = e.decode().unwrap_or_default().trim().to_string();
-                if !text.is_empty() {
-                    if let Some(current) = stack.last_mut() {
-                        current.1.insert("#text".to_string(), Value::String(text));
-                    }
+                if !text.is_empty()
+                    && let Some(current) = stack.last_mut()
+                {
+                    current.1.insert("#text".to_string(), Value::String(text));
                 }
             }
             Ok(Event::CData(ref e)) => {
                 let text = String::from_utf8_lossy(e.as_ref()).trim().to_string();
-                if !text.is_empty() {
-                    if let Some(current) = stack.last_mut() {
-                        current.1.insert("#text".to_string(), Value::String(text));
-                    }
+                if !text.is_empty()
+                    && let Some(current) = stack.last_mut()
+                {
+                    current.1.insert("#text".to_string(), Value::String(text));
                 }
             }
             Ok(Event::End(_)) => {

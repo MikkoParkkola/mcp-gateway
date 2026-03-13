@@ -62,15 +62,15 @@ impl CapabilityFixer {
                     });
                 }
             }
-            if issue.contains("missing 'description'") {
-                if let Some(name) = extract_property_name(issue) {
-                    fixes.push(SuggestedFix {
-                        rule_code: "AX-007".to_string(),
-                        description: format!("Add description to property '{name}'"),
-                        field_path: format!("schema.input.properties.{name}.description"),
-                        suggested_value: serde_json::Value::String(format!("The {name} parameter")),
-                    });
-                }
+            if issue.contains("missing 'description'")
+                && let Some(name) = extract_property_name(issue)
+            {
+                fixes.push(SuggestedFix {
+                    rule_code: "AX-007".to_string(),
+                    description: format!("Add description to property '{name}'"),
+                    field_path: format!("schema.input.properties.{name}.description"),
+                    suggested_value: serde_json::Value::String(format!("The {name} parameter")),
+                });
             }
         }
     }

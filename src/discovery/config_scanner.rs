@@ -114,28 +114,28 @@ impl ConfigScanner {
         let mut servers = Vec::new();
 
         // VS Code settings
-        if let Ok(vscode_path) = Self::vscode_config_path() {
-            if vscode_path.exists() {
-                debug!("Scanning VS Code config at {}", vscode_path.display());
-                if let Ok(mut vs_servers) = self
-                    .parse_vscode_config(&vscode_path, DiscoverySource::VsCode)
-                    .await
-                {
-                    servers.append(&mut vs_servers);
-                }
+        if let Ok(vscode_path) = Self::vscode_config_path()
+            && vscode_path.exists()
+        {
+            debug!("Scanning VS Code config at {}", vscode_path.display());
+            if let Ok(mut vs_servers) = self
+                .parse_vscode_config(&vscode_path, DiscoverySource::VsCode)
+                .await
+            {
+                servers.append(&mut vs_servers);
             }
         }
 
         // Cursor settings (similar format)
-        if let Ok(cursor_path) = Self::cursor_config_path() {
-            if cursor_path.exists() {
-                debug!("Scanning Cursor config at {}", cursor_path.display());
-                if let Ok(mut cursor_servers) = self
-                    .parse_vscode_config(&cursor_path, DiscoverySource::VsCode)
-                    .await
-                {
-                    servers.append(&mut cursor_servers);
-                }
+        if let Ok(cursor_path) = Self::cursor_config_path()
+            && cursor_path.exists()
+        {
+            debug!("Scanning Cursor config at {}", cursor_path.display());
+            if let Ok(mut cursor_servers) = self
+                .parse_vscode_config(&cursor_path, DiscoverySource::VsCode)
+                .await
+            {
+                servers.append(&mut cursor_servers);
             }
         }
 
@@ -551,12 +551,11 @@ impl ConfigScanner {
         match config.get("mcpServers") {
             Some(Value::Array(arr)) => {
                 for entry in arr {
-                    if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
-                        if let Some(server) =
+                    if let Some(name) = entry.get("name").and_then(|v| v.as_str())
+                        && let Some(server) =
                             Self::parse_server_config(name, entry, &DiscoverySource::Continue, path)
-                        {
-                            servers.push(server);
-                        }
+                    {
+                        servers.push(server);
                     }
                 }
             }

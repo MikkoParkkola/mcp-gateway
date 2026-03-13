@@ -57,10 +57,10 @@ impl AuditLogger {
     /// Returns an `io::Error` if the file cannot be opened or the parent
     /// directory cannot be created.
     pub fn new(path: &Path) -> io::Result<Self> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new().create(true).append(true).open(path)?;
         Ok(Self {
@@ -129,11 +129,11 @@ impl AuditLogger {
     }
 
     fn write_entry<T: Serialize>(&self, entry: &T) {
-        if let Ok(json) = serde_json::to_string(entry) {
-            if let Ok(mut w) = self.writer.lock() {
-                let _ = writeln!(w, "{json}");
-                let _ = w.flush();
-            }
+        if let Ok(json) = serde_json::to_string(entry)
+            && let Ok(mut w) = self.writer.lock()
+        {
+            let _ = writeln!(w, "{json}");
+            let _ = w.flush();
         }
     }
 }

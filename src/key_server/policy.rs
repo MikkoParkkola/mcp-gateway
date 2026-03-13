@@ -103,22 +103,22 @@ fn matches_rule(criteria: &MatchCriteria, identity: &VerifiedIdentity) -> bool {
         }
     }
 
-    if let Some(ref issuer) = criteria.issuer {
-        if &identity.issuer != issuer {
-            return false;
-        }
+    if let Some(ref issuer) = criteria.issuer
+        && &identity.issuer != issuer
+    {
+        return false;
     }
 
-    if let Some(ref email) = criteria.email {
-        if &identity.email != email {
-            return false;
-        }
+    if let Some(ref email) = criteria.email
+        && &identity.email != email
+    {
+        return false;
     }
 
-    if let Some(ref group) = criteria.group {
-        if !identity.groups.iter().any(|g| g == group) {
-            return false;
-        }
+    if let Some(ref group) = criteria.group
+        && !identity.groups.iter().any(|g| g == group)
+    {
+        return false;
     }
 
     true

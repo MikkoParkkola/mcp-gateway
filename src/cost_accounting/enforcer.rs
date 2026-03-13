@@ -239,68 +239,65 @@ impl BudgetEnforcer {
         }
 
         // Check 2: global daily limit
-        if !blocked {
-            if let Some(limit) = self.config.budgets.daily {
-                #[allow(clippy::cast_precision_loss)]
-                let current_usd = self.global_daily.current() as f64 / 1_000_000.0;
-                let projected = current_usd + cost;
+        if !blocked && let Some(limit) = self.config.budgets.daily {
+            #[allow(clippy::cast_precision_loss)]
+            let current_usd = self.global_daily.current() as f64 / 1_000_000.0;
+            let projected = current_usd + cost;
 
-                if let Some(action) = self.evaluate_alerts(projected, limit) {
-                    match action {
-                        AlertAction::Log => {
-                            tracing::warn!(
-                                spent = projected,
-                                limit = limit,
-                                "Global daily spend approaching limit"
-                            );
-                        }
-                        AlertAction::Notify => {
-                            warnings.push(format!(
-                                "Global daily spend ${projected:.4} approaching limit ${limit:.2}"
-                            ));
-                        }
-                        AlertAction::Block => {
-                            blocked = true;
-                            block_reason = Some(format!(
-                                "Global daily budget exceeded: ${projected:.4} >= ${limit:.2}"
-                            ));
-                        }
+            if let Some(action) = self.evaluate_alerts(projected, limit) {
+                match action {
+                    AlertAction::Log => {
+                        tracing::warn!(
+                            spent = projected,
+                            limit = limit,
+                            "Global daily spend approaching limit"
+                        );
+                    }
+                    AlertAction::Notify => {
+                        warnings.push(format!(
+                            "Global daily spend ${projected:.4} approaching limit ${limit:.2}"
+                        ));
+                    }
+                    AlertAction::Block => {
+                        blocked = true;
+                        block_reason = Some(format!(
+                            "Global daily budget exceeded: ${projected:.4} >= ${limit:.2}"
+                        ));
                     }
                 }
             }
         }
 
         // Check 3: per-key daily limit
-        if !blocked {
-            if let Some(key_name) = api_key_name {
-                if let Some(&limit) = self.config.budgets.per_key.get(key_name) {
-                    let acc = self.key_daily.entry(key_name.to_string()).or_default();
-                    #[allow(clippy::cast_precision_loss)]
-                    let current_usd = acc.current() as f64 / 1_000_000.0;
-                    let projected = current_usd + cost;
+        if !blocked
+            && let Some(key_name) = api_key_name
+            && let Some(&limit) = self.config.budgets.per_key.get(key_name)
+        {
+            let acc = self.key_daily.entry(key_name.to_string()).or_default();
+            #[allow(clippy::cast_precision_loss)]
+            let current_usd = acc.current() as f64 / 1_000_000.0;
+            let projected = current_usd + cost;
 
-                    if let Some(action) = self.evaluate_alerts(projected, limit) {
-                        match action {
-                            AlertAction::Log => {
-                                tracing::warn!(
-                                    key = key_name,
-                                    spent = projected,
-                                    limit = limit,
-                                    "API key approaching daily budget limit"
-                                );
-                            }
-                            AlertAction::Notify => {
-                                warnings.push(format!(
+            if let Some(action) = self.evaluate_alerts(projected, limit) {
+                match action {
+                    AlertAction::Log => {
+                        tracing::warn!(
+                            key = key_name,
+                            spent = projected,
+                            limit = limit,
+                            "API key approaching daily budget limit"
+                        );
+                    }
+                    AlertAction::Notify => {
+                        warnings.push(format!(
                                     "API key '{key_name}' daily spend ${projected:.4} approaching limit ${limit:.2}"
                                 ));
-                            }
-                            AlertAction::Block => {
-                                blocked = true;
-                                block_reason = Some(format!(
-                                    "API key '{key_name}' daily budget exceeded: ${projected:.4} >= ${limit:.2}"
-                                ));
-                            }
-                        }
+                    }
+                    AlertAction::Block => {
+                        blocked = true;
+                        block_reason = Some(format!(
+                            "API key '{key_name}' daily budget exceeded: ${projected:.4} >= ${limit:.2}"
+                        ));
                     }
                 }
             }

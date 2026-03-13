@@ -250,15 +250,15 @@ impl Rule for FlatArgumentsRule {
                 }
 
                 // Check for arrays of objects
-                if prop_type == "array" {
-                    if let Some(items) = prop.get("items") {
-                        let items_type = items.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                        if items_type == "object" {
-                            result.add_issue(format!(
-                                "Parameter '{name}' is an array of objects - simplify structure"
-                            ));
-                            nesting_count += 1;
-                        }
+                if prop_type == "array"
+                    && let Some(items) = prop.get("items")
+                {
+                    let items_type = items.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if items_type == "object" {
+                        result.add_issue(format!(
+                            "Parameter '{name}' is an array of objects - simplify structure"
+                        ));
+                        nesting_count += 1;
                     }
                 }
             }

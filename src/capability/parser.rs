@@ -29,10 +29,10 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
     let mut capability = parse_capability(&content)?;
 
     // Use filename as name if not specified
-    if capability.name.is_empty() {
-        if let Some(stem) = path.file_stem() {
-            capability.name = stem.to_string_lossy().to_string();
-        }
+    if capability.name.is_empty()
+        && let Some(stem) = path.file_stem()
+    {
+        capability.name = stem.to_string_lossy().to_string();
     }
 
     Ok(capability)

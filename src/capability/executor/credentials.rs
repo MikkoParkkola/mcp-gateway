@@ -113,49 +113,49 @@ impl CapabilityExecutor {
         // 1. In-memory cache
         {
             let tokens = self.oauth_tokens.read();
-            if let Some(token) = tokens.get(provider) {
-                if !token.is_expired() {
-                    return Ok(token.access_token.clone());
-                }
+            if let Some(token) = tokens.get(provider)
+                && !token.is_expired()
+            {
+                return Ok(token.access_token.clone());
             }
         }
 
         // 2. Disk storage
-        if let Some(ref storage) = self.token_storage {
-            if let Some(token) = storage.load(provider, provider) {
-                if !token.is_expired() {
-                    let tokens = self.oauth_tokens.read();
-                    tokens.insert(provider.to_string(), token.clone());
-                    return Ok(token.access_token);
-                }
-
-                // 3. Refresh grant
-                if let (Some(ref_tok), Some(endpoint)) = (&token.refresh_token, token_endpoint) {
-                    match self
-                        .perform_token_refresh(provider, ref_tok, endpoint, storage)
-                        .await
-                    {
-                        Ok(new_token) => return Ok(new_token),
-                        Err(e) => {
-                            warn!(
-                                provider = %provider,
-                                error = %e,
-                                "Token refresh failed; manual re-authentication required"
-                            );
-                        }
-                    }
-                } else if token.refresh_token.is_some() && token_endpoint.is_none() {
-                    warn!(
-                        provider = %provider,
-                        "OAuth token expired with refresh_token present, but no \
-                         token_endpoint configured in auth.token_endpoint."
-                    );
-                }
-
-                return Err(Error::Config(format!(
-                    "OAuth token for '{provider}' is expired. Re-authenticate using the gateway OAuth flow or refresh the token."
-                )));
+        if let Some(ref storage) = self.token_storage
+            && let Some(token) = storage.load(provider, provider)
+        {
+            if !token.is_expired() {
+                let tokens = self.oauth_tokens.read();
+                tokens.insert(provider.to_string(), token.clone());
+                return Ok(token.access_token);
             }
+
+            // 3. Refresh grant
+            if let (Some(ref_tok), Some(endpoint)) = (&token.refresh_token, token_endpoint) {
+                match self
+                    .perform_token_refresh(provider, ref_tok, endpoint, storage)
+                    .await
+                {
+                    Ok(new_token) => return Ok(new_token),
+                    Err(e) => {
+                        warn!(
+                            provider = %provider,
+                            error = %e,
+                            "Token refresh failed; manual re-authentication required"
+                        );
+                    }
+                }
+            } else if token.refresh_token.is_some() && token_endpoint.is_none() {
+                warn!(
+                    provider = %provider,
+                    "OAuth token expired with refresh_token present, but no \
+                     token_endpoint configured in auth.token_endpoint."
+                );
+            }
+
+            return Err(Error::Config(format!(
+                "OAuth token for '{provider}' is expired. Re-authenticate using the gateway OAuth flow or refresh the token."
+            )));
         }
 
         Err(Error::Config(format!(

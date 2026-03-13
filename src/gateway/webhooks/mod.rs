@@ -275,25 +275,25 @@ async fn webhook_handler(
     );
 
     // Validate HMAC signature if required.
-    if state.config.require_signature || state.definition.secret.is_some() {
-        if let Err(e) = validate_signature(&headers, &body, &state.definition) {
-            state
-                .stats
-                .signature_failures
-                .fetch_add(1, Ordering::Relaxed);
-            warn!(
-                request_id = %request_id,
-                error = %e,
-                "Webhook signature validation failed"
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "Invalid signature",
-                    "request_id": request_id
-                })),
-            );
-        }
+    if (state.config.require_signature || state.definition.secret.is_some())
+        && let Err(e) = validate_signature(&headers, &body, &state.definition)
+    {
+        state
+            .stats
+            .signature_failures
+            .fetch_add(1, Ordering::Relaxed);
+        warn!(
+            request_id = %request_id,
+            error = %e,
+            "Webhook signature validation failed"
+        );
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "Invalid signature",
+                "request_id": request_id
+            })),
+        );
     }
 
     // Transform payload to notification.

@@ -207,31 +207,31 @@ impl MetaMcp {
         // Record prompt-cached tokens from the backend response (if any)
         if let Ok(ref response) = dispatch_result {
             let cached_tokens = extract_cached_tokens(response);
-            if cached_tokens > 0 {
-                if let Some(ref stats) = self.stats {
-                    stats.record_cached_tokens(server, session_id, cached_tokens);
-                    debug!(
-                        server,
-                        tool, cached_tokens, trace_id, "Prompt cache hit recorded"
-                    );
-                }
+            if cached_tokens > 0
+                && let Some(ref stats) = self.stats
+            {
+                stats.record_cached_tokens(server, session_id, cached_tokens);
+                debug!(
+                    server,
+                    tool, cached_tokens, trace_id, "Prompt cache hit recorded"
+                );
             }
         }
 
         self.record_error_budget(server, tool, dispatch_result.is_ok());
 
         // Record cost for successful calls (token count estimated at 0 for non-LLM tools).
-        if dispatch_result.is_ok() {
-            if let Some(sid) = session_id {
-                self.cost_tracker.record(
-                    sid,
-                    api_key_name,
-                    server,
-                    tool,
-                    0, // token_count: 0 for backend tool calls (no model inference)
-                    crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
-                );
-            }
+        if dispatch_result.is_ok()
+            && let Some(sid) = session_id
+        {
+            self.cost_tracker.record(
+                sid,
+                api_key_name,
+                server,
+                tool,
+                0, // token_count: 0 for backend tool calls (no model inference)
+                crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
+            );
         }
 
         // === POST-INVOKE: BudgetEnforcer cost recording ===
@@ -239,11 +239,11 @@ impl MetaMcp {
         // Record actual spend for per-tool and global daily accumulators.
         // Only on success — the call actually incurred the cost.
         #[cfg(feature = "cost-governance")]
-        if dispatch_result.is_ok() {
-            if let Some(ref enforcer) = self.budget_enforcer {
-                let cost = enforcer.registry.cost_for(tool);
-                enforcer.record_spend(tool, api_key_name, cost);
-            }
+        if dispatch_result.is_ok()
+            && let Some(ref enforcer) = self.budget_enforcer
+        {
+            let cost = enforcer.registry.cost_for(tool);
+            enforcer.record_spend(tool, api_key_name, cost);
         }
 
         let mut result = match dispatch_result {
@@ -262,13 +262,13 @@ impl MetaMcp {
         // `_cost_suggestion` — present when a cheaper alternative exists.
         #[cfg(feature = "cost-governance")]
         {
-            if !cost_warnings.is_empty() {
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert(
-                        "_cost_warnings".to_string(),
-                        serde_json::json!(cost_warnings),
-                    );
-                }
+            if !cost_warnings.is_empty()
+                && let Some(obj) = result.as_object_mut()
+            {
+                obj.insert(
+                    "_cost_warnings".to_string(),
+                    serde_json::json!(cost_warnings),
+                );
             }
 
             if let Some(ref enforcer) = self.budget_enforcer {
@@ -278,18 +278,17 @@ impl MetaMcp {
                     let alternatives = enforcer.config.alternatives.as_ref();
                     if let Some(suggestion) =
                         suggestions::suggest_cheaper(tool, cost, &all_costs, alternatives)
+                        && let Some(obj) = result.as_object_mut()
                     {
-                        if let Some(obj) = result.as_object_mut() {
-                            obj.insert(
-                                "_cost_suggestion".to_string(),
-                                serde_json::json!({
-                                    "message": suggestion.reason,
-                                    "alternative": suggestion.alternative,
-                                    "savings_per_call": suggestion.savings_per_call,
-                                    "alternative_cost": suggestion.alternative_cost,
-                                }),
-                            );
-                        }
+                        obj.insert(
+                            "_cost_suggestion".to_string(),
+                            serde_json::json!({
+                                "message": suggestion.reason,
+                                "alternative": suggestion.alternative,
+                                "savings_per_call": suggestion.savings_per_call,
+                                "alternative_cost": suggestion.alternative_cost,
+                            }),
+                        );
                     }
                 }
             }
@@ -395,11 +394,12 @@ impl MetaMcp {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
 
-        if let Some(cap) = self.get_capabilities() {
-            if server == cap.name && cap.has_capability(tool) {
-                let result = cap.call_tool(tool, arguments).await?;
-                return Ok(serde_json::to_value(result)?);
-            }
+        if let Some(cap) = self.get_capabilities()
+            && server == cap.name
+            && cap.has_capability(tool)
+        {
+            let result = cap.call_tool(tool, arguments).await?;
+            return Ok(serde_json::to_value(result)?);
         }
 
         let backend = self

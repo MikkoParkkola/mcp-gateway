@@ -48,28 +48,27 @@ impl MetaMcp {
         let mut all_tags: Vec<String> = Vec::new();
 
         // Search capability backend
-        if let Some(cap) = self.get_capabilities() {
-            if profile.backend_allowed(&cap.name) {
-                let cap_killed = self.kill_switch.is_killed(&cap.name);
-                for capability in cap.list_capabilities() {
-                    let tool = capability.to_mcp_tool();
-                    if !profile.tool_allowed(&tool.name) {
-                        continue;
+        if let Some(cap) = self.get_capabilities()
+            && profile.backend_allowed(&cap.name)
+        {
+            let cap_killed = self.kill_switch.is_killed(&cap.name);
+            for capability in cap.list_capabilities() {
+                let tool = capability.to_mcp_tool();
+                if !profile.tool_allowed(&tool.name) {
+                    continue;
+                }
+                collect_tool_tags_for_code_mode(&tool, &mut all_tags);
+                let is_match = if use_glob {
+                    tool_matches_glob(&tool, &query)
+                } else {
+                    tool_matches_query(&tool, &query)
+                };
+                if is_match {
+                    let mut entry = build_code_mode_match_json(&cap.name, &tool, include_schema);
+                    if cap_killed {
+                        entry["status"] = json!("disabled");
                     }
-                    collect_tool_tags_for_code_mode(&tool, &mut all_tags);
-                    let is_match = if use_glob {
-                        tool_matches_glob(&tool, &query)
-                    } else {
-                        tool_matches_query(&tool, &query)
-                    };
-                    if is_match {
-                        let mut entry =
-                            build_code_mode_match_json(&cap.name, &tool, include_schema);
-                        if cap_killed {
-                            entry["status"] = json!("disabled");
-                        }
-                        matches.push(entry);
-                    }
+                    matches.push(entry);
                 }
             }
         }
@@ -119,15 +118,13 @@ impl MetaMcp {
         let total_found = matches.len();
 
         // Apply ranking for keyword queries (not glob — glob already filters precisely)
-        if !use_glob {
-            if let Some(ref ranker) = self.ranker {
-                let search_results: Vec<_> = matches
-                    .iter()
-                    .filter_map(json_to_code_mode_search_result)
-                    .collect();
-                let ranked = ranker.rank(search_results, &query);
-                matches = ranked_results_to_code_mode_json(ranked, include_schema, &matches);
-            }
+        if !use_glob && let Some(ref ranker) = self.ranker {
+            let search_results: Vec<_> = matches
+                .iter()
+                .filter_map(json_to_code_mode_search_result)
+                .collect();
+            let ranked = ranker.rank(search_results, &query);
+            matches = ranked_results_to_code_mode_json(ranked, include_schema, &matches);
         }
 
         matches.truncate(limit);
@@ -265,19 +262,19 @@ impl MetaMcp {
             }
 
             // Check if it's the capability backend
-            if let Some(cap) = self.get_capabilities() {
-                if server == cap.name {
-                    let tools: Vec<_> = cap
-                        .get_tools()
-                        .into_iter()
-                        .filter(|t| profile.tool_allowed(&t.name))
-                        .collect();
-                    return Ok(json!({
-                        "server": server,
-                        "status": if killed { "disabled" } else { "active" },
-                        "tools": tools
-                    }));
-                }
+            if let Some(cap) = self.get_capabilities()
+                && server == cap.name
+            {
+                let tools: Vec<_> = cap
+                    .get_tools()
+                    .into_iter()
+                    .filter(|t| profile.tool_allowed(&t.name))
+                    .collect();
+                return Ok(json!({
+                    "server": server,
+                    "status": if killed { "disabled" } else { "active" },
+                    "tools": tools
+                }));
             }
 
             // Otherwise, look in MCP backends
@@ -304,23 +301,23 @@ impl MetaMcp {
         let mut all_tools: Vec<Value> = Vec::new();
 
         // Capability tools (instant, in memory)
-        if let Some(cap) = self.get_capabilities() {
-            if profile.backend_allowed(&cap.name) {
-                let cap_killed = self.kill_switch.is_killed(&cap.name);
-                for tool in cap.get_tools() {
-                    if !profile.tool_allowed(&tool.name) {
-                        continue;
-                    }
-                    let mut entry = json!({
-                        "server": cap.name,
-                        "name": tool.name,
-                        "description": tool.description.as_deref().unwrap_or("")
-                    });
-                    if cap_killed {
-                        entry["status"] = json!("disabled");
-                    }
-                    all_tools.push(entry);
+        if let Some(cap) = self.get_capabilities()
+            && profile.backend_allowed(&cap.name)
+        {
+            let cap_killed = self.kill_switch.is_killed(&cap.name);
+            for tool in cap.get_tools() {
+                if !profile.tool_allowed(&tool.name) {
+                    continue;
                 }
+                let mut entry = json!({
+                    "server": cap.name,
+                    "name": tool.name,
+                    "description": tool.description.as_deref().unwrap_or("")
+                });
+                if cap_killed {
+                    entry["status"] = json!("disabled");
+                }
+                all_tools.push(entry);
             }
         }
 
@@ -385,26 +382,26 @@ impl MetaMcp {
 
         // Search capability backend exhaustively (fast, no network, all in memory).
         // Iterates over full CapabilityDefinition to include composition metadata.
-        if let Some(cap) = self.get_capabilities() {
-            if profile.backend_allowed(&cap.name) {
-                let cap_killed = self.kill_switch.is_killed(&cap.name);
-                for capability in cap.list_capabilities() {
-                    let tool = capability.to_mcp_tool();
-                    if !profile.tool_allowed(&tool.name) {
-                        continue;
+        if let Some(cap) = self.get_capabilities()
+            && profile.backend_allowed(&cap.name)
+        {
+            let cap_killed = self.kill_switch.is_killed(&cap.name);
+            for capability in cap.list_capabilities() {
+                let tool = capability.to_mcp_tool();
+                if !profile.tool_allowed(&tool.name) {
+                    continue;
+                }
+                collect_tool_tags(&tool, &mut all_tags);
+                if tool_matches_query(&tool, &query) {
+                    let mut entry = build_match_json_with_chains(
+                        &cap.name,
+                        &tool,
+                        &capability.metadata.chains_with,
+                    );
+                    if cap_killed {
+                        entry["status"] = json!("disabled");
                     }
-                    collect_tool_tags(&tool, &mut all_tags);
-                    if tool_matches_query(&tool, &query) {
-                        let mut entry = build_match_json_with_chains(
-                            &cap.name,
-                            &tool,
-                            &capability.metadata.chains_with,
-                        );
-                        if cap_killed {
-                            entry["status"] = json!("disabled");
-                        }
-                        matches.push(entry);
-                    }
+                    matches.push(entry);
                 }
             }
         }

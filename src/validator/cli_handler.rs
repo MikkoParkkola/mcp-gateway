@@ -163,20 +163,17 @@ pub async fn run_validate_command(paths: &[PathBuf], config: &ValidateConfig) ->
         // Auto-fix if requested
         if config.auto_fix {
             let suggested = super::fix::CapabilityFixer::suggest_fixes(&report.results);
-            if !suggested.is_empty() {
-                if let Ok(content) = std::fs::read_to_string(file) {
-                    if let Some(patched) =
-                        super::fix::CapabilityFixer::apply_fixes(&content, &suggested)
-                    {
-                        if std::fs::write(file, patched).is_ok() {
-                            eprintln!(
-                                "Auto-fixed {} issue(s) in {}",
-                                suggested.len(),
-                                file.display()
-                            );
-                        }
-                    }
-                }
+            if !suggested.is_empty()
+                && let Ok(content) = std::fs::read_to_string(file)
+                && let Some(patched) =
+                    super::fix::CapabilityFixer::apply_fixes(&content, &suggested)
+                && std::fs::write(file, patched).is_ok()
+            {
+                eprintln!(
+                    "Auto-fixed {} issue(s) in {}",
+                    suggested.len(),
+                    file.display()
+                );
             }
         }
 

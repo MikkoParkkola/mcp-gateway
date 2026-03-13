@@ -241,49 +241,48 @@ fn validate_property(
     // Only proceed to enum / constraint checks if type was valid.
     if violations.is_empty() {
         // Enum check.
-        if let Some(enum_values) = prop_schema.get("enum").and_then(Value::as_array) {
-            if !enum_values.contains(&coerced) {
-                let options: Vec<String> =
-                    enum_values.iter().map(value_to_display_string).collect();
-                violations.push(ValidationViolation::new(
-                    name,
-                    format!("must be one of: {}", options.join(", ")),
-                ));
-            }
+        if let Some(enum_values) = prop_schema.get("enum").and_then(Value::as_array)
+            && !enum_values.contains(&coerced)
+        {
+            let options: Vec<String> = enum_values.iter().map(value_to_display_string).collect();
+            violations.push(ValidationViolation::new(
+                name,
+                format!("must be one of: {}", options.join(", ")),
+            ));
         }
 
         // Numeric constraints.
         if let Some(num) = coerced.as_f64() {
-            if let Some(min) = prop_schema.get("minimum").and_then(Value::as_f64) {
-                if num < min {
-                    violations.push(ValidationViolation::new(name, format!("must be >= {min}")));
-                }
+            if let Some(min) = prop_schema.get("minimum").and_then(Value::as_f64)
+                && num < min
+            {
+                violations.push(ValidationViolation::new(name, format!("must be >= {min}")));
             }
-            if let Some(max) = prop_schema.get("maximum").and_then(Value::as_f64) {
-                if num > max {
-                    violations.push(ValidationViolation::new(name, format!("must be <= {max}")));
-                }
+            if let Some(max) = prop_schema.get("maximum").and_then(Value::as_f64)
+                && num > max
+            {
+                violations.push(ValidationViolation::new(name, format!("must be <= {max}")));
             }
         }
 
         // String length constraints.
         if let Some(s) = coerced.as_str() {
             let len = s.chars().count();
-            if let Some(min_len) = prop_schema.get("minLength").and_then(Value::as_u64) {
-                if (len as u64) < min_len {
-                    violations.push(ValidationViolation::new(
-                        name,
-                        format!("must be at least {min_len} characters long"),
-                    ));
-                }
+            if let Some(min_len) = prop_schema.get("minLength").and_then(Value::as_u64)
+                && (len as u64) < min_len
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must be at least {min_len} characters long"),
+                ));
             }
-            if let Some(max_len) = prop_schema.get("maxLength").and_then(Value::as_u64) {
-                if (len as u64) > max_len {
-                    violations.push(ValidationViolation::new(
-                        name,
-                        format!("must be at most {max_len} characters long"),
-                    ));
-                }
+            if let Some(max_len) = prop_schema.get("maxLength").and_then(Value::as_u64)
+                && (len as u64) > max_len
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must be at most {max_len} characters long"),
+                ));
             }
         }
     }
@@ -322,11 +321,11 @@ fn coerce_to_integer(value: &Value) -> Result<Value, String> {
         Value::Number(n) if n.is_i64() || n.is_u64() => Ok(value.clone()),
         Value::Number(n) => {
             // Float with no fractional part → integer.
-            if let Some(f) = n.as_f64() {
-                if f.fract() == 0.0 {
-                    #[allow(clippy::cast_possible_truncation)]
-                    return Ok(Value::Number((f as i64).into()));
-                }
+            if let Some(f) = n.as_f64()
+                && f.fract() == 0.0
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                return Ok(Value::Number((f as i64).into()));
             }
             Err(format!("expected integer, got float {n}"))
         }

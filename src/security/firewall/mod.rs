@@ -284,16 +284,16 @@ impl Firewall {
             .as_ref()
             .map(|a| a.score_transition(session_id, server, tool));
 
-        if let Some(score) = anomaly_score {
-            if score >= self.config.anomaly_threshold {
-                findings.push(Finding {
-                    scan_type: ScanType::SequenceAnomaly,
-                    severity: Severity::Low,
-                    description: format!("Unusual tool sequence (anomaly score: {score:.2})"),
-                    matched: format!("{server}:{tool}"),
-                    location: FindingLocation::SequenceAnomaly,
-                });
-            }
+        if let Some(score) = anomaly_score
+            && score >= self.config.anomaly_threshold
+        {
+            findings.push(Finding {
+                scan_type: ScanType::SequenceAnomaly,
+                severity: Severity::Low,
+                description: format!("Unusual tool sequence (anomaly score: {score:.2})"),
+                matched: format!("{server}:{tool}"),
+                location: FindingLocation::SequenceAnomaly,
+            });
         }
 
         // 3. Determine action from rules + finding severity.

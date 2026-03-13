@@ -238,10 +238,10 @@ impl CapabilityExecutor {
             if substituted.is_null() {
                 continue;
             }
-            if let Value::String(ref s) = substituted {
-                if is_unresolved_placeholder(s) {
-                    continue;
-                }
+            if let Value::String(ref s) = substituted
+                && is_unresolved_placeholder(s)
+            {
+                continue;
             }
             result.insert(k.clone(), substituted);
         }

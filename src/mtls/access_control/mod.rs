@@ -186,33 +186,31 @@ impl CompiledCriteria {
         }
 
         // All specified criteria must match
-        if let Some(ref pat) = self.cn {
-            if !identity
+        if let Some(ref pat) = self.cn
+            && !identity
                 .common_name
                 .as_deref()
                 .is_some_and(|cn| pat.matches(cn))
-            {
-                return false;
-            }
+        {
+            return false;
         }
-        if let Some(ref pat) = self.ou {
-            if !identity
+        if let Some(ref pat) = self.ou
+            && !identity
                 .organizational_unit
                 .as_deref()
                 .is_some_and(|ou| pat.matches(ou))
-            {
-                return false;
-            }
+        {
+            return false;
         }
-        if let Some(ref pat) = self.san_uri {
-            if !identity.san_uris.iter().any(|u| pat.matches(u)) {
-                return false;
-            }
+        if let Some(ref pat) = self.san_uri
+            && !identity.san_uris.iter().any(|u| pat.matches(u))
+        {
+            return false;
         }
-        if let Some(ref pat) = self.san_dns {
-            if !identity.san_dns_names.iter().any(|d| pat.matches(d)) {
-                return false;
-            }
+        if let Some(ref pat) = self.san_dns
+            && !identity.san_dns_names.iter().any(|d| pat.matches(d))
+        {
+            return false;
         }
         // At least one criterion must have been specified (otherwise it's a
         // vacuously-true rule with no match fields — we treat as no-match to

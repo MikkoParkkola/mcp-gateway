@@ -215,10 +215,10 @@ fn try_parse_scalar(raw: &str) -> Value {
         return serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()));
     }
     // Pure number?
-    if let Ok(v) = serde_json::from_str::<Value>(raw) {
-        if v.is_number() {
-            return v;
-        }
+    if let Ok(v) = serde_json::from_str::<Value>(raw)
+        && v.is_number()
+    {
+        return v;
     }
     Value::String(raw.to_string())
 }

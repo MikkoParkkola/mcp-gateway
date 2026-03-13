@@ -101,11 +101,11 @@ impl<'a> DiscoveryChain<'a> {
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 // Guard against excessively large specs (10 MB limit)
-                if let Some(len) = resp.content_length() {
-                    if len > 10 * 1024 * 1024 {
-                        debug!(url = %url, len = len, "Spec too large, skipping");
-                        return None;
-                    }
+                if let Some(len) = resp.content_length()
+                    && len > 10 * 1024 * 1024
+                {
+                    debug!(url = %url, len = len, "Spec too large, skipping");
+                    return None;
                 }
 
                 match resp.text().await {

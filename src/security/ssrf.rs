@@ -267,12 +267,12 @@ pub fn check_host_not_ssrf(host: &str) -> Result<()> {
 
     // Strip brackets for IPv6 literals like `[::ffff:127.0.0.1]`
     let trimmed = host.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(addr) = trimmed.parse::<IpAddr>() {
-        if is_private_or_reserved(addr) {
-            return Err(Error::Protocol(format!(
-                "SSRF blocked: host targets private/reserved address {addr}"
-            )));
-        }
+    if let Ok(addr) = trimmed.parse::<IpAddr>()
+        && is_private_or_reserved(addr)
+    {
+        return Err(Error::Protocol(format!(
+            "SSRF blocked: host targets private/reserved address {addr}"
+        )));
     }
 
     // Domain names: pass through — DNS resolution happens downstream.

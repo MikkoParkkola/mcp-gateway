@@ -34,10 +34,10 @@ impl SpecDetector {
     /// Detect format from a parsed JSON/YAML value.
     fn detect_from_value(val: &Value) -> Option<super::SpecFormat> {
         // OpenAPI 3.x: root key "openapi" with value starting "3."
-        if let Some(v) = val.get("openapi").and_then(Value::as_str) {
-            if v.starts_with('3') {
-                return Some(super::SpecFormat::OpenApi3);
-            }
+        if let Some(v) = val.get("openapi").and_then(Value::as_str)
+            && v.starts_with('3')
+        {
+            return Some(super::SpecFormat::OpenApi3);
         }
         // Also accept "openapi" key without version check (forward-compatible)
         if val.get("openapi").is_some() {

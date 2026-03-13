@@ -142,12 +142,12 @@ impl PlaybookEngine {
             }
 
             // Evaluate condition
-            if let Some(ref condition) = step.condition {
-                if !evaluate_condition(condition, &ctx) {
-                    debug!(step = %step.name, "Step skipped (condition false)");
-                    steps_skipped.push(step.name.clone());
-                    continue;
-                }
+            if let Some(ref condition) = step.condition
+                && !evaluate_condition(condition, &ctx)
+            {
+                debug!(step = %step.name, "Step skipped (condition false)");
+                steps_skipped.push(step.name.clone());
+                continue;
             }
 
             // Interpolate arguments

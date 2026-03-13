@@ -230,10 +230,10 @@ impl MetaMcp {
         uri: &str,
     ) -> Option<Arc<crate::backend::Backend>> {
         for backend in self.backends.all() {
-            if let Ok(resources) = backend.get_resources().await {
-                if resources.iter().any(|r| r.uri == uri) {
-                    return Some(backend);
-                }
+            if let Ok(resources) = backend.get_resources().await
+                && resources.iter().any(|r| r.uri == uri)
+            {
+                return Some(backend);
             }
         }
         None

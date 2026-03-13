@@ -208,23 +208,23 @@ impl StdioTransport {
         }
 
         // Success — check if server negotiated a different version
-        if let Some(ref result) = response.result {
-            if let Some(server_version) = result.get("protocolVersion").and_then(Value::as_str) {
-                if server_version == version {
-                    debug!(
-                        command = %self.command,
-                        version = %server_version,
-                        "Protocol version accepted"
-                    );
-                } else {
-                    info!(
-                        command = %self.command,
-                        requested = %version,
-                        negotiated = %server_version,
-                        "Server negotiated different protocol version"
-                    );
-                    *self.protocol_version.write() = Some(server_version.to_string());
-                }
+        if let Some(ref result) = response.result
+            && let Some(server_version) = result.get("protocolVersion").and_then(Value::as_str)
+        {
+            if server_version == version {
+                debug!(
+                    command = %self.command,
+                    version = %server_version,
+                    "Protocol version accepted"
+                );
+            } else {
+                info!(
+                    command = %self.command,
+                    requested = %version,
+                    negotiated = %server_version,
+                    "Server negotiated different protocol version"
+                );
+                *self.protocol_version.write() = Some(server_version.to_string());
             }
         }
 

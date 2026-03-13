@@ -44,22 +44,22 @@ async fn handle_stats_response(response: reqwest::Response, url: &str) -> ExitCo
 }
 
 fn print_stats_body(body: &serde_json::Value, _url: &str) -> ExitCode {
-    if let Some(text) = extract_stats_text(body) {
-        if let Ok(stats) = serde_json::from_str::<serde_json::Value>(text) {
-            println!("📊 Gateway Statistics\n");
-            println!("Invocations:       {}", stats["invocations"]);
-            println!("Cache Hits:        {}", stats["cache_hits"]);
-            println!("Cache Hit Rate:    {}", stats["cache_hit_rate"]);
-            println!("Tools Discovered:  {}", stats["tools_discovered"]);
-            println!("Tools Available:   {}", stats["tools_available"]);
-            println!(
-                "Tokens Saved:      {}",
-                stats["tokens_saved"].as_u64().unwrap_or(0)
-            );
-            println!("Estimated Savings: {}", stats["estimated_savings_usd"]);
-            print_top_tools(&stats);
-            return ExitCode::SUCCESS;
-        }
+    if let Some(text) = extract_stats_text(body)
+        && let Ok(stats) = serde_json::from_str::<serde_json::Value>(text)
+    {
+        println!("📊 Gateway Statistics\n");
+        println!("Invocations:       {}", stats["invocations"]);
+        println!("Cache Hits:        {}", stats["cache_hits"]);
+        println!("Cache Hit Rate:    {}", stats["cache_hit_rate"]);
+        println!("Tools Discovered:  {}", stats["tools_discovered"]);
+        println!("Tools Available:   {}", stats["tools_available"]);
+        println!(
+            "Tokens Saved:      {}",
+            stats["tokens_saved"].as_u64().unwrap_or(0)
+        );
+        println!("Estimated Savings: {}", stats["estimated_savings_usd"]);
+        print_top_tools(&stats);
+        return ExitCode::SUCCESS;
     }
     if let Some(error) = body.get("error") {
         eprintln!(
@@ -85,17 +85,17 @@ fn extract_stats_text(body: &serde_json::Value) -> Option<&str> {
 }
 
 fn print_top_tools(stats: &serde_json::Value) {
-    if let Some(top_tools) = stats["top_tools"].as_array() {
-        if !top_tools.is_empty() {
-            println!("\n🏆 Top Tools:");
-            for tool in top_tools {
-                println!(
-                    "  • {}:{} - {} calls",
-                    tool["server"].as_str().unwrap_or(""),
-                    tool["tool"].as_str().unwrap_or(""),
-                    tool["count"]
-                );
-            }
+    if let Some(top_tools) = stats["top_tools"].as_array()
+        && !top_tools.is_empty()
+    {
+        println!("\n🏆 Top Tools:");
+        for tool in top_tools {
+            println!(
+                "  • {}:{} - {} calls",
+                tool["server"].as_str().unwrap_or(""),
+                tool["tool"].as_str().unwrap_or(""),
+                tool["count"]
+            );
         }
     }
 }

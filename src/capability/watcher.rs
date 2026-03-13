@@ -132,9 +132,9 @@ impl CapabilityWatcher {
                     }
                     _ = interval.tick() => {
                         // Check if we should trigger reload
-                        if pending_reload {
-                            if let Some(last) = last_event {
-                                if last.elapsed() >= Duration::from_millis(DEBOUNCE_MS) {
+                        if pending_reload
+                            && let Some(last) = last_event
+                                && last.elapsed() >= Duration::from_millis(DEBOUNCE_MS) {
                                     pending_reload = false;
                                     last_event = None;
 
@@ -156,8 +156,6 @@ impl CapabilityWatcher {
                                         }
                                     }
                                 }
-                            }
-                        }
                     }
                     _ = shutdown_rx.recv() => {
                         info!("Capability watcher shutting down");

@@ -187,13 +187,13 @@ fn count_tools(yaml: &str) -> usize {
     let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
         return 0;
     };
-    if let serde_yaml::Value::Mapping(map) = &val {
-        if let Some(providers) = map.get("providers") {
-            match providers {
-                serde_yaml::Value::Mapping(m) => return m.len().max(1),
-                serde_yaml::Value::Sequence(s) => return s.len().max(1),
-                _ => {}
-            }
+    if let serde_yaml::Value::Mapping(map) = &val
+        && let Some(providers) = map.get("providers")
+    {
+        match providers {
+            serde_yaml::Value::Mapping(m) => return m.len().max(1),
+            serde_yaml::Value::Sequence(s) => return s.len().max(1),
+            _ => {}
         }
     }
     // Treat as a single-tool capability if parsing succeeds.
@@ -367,17 +367,17 @@ pub async fn put_capability(
     });
 
     // Ensure parent directory exists.
-    if let Some(parent) = target_path.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "io_error",
-                    "message": format!("Failed to create directory: {e}"),
-                })),
-            )
-                .into_response();
-        }
+    if let Some(parent) = target_path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "io_error",
+                "message": format!("Failed to create directory: {e}"),
+            })),
+        )
+            .into_response();
     }
 
     match tokio::fs::write(&target_path, body.as_bytes()).await {
@@ -490,17 +490,17 @@ pub async fn create_capability(
     let dir = primary_write_dir(dirs).unwrap_or("capabilities");
     let target_path = Path::new(dir).join(format!("{name}.yaml"));
 
-    if let Some(parent) = target_path.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "io_error",
-                    "message": format!("Failed to create directory: {e}"),
-                })),
-            )
-                .into_response();
-        }
+    if let Some(parent) = target_path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "io_error",
+                "message": format!("Failed to create directory: {e}"),
+            })),
+        )
+            .into_response();
     }
 
     match tokio::fs::write(&target_path, yaml.as_bytes()).await {

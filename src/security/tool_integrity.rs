@@ -119,25 +119,25 @@ impl ToolIntegrityChecker {
 
         // Check for mutations in existing tools
         for (name, new_fp) in &new_fps {
-            if let Some(old_fp) = entry.get(name) {
-                if old_fp.schema_hash != new_fp.schema_hash {
-                    let mutation = ToolMutation {
-                        backend: backend.to_string(),
-                        tool_name: name.clone(),
-                        previous_hash: old_fp.schema_hash.clone(),
-                        new_hash: new_fp.schema_hash.clone(),
-                        previous_description: old_fp.description.clone(),
-                        new_description: new_fp.description.clone(),
-                    };
-                    warn!(
-                        backend = backend,
-                        tool = name.as_str(),
-                        previous_hash = old_fp.schema_hash.as_str(),
-                        new_hash = new_fp.schema_hash.as_str(),
-                        "SECURITY: Tool definition mutated (possible rug pull)"
-                    );
-                    mutations.push(mutation);
-                }
+            if let Some(old_fp) = entry.get(name)
+                && old_fp.schema_hash != new_fp.schema_hash
+            {
+                let mutation = ToolMutation {
+                    backend: backend.to_string(),
+                    tool_name: name.clone(),
+                    previous_hash: old_fp.schema_hash.clone(),
+                    new_hash: new_fp.schema_hash.clone(),
+                    previous_description: old_fp.description.clone(),
+                    new_description: new_fp.description.clone(),
+                };
+                warn!(
+                    backend = backend,
+                    tool = name.as_str(),
+                    previous_hash = old_fp.schema_hash.as_str(),
+                    new_hash = new_fp.schema_hash.as_str(),
+                    "SECURITY: Tool definition mutated (possible rug pull)"
+                );
+                mutations.push(mutation);
             }
             // New tools added after baseline are not mutations — they're additions.
         }

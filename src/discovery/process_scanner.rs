@@ -289,14 +289,12 @@ impl ProcessScanner {
         ];
 
         for pattern in &patterns {
-            if let Ok(re) = regex::Regex::new(pattern) {
-                if let Some(captures) = re.captures(command) {
-                    if let Some(port_str) = captures.get(1) {
-                        if let Ok(port) = port_str.as_str().parse::<u16>() {
-                            return Some(port);
-                        }
-                    }
-                }
+            if let Ok(re) = regex::Regex::new(pattern)
+                && let Some(captures) = re.captures(command)
+                && let Some(port_str) = captures.get(1)
+                && let Ok(port) = port_str.as_str().parse::<u16>()
+            {
+                return Some(port);
             }
         }
 

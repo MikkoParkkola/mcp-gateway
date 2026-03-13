@@ -156,12 +156,12 @@ pub fn validate_tool_name(name: &str) -> Result<(), String> {
     }
 
     // Must start with alphanumeric or underscore (not a leading hyphen).
-    if let Some(first) = name.chars().next() {
-        if first == '-' {
-            return Err(format!(
-                "Tool name '{name}' must start with [A-Za-z0-9_], not '-'"
-            ));
-        }
+    if let Some(first) = name.chars().next()
+        && first == '-'
+    {
+        return Err(format!(
+            "Tool name '{name}' must start with [A-Za-z0-9_], not '-'"
+        ));
     }
 
     Ok(())

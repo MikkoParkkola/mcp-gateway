@@ -86,20 +86,20 @@ pub(super) async fn backend_handler(
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
 
     // Check backend access if auth is enabled
-    if let Some(ref client) = client {
-        if !client.can_access_backend(&name) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "error": {
-                        "code": -32003,
-                        "message": format!("Client '{}' not authorized for backend '{}'", client.name, name)
-                    },
-                    "id": null
-                })),
-            );
-        }
+    if let Some(ref client) = client
+        && !client.can_access_backend(&name)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32003,
+                    "message": format!("Client '{}' not authorized for backend '{}'", client.name, name)
+                },
+                "id": null
+            })),
+        );
     }
 
     // Parse JSON body

@@ -202,11 +202,11 @@ impl CapabilityExecutor {
 
         // Inject auth credential as a query parameter when auth.param is specified
         // (e.g., Spoonacular uses ?apiKey=..., Google Maps uses ?key=...)
-        if let Some(ref param_name) = capability.auth.param {
-            if capability.auth.required {
-                let credential = self.fetch_credential(&capability.auth).await?;
-                request = request.query(&[(param_name.as_str(), credential.as_str())]);
-            }
+        if let Some(ref param_name) = capability.auth.param
+            && capability.auth.required
+        {
+            let credential = self.fetch_credential(&capability.auth).await?;
+            request = request.query(&[(param_name.as_str(), credential.as_str())]);
         }
 
         // Add query parameters (from config.params with substitution)
@@ -293,10 +293,10 @@ impl CapabilityExecutor {
                 continue;
             }
 
-            if let Ok(header_name) = name.parse::<HeaderName>() {
-                if let Ok(header_value) = value.parse::<HeaderValue>() {
-                    headers.insert(header_name, header_value);
-                }
+            if let Ok(header_name) = name.parse::<HeaderName>()
+                && let Ok(header_value) = value.parse::<HeaderValue>()
+            {
+                headers.insert(header_name, header_value);
             }
         }
 

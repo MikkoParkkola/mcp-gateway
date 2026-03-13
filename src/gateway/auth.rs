@@ -70,10 +70,10 @@ impl ResolvedAuthConfig {
         let bearer_token = config.resolve_bearer_token();
 
         // Log if auto-generated token
-        if config.bearer_token.as_deref() == Some("auto") {
-            if let Some(ref token) = bearer_token {
-                tracing::info!("Auto-generated bearer token: {}", token);
-            }
+        if config.bearer_token.as_deref() == Some("auto")
+            && let Some(ref token) = bearer_token
+        {
+            tracing::info!("Auto-generated bearer token: {}", token);
         }
 
         let api_keys: Vec<ResolvedApiKey> = config
@@ -92,11 +92,11 @@ impl ResolvedAuthConfig {
         // Pre-create rate limiters for clients with rate limits
         let rate_limiters = DashMap::new();
         for key in &api_keys {
-            if key.rate_limit > 0 {
-                if let Some(quota) = NonZeroU32::new(key.rate_limit) {
-                    let limiter = RateLimiter::direct(Quota::per_minute(quota));
-                    rate_limiters.insert(key.name.clone(), Arc::new(limiter));
-                }
+            if key.rate_limit > 0
+                && let Some(quota) = NonZeroU32::new(key.rate_limit)
+            {
+                let limiter = RateLimiter::direct(Quota::per_minute(quota));
+                rate_limiters.insert(key.name.clone(), Arc::new(limiter));
             }
         }
 
@@ -119,16 +119,16 @@ impl ResolvedAuthConfig {
     #[must_use]
     pub fn validate_token(&self, token: &str) -> Option<AuthenticatedClient> {
         // Check bearer token first
-        if let Some(ref bearer) = self.bearer_token {
-            if token == bearer {
-                return Some(AuthenticatedClient {
-                    name: "bearer".to_string(),
-                    rate_limit: 0,
-                    backends: vec!["*".to_string()],
-                    allowed_tools: None,
-                    denied_tools: None,
-                });
-            }
+        if let Some(ref bearer) = self.bearer_token
+            && token == bearer
+        {
+            return Some(AuthenticatedClient {
+                name: "bearer".to_string(),
+                rate_limit: 0,
+                backends: vec!["*".to_string()],
+                allowed_tools: None,
+                denied_tools: None,
+            });
         }
 
         // Check API keys
@@ -193,23 +193,23 @@ impl AuthenticatedClient {
         let qualified = format!("{server}:{tool}");
 
         // If allowlist is set, ONLY tools in the list are permitted
-        if let Some(ref allowed) = self.allowed_tools {
-            if !Self::matches_any_pattern(allowed, tool, &qualified) {
-                return Err(format!(
-                    "Tool '{tool}' on server '{server}' is not in the allowlist for client '{}'",
-                    self.name
-                ));
-            }
+        if let Some(ref allowed) = self.allowed_tools
+            && !Self::matches_any_pattern(allowed, tool, &qualified)
+        {
+            return Err(format!(
+                "Tool '{tool}' on server '{server}' is not in the allowlist for client '{}'",
+                self.name
+            ));
         }
 
         // If denylist is set, tools in the list are blocked
-        if let Some(ref denied) = self.denied_tools {
-            if Self::matches_any_pattern(denied, tool, &qualified) {
-                return Err(format!(
-                    "Tool '{tool}' on server '{server}' is blocked by client '{}' policy",
-                    self.name
-                ));
-            }
+        if let Some(ref denied) = self.denied_tools
+            && Self::matches_any_pattern(denied, tool, &qualified)
+        {
+            return Err(format!(
+                "Tool '{tool}' on server '{server}' is blocked by client '{}' policy",
+                self.name
+            ));
         }
 
         Ok(())
@@ -308,15 +308,15 @@ pub async fn auth_middleware(
     }
 
     // 2. Try temporary token (key server)
-    if let Some(ref ks) = state.key_server {
-        if let Some((client, identity_token)) = ks.validate_token(token).await {
-            debug!(client = %client.name, path = %path, "Authenticated via temporary token");
-            request
-                .extensions_mut()
-                .insert(identity_token.identity.clone());
-            request.extensions_mut().insert(client);
-            return next.run(request).await;
-        }
+    if let Some(ref ks) = state.key_server
+        && let Some((client, identity_token)) = ks.validate_token(token).await
+    {
+        debug!(client = %client.name, path = %path, "Authenticated via temporary token");
+        request
+            .extensions_mut()
+            .insert(identity_token.identity.clone());
+        request.extensions_mut().insert(client);
+        return next.run(request).await;
     }
 
     // 3. Reject

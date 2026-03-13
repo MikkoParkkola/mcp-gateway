@@ -198,11 +198,11 @@ pub fn merge_into_config(
     };
 
     // Ensure parent directory exists before writing.
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
     }
 
     let json_str = serde_json::to_string_pretty(&doc)
@@ -429,26 +429,25 @@ fn do_export(
 fn export_one(spec: &ClientSpec, name: &str, entry: &Value, dry_run: bool) -> ExportAction {
     // For workspace-relative paths (Cursor, VS Code, Cline): skip if the
     // parent directory does not exist, since there is no project open.
-    if !spec.path.is_absolute()
+    if (!spec.path.is_absolute()
         || spec.label == "Cursor"
         || spec.label == "VS Code Copilot"
-        || spec.label == "Cline"
+        || spec.label == "Cline")
+        && let Some(parent) = spec.path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
     {
-        if let Some(parent) = spec.path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                return ExportAction::Skipped(format!("no {} directory", parent.display()));
-            }
-        }
+        return ExportAction::Skipped(format!("no {} directory", parent.display()));
     }
 
     // For global paths (Claude Desktop, Windsurf, Zed): skip if the parent
     // directory doesn't exist (client not installed).
-    if spec.label != "Claude Code" {
-        if let Some(parent) = spec.path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                return ExportAction::Skipped(format!("{} not installed", spec.label));
-            }
-        }
+    if spec.label != "Claude Code"
+        && let Some(parent) = spec.path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        return ExportAction::Skipped(format!("{} not installed", spec.label));
     }
 
     if dry_run {
@@ -525,36 +524,36 @@ async fn run_watch_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        if let Some(t) = last_event {
-            if t.elapsed() >= debounce {
-                last_event = None;
-                let now = chrono::Local::now().format("%H:%M:%S");
-                println!(
-                    "[{now}] {} changed — regenerating...",
-                    config_path.display()
-                );
+        if let Some(t) = last_event
+            && t.elapsed() >= debounce
+        {
+            last_event = None;
+            let now = chrono::Local::now().format("%H:%M:%S");
+            println!(
+                "[{now}] {} changed — regenerating...",
+                config_path.display()
+            );
 
-                match Config::load(Some(config_path)) {
-                    Ok(config) => {
-                        let entry = build_gateway_entry(&config, Some(config_path), mode);
-                        let specs = client_specs(target);
-                        let mut updated = 0usize;
-                        for spec in specs {
-                            match export_one(&spec, name, &entry, false) {
-                                ExportAction::Created | ExportAction::Updated => {
-                                    println!("  {}: Updated", spec.label);
-                                    updated += 1;
-                                }
-                                ExportAction::Skipped(_) => {}
-                                ExportAction::Failed(e) => {
-                                    eprintln!("  {}: FAILED — {e}", spec.label);
-                                }
+            match Config::load(Some(config_path)) {
+                Ok(config) => {
+                    let entry = build_gateway_entry(&config, Some(config_path), mode);
+                    let specs = client_specs(target);
+                    let mut updated = 0usize;
+                    for spec in specs {
+                        match export_one(&spec, name, &entry, false) {
+                            ExportAction::Created | ExportAction::Updated => {
+                                println!("  {}: Updated", spec.label);
+                                updated += 1;
+                            }
+                            ExportAction::Skipped(_) => {}
+                            ExportAction::Failed(e) => {
+                                eprintln!("  {}: FAILED — {e}", spec.label);
                             }
                         }
-                        println!("[{now}] Done ({updated} client(s) updated).");
                     }
-                    Err(e) => eprintln!("  Cannot reload config: {e}"),
+                    println!("[{now}] Done ({updated} client(s) updated).");
                 }
+                Err(e) => eprintln!("  Cannot reload config: {e}"),
             }
         }
     }

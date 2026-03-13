@@ -414,20 +414,19 @@ impl OpenApiConverter {
         }
 
         // Add request body properties (simplified - assumes object type)
-        if let Some(body) = body {
-            if let Some(media) = body.content.get("application/json") {
-                if let Some(ref schema) = media.schema {
-                    if let Some(body_props) = schema.get("properties").and_then(|p| p.as_object()) {
-                        for (k, v) in body_props {
-                            properties.insert(k.clone(), v.clone());
-                        }
-                    }
-                    if let Some(body_required) = schema.get("required").and_then(|r| r.as_array()) {
-                        for r in body_required {
-                            if !required.contains(r) {
-                                required.push(r.clone());
-                            }
-                        }
+        if let Some(body) = body
+            && let Some(media) = body.content.get("application/json")
+            && let Some(ref schema) = media.schema
+        {
+            if let Some(body_props) = schema.get("properties").and_then(|p| p.as_object()) {
+                for (k, v) in body_props {
+                    properties.insert(k.clone(), v.clone());
+                }
+            }
+            if let Some(body_required) = schema.get("required").and_then(|r| r.as_array()) {
+                for r in body_required {
+                    if !required.contains(r) {
+                        required.push(r.clone());
                     }
                 }
             }
@@ -449,14 +448,12 @@ impl OpenApiConverter {
             .or_else(|| responses.get("201"))
             .or_else(|| responses.get("default"));
 
-        if let Some(resp) = response {
-            if let Some(ref content) = resp.content {
-                if let Some(media) = content.get("application/json") {
-                    if let Some(ref schema) = media.schema {
-                        return schema.clone();
-                    }
-                }
-            }
+        if let Some(resp) = response
+            && let Some(ref content) = resp.content
+            && let Some(media) = content.get("application/json")
+            && let Some(ref schema) = media.schema
+        {
+            return schema.clone();
         }
 
         // Default: any object

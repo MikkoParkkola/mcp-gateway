@@ -412,17 +412,17 @@ impl KillSwitch {
     /// Check whether a capability key is disabled, optionally auto-recovering.
     fn is_capability_key_disabled(&self, key: &str, cooldown: Option<Duration>) -> bool {
         if let Some(entry) = self.disabled_capabilities.get(key) {
-            if let Some(cd) = cooldown {
-                if entry.elapsed() >= cd {
-                    // Cooldown elapsed — auto-recover.
-                    drop(entry);
-                    self.disabled_capabilities.remove(key);
-                    if let Some(budget) = self.capability_budgets.get(key) {
-                        budget.lock().reset();
-                    }
-                    info!(capability = key, "Capability auto-recovered after cooldown");
-                    return false;
+            if let Some(cd) = cooldown
+                && entry.elapsed() >= cd
+            {
+                // Cooldown elapsed — auto-recover.
+                drop(entry);
+                self.disabled_capabilities.remove(key);
+                if let Some(budget) = self.capability_budgets.get(key) {
+                    budget.lock().reset();
                 }
+                info!(capability = key, "Capability auto-recovered after cooldown");
+                return false;
             }
             return true;
         }

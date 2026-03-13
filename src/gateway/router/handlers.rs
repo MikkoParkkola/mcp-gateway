@@ -289,26 +289,24 @@ pub(super) async fn meta_mcp_handler(
     // Must be handled BEFORE `parse_request`, which rejects messages without "method".
     if request.get("method").is_none()
         && (request.get("result").is_some() || request.get("error").is_some())
+        && let Some(resp_id) = request.get("id").and_then(|v| v.as_str())
+        && (resp_id.starts_with("sampling-") || resp_id.starts_with("elicitation-"))
     {
-        if let Some(resp_id) = request.get("id").and_then(|v| v.as_str()) {
-            if resp_id.starts_with("sampling-") || resp_id.starts_with("elicitation-") {
-                debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
-                let resolved = state
-                    .proxy_manager
-                    .resolve_pending(resp_id, request.clone());
-                if resolved {
-                    debug!(id = %resp_id, "Routed proxy response to caller");
-                } else {
-                    warn!(id = %resp_id, "No pending request for response");
-                }
-                let mut resp = Json(json!({})).into_response();
-                resp.headers_mut().insert(
-                    axum::http::header::HeaderName::from_static("mcp-session-id"),
-                    session_id.parse().unwrap(),
-                );
-                return (StatusCode::ACCEPTED, resp).into_response();
-            }
+        debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
+        let resolved = state
+            .proxy_manager
+            .resolve_pending(resp_id, request.clone());
+        if resolved {
+            debug!(id = %resp_id, "Routed proxy response to caller");
+        } else {
+            warn!(id = %resp_id, "No pending request for response");
         }
+        let mut resp = Json(json!({})).into_response();
+        resp.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("mcp-session-id"),
+            session_id.parse().unwrap(),
+        );
+        return (StatusCode::ACCEPTED, resp).into_response();
     }
 
     // Parse request
@@ -359,22 +357,57 @@ pub(super) async fn meta_mcp_handler(
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 
             // Apply tool policy check and SSRF validation for gateway_invoke calls
-            if tool_name == "gateway_invoke" {
-                if let Some(ref args) = params {
-                    let server = args
-                        .get("arguments")
-                        .and_then(|a| a.get("server"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let tool = args
-                        .get("arguments")
-                        .and_then(|a| a.get("tool"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if !server.is_empty() && !tool.is_empty() {
-                        // Global policy check
-                        if let Err(e) = state.tool_policy.check(server, tool) {
-                            let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
+            if tool_name == "gateway_invoke"
+                && let Some(ref args) = params
+            {
+                let server = args
+                    .get("arguments")
+                    .and_then(|a| a.get("server"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let tool = args
+                    .get("arguments")
+                    .and_then(|a| a.get("tool"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !server.is_empty() && !tool.is_empty() {
+                    // Global policy check
+                    if let Err(e) = state.tool_policy.check(server, tool) {
+                        let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
+                        let mut response =
+                            Json(serde_json::to_value(resp).unwrap()).into_response();
+                        response.headers_mut().insert(
+                            axum::http::header::HeaderName::from_static("mcp-session-id"),
+                            session_id.parse().unwrap(),
+                        );
+                        return (StatusCode::FORBIDDEN, response).into_response();
+                    }
+
+                    // mTLS certificate-based policy check (defense-in-depth layer)
+                    if !state.mtls_policy.is_empty() {
+                        use crate::mtls::PolicyDecision;
+                        let decision =
+                            state
+                                .mtls_policy
+                                .evaluate(cert_identity.as_ref(), server, tool);
+                        if decision == PolicyDecision::Deny {
+                            let identity_label = cert_identity
+                                .as_ref()
+                                .map_or("<unauthenticated>", |id| id.display_name.as_str());
+                            warn!(
+                                server = server,
+                                tool = tool,
+                                identity = identity_label,
+                                "Tool invocation denied by mTLS policy"
+                            );
+                            let resp = JsonRpcResponse::error(
+                                Some(id),
+                                -32600,
+                                format!(
+                                    "Tool '{tool}' on server '{server}' is blocked by \
+                                         certificate policy"
+                                ),
+                            );
                             let mut response =
                                 Json(serde_json::to_value(resp).unwrap()).into_response();
                             response.headers_mut().insert(
@@ -383,125 +416,80 @@ pub(super) async fn meta_mcp_handler(
                             );
                             return (StatusCode::FORBIDDEN, response).into_response();
                         }
-
-                        // mTLS certificate-based policy check (defense-in-depth layer)
-                        if !state.mtls_policy.is_empty() {
-                            use crate::mtls::PolicyDecision;
-                            let decision =
-                                state
-                                    .mtls_policy
-                                    .evaluate(cert_identity.as_ref(), server, tool);
-                            if decision == PolicyDecision::Deny {
-                                let identity_label = cert_identity
-                                    .as_ref()
-                                    .map_or("<unauthenticated>", |id| id.display_name.as_str());
-                                warn!(
-                                    server = server,
-                                    tool = tool,
-                                    identity = identity_label,
-                                    "Tool invocation denied by mTLS policy"
-                                );
-                                let resp = JsonRpcResponse::error(
-                                    Some(id),
-                                    -32600,
-                                    format!(
-                                        "Tool '{tool}' on server '{server}' is blocked by \
-                                         certificate policy"
-                                    ),
-                                );
-                                let mut response =
-                                    Json(serde_json::to_value(resp).unwrap()).into_response();
-                                response.headers_mut().insert(
-                                    axum::http::header::HeaderName::from_static("mcp-session-id"),
-                                    session_id.parse().unwrap(),
-                                );
-                                return (StatusCode::FORBIDDEN, response).into_response();
-                            }
-                        }
-
-                        // Per-client tool scope check
-                        if let Some(ref c) = client {
-                            if let Err(e) = c.check_tool_scope(server, tool) {
-                                let resp = JsonRpcResponse::error(Some(id), -32600, e);
-                                let mut response =
-                                    Json(serde_json::to_value(resp).unwrap()).into_response();
-                                response.headers_mut().insert(
-                                    axum::http::header::HeaderName::from_static("mcp-session-id"),
-                                    session_id.parse().unwrap(),
-                                );
-                                return (StatusCode::FORBIDDEN, response).into_response();
-                            }
-                        }
                     }
 
-                    // Firewall: pre-invocation request scan
-                    #[cfg(feature = "firewall")]
-                    if let Some(ref fw) = state.firewall {
-                        if !server.is_empty() && !tool.is_empty() {
-                            let caller_name =
-                                client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                            let invoke_args = args
-                                .get("arguments")
-                                .cloned()
-                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                            let verdict = fw.check_request(
-                                &session_id,
-                                server,
-                                tool,
-                                &invoke_args,
-                                caller_name,
-                            );
-                            if verdict.action == FirewallAction::Warn {
-                                warn!(
-                                    server = server,
-                                    tool = tool,
-                                    findings = verdict.findings.len(),
-                                    "Firewall: request warning"
-                                );
-                            }
-                            if !verdict.allowed {
-                                let reason = verdict
-                                    .findings
-                                    .first()
-                                    .map_or("Security firewall blocked this request", |f| {
-                                        f.description.as_str()
-                                    });
-                                let resp = JsonRpcResponse::error(
-                                    Some(id),
-                                    -32600,
-                                    format!("Firewall blocked: {reason}"),
-                                );
-                                let mut response =
-                                    Json(serde_json::to_value(resp).unwrap()).into_response();
-                                response.headers_mut().insert(
-                                    axum::http::header::HeaderName::from_static("mcp-session-id"),
-                                    session_id.parse().unwrap(),
-                                );
-                                return (StatusCode::BAD_REQUEST, response).into_response();
-                            }
-                        }
+                    // Per-client tool scope check
+                    if let Some(ref c) = client
+                        && let Err(e) = c.check_tool_scope(server, tool)
+                    {
+                        let resp = JsonRpcResponse::error(Some(id), -32600, e);
+                        let mut response =
+                            Json(serde_json::to_value(resp).unwrap()).into_response();
+                        response.headers_mut().insert(
+                            axum::http::header::HeaderName::from_static("mcp-session-id"),
+                            session_id.parse().unwrap(),
+                        );
+                        return (StatusCode::FORBIDDEN, response).into_response();
                     }
+                }
 
-                    // SSRF protection: validate backend URL before proxying
-                    if state.ssrf_protection && !server.is_empty() {
-                        if let Some(backend) = state.backends.get(server) {
-                            if let Some(url) = backend.transport_url() {
-                                if let Err(e) = validate_url_not_ssrf(url) {
-                                    let resp =
-                                        JsonRpcResponse::error(Some(id), -32600, e.to_string());
-                                    let mut response =
-                                        Json(serde_json::to_value(resp).unwrap()).into_response();
-                                    response.headers_mut().insert(
-                                        axum::http::header::HeaderName::from_static(
-                                            "mcp-session-id",
-                                        ),
-                                        session_id.parse().unwrap(),
-                                    );
-                                    return (StatusCode::FORBIDDEN, response).into_response();
-                                }
-                            }
-                        }
+                // Firewall: pre-invocation request scan
+                #[cfg(feature = "firewall")]
+                if let Some(ref fw) = state.firewall
+                    && !server.is_empty()
+                    && !tool.is_empty()
+                {
+                    let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                    let invoke_args = args
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    let verdict =
+                        fw.check_request(&session_id, server, tool, &invoke_args, caller_name);
+                    if verdict.action == FirewallAction::Warn {
+                        warn!(
+                            server = server,
+                            tool = tool,
+                            findings = verdict.findings.len(),
+                            "Firewall: request warning"
+                        );
                     }
+                    if !verdict.allowed {
+                        let reason = verdict
+                            .findings
+                            .first()
+                            .map_or("Security firewall blocked this request", |f| {
+                                f.description.as_str()
+                            });
+                        let resp = JsonRpcResponse::error(
+                            Some(id),
+                            -32600,
+                            format!("Firewall blocked: {reason}"),
+                        );
+                        let mut response =
+                            Json(serde_json::to_value(resp).unwrap()).into_response();
+                        response.headers_mut().insert(
+                            axum::http::header::HeaderName::from_static("mcp-session-id"),
+                            session_id.parse().unwrap(),
+                        );
+                        return (StatusCode::BAD_REQUEST, response).into_response();
+                    }
+                }
+
+                // SSRF protection: validate backend URL before proxying
+                if state.ssrf_protection
+                    && !server.is_empty()
+                    && let Some(backend) = state.backends.get(server)
+                    && let Some(url) = backend.transport_url()
+                    && let Err(e) = validate_url_not_ssrf(url)
+                {
+                    let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
+                    let mut response = Json(serde_json::to_value(resp).unwrap()).into_response();
+                    response.headers_mut().insert(
+                        axum::http::header::HeaderName::from_static("mcp-session-id"),
+                        session_id.parse().unwrap(),
+                    );
+                    return (StatusCode::FORBIDDEN, response).into_response();
                 }
             }
 
@@ -544,25 +532,20 @@ pub(super) async fn meta_mcp_handler(
 
             // Firewall: post-invocation response scan + credential redaction.
             #[cfg(feature = "firewall")]
-            if let Some(ref fw) = state.firewall {
-                if !fw_server.is_empty() && !fw_tool.is_empty() {
-                    if let Some(ref mut result_val) = call_response.result {
-                        let verdict = fw.check_response(
-                            &session_id,
-                            &fw_server,
-                            &fw_tool,
-                            result_val,
-                            &fw_caller,
-                        );
-                        if verdict.action == FirewallAction::Warn {
-                            warn!(
-                                server = %fw_server,
-                                tool = %fw_tool,
-                                findings = verdict.findings.len(),
-                                "Firewall: response warning"
-                            );
-                        }
-                    }
+            if let Some(ref fw) = state.firewall
+                && !fw_server.is_empty()
+                && !fw_tool.is_empty()
+                && let Some(ref mut result_val) = call_response.result
+            {
+                let verdict =
+                    fw.check_response(&session_id, &fw_server, &fw_tool, result_val, &fw_caller);
+                if verdict.action == FirewallAction::Warn {
+                    warn!(
+                        server = %fw_server,
+                        tool = %fw_tool,
+                        findings = verdict.findings.len(),
+                        "Firewall: response warning"
+                    );
                 }
             }
 

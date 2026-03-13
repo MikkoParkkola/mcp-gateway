@@ -175,7 +175,7 @@ impl CronField {
         match self {
             Self::Any => true,
             Self::Exact(n) => value == *n,
-            Self::Step(n) => value % n == 0,
+            Self::Step(n) => value.is_multiple_of(*n),
             Self::Range(lo, hi) => value >= *lo && value <= *hi,
             Self::List(vs) => vs.contains(&value),
         }

@@ -173,11 +173,11 @@ async fn import_handler(
 
     for cap in &caps {
         // Filter by selected_tools when provided.
-        if let Some(ref selected) = body.selected_tools {
-            if !selected.iter().any(|s| s == &cap.name) {
-                skipped.push(cap.name.clone());
-                continue;
-            }
+        if let Some(ref selected) = body.selected_tools
+            && !selected.iter().any(|s| s == &cap.name)
+        {
+            skipped.push(cap.name.clone());
+            continue;
         }
 
         match cap.write_to_file(&output_dir) {
@@ -321,28 +321,27 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
 
     for line in cap.yaml.lines() {
         let trimmed = line.trim();
-        if method.is_empty() {
-            if let Some(rest) = trimmed.strip_prefix("method: ") {
-                method = rest.trim().to_string();
-            }
+        if method.is_empty()
+            && let Some(rest) = trimmed.strip_prefix("method: ")
+        {
+            method = rest.trim().to_string();
         }
-        if path.is_empty() {
-            if let Some(rest) = trimmed.strip_prefix("path: ") {
-                path = rest.trim().to_string();
-            }
+        if path.is_empty()
+            && let Some(rest) = trimmed.strip_prefix("path: ")
+        {
+            path = rest.trim().to_string();
         }
         // Collect param names from inline template refs: `  key: "{param}"`
-        if trimmed.ends_with("}\"") || trimmed.ends_with('}') {
-            if let Some(start) = trimmed.find('{') {
-                if let Some(end) = trimmed.find('}') {
-                    let param_name = &trimmed[start + 1..end];
-                    if !param_name.is_empty()
-                        && param_name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                        && !parameters.contains(&param_name.to_string())
-                    {
-                        parameters.push(param_name.to_string());
-                    }
-                }
+        if (trimmed.ends_with("}\"") || trimmed.ends_with('}'))
+            && let Some(start) = trimmed.find('{')
+            && let Some(end) = trimmed.find('}')
+        {
+            let param_name = &trimmed[start + 1..end];
+            if !param_name.is_empty()
+                && param_name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && !parameters.contains(&param_name.to_string())
+            {
+                parameters.push(param_name.to_string());
             }
         }
     }

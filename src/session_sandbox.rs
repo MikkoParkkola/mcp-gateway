@@ -314,15 +314,15 @@ impl SandboxEnforcer {
         }
 
         // 2. Backend allowlist
-        if let Some(ref allowed) = self.sandbox.allowed_backends {
-            if !allowed.iter().any(|b| b == backend) {
-                return Err(Error::Protocol(
-                    SandboxViolation::BackendNotAllowed {
-                        backend: backend.to_string(),
-                    }
-                    .to_string(),
-                ));
-            }
+        if let Some(ref allowed) = self.sandbox.allowed_backends
+            && !allowed.iter().any(|b| b == backend)
+        {
+            return Err(Error::Protocol(
+                SandboxViolation::BackendNotAllowed {
+                    backend: backend.to_string(),
+                }
+                .to_string(),
+            ));
         }
 
         // 3. Tool denylist

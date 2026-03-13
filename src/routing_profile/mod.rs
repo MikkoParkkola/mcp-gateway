@@ -205,16 +205,16 @@ impl PatternFilter {
     /// Return `true` if `name` passes both the allow and deny stages.
     fn is_allowed(&self, name: &str) -> bool {
         // Allow stage: must match at least one allowlist pattern (if list exists).
-        if let Some(ref allow_patterns) = self.allow {
-            if !allow_patterns.iter().any(|p| p.matches(name)) {
-                return false;
-            }
+        if let Some(ref allow_patterns) = self.allow
+            && !allow_patterns.iter().any(|p| p.matches(name))
+        {
+            return false;
         }
         // Deny stage: must not match any denylist pattern.
-        if let Some(ref deny_patterns) = self.deny {
-            if deny_patterns.iter().any(|p| p.matches(name)) {
-                return false;
-            }
+        if let Some(ref deny_patterns) = self.deny
+            && deny_patterns.iter().any(|p| p.matches(name))
+        {
+            return false;
         }
         true
     }

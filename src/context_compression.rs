@@ -243,10 +243,9 @@ impl SessionCompressor {
                     .groups
                     .iter_mut()
                     .find(|g| g.members.contains(canonical_name))
+                    && !grp.members.contains(&tool.name)
                 {
-                    if !grp.members.contains(&tool.name) {
-                        grp.members.push(tool.name.clone());
-                    }
+                    grp.members.push(tool.name.clone());
                 }
                 continue;
             }
@@ -262,10 +261,10 @@ impl SessionCompressor {
                     self.aliases
                         .insert(tool.name.clone(), existing.name.clone());
                     let existing_hash = semantic_hash(existing);
-                    if let Some(grp) = self.groups.iter_mut().find(|g| g.hash == existing_hash) {
-                        if !grp.members.contains(&tool.name) {
-                            grp.members.push(tool.name.clone());
-                        }
+                    if let Some(grp) = self.groups.iter_mut().find(|g| g.hash == existing_hash)
+                        && !grp.members.contains(&tool.name)
+                    {
+                        grp.members.push(tool.name.clone());
                     }
                     merged = true;
                     break;

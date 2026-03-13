@@ -293,10 +293,10 @@ pub(crate) fn evaluate_condition(condition: &str, ctx: &PlaybookContext) -> bool
                 if let Ok(n) = threshold.trim().parse::<usize>() {
                     return actual_len > n;
                 }
-            } else if let Some(threshold) = len_expr.strip_prefix(">=") {
-                if let Ok(n) = threshold.trim().parse::<usize>() {
-                    return actual_len >= n;
-                }
+            } else if let Some(threshold) = len_expr.strip_prefix(">=")
+                && let Ok(n) = threshold.trim().parse::<usize>()
+            {
+                return actual_len >= n;
             }
         }
 

@@ -85,16 +85,16 @@ pub(super) fn check_schema_input(input: &serde_json::Value, issues: &mut Vec<Iss
     }
 
     // Properties must be an object, not an array.
-    if let Some(props) = input.get("properties") {
-        if !props.is_object() {
-            issues.push(
-                Issue::error(
-                    "CAP-003",
-                    "schema.input.properties must be a YAML mapping (object), not an array",
-                )
-                .with_field("schema.input.properties"),
-            );
-        }
+    if let Some(props) = input.get("properties")
+        && !props.is_object()
+    {
+        issues.push(
+            Issue::error(
+                "CAP-003",
+                "schema.input.properties must be a YAML mapping (object), not an array",
+            )
+            .with_field("schema.input.properties"),
+        );
     }
 }
 
@@ -106,28 +106,28 @@ pub(super) fn check_schema_output(output: &serde_json::Value, issues: &mut Vec<I
         return;
     }
 
-    if let Some(t) = output.get("type").and_then(|v| v.as_str()) {
-        if t != "object" {
-            issues.push(
-                Issue::warning(
-                    "CAP-004",
-                    format!("schema.output.type should be 'object', got '{t}'"),
-                )
-                .with_field("schema.output.type"),
-            );
-        }
+    if let Some(t) = output.get("type").and_then(|v| v.as_str())
+        && t != "object"
+    {
+        issues.push(
+            Issue::warning(
+                "CAP-004",
+                format!("schema.output.type should be 'object', got '{t}'"),
+            )
+            .with_field("schema.output.type"),
+        );
     }
 
-    if let Some(props) = output.get("properties") {
-        if !props.is_object() {
-            issues.push(
-                Issue::error(
-                    "CAP-004",
-                    "schema.output.properties must be a YAML mapping (object), not an array",
-                )
-                .with_field("schema.output.properties"),
-            );
-        }
+    if let Some(props) = output.get("properties")
+        && !props.is_object()
+    {
+        issues.push(
+            Issue::error(
+                "CAP-004",
+                "schema.output.properties must be a YAML mapping (object), not an array",
+            )
+            .with_field("schema.output.properties"),
+        );
     }
 }
 

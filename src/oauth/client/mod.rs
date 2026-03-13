@@ -165,10 +165,10 @@ impl OAuthClient {
         // Check if we have a valid cached token
         {
             let token = self.current_token.read();
-            if let Some(ref t) = *token {
-                if !t.is_expired() {
-                    return Ok(t.access_token.clone());
-                }
+            if let Some(ref t) = *token
+                && !t.is_expired()
+            {
+                return Ok(t.access_token.clone());
             }
         }
 
@@ -178,10 +178,10 @@ impl OAuthClient {
             token.as_ref().and_then(|t| t.refresh_token.clone())
         };
 
-        if let Some(refresh_token) = refresh_token_opt {
-            if let Ok(new_token) = self.refresh_token(&refresh_token).await {
-                return Ok(new_token);
-            }
+        if let Some(refresh_token) = refresh_token_opt
+            && let Ok(new_token) = self.refresh_token(&refresh_token).await
+        {
+            return Ok(new_token);
         }
 
         // Need to authorize from scratch

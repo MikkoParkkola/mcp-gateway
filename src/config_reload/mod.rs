@@ -277,12 +277,12 @@ fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPatch) {
 
     // Modified: in both but config differs
     for (name, new_cfg) in &new_enabled {
-        if let Some(old_cfg) = old_enabled.get(name) {
-            if backend_config_changed(old_cfg, new_cfg) {
-                patch
-                    .backends_modified
-                    .push(((*name).to_string(), (*new_cfg).clone()));
-            }
+        if let Some(old_cfg) = old_enabled.get(name)
+            && backend_config_changed(old_cfg, new_cfg)
+        {
+            patch
+                .backends_modified
+                .push(((*name).to_string(), (*new_cfg).clone()));
         }
     }
 }
@@ -329,10 +329,10 @@ pub async fn apply_patch(
     }
 
     for name in &patch.backends_removed {
-        if let Some(backend) = registry.get(name) {
-            if let Err(e) = backend.stop().await {
-                warn!(backend = %name, error = %e, "Config reload: error stopping removed backend");
-            }
+        if let Some(backend) = registry.get(name)
+            && let Err(e) = backend.stop().await
+        {
+            warn!(backend = %name, error = %e, "Config reload: error stopping removed backend");
         }
         registry.remove(name);
         info!(backend = %name, "Config reload: backend removed");
@@ -340,10 +340,10 @@ pub async fn apply_patch(
 
     for (name, cfg) in &patch.backends_modified {
         // Stop old instance (waits for transport close).
-        if let Some(old) = registry.get(name) {
-            if let Err(e) = old.stop().await {
-                warn!(backend = %name, error = %e, "Config reload: error stopping modified backend");
-            }
+        if let Some(old) = registry.get(name)
+            && let Err(e) = old.stop().await
+        {
+            warn!(backend = %name, error = %e, "Config reload: error stopping modified backend");
         }
         // Register replacement.
         let backend = Arc::new(Backend::new(name, cfg.clone(), failsafe_config, cache_ttl));
@@ -377,10 +377,10 @@ enum ReloadTrigger {
 /// Returns the path unchanged if it does not start with `~` or if the home
 /// directory cannot be determined.
 fn expand_tilde(path_str: &str) -> PathBuf {
-    if path_str.starts_with('~') {
-        if let Some(home) = dirs::home_dir() {
-            return PathBuf::from(path_str.replacen('~', &home.display().to_string(), 1));
-        }
+    if path_str.starts_with('~')
+        && let Some(home) = dirs::home_dir()
+    {
+        return PathBuf::from(path_str.replacen('~', &home.display().to_string(), 1));
     }
     PathBuf::from(path_str)
 }

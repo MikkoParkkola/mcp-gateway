@@ -263,10 +263,10 @@ impl Backend {
             let cache = self.tools_cache.read();
             let cache_time = self.cache_time.read();
 
-            if let (Some(tools), Some(time)) = (cache.as_ref(), cache_time.as_ref()) {
-                if time.elapsed() < self.cache_ttl {
-                    return Ok(tools.clone());
-                }
+            if let (Some(tools), Some(time)) = (cache.as_ref(), cache_time.as_ref())
+                && time.elapsed() < self.cache_ttl
+            {
+                return Ok(tools.clone());
             }
         }
 
@@ -304,10 +304,10 @@ impl Backend {
             let cache = self.resources_cache.read();
             let cache_time = self.resources_cache_time.read();
 
-            if let (Some(resources), Some(time)) = (cache.as_ref(), cache_time.as_ref()) {
-                if time.elapsed() < self.cache_ttl {
-                    return Ok(resources.clone());
-                }
+            if let (Some(resources), Some(time)) = (cache.as_ref(), cache_time.as_ref())
+                && time.elapsed() < self.cache_ttl
+            {
+                return Ok(resources.clone());
             }
         }
 
@@ -340,10 +340,10 @@ impl Backend {
             let cache = self.resource_templates_cache.read();
             let cache_time = self.resource_templates_cache_time.read();
 
-            if let (Some(templates), Some(time)) = (cache.as_ref(), cache_time.as_ref()) {
-                if time.elapsed() < self.cache_ttl {
-                    return Ok(templates.clone());
-                }
+            if let (Some(templates), Some(time)) = (cache.as_ref(), cache_time.as_ref())
+                && time.elapsed() < self.cache_ttl
+            {
+                return Ok(templates.clone());
             }
         }
 
@@ -378,10 +378,10 @@ impl Backend {
             let cache = self.prompts_cache.read();
             let cache_time = self.prompts_cache_time.read();
 
-            if let (Some(prompts), Some(time)) = (cache.as_ref(), cache_time.as_ref()) {
-                if time.elapsed() < self.cache_ttl {
-                    return Ok(prompts.clone());
-                }
+            if let (Some(prompts), Some(time)) = (cache.as_ref(), cache_time.as_ref())
+                && time.elapsed() < self.cache_ttl
+            {
+                return Ok(prompts.clone());
             }
         }
 
