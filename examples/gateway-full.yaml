@@ -102,6 +102,52 @@ capabilities:
   directories:                    # Directories to load capability YAMLs from
     - ./capabilities
 
+# --- Cost Governance (RFC-0075) ---
+
+# cost_governance:
+#   enabled: false                  # Enable cost tracking and budget enforcement
+#   currency: "USD"                 # Currency label (informational)
+#   default_cost: 0.0              # Default cost per tool invocation
+#   budgets:
+#     daily: 10.0                  # Daily budget limit (null = unlimited)
+#     per_tool:                    # Per-tool daily budget overrides
+#       expensive_api: 2.0
+#     per_key:                     # Per-API-key daily budgets
+#       heavy_user_key: 5.0
+#   alerts:                        # Budget alert thresholds (sorted by at_percent)
+#     - at_percent: 50
+#       action: Log                # Log, Notify, or Block
+#     - at_percent: 80
+#       action: Notify
+#     - at_percent: 100
+#       action: Block
+#   tool_costs:                    # Explicit per-tool costs (overrides default_cost)
+#     tavily_search: 0.01
+#     brave_search: 0.005
+#   alternatives:                  # Cheaper alternatives for cost suggestions
+#     search: [brave_search, tavily_search]
+
+# --- Security Firewall (RFC-0071) ---
+
+# security:
+#   firewall:
+#     enabled: true                # Enable bidirectional request/response scanning
+#     scan_requests: true          # Scan tool arguments for injection
+#     scan_responses: true         # Scan tool outputs for credential leaks
+#     credential_redaction: true   # Auto-redact AWS keys, GitHub tokens, JWTs, etc.
+#     prompt_injection_detection: true
+#     anomaly_detection: false     # Opt-in: flag unusual tool transition patterns
+#     anomaly_threshold: 0.7      # 0.0-1.0, higher = more permissive
+#     audit_log: /var/log/mcp-gateway/audit.ndjson  # NDJSON audit trail
+#     rules:                       # Per-tool glob-matched rules
+#       - tool_match: "exec_*"
+#         action: Block            # Allow, Warn, or Block
+#         reason: "Execution tools blocked by policy"
+#         scan: [ShellInjection, PathTraversal]
+#       - tool_match: "*"
+#         action: Warn
+#         scan: [Credentials, SqlInjection]
+
 # --- Backends (MCP servers) ---
 
 backends:
