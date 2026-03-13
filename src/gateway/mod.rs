@@ -24,3 +24,16 @@ pub use proxy::ProxyManager;
 pub use server::Gateway;
 pub use streaming::{NotificationMultiplexer, TaggedNotification};
 pub use webhooks::WebhookRegistry;
+
+/// Public test helpers for integration tests in `tests/`.
+///
+/// Exposes internal types (`AppState`, `MetaMcp`, `create_router`) that are
+/// not part of the public API but are needed to build an in-process router
+/// without starting a real TCP server.
+///
+/// Hidden from docs; only used in the `tests/` directory.
+#[doc(hidden)]
+pub mod test_helpers {
+    pub use super::meta_mcp::MetaMcp;
+    pub use super::router::{AppState, create_router};
+}

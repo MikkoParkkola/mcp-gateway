@@ -40,7 +40,7 @@ pub fn capabilities_router() -> Router<Arc<AppState>> {
             get(list_capabilities).post(create_capability),
         )
         .route(
-            "/ui/api/capabilities/:name",
+            "/ui/api/capabilities/{name}",
             get(get_capability)
                 .put(put_capability)
                 .delete(delete_capability),
