@@ -441,6 +441,11 @@ impl Gateway {
             inflight: Arc::clone(&inflight),
             agent_auth,
             gateway_key_pair,
+            capability_dirs: if self.config.capabilities.enabled {
+                self.config.capabilities.directories.clone()
+            } else {
+                Vec::new()
+            },
         });
 
         // Create router

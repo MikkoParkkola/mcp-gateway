@@ -60,6 +60,9 @@ pub struct AppState {
     pub agent_auth: AgentAuthState,
     /// Gateway RSA key pair for JWKS endpoint.
     pub gateway_key_pair: Arc<GatewayKeyPair>,
+    /// Configured capability directories (for Web UI capability management).
+    /// Empty when the capability system is disabled.
+    pub capability_dirs: Vec<String>,
 }
 
 /// Create the router.
