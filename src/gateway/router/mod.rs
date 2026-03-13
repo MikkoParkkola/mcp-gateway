@@ -60,6 +60,9 @@ pub struct AppState {
     pub agent_auth: AgentAuthState,
     /// Gateway RSA key pair for JWKS endpoint.
     pub gateway_key_pair: Arc<GatewayKeyPair>,
+    /// Path to the gateway config file on disk (enables API-driven config writes).
+    /// `None` when the gateway was started without a config file path.
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 /// Create the router.
