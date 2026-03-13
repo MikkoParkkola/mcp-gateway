@@ -10,8 +10,11 @@
 //! - [`tool_integrity`]: Anti-rug-pull — hash tool schemas, detect mutations
 //! - [`scope_collision`]: Namespace collision detection + tool name validation
 //! - [`response_scanner`]: Prompt injection pattern detection in tool responses
+//! - [`firewall`]: Unified request/response security firewall (RFC-0071)
 
 pub mod data_flow;
+#[cfg(feature = "firewall")]
+pub mod firewall;
 pub mod policy;
 pub mod response_scanner;
 pub mod sanitize;

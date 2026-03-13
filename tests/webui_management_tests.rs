@@ -86,6 +86,8 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         gateway_key_pair,
         capability_dirs,
         config_path,
+        #[cfg(feature = "firewall")]
+        firewall: None,
     })
 }
 

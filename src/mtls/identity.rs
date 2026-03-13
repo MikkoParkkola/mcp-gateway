@@ -128,7 +128,8 @@ fn build_display_name(cn: Option<&String>, san_uris: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rcgen::{CertificateParams, DistinguishedName, DnType, Ia5String, SanType};
+    use rcgen::string::Ia5String;
+    use rcgen::{CertificateParams, DistinguishedName, DnType, SanType};
 
     // ── helpers ──────────────────────────────────────────────────────────────
 

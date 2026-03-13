@@ -19,6 +19,8 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::streaming::create_sse_response;
 use crate::mtls::CertIdentity;
 use crate::protocol::{ElicitationCreateParams, JsonRpcResponse};
+#[cfg(feature = "firewall")]
+use crate::security::firewall::FirewallAction;
 use crate::security::{sanitize_json_value, validate_url_not_ssrf};
 
 /// GET /mcp handler - SSE stream for server→client notifications
@@ -432,6 +434,54 @@ pub(super) async fn meta_mcp_handler(
                         }
                     }
 
+                    // Firewall: pre-invocation request scan
+                    #[cfg(feature = "firewall")]
+                    if let Some(ref fw) = state.firewall {
+                        if !server.is_empty() && !tool.is_empty() {
+                            let caller_name =
+                                client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                            let invoke_args = args
+                                .get("arguments")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                            let verdict = fw.check_request(
+                                &session_id,
+                                server,
+                                tool,
+                                &invoke_args,
+                                caller_name,
+                            );
+                            if verdict.action == FirewallAction::Warn {
+                                warn!(
+                                    server = server,
+                                    tool = tool,
+                                    findings = verdict.findings.len(),
+                                    "Firewall: request warning"
+                                );
+                            }
+                            if !verdict.allowed {
+                                let reason = verdict
+                                    .findings
+                                    .first()
+                                    .map_or("Security firewall blocked this request", |f| {
+                                        f.description.as_str()
+                                    });
+                                let resp = JsonRpcResponse::error(
+                                    Some(id),
+                                    -32600,
+                                    format!("Firewall blocked: {reason}"),
+                                );
+                                let mut response =
+                                    Json(serde_json::to_value(resp).unwrap()).into_response();
+                                response.headers_mut().insert(
+                                    axum::http::header::HeaderName::from_static("mcp-session-id"),
+                                    session_id.parse().unwrap(),
+                                );
+                                return (StatusCode::BAD_REQUEST, response).into_response();
+                            }
+                        }
+                    }
+
                     // SSRF protection: validate backend URL before proxying
                     if state.ssrf_protection && !server.is_empty() {
                         if let Some(backend) = state.backends.get(server) {
@@ -456,7 +506,32 @@ pub(super) async fn meta_mcp_handler(
             }
 
             let api_key_name = client.as_ref().map(|c| c.name.as_str());
-            state
+
+            // Capture server/tool for post-invoke firewall scan (before borrows move).
+            #[cfg(feature = "firewall")]
+            let (fw_server, fw_tool, fw_caller) = {
+                let srv = params
+                    .as_ref()
+                    .and_then(|p| p.get("arguments"))
+                    .and_then(|a| a.get("server"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tl = params
+                    .as_ref()
+                    .and_then(|p| p.get("arguments"))
+                    .and_then(|a| a.get("tool"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let cl = client
+                    .as_ref()
+                    .map_or("anonymous", |c| c.name.as_str())
+                    .to_string();
+                (srv, tl, cl)
+            };
+
+            let mut call_response = state
                 .meta_mcp
                 .handle_tools_call(
                     id,
@@ -465,7 +540,33 @@ pub(super) async fn meta_mcp_handler(
                     Some(session_id.as_str()),
                     api_key_name,
                 )
-                .await
+                .await;
+
+            // Firewall: post-invocation response scan + credential redaction.
+            #[cfg(feature = "firewall")]
+            if let Some(ref fw) = state.firewall {
+                if !fw_server.is_empty() && !fw_tool.is_empty() {
+                    if let Some(ref mut result_val) = call_response.result {
+                        let verdict = fw.check_response(
+                            &session_id,
+                            &fw_server,
+                            &fw_tool,
+                            result_val,
+                            &fw_caller,
+                        );
+                        if verdict.action == FirewallAction::Warn {
+                            warn!(
+                                server = %fw_server,
+                                tool = %fw_tool,
+                                findings = verdict.findings.len(),
+                                "Firewall: response warning"
+                            );
+                        }
+                    }
+                }
+            }
+
+            call_response
         }
         // Resources
         "resources/list" => {

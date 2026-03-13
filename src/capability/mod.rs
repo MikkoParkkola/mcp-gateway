@@ -32,6 +32,8 @@
 
 mod backend;
 mod definition;
+#[cfg(feature = "discovery")]
+pub mod discovery;
 mod executor;
 mod loader;
 mod openapi;
@@ -43,6 +45,8 @@ mod watcher;
 
 pub use backend::{CapabilityBackend, CapabilityBackendStatus};
 pub use definition::*;
+#[cfg(feature = "discovery")]
+pub use discovery::{DiscoveryEngine, DiscoveryOptions, DiscoveryResult};
 pub use executor::CapabilityExecutor;
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};

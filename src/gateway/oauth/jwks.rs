@@ -150,14 +150,15 @@ impl GatewayKeyPair {
 
 /// Generate a fresh ECDSA P-256 key pair and extract its public-key components.
 fn generate_key_info() -> Result<GatewayKeyInfo, String> {
-    // `KeyPair::generate()` defaults to ECDSA P-256 in rcgen 0.13.
+    // `KeyPair::generate()` defaults to ECDSA P-256 in rcgen 0.14.
     let key_pair = RcgenKeyPair::generate().map_err(|e| format!("Key generation failed: {e}"))?;
 
     let kid = Uuid::new_v4().to_string();
     let private_key_pem = key_pair.serialize_pem();
-    let der = key_pair.public_key_der();
+    // rcgen 0.14: public_key_raw() returns the raw EC point bytes (no SPKI wrapper)
+    let raw = key_pair.public_key_raw();
 
-    let (x, y) = extract_ec_public_components(&der)?;
+    let (x, y) = extract_ec_public_components_raw(raw)?;
 
     Ok(GatewayKeyInfo {
         kid,
@@ -167,86 +168,26 @@ fn generate_key_info() -> Result<GatewayKeyInfo, String> {
     })
 }
 
-/// Extract the EC public key x/y coordinates from a DER-encoded
-/// `SubjectPublicKeyInfo` for P-256 (uncompressed point, 65 bytes).
+/// Extract the EC public key x/y coordinates from raw uncompressed point bytes.
 ///
-/// Layout: `04 || x (32 bytes) || y (32 bytes)` inside the BIT STRING.
-fn extract_ec_public_components(der: &[u8]) -> Result<(String, String), String> {
-    let bitstring_payload = parse_spki_bitstring_payload(der)
-        .ok_or("Failed to parse SubjectPublicKeyInfo BIT STRING")?;
-
+/// `raw` is the output of `rcgen::KeyPair::public_key_raw()` — the uncompressed
+/// EC point: `04 || x (32 bytes) || y (32 bytes)` = 65 bytes total.
+fn extract_ec_public_components_raw(raw: &[u8]) -> Result<(String, String), String> {
     // P-256 uncompressed point: 0x04 prefix + 32 bytes x + 32 bytes y = 65 bytes.
-    if bitstring_payload.len() < 65 || bitstring_payload[0] != 0x04 {
+    if raw.len() < 65 || raw[0] != 0x04 {
         return Err(format!(
             "Unexpected EC point format: len={}, prefix=0x{:02x}",
-            bitstring_payload.len(),
-            bitstring_payload.first().copied().unwrap_or(0)
+            raw.len(),
+            raw.first().copied().unwrap_or(0)
         ));
     }
 
-    let x = URL_SAFE_NO_PAD.encode(&bitstring_payload[1..33]);
-    let y = URL_SAFE_NO_PAD.encode(&bitstring_payload[33..65]);
+    let x = URL_SAFE_NO_PAD.encode(&raw[1..33]);
+    let y = URL_SAFE_NO_PAD.encode(&raw[33..65]);
     Ok((x, y))
 }
 
 // ── Minimal DER helpers ───────────────────────────────────────────────────────
-
-fn der_read_len(data: &[u8]) -> Option<(usize, usize)> {
-    if data.is_empty() {
-        return None;
-    }
-    if data[0] < 0x80 {
-        return Some((data[0] as usize, 1));
-    }
-    let num_bytes = (data[0] & 0x7f) as usize;
-    if num_bytes == 0 || data.len() < 1 + num_bytes {
-        return None;
-    }
-    let mut len = 0usize;
-    for &b in &data[1..=num_bytes] {
-        len = (len << 8) | (b as usize);
-    }
-    Some((len, 1 + num_bytes))
-}
-
-/// Read a TLV (tag, length, value) at the start of `data`.
-/// Returns `(tag, value_slice, remaining)`.
-fn der_read_tlv(data: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    if data.is_empty() {
-        return None;
-    }
-    let tag = data[0];
-    let (len, hdr_bytes) = der_read_len(&data[1..])?;
-    let start = 1 + hdr_bytes;
-    let end = start.checked_add(len)?;
-    if data.len() < end {
-        return None;
-    }
-    Some((tag, &data[start..end], &data[end..]))
-}
-
-/// Skip over the `AlgorithmIdentifier` sequence and return the BIT STRING payload.
-fn parse_spki_bitstring_payload(der: &[u8]) -> Option<&[u8]> {
-    let (tag, outer, _) = der_read_tlv(der)?;
-    if tag != 0x30 {
-        return None;
-    } // outer SEQUENCE
-
-    // Skip `AlgorithmIdentifier` SEQUENCE.
-    let (_, _alg_seq, rest) = der_read_tlv(outer)?;
-
-    // BIT STRING
-    let (tag2, bit_string, _) = der_read_tlv(rest)?;
-    if tag2 != 0x03 {
-        return None;
-    }
-
-    // First byte of BIT STRING is the number of unused bits (always 0 for EC).
-    if bit_string.is_empty() {
-        return None;
-    }
-    Some(&bit_string[1..])
-}
 
 #[cfg(test)]
 mod tests {

@@ -19,7 +19,7 @@ tokio = { version = "1.44", features = ["full", "tracing"] }
 
 # HTTP server/client
 axum = { version = "0.8", features = ["tracing", "http2"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "form", "query"] }
 tower = { version = "0.5", features = ["timeout", "limit", "load-shed", "retry"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "compression-gzip", "request-id", "catch-panic"] }
 
@@ -33,7 +33,7 @@ figment = { version = "0.10", features = ["yaml", "env"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
-clap_complete = "4.5"
+clap_complete = "4.6"
 
 # Logging & Telemetry
 tracing = "0.1"
@@ -66,30 +66,30 @@ pin-project-lite = "0.2"
 
 # OAuth / Crypto
 sha2 = "0.10"
-md5 = "0.7"
+md5 = "0.8"
 base64 = "0.22"
-rand = "0.9"
+rand = "0.10"
 dirs = "6.0"
 open = "5.3"
-dialoguer = "0.11"
+dialoguer = "0.12"
 hmac = "0.12"
 hex = "0.4"
 # Key Server: OIDC JWT verification
-jsonwebtoken = "9.3"
+jsonwebtoken = { version = "10.3", features = ["use_pem", "rust_crypto"] }
 # Constant-time comparison (prevent timing attacks in admin token check)
 subtle = "2.6"
 
 # mTLS / TLS
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
 rustls-pemfile = "2.2"
-rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
+rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 time = { version = "0.3", default-features = false }
-x509-parser = "0.16"
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+x509-parser = "0.18"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 tokio-rustls = "0.26"
 
 # XML parsing (for APIs that return XML, e.g. ECB exchange rates)
-quick-xml = "0.37"
+quick-xml = "0.39"
 
 # Environment file loading
 dotenvy = "0.15"
@@ -97,6 +97,9 @@ dotenvy = "0.15"
 # File watching (hot-reload)
 notify = "8.0"
 walkdir = "2.5"
+
+# Glob pattern matching for firewall rules (RFC-0071)
+glob = "0.3"
 
 # Metrics
 metrics = "0.24"
@@ -111,10 +114,12 @@ serde_urlencoded = "0.7"
 criterion = { version = "0.7.0", features = ["html_reports"] }
 
 [features]
-default = ["webui", "config-export", "cost-governance"]
+default = ["webui", "config-export", "cost-governance", "firewall", "discovery"]
 webui = []
 config-export = []
 cost-governance = []
+firewall = []
+discovery = []
 metrics = ["dep:metrics-exporter-prometheus"]
 
 [[bin]]

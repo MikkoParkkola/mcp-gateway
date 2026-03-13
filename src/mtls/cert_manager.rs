@@ -15,9 +15,10 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use rcgen::string::Ia5String;
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, Ia5String, IsCa, KeyPair,
-    SanType, date_time_ymd,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair, SanType,
+    date_time_ymd,
 };
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -204,12 +205,9 @@ impl CertGenerator {
         let ca_key = KeyPair::from_pem(ca_key_pem)
             .map_err(|e| Error::Config(format!("Failed to parse CA key: {e}")))?;
 
-        // Parse CA certificate for signing
-        let ca_cert_params = CertificateParams::from_ca_cert_pem(ca_cert_pem)
+        // Parse CA certificate + key into an Issuer for signing (rcgen 0.14 API)
+        let ca_issuer = Issuer::from_ca_cert_pem(ca_cert_pem, ca_key)
             .map_err(|e| Error::Config(format!("Failed to parse CA cert: {e}")))?;
-        let ca_cert = ca_cert_params
-            .self_signed(&ca_key)
-            .map_err(|e| Error::Config(format!("Failed to rebuild CA cert for signing: {e}")))?;
 
         // Build leaf params
         let leaf_key = KeyPair::generate()
@@ -224,7 +222,7 @@ impl CertGenerator {
         leaf_params.distinguished_name = dn;
         leaf_params.not_after = validity_to_date(params.validity_days)?;
 
-        // Add SANs — rcgen 0.13 uses Ia5String for DNS and URI SAN types
+        // Add SANs — rcgen 0.14 uses Ia5String (from rcgen::string) for DNS and URI SAN types
         let mut sans: Vec<SanType> = Vec::new();
         for dns in &params.san_dns {
             let ia5 = Ia5String::try_from(dns.as_str())
@@ -238,8 +236,9 @@ impl CertGenerator {
         }
         leaf_params.subject_alt_names = sans;
 
+        // rcgen 0.14: signed_by takes (&signing_key, &Issuer)
         let leaf_cert = leaf_params
-            .signed_by(&leaf_key, &ca_cert, &ca_key)
+            .signed_by(&leaf_key, &ca_issuer)
             .map_err(|e| Error::Config(format!("Leaf cert signing failed: {e}")))?;
 
         Ok(GeneratedCert {

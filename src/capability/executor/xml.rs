@@ -59,7 +59,7 @@ pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
                 }
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.unescape().unwrap_or_default().trim().to_string();
+                let text = e.decode().unwrap_or_default().trim().to_string();
                 if !text.is_empty() {
                     if let Some(current) = stack.last_mut() {
                         current.1.insert("#text".to_string(), Value::String(text));

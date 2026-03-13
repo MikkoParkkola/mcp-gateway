@@ -42,7 +42,7 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::time::Instant;
 
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
