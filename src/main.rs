@@ -23,6 +23,7 @@ use mcp_gateway::{
 // the library crate, so they are imported directly here.
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -90,19 +91,61 @@ async fn main() -> ExitCode {
             } else {
                 Some(trailing_command.join(" "))
             };
-            commands::run_add_command(
-                &name,
-                effective_command.as_deref(),
-                url.as_deref(),
-                description.as_deref(),
-                &env_vars,
-                &config,
-            )
-            .await
+            #[cfg(feature = "webui")]
+            {
+                commands::run_add_command(
+                    &name,
+                    effective_command.as_deref(),
+                    url.as_deref(),
+                    description.as_deref(),
+                    &env_vars,
+                    &config,
+                )
+                .await
+            }
+            #[cfg(not(feature = "webui"))]
+            {
+                let _ = (name, effective_command, url, description, env_vars, config);
+                eprintln!("Error: add/remove commands require the 'webui' feature");
+                ExitCode::FAILURE
+            }
         }
-        Some(Command::Remove { name, config }) => commands::run_remove_command(&name, &config),
-        Some(Command::List { json, config }) => commands::run_list_command(json, &config),
-        Some(Command::Get { name, config }) => commands::run_get_command(&name, &config),
+        Some(Command::Remove { name, config }) => {
+            #[cfg(feature = "webui")]
+            {
+                commands::run_remove_command(&name, &config)
+            }
+            #[cfg(not(feature = "webui"))]
+            {
+                let _ = (name, config);
+                eprintln!("Error: add/remove commands require the 'webui' feature");
+                ExitCode::FAILURE
+            }
+        }
+        Some(Command::List { json, config }) => {
+            #[cfg(feature = "webui")]
+            {
+                commands::run_list_command(json, &config)
+            }
+            #[cfg(not(feature = "webui"))]
+            {
+                let _ = (json, config);
+                eprintln!("Error: add/remove commands require the 'webui' feature");
+                ExitCode::FAILURE
+            }
+        }
+        Some(Command::Get { name, config }) => {
+            #[cfg(feature = "webui")]
+            {
+                commands::run_get_command(&name, &config)
+            }
+            #[cfg(not(feature = "webui"))]
+            {
+                let _ = (name, config);
+                eprintln!("Error: add/remove commands require the 'webui' feature");
+                ExitCode::FAILURE
+            }
+        }
         Some(Command::Doctor { fix, config }) => {
             commands::run_doctor_command(fix, config.as_deref()).await
         }

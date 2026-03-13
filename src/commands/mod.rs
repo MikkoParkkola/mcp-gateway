@@ -3,6 +3,7 @@
 //! Each public function corresponds to a top-level `Command` variant and
 //! returns an `ExitCode` so `main` can remain a thin dispatcher.
 
+#[cfg(feature = "webui")]
 mod add_remove;
 mod cap;
 #[cfg(feature = "config-export")]
@@ -15,6 +16,7 @@ mod plugin;
 mod setup;
 mod stats;
 
+#[cfg(feature = "webui")]
 pub use add_remove::{run_add_command, run_get_command, run_list_command, run_remove_command};
 pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
