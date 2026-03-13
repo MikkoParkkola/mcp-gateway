@@ -1,9 +1,11 @@
 //! MCP Protocol types (version 2025-11-25)
 
 mod messages;
+mod negotiate;
 mod types;
 
 pub use messages::*;
+pub use negotiate::*;
 pub use types::*;
 
 /// MCP Protocol version (latest)

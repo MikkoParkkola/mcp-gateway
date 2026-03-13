@@ -336,6 +336,7 @@ mod tests {
             transport: TransportConfig::Stdio {
                 command: format!("npx -y @test/{name}"),
                 cwd: None,
+                protocol_version: None,
             },
             metadata: ServerMetadata::default(),
         }
@@ -433,6 +434,7 @@ mod tests {
                 transport: TransportConfig::Stdio {
                     command: "npx -y test".to_string(),
                     cwd: None,
+                    protocol_version: None,
                 },
                 metadata: ServerMetadata::default(),
             }

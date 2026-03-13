@@ -25,7 +25,8 @@ use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::{
-    JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, SUPPORTED_VERSIONS,
+    JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
 };
 use crate::{Error, Result};
 
@@ -191,9 +192,7 @@ impl HttpTransport {
             let error_msg = &error.message;
 
             // If server rejected our protocol version, try to negotiate
-            if error_msg.contains("Unsupported protocol version")
-                || error_msg.contains("protocol version")
-            {
+            if is_version_mismatch_error(error_msg) {
                 // Try to extract supported versions from error message
                 if let Some(negotiated_version) = self.negotiate_protocol_version(error_msg).await {
                     warn!(
@@ -262,69 +261,30 @@ impl HttpTransport {
         }
     }
 
-    /// Negotiate protocol version from error message
-    /// Parse "supported versions: X, Y, Z" and find best match
+    /// Negotiate protocol version from error message.
+    ///
+    /// Delegates to shared helpers in [`crate::protocol::negotiate`].
     #[allow(clippy::unused_async)] // async for future network-based negotiation
     async fn negotiate_protocol_version(&self, error_msg: &str) -> Option<String> {
-        // Try to extract supported versions from error message
-        // Example: "Bad Request: Unsupported protocol version (supported versions: 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07)"
-        let supported_versions = self.parse_supported_versions(error_msg)?;
+        let supported_versions = parse_supported_versions_from_error(error_msg)?;
 
         debug!(
             url = %self.base_url,
             server_versions = ?supported_versions,
-            client_versions = ?SUPPORTED_VERSIONS,
             "Negotiating protocol version"
         );
 
-        // Find highest version supported by both client and server
-        for &client_version in SUPPORTED_VERSIONS {
-            if supported_versions.iter().any(|v| v == client_version) {
-                return Some(client_version.to_string());
-            }
+        let result = negotiate_best_version(&supported_versions);
+
+        if result.is_none() {
+            warn!(
+                url = %self.base_url,
+                server_versions = ?supported_versions,
+                "No compatible protocol version found"
+            );
         }
 
-        // No match found
-        warn!(
-            url = %self.base_url,
-            server_versions = ?supported_versions,
-            client_versions = ?SUPPORTED_VERSIONS,
-            "No compatible protocol version found"
-        );
-        None
-    }
-
-    /// Parse supported versions from error message
-    #[allow(clippy::unused_self)] // method on self for logical grouping
-    fn parse_supported_versions(&self, error_msg: &str) -> Option<Vec<String>> {
-        // Look for pattern: "supported versions: X, Y, Z" or "supported: X, Y, Z"
-        let patterns = ["supported versions:", "supported:"];
-
-        for pattern in &patterns {
-            if let Some(versions_start) = error_msg.to_lowercase().find(pattern) {
-                let versions_str = &error_msg[versions_start + pattern.len()..];
-
-                // Extract until closing paren or end of string
-                let versions_str = if let Some(end) = versions_str.find(')') {
-                    &versions_str[..end]
-                } else {
-                    versions_str
-                };
-
-                // Split by comma and trim
-                let versions: Vec<String> = versions_str
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-
-                if !versions.is_empty() {
-                    return Some(versions);
-                }
-            }
-        }
-
-        None
+        result.map(str::to_string)
     }
 
     /// Establish SSE connection and get the message endpoint
