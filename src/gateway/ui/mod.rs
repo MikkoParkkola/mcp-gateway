@@ -10,6 +10,7 @@
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+pub mod import;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -55,6 +56,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/dashboard", get(dashboard_handler))
         .merge(capabilities::capabilities_router())
         .merge(backends::backends_router())
+        .merge(import::import_router())
 }
 
 /// Build the unauthenticated `/ui` route (serves static HTML, no data).
