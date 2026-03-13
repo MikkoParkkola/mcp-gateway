@@ -36,8 +36,7 @@ fn parses_response_success() {
 
 #[test]
 fn parses_response_error() {
-    let text =
-        r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found"}}"#;
+    let text = r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found"}}"#;
     let frame = McpFrame::from_text(text).unwrap();
     match frame {
         McpFrame::Response(res) => {
@@ -50,8 +49,7 @@ fn parses_response_error() {
 
 #[test]
 fn parses_notification_with_params() {
-    let text =
-        r#"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":50}}"#;
+    let text = r#"{"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":50}}"#;
     let frame = McpFrame::from_text(text).unwrap();
     match frame {
         McpFrame::Notification { method, params } => {
@@ -358,9 +356,7 @@ async fn connected_flag_toggles_correctly() {
 async fn send_message_errors_when_not_connected() {
     let t = WebSocketTransport::new("ws://localhost:9999");
     // outbound_tx slot is None — simulates pre-connect state.
-    let result = t
-        .send_message(Message::Text("hello".into()))
-        .await;
+    let result = t.send_message(Message::Text("hello".into())).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err, Error::Transport(_)));
@@ -372,9 +368,7 @@ async fn send_message_succeeds_with_live_channel() {
     let (tx, mut rx) = channel::<Message>(8);
     *t.inner.outbound_tx.lock().await = Some(tx);
 
-    t.send_message(Message::Text("hello".into()))
-        .await
-        .unwrap();
+    t.send_message(Message::Text("hello".into())).await.unwrap();
 
     let msg = rx.try_recv().unwrap();
     assert_eq!(msg, Message::Text("hello".into()));

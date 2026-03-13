@@ -30,28 +30,53 @@ impl ConfigScanner {
         let mut servers = Vec::new();
 
         // Scan Claude Desktop config
-        if let Ok(mut claude_servers) = self.scan_claude_desktop().await {
-            servers.append(&mut claude_servers);
+        if let Ok(mut s) = self.scan_claude_desktop().await {
+            servers.append(&mut s);
+        }
+
+        // Scan Claude Code CLI config
+        if let Ok(mut s) = self.scan_claude_code().await {
+            servers.append(&mut s);
         }
 
         // Scan VS Code config
-        if let Ok(mut vscode_servers) = self.scan_vscode().await {
-            servers.append(&mut vscode_servers);
+        if let Ok(mut s) = self.scan_vscode().await {
+            servers.append(&mut s);
+        }
+
+        // Scan Cursor standalone mcp.json
+        if let Ok(mut s) = self.scan_cursor_mcp_json().await {
+            servers.append(&mut s);
         }
 
         // Scan Windsurf config
-        if let Ok(mut windsurf_servers) = self.scan_windsurf().await {
-            servers.append(&mut windsurf_servers);
+        if let Ok(mut s) = self.scan_windsurf().await {
+            servers.append(&mut s);
+        }
+
+        // Scan Zed editor
+        if let Ok(mut s) = self.scan_zed().await {
+            servers.append(&mut s);
+        }
+
+        // Scan Continue.dev
+        if let Ok(mut s) = self.scan_continue().await {
+            servers.append(&mut s);
+        }
+
+        // Scan OpenAI Codex CLI
+        if let Ok(mut s) = self.scan_codex().await {
+            servers.append(&mut s);
         }
 
         // Scan generic MCP config directory
-        if let Ok(mut mcp_servers) = self.scan_mcp_config_dir().await {
-            servers.append(&mut mcp_servers);
+        if let Ok(mut s) = self.scan_mcp_config_dir().await {
+            servers.append(&mut s);
         }
 
         // Scan environment variables
-        if let Ok(mut env_servers) = self.scan_environment() {
-            servers.append(&mut env_servers);
+        if let Ok(mut s) = self.scan_environment() {
+            servers.append(&mut s);
         }
 
         Ok(servers)
@@ -65,11 +90,17 @@ impl ConfigScanner {
     pub async fn scan_claude_desktop(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::claude_desktop_config_path()?;
         if !config_path.exists() {
-            debug!("Claude Desktop config not found at {}", config_path.display());
+            debug!(
+                "Claude Desktop config not found at {}",
+                config_path.display()
+            );
             return Ok(Vec::new());
         }
 
-        debug!("Scanning Claude Desktop config at {}", config_path.display());
+        debug!(
+            "Scanning Claude Desktop config at {}",
+            config_path.display()
+        );
         self.parse_claude_config(&config_path, DiscoverySource::ClaudeDesktop)
             .await
     }
@@ -141,14 +172,16 @@ impl ConfigScanner {
         }
 
         let mut servers = Vec::new();
-        let entries = tokio::fs::read_dir(&mcp_dir).await.map_err(|e| {
-            Error::Config(format!("Failed to read MCP config dir: {e}"))
-        })?;
+        let entries = tokio::fs::read_dir(&mcp_dir)
+            .await
+            .map_err(|e| Error::Config(format!("Failed to read MCP config dir: {e}")))?;
 
         let mut entries = entries;
-        while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            Error::Config(format!("Failed to read dir entry: {e}"))
-        })? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| Error::Config(format!("Failed to read dir entry: {e}")))?
+        {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 debug!("Scanning MCP config file: {}", path.display());
@@ -227,7 +260,8 @@ impl ConfigScanner {
         // Claude Desktop format: { "mcpServers": { "name": { "command": "...", ... } } }
         if let Some(mcp_servers) = config.get("mcpServers").and_then(|v| v.as_object()) {
             for (name, server_config) in mcp_servers {
-                if let Some(server) = Self::parse_server_config(name, server_config, &source, path) {
+                if let Some(server) = Self::parse_server_config(name, server_config, &source, path)
+                {
                     servers.push(server);
                 }
             }
@@ -254,7 +288,8 @@ impl ConfigScanner {
         // VS Code might have MCP config under various keys
         if let Some(mcp_config) = config.get("mcp").and_then(|v| v.as_object()) {
             for (name, server_config) in mcp_config {
-                if let Some(server) = Self::parse_server_config(name, server_config, &source, path) {
+                if let Some(server) = Self::parse_server_config(name, server_config, &source, path)
+                {
                     servers.push(server);
                 }
             }
@@ -299,7 +334,9 @@ impl ConfigScanner {
                 source: source.clone(),
                 transport: TransportConfig::Stdio {
                     command: full_command.clone(),
-                    cwd: working_dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    cwd: working_dir
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned()),
                 },
                 metadata: ServerMetadata {
                     config_path: Some(config_path.to_path_buf()),
@@ -336,11 +373,256 @@ impl ConfigScanner {
         None
     }
 
+    // ── New AI client scanners ─────────────────────────────────────────────
+
+    /// Scan Claude Code CLI configuration (`~/.claude.json`).
+    ///
+    /// Format: `{ "mcpServers": { "<name>": { "command": "...", "args": [...], "env": {...} } } }`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub async fn scan_claude_code(&self) -> Result<Vec<DiscoveredServer>> {
+        let config_path = Self::claude_code_config_path()?;
+        if !config_path.exists() {
+            debug!("Claude Code config not found at {}", config_path.display());
+            return Ok(Vec::new());
+        }
+        debug!("Scanning Claude Code config at {}", config_path.display());
+        self.parse_claude_config(&config_path, DiscoverySource::ClaudeCode)
+            .await
+    }
+
+    /// Scan Cursor's standalone MCP config (`~/.cursor/mcp.json`).
+    ///
+    /// Same `mcpServers` format as Claude Desktop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub async fn scan_cursor_mcp_json(&self) -> Result<Vec<DiscoveredServer>> {
+        let config_path = Self::cursor_mcp_json_path()?;
+        if !config_path.exists() {
+            debug!("Cursor mcp.json not found at {}", config_path.display());
+            return Ok(Vec::new());
+        }
+        debug!("Scanning Cursor mcp.json at {}", config_path.display());
+        self.parse_claude_config(&config_path, DiscoverySource::Cursor)
+            .await
+    }
+
+    /// Scan Zed editor configuration (`~/.config/zed/settings.json`).
+    ///
+    /// Format: `{ "context_servers": { "<name>": { "command": { "path": "...", "args": [...] } } } }`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub async fn scan_zed(&self) -> Result<Vec<DiscoveredServer>> {
+        let config_path = Self::zed_config_path()?;
+        if !config_path.exists() {
+            debug!("Zed config not found at {}", config_path.display());
+            return Ok(Vec::new());
+        }
+        debug!("Scanning Zed config at {}", config_path.display());
+        self.parse_zed_config(&config_path).await
+    }
+
+    /// Scan Continue.dev configuration (`~/.continue/config.json`).
+    ///
+    /// Format: `{ "mcpServers": [ { "name": "...", "command": "...", "args": [...] } ] }`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub async fn scan_continue(&self) -> Result<Vec<DiscoveredServer>> {
+        let config_path = Self::continue_config_path()?;
+        if !config_path.exists() {
+            debug!("Continue.dev config not found at {}", config_path.display());
+            return Ok(Vec::new());
+        }
+        debug!("Scanning Continue.dev config at {}", config_path.display());
+        self.parse_continue_config(&config_path).await
+    }
+
+    /// Scan `OpenAI` Codex CLI configuration (`~/.codex/config.json`).
+    ///
+    /// Format: `{ "mcpServers": { "<name>": { "command": "...", "args": [...] } } }`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub async fn scan_codex(&self) -> Result<Vec<DiscoveredServer>> {
+        let config_path = Self::codex_config_path()?;
+        if !config_path.exists() {
+            debug!("Codex config not found at {}", config_path.display());
+            return Ok(Vec::new());
+        }
+        debug!("Scanning Codex config at {}", config_path.display());
+        self.parse_claude_config(&config_path, DiscoverySource::Codex)
+            .await
+    }
+
+    // ── Zed-specific parser ────────────────────────────────────────────────
+
+    /// Parse Zed `settings.json` — `context_servers` key.
+    async fn parse_zed_config(&self, path: &Path) -> Result<Vec<DiscoveredServer>> {
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| Error::Config(format!("Failed to read Zed config: {e}")))?;
+
+        let config: Value = serde_json::from_str(&content)
+            .map_err(|e| Error::Config(format!("Failed to parse Zed config JSON: {e}")))?;
+
+        let Some(context_servers) = config.get("context_servers").and_then(|v| v.as_object())
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut servers = Vec::new();
+        for (name, server_config) in context_servers {
+            if let Some(server) = Self::parse_zed_server(name, server_config, path) {
+                servers.push(server);
+            }
+        }
+        Ok(servers)
+    }
+
+    /// Parse a single Zed context-server entry.
+    fn parse_zed_server(
+        name: &str,
+        config: &Value,
+        config_path: &Path,
+    ) -> Option<DiscoveredServer> {
+        // Zed wraps the command under `{ "command": { "path": "...", "args": [...] } }`
+        let cmd_obj = config.get("command")?;
+        let path_str = cmd_obj.get("path").and_then(|v| v.as_str())?;
+        let args: Vec<String> = cmd_obj
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let full_command = if args.is_empty() {
+            path_str.to_string()
+        } else {
+            format!("{} {}", path_str, args.join(" "))
+        };
+
+        Some(DiscoveredServer {
+            name: name.to_string(),
+            description: format!("MCP server from {:?}", DiscoverySource::Zed),
+            source: DiscoverySource::Zed,
+            transport: TransportConfig::Stdio {
+                command: full_command.clone(),
+                cwd: None,
+            },
+            metadata: ServerMetadata {
+                config_path: Some(config_path.to_path_buf()),
+                pid: None,
+                port: None,
+                command: Some(full_command),
+                working_dir: None,
+            },
+        })
+    }
+
+    // ── Continue.dev-specific parser ───────────────────────────────────────
+
+    /// Parse Continue.dev `config.json` — `mcpServers` array or object.
+    async fn parse_continue_config(&self, path: &Path) -> Result<Vec<DiscoveredServer>> {
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| Error::Config(format!("Failed to read Continue.dev config: {e}")))?;
+
+        let config: Value = serde_json::from_str(&content)
+            .map_err(|e| Error::Config(format!("Failed to parse Continue.dev config JSON: {e}")))?;
+
+        let mut servers = Vec::new();
+
+        // Continue.dev supports both array format (list of server objects) and
+        // object format (name-keyed map), depending on version.
+        match config.get("mcpServers") {
+            Some(Value::Array(arr)) => {
+                for entry in arr {
+                    if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
+                        if let Some(server) =
+                            Self::parse_server_config(name, entry, &DiscoverySource::Continue, path)
+                        {
+                            servers.push(server);
+                        }
+                    }
+                }
+            }
+            Some(Value::Object(map)) => {
+                for (name, server_config) in map {
+                    if let Some(server) = Self::parse_server_config(
+                        name,
+                        server_config,
+                        &DiscoverySource::Continue,
+                        path,
+                    ) {
+                        servers.push(server);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        Ok(servers)
+    }
+
+    // ── New path helpers ───────────────────────────────────────────────────
+
+    /// Get Claude Code CLI config path (`~/.claude.json`).
+    fn claude_code_config_path() -> Result<PathBuf> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+        Ok(home.join(".claude.json"))
+    }
+
+    /// Get Cursor standalone mcp.json path (`~/.cursor/mcp.json`).
+    fn cursor_mcp_json_path() -> Result<PathBuf> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+        Ok(home.join(".cursor/mcp.json"))
+    }
+
+    /// Get Zed settings path (`~/.config/zed/settings.json`).
+    fn zed_config_path() -> Result<PathBuf> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+
+        #[cfg(target_os = "macos")]
+        let path = home.join(".config/zed/settings.json");
+
+        #[cfg(not(target_os = "macos"))]
+        let path = home.join(".config/zed/settings.json");
+
+        Ok(path)
+    }
+
+    /// Get Continue.dev config path (`~/.continue/config.json`).
+    fn continue_config_path() -> Result<PathBuf> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+        Ok(home.join(".continue/config.json"))
+    }
+
+    /// Get `OpenAI` Codex CLI config path (`~/.codex/config.json`).
+    fn codex_config_path() -> Result<PathBuf> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+        Ok(home.join(".codex/config.json"))
+    }
+
     /// Extract port number from URL
     fn extract_port_from_url(url: &str) -> Option<u16> {
-        url::Url::parse(url)
-            .ok()
-            .and_then(|u| u.port())
+        url::Url::parse(url).ok().and_then(|u| u.port())
     }
 
     /// Get Claude Desktop config path

@@ -61,7 +61,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-005"), "unexpected CAP-005: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-005"),
+        "unexpected CAP-005: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -86,7 +90,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-005"), "unexpected CAP-005: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-005"),
+        "unexpected CAP-005: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -116,7 +124,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-006"),
+        "unexpected CAP-006: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -151,7 +163,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-006"),
+        "unexpected CAP-006: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -183,7 +199,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-006"),
+        "unexpected CAP-006: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -213,7 +233,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-006"),
+        "unexpected CAP-006: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -243,7 +267,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(!has_code(&errors_of(&issues), "CAP-006"), "unexpected CAP-006: {:?}", issues);
+    assert!(
+        !has_code(&errors_of(&issues), "CAP-006"),
+        "unexpected CAP-006: {:?}",
+        issues
+    );
 }
 
 // ── Failing YAMLs ─────────────────────────────────────────────────────────────
@@ -265,7 +293,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-005"), "expected CAP-005: {:?}", issues);
+    assert!(
+        has_code(&errors_of(&issues), "CAP-005"),
+        "expected CAP-005: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -292,7 +324,11 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-006"), "expected CAP-006: {:?}", issues);
+    assert!(
+        has_code(&errors_of(&issues), "CAP-006"),
+        "expected CAP-006: {:?}",
+        issues
+    );
 }
 
 #[test]
@@ -311,5 +347,9 @@ providers:
 "#;
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
-    assert!(has_code(&errors_of(&issues), "CAP-005"), "expected CAP-005: {:?}", issues);
+    assert!(
+        has_code(&errors_of(&issues), "CAP-005"),
+        "expected CAP-005: {:?}",
+        issues
+    );
 }

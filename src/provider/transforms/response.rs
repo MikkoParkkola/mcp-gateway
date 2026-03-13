@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::protocol::Tool;
 use crate::transform::{TransformConfig, TransformPipeline};
-use crate::{provider::Transform, Result};
+use crate::{Result, provider::Transform};
 
 /// Shapes tool responses using the existing transform pipeline.
 ///
@@ -51,11 +51,7 @@ impl Transform for ResponseTransform {
         Ok(tools)
     }
 
-    async fn transform_invoke(
-        &self,
-        tool: &str,
-        args: Value,
-    ) -> Result<Option<(String, Value)>> {
+    async fn transform_invoke(&self, tool: &str, args: Value) -> Result<Option<(String, Value)>> {
         // Response transforms do not intercept the invocation request.
         Ok(Some((tool.to_string(), args)))
     }

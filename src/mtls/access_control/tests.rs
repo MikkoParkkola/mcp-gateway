@@ -241,8 +241,16 @@ fn san_uri_glob_does_not_match_different_spiffe_path() {
 
 #[test]
 fn any_true_catch_all_denies_everything() {
-    let policy =
-        policy_with_rules(vec![rule(None, None, None, Some(true), &[], &[], &["*"], &["*"])]);
+    let policy = policy_with_rules(vec![rule(
+        None,
+        None,
+        None,
+        Some(true),
+        &[],
+        &[],
+        &["*"],
+        &["*"],
+    )]);
     let id = identity(Some("any-agent"), Some("any-ou"), &[], &[]);
     assert_eq!(
         policy.evaluate(Some(&id), "brave", "search"),
@@ -333,16 +341,7 @@ fn deny_backend_blocks_access_regardless_of_tool() {
 fn first_matching_rule_wins_not_later_ones() {
     // GIVEN: first rule allows, second rule (catch-all) denies
     let policy = policy_with_rules(vec![
-        rule(
-            Some("my-agent"),
-            None,
-            None,
-            None,
-            &["*"],
-            &["*"],
-            &[],
-            &[],
-        ),
+        rule(Some("my-agent"), None, None, None, &["*"], &["*"], &[], &[]),
         rule(None, None, None, Some(true), &[], &[], &["*"], &["*"]),
     ]);
     let id = identity(Some("my-agent"), None, &[], &[]);

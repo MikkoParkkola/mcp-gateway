@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use super::*;
 use super::super::{JsonPathSegment, RedactRule};
+use super::*;
 use serde_json::json;
 
 // ── parse_json_path ─────────────────────────────────────────────────

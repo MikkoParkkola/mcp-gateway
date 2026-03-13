@@ -44,7 +44,11 @@ fn test_allowlist_exact_match() {
     // Tools in allowlist should be permitted
     assert!(client.check_tool_scope("tavily", "search_web").is_ok());
     assert!(client.check_tool_scope("filesystem", "read_file").is_ok());
-    assert!(client.check_tool_scope("filesystem", "list_directory").is_ok());
+    assert!(
+        client
+            .check_tool_scope("filesystem", "list_directory")
+            .is_ok()
+    );
 
     // Tools NOT in allowlist should be denied
     let result = client.check_tool_scope("filesystem", "write_file");
@@ -65,10 +69,7 @@ fn test_allowlist_glob_patterns() {
         name: "search_only".to_string(),
         rate_limit: 0,
         backends: vec![],
-        allowed_tools: Some(vec![
-            "search_*".to_string(),
-            "read_*".to_string(),
-        ]),
+        allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
         denied_tools: None,
     };
 
@@ -80,7 +81,11 @@ fn test_allowlist_glob_patterns() {
 
     // Tools NOT matching patterns should be denied
     assert!(client.check_tool_scope("filesystem", "write_file").is_err());
-    assert!(client.check_tool_scope("server", "execute_command").is_err());
+    assert!(
+        client
+            .check_tool_scope("server", "execute_command")
+            .is_err()
+    );
     assert!(client.check_tool_scope("database", "write_query").is_err());
 }
 
@@ -107,8 +112,16 @@ fn test_denylist_exact_match() {
     assert!(err.contains("blocked"));
     assert!(err.contains("no_writes"));
 
-    assert!(client.check_tool_scope("filesystem", "delete_file").is_err());
-    assert!(client.check_tool_scope("server", "execute_command").is_err());
+    assert!(
+        client
+            .check_tool_scope("filesystem", "delete_file")
+            .is_err()
+    );
+    assert!(
+        client
+            .check_tool_scope("server", "execute_command")
+            .is_err()
+    );
 
     // Tools NOT in denylist should be allowed
     assert!(client.check_tool_scope("filesystem", "read_file").is_ok());
@@ -123,15 +136,20 @@ fn test_denylist_glob_patterns() {
         rate_limit: 0,
         backends: vec![],
         allowed_tools: None,
-        denied_tools: Some(vec![
-            "filesystem_*".to_string(),
-            "exec_*".to_string(),
-        ]),
+        denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
     };
 
     // Tools matching deny patterns should be blocked
-    assert!(client.check_tool_scope("server", "filesystem_read").is_err());
-    assert!(client.check_tool_scope("server", "filesystem_write").is_err());
+    assert!(
+        client
+            .check_tool_scope("server", "filesystem_read")
+            .is_err()
+    );
+    assert!(
+        client
+            .check_tool_scope("server", "filesystem_write")
+            .is_err()
+    );
     assert!(client.check_tool_scope("server", "exec_command").is_err());
     assert!(client.check_tool_scope("server", "exec_shell").is_err());
 
@@ -156,7 +174,11 @@ fn test_qualified_name_matching() {
 
     // Qualified match: filesystem:read_file allowed, but not on other servers
     assert!(client.check_tool_scope("filesystem", "read_file").is_ok());
-    assert!(client.check_tool_scope("other_server", "read_file").is_err());
+    assert!(
+        client
+            .check_tool_scope("other_server", "read_file")
+            .is_err()
+    );
 
     // Qualified glob: database:* allows all tools on database server
     assert!(client.check_tool_scope("database", "query").is_ok());
@@ -174,10 +196,7 @@ fn test_allowlist_and_denylist_combination() {
         name: "complex".to_string(),
         rate_limit: 0,
         backends: vec![],
-        allowed_tools: Some(vec![
-            "filesystem_*".to_string(),
-            "search_*".to_string(),
-        ]),
+        allowed_tools: Some(vec!["filesystem_*".to_string(), "search_*".to_string()]),
         denied_tools: Some(vec![
             "filesystem_write".to_string(),
             "filesystem_delete".to_string(),
@@ -189,11 +208,23 @@ fn test_allowlist_and_denylist_combination() {
     assert!(client.check_tool_scope("server", "search_web").is_ok());
 
     // In allowlist BUT in denylist: denylist takes precedence
-    assert!(client.check_tool_scope("server", "filesystem_write").is_err());
-    assert!(client.check_tool_scope("server", "filesystem_delete").is_err());
+    assert!(
+        client
+            .check_tool_scope("server", "filesystem_write")
+            .is_err()
+    );
+    assert!(
+        client
+            .check_tool_scope("server", "filesystem_delete")
+            .is_err()
+    );
 
     // NOT in allowlist: denied (even if not in denylist)
-    assert!(client.check_tool_scope("server", "execute_command").is_err());
+    assert!(
+        client
+            .check_tool_scope("server", "execute_command")
+            .is_err()
+    );
 }
 
 /// Test `ApiKeyConfig` with tool scopes (config layer)
@@ -272,7 +303,11 @@ fn test_pattern_matching_edge_cases() {
 
     // Prefix/suffix glob (only suffix * is implemented, so this is exact match)
     // The pattern "*ends_with_this" will only match if tool name is exactly "*ends_with_this"
-    assert!(client.check_tool_scope("server", "starts_with_this_ends_with_this").is_err());
+    assert!(
+        client
+            .check_tool_scope("server", "starts_with_this_ends_with_this")
+            .is_err()
+    );
 
     // Not matching any pattern
     assert!(client.check_tool_scope("server", "b").is_err());

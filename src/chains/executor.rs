@@ -65,7 +65,10 @@ impl ChainExecutor {
     /// Create an executor with an explicit checkpoint store and retry policy.
     #[must_use]
     pub fn new(store: ChainCheckpointStore, retry_policy: ChainRetryPolicy) -> Self {
-        Self { store, retry_policy }
+        Self {
+            store,
+            retry_policy,
+        }
     }
 
     /// Create an executor using the default store (`~/.mcp-gateway/chains/`).
@@ -86,10 +89,7 @@ impl ChainExecutor {
     ///
     /// Returns `Error::Io` if the temp dir cannot be created.
     pub fn with_temp_store() -> Result<Self> {
-        let tmp = std::env::temp_dir().join(format!(
-            "mcp-gateway-chains-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let tmp = std::env::temp_dir().join(format!("mcp-gateway-chains-{}", uuid::Uuid::new_v4()));
         Ok(Self::new(
             ChainCheckpointStore::new(&tmp)?,
             ChainRetryPolicy::default(),
@@ -185,15 +185,16 @@ impl ChainExecutor {
                     obs.step_completed(&step.name, idx, attempts, duration_ms);
 
                     // Persist checkpoint
-                    self.store.append(&ChainCheckpoint {
-                        chain_id: chain.id.clone(),
-                        step_name: step.name.clone(),
-                        output: output.clone(),
-                        attempts,
-                        completed_at: chrono::Utc::now(),
-                        duration_ms,
-                    })
-                    .await?;
+                    self.store
+                        .append(&ChainCheckpoint {
+                            chain_id: chain.id.clone(),
+                            step_name: step.name.clone(),
+                            output: output.clone(),
+                            attempts,
+                            completed_at: chrono::Utc::now(),
+                            duration_ms,
+                        })
+                        .await?;
 
                     outputs.insert(step.name.clone(), output.clone());
                     step_results.push(ChainStepResult {
@@ -219,11 +220,7 @@ impl ChainExecutor {
                 }
                 Err(e) => {
                     let err_msg = e.to_string();
-                    obs.step_failed(
-                        &step.name,
-                        self.retry_policy.max_attempts,
-                        &err_msg,
-                    );
+                    obs.step_failed(&step.name, self.retry_policy.max_attempts, &err_msg);
                     step_results.push(ChainStepResult {
                         name: step.name.clone(),
                         state: StepState::Failed,
@@ -314,7 +311,9 @@ impl ChainExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chains::interpolation::{PathSegment, extract_var_refs, interpolate_inputs, resolve_path, tokenize_path};
+    use crate::chains::interpolation::{
+        PathSegment, extract_var_refs, interpolate_inputs, resolve_path, tokenize_path,
+    };
     use crate::chains::types::{Chain, ChainStep};
     use serde_json::json;
 
@@ -334,7 +333,10 @@ mod tests {
         }
 
         fn respond(self, tool: &str, value: Value) -> Self {
-            self.responses.write().unwrap().insert(tool.to_string(), value);
+            self.responses
+                .write()
+                .unwrap()
+                .insert(tool.to_string(), value);
             self
         }
 
@@ -345,7 +347,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ToolInvoker for MockInvoker {
-        async fn invoke(&self, _server: &str, tool: &str, _arguments: Value) -> crate::Result<Value> {
+        async fn invoke(
+            &self,
+            _server: &str,
+            tool: &str,
+            _arguments: Value,
+        ) -> crate::Result<Value> {
             self.call_log.lock().unwrap().push(tool.to_string());
             self.responses
                 .read()
@@ -361,12 +368,8 @@ mod tests {
     }
 
     fn make_executor() -> ChainExecutor {
-        let tmp = std::env::temp_dir()
-            .join(format!("chain-test-{}", uuid::Uuid::new_v4()));
-        ChainExecutor::new(
-            ChainCheckpointStore::new(&tmp).unwrap(),
-            fast_policy(),
-        )
+        let tmp = std::env::temp_dir().join(format!("chain-test-{}", uuid::Uuid::new_v4()));
+        ChainExecutor::new(ChainCheckpointStore::new(&tmp).unwrap(), fast_policy())
     }
 
     // ── execute: basic happy path ───────────────────────────────────────────
@@ -411,8 +414,7 @@ mod tests {
     async fn required_step_failure_aborts_chain() {
         // GIVEN a chain where the second step always fails
         let executor = make_executor();
-        let invoker = MockInvoker::new()
-            .respond("step_a_tool", json!("ok"));
+        let invoker = MockInvoker::new().respond("step_a_tool", json!("ok"));
         // step_b_tool has no response → BackendNotFound (non-retryable)
         let chain = Chain::new("chain-3")
             .step(ChainStep::new("step_a", "step_a_tool"))
@@ -448,22 +450,23 @@ mod tests {
     #[tokio::test]
     async fn resume_skips_already_completed_steps() {
         // GIVEN a checkpoint exists for step_a
-        let tmp = std::env::temp_dir()
-            .join(format!("chain-resume-test-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("chain-resume-test-{}", uuid::Uuid::new_v4()));
         let store = ChainCheckpointStore::new(&tmp).unwrap();
-        store.append(&ChainCheckpoint {
-            chain_id: "chain-5".into(),
-            step_name: "step_a".into(),
-            output: json!({"cached": true}),
-            attempts: 1,
-            completed_at: chrono::Utc::now(),
-            duration_ms: 5,
-        }).await.unwrap();
+        store
+            .append(&ChainCheckpoint {
+                chain_id: "chain-5".into(),
+                step_name: "step_a".into(),
+                output: json!({"cached": true}),
+                attempts: 1,
+                completed_at: chrono::Utc::now(),
+                duration_ms: 5,
+            })
+            .await
+            .unwrap();
 
         let executor = ChainExecutor::new(store, fast_policy());
         // step_a_tool is NOT registered — proving it was skipped from checkpoint
-        let invoker = MockInvoker::new()
-            .respond("step_b_tool", json!({"new": true}));
+        let invoker = MockInvoker::new().respond("step_b_tool", json!({"new": true}));
         let chain = Chain::new("chain-5")
             .step(ChainStep::new("step_a", "step_a_tool"))
             .step(ChainStep::new("step_b", "step_b_tool"));
@@ -488,7 +491,12 @@ mod tests {
         let result = executor.resume(&chain, json!({}), &invoker).await;
         // THEN an error is returned
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No checkpoint found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No checkpoint found")
+        );
     }
 
     // ── variable interpolation ──────────────────────────────────────────────
@@ -512,11 +520,8 @@ mod tests {
         outputs.insert("search".into(), json!({"query": "rust"}));
         let inputs = json!({});
         // WHEN interpolated
-        let result = interpolate_inputs(
-            &json!("results for $search.query found"),
-            &outputs,
-            &inputs,
-        );
+        let result =
+            interpolate_inputs(&json!("results for $search.query found"), &outputs, &inputs);
         // THEN the reference is replaced inline
         assert_eq!(result, json!("results for rust found"));
     }
@@ -580,22 +585,28 @@ mod tests {
         // GIVEN two partially-completed chains
         let executor = make_executor();
         let store_ref = &executor.store;
-        store_ref.append(&ChainCheckpoint {
-            chain_id: "partial-1".into(),
-            step_name: "s1".into(),
-            output: json!(null),
-            attempts: 1,
-            completed_at: chrono::Utc::now(),
-            duration_ms: 1,
-        }).await.unwrap();
-        store_ref.append(&ChainCheckpoint {
-            chain_id: "partial-2".into(),
-            step_name: "s1".into(),
-            output: json!(null),
-            attempts: 1,
-            completed_at: chrono::Utc::now(),
-            duration_ms: 1,
-        }).await.unwrap();
+        store_ref
+            .append(&ChainCheckpoint {
+                chain_id: "partial-1".into(),
+                step_name: "s1".into(),
+                output: json!(null),
+                attempts: 1,
+                completed_at: chrono::Utc::now(),
+                duration_ms: 1,
+            })
+            .await
+            .unwrap();
+        store_ref
+            .append(&ChainCheckpoint {
+                chain_id: "partial-2".into(),
+                step_name: "s1".into(),
+                output: json!(null),
+                attempts: 1,
+                completed_at: chrono::Utc::now(),
+                duration_ms: 1,
+            })
+            .await
+            .unwrap();
         // WHEN listed
         let mut ids = executor.list_partial_chains().await.unwrap();
         ids.sort();
@@ -606,13 +617,11 @@ mod tests {
     #[tokio::test]
     async fn checkpoint_deleted_after_successful_completion() {
         // GIVEN a chain that completes successfully
-        let tmp = std::env::temp_dir()
-            .join(format!("chain-cleanup-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("chain-cleanup-{}", uuid::Uuid::new_v4()));
         let store = ChainCheckpointStore::new(&tmp).unwrap();
         let executor = ChainExecutor::new(store.clone(), fast_policy());
         let invoker = MockInvoker::new().respond("the_tool", json!("ok"));
-        let chain = Chain::new("cleanup-chain")
-            .step(ChainStep::new("step1", "the_tool"));
+        let chain = Chain::new("cleanup-chain").step(ChainStep::new("step1", "the_tool"));
         // WHEN executed to completion
         executor.execute(&chain, json!({}), &invoker).await.unwrap();
         // THEN checkpoint file is deleted

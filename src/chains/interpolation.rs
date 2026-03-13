@@ -28,9 +28,11 @@ pub fn interpolate_inputs(
                 .map(|(k, v)| (k.clone(), interpolate_inputs(v, outputs, inputs)))
                 .collect(),
         ),
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| interpolate_inputs(v, outputs, inputs)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| interpolate_inputs(v, outputs, inputs))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }

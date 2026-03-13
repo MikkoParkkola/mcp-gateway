@@ -10,14 +10,10 @@ fn profile_from(
 ) -> RoutingProfile {
     let cfg = RoutingProfileConfig {
         description: String::new(),
-        allow_tools: allow_tools
-            .map(|s| s.iter().map(|x| (*x).to_string()).collect()),
-        deny_tools: deny_tools
-            .map(|s| s.iter().map(|x| (*x).to_string()).collect()),
-        allow_backends: allow_backends
-            .map(|s| s.iter().map(|x| (*x).to_string()).collect()),
-        deny_backends: deny_backends
-            .map(|s| s.iter().map(|x| (*x).to_string()).collect()),
+        allow_tools: allow_tools.map(|s| s.iter().map(|x| (*x).to_string()).collect()),
+        deny_tools: deny_tools.map(|s| s.iter().map(|x| (*x).to_string()).collect()),
+        allow_backends: allow_backends.map(|s| s.iter().map(|x| (*x).to_string()).collect()),
+        deny_backends: deny_backends.map(|s| s.iter().map(|x| (*x).to_string()).collect()),
     };
     RoutingProfile::from_config("test", &cfg)
 }
@@ -100,12 +96,7 @@ fn deny_tools_glob_prefix_blocks_matching_tools() {
 fn deny_overrides_allow_when_both_match() {
     // allow_tools: ["brave_*"], deny_tools: ["brave_news"]
     // brave_news is in both → should be denied (deny wins)
-    let p = profile_from(
-        Some(&["brave_*"]),
-        Some(&["brave_news"]),
-        None,
-        None,
-    );
+    let p = profile_from(Some(&["brave_*"]), Some(&["brave_news"]), None, None);
     assert!(p.check("b", "brave_search").is_ok());
     assert!(p.check("b", "brave_news").is_err());
 }
@@ -136,7 +127,10 @@ fn error_message_contains_profile_name_for_denied_tool() {
     };
     let p = RoutingProfile::from_config("research", &cfg);
     let err = p.check("brave", "gmail_send").unwrap_err();
-    assert!(err.contains("research"), "error should mention profile name");
+    assert!(
+        err.contains("research"),
+        "error should mention profile name"
+    );
     assert!(err.contains("gmail_send"), "error should mention tool name");
 }
 

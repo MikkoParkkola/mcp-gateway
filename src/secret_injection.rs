@@ -243,7 +243,10 @@ impl SecretInjector {
                     // Inject into the tool arguments JSON object
                     if let Some(obj) = args.as_object_mut() {
                         // Overwrite protection: always set, never let agent override
-                        obj.insert(rule.inject_key.clone(), serde_json::Value::String(resolved_value));
+                        obj.insert(
+                            rule.inject_key.clone(),
+                            serde_json::Value::String(resolved_value),
+                        );
                     }
                 }
                 InjectTarget::Header => {
@@ -397,7 +400,9 @@ pub fn glob_match(pattern: &str, value: &str) -> bool {
     if let Some(star_pos) = pattern.find('*') {
         let prefix = &pattern[..star_pos];
         let suffix = &pattern[star_pos + 1..];
-        return value.starts_with(prefix) && value.ends_with(suffix) && value.len() >= prefix.len() + suffix.len();
+        return value.starts_with(prefix)
+            && value.ends_with(suffix)
+            && value.len() >= prefix.len() + suffix.len();
     }
 
     false
@@ -412,9 +417,7 @@ impl SecretInjector {
     ///
     /// Extracts `secrets` fields from each backend config and aggregates them.
     #[must_use]
-    pub fn from_backend_configs(
-        backends: &HashMap<String, crate::config::BackendConfig>,
-    ) -> Self {
+    pub fn from_backend_configs(backends: &HashMap<String, crate::config::BackendConfig>) -> Self {
         let mut rules: HashMap<String, Vec<CredentialRule>> = HashMap::new();
 
         for (name, config) in backends {

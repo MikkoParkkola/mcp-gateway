@@ -4,6 +4,7 @@
 //! from both local capabilities directory and remote GitHub sources.
 
 pub mod marketplace;
+pub mod server_registry;
 
 use std::collections::HashMap;
 use std::fs;
@@ -75,7 +76,9 @@ impl From<RegistryIndexWire> for RegistryIndex {
 }
 
 impl<'de> Deserialize<'de> for RegistryIndex {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let wire = RegistryIndexWire::deserialize(deserializer)?;
         Ok(Self::from(wire))
     }
@@ -115,7 +118,10 @@ impl RegistryIndex {
             .filter(|entry| {
                 entry.name.to_lowercase().contains(&query_lower)
                     || entry.description.to_lowercase().contains(&query_lower)
-                    || entry.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                    || entry
+                        .tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
             })
             .collect()
     }
@@ -123,9 +129,7 @@ impl RegistryIndex {
     /// Find capability by exact name — O(1) via the name index.
     #[must_use]
     pub fn find(&self, name: &str) -> Option<&RegistryEntry> {
-        self.name_index
-            .get(name)
-            .map(|&i| &self.capabilities[i])
+        self.name_index.get(name).map(|&i| &self.capabilities[i])
     }
 }
 
@@ -178,7 +182,9 @@ impl Registry {
                     // Calculate relative path from capabilities directory
                     let relative_path = path
                         .strip_prefix(&self.capabilities_path)
-                        .map_err(|e| Error::Config(format!("Failed to calculate relative path: {e}")))?
+                        .map_err(|e| {
+                            Error::Config(format!("Failed to calculate relative path: {e}"))
+                        })?
                         .to_string_lossy()
                         .to_string();
 
@@ -245,16 +251,14 @@ impl Registry {
         let mut last_error = None;
 
         for pattern in search_patterns {
-            let capability_url = format!(
-                "https://raw.githubusercontent.com/{repo}/{branch}/{pattern}"
-            );
+            let capability_url =
+                format!("https://raw.githubusercontent.com/{repo}/{branch}/{pattern}");
 
             match client.get(&capability_url).send().await {
                 Ok(response) if response.status().is_success() => {
-                    let capability_content = response
-                        .text()
-                        .await
-                        .map_err(|e| Error::Transport(format!("Failed to read capability content: {e}")))?;
+                    let capability_content = response.text().await.map_err(|e| {
+                        Error::Transport(format!("Failed to read capability content: {e}"))
+                    })?;
 
                     // Determine subdirectory from pattern
                     let pattern_path = PathBuf::from(&pattern);
@@ -308,7 +312,13 @@ mod tests {
         assert_eq!(deserialized.tags.len(), 1);
     }
 
-    fn make_entry(name: &str, description: &str, path: &str, tags: Vec<&str>, requires_key: bool) -> RegistryEntry {
+    fn make_entry(
+        name: &str,
+        description: &str,
+        path: &str,
+        tags: Vec<&str>,
+        requires_key: bool,
+    ) -> RegistryEntry {
         RegistryEntry {
             name: name.to_string(),
             description: description.to_string(),
@@ -321,8 +331,20 @@ mod tests {
     #[test]
     fn test_registry_search() {
         let index = RegistryIndex::new(vec![
-            make_entry("stripe_charges", "List Stripe charges", "finance/stripe_charges.yaml", vec!["finance", "stripe"], true),
-            make_entry("gmail_send", "Send email via Gmail", "communication/gmail_send.yaml", vec!["email", "google"], true),
+            make_entry(
+                "stripe_charges",
+                "List Stripe charges",
+                "finance/stripe_charges.yaml",
+                vec!["finance", "stripe"],
+                true,
+            ),
+            make_entry(
+                "gmail_send",
+                "Send email via Gmail",
+                "communication/gmail_send.yaml",
+                vec!["email", "google"],
+                true,
+            ),
         ]);
 
         let results = index.search("stripe");
@@ -339,9 +361,13 @@ mod tests {
 
     #[test]
     fn test_registry_find_exact() {
-        let index = RegistryIndex::new(vec![
-            make_entry("test_tool", "Test", "test.yaml", vec![], false),
-        ]);
+        let index = RegistryIndex::new(vec![make_entry(
+            "test_tool",
+            "Test",
+            "test.yaml",
+            vec![],
+            false,
+        )]);
 
         let result = index.find("test_tool");
         assert!(result.is_some());
@@ -353,9 +379,13 @@ mod tests {
 
     #[test]
     fn test_registry_search_case_insensitive() {
-        let index = RegistryIndex::new(vec![
-            make_entry("MyTool", "Description", "tool.yaml", vec!["TAG"], false),
-        ]);
+        let index = RegistryIndex::new(vec![make_entry(
+            "MyTool",
+            "Description",
+            "tool.yaml",
+            vec!["TAG"],
+            false,
+        )]);
 
         let results = index.search("mytool");
         assert_eq!(results.len(), 1);
@@ -366,9 +396,13 @@ mod tests {
 
     #[test]
     fn test_registry_search_empty_query() {
-        let index = RegistryIndex::new(vec![
-            make_entry("tool1", "Desc", "tool1.yaml", vec![], false),
-        ]);
+        let index = RegistryIndex::new(vec![make_entry(
+            "tool1",
+            "Desc",
+            "tool1.yaml",
+            vec![],
+            false,
+        )]);
 
         let results = index.search("");
         assert_eq!(results.len(), 1);
@@ -417,9 +451,13 @@ mod tests {
     #[test]
     fn registry_index_find_returns_none_for_prefix_match() {
         // GIVEN: an index where "foo" exists but "fo" does not
-        let index = RegistryIndex::new(vec![
-            make_entry("foo", "Foo tool", "foo.yaml", vec![], false),
-        ]);
+        let index = RegistryIndex::new(vec![make_entry(
+            "foo",
+            "Foo tool",
+            "foo.yaml",
+            vec![],
+            false,
+        )]);
         // WHEN: looking up a name prefix
         let result = index.find("fo");
         // THEN: None — find is exact-match only
@@ -448,15 +486,22 @@ mod tests {
     #[test]
     fn registry_index_serde_round_trip_rebuilds_name_index() {
         // GIVEN: an index serialised to JSON
-        let original = RegistryIndex::new(vec![
-            make_entry("serde_tool", "Round-trip test", "serde.yaml", vec!["test"], false),
-        ]);
+        let original = RegistryIndex::new(vec![make_entry(
+            "serde_tool",
+            "Round-trip test",
+            "serde.yaml",
+            vec!["test"],
+            false,
+        )]);
         let json = serde_json::to_string(&original).unwrap();
         // WHEN: deserialising back
         let restored: RegistryIndex = serde_json::from_str(&json).unwrap();
         // THEN: the O(1) index is rebuilt and find() works
         let found = restored.find("serde_tool");
-        assert!(found.is_some(), "name_index must be rebuilt after deserialization");
+        assert!(
+            found.is_some(),
+            "name_index must be rebuilt after deserialization"
+        );
         assert_eq!(found.unwrap().name, "serde_tool");
         // AND: a missing name still returns None
         assert!(restored.find("nonexistent").is_none());
@@ -480,7 +525,10 @@ mod tests {
         let capabilities_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("capabilities");
         let registry = Registry::new(&capabilities_path);
 
-        let index = registry.build_index().await.expect("Failed to build registry index");
+        let index = registry
+            .build_index()
+            .await
+            .expect("Failed to build registry index");
 
         // Verify we have a reasonable number of capabilities (38 after dedup cleanup)
         assert!(
@@ -503,20 +551,16 @@ mod tests {
             // File must parse correctly
             let capability = parse_capability_file(&capability_path)
                 .await
-                .unwrap_or_else(|e| panic!(
-                    "Failed to parse {}: {e}",
-                    capability_path.display()
-                ));
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {e}", capability_path.display()));
 
             // Capability must validate
-            validate_capability(&capability).unwrap_or_else(|e| panic!(
-                "Validation failed for {}: {e}",
-                capability.name
-            ));
+            validate_capability(&capability)
+                .unwrap_or_else(|e| panic!("Validation failed for {}: {e}", capability.name));
 
             // Name must match registry entry
             assert_eq!(
-                capability.name, entry.name,
+                capability.name,
+                entry.name,
                 "Capability name mismatch in {}",
                 capability_path.display()
             );
@@ -529,7 +573,10 @@ mod tests {
 
         let capabilities_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("capabilities");
         let registry = Registry::new(&capabilities_path);
-        let index = registry.build_index().await.expect("Failed to build registry index");
+        let index = registry
+            .build_index()
+            .await
+            .expect("Failed to build registry index");
 
         // Expected capabilities with their metadata
         let expected = vec![

@@ -58,11 +58,11 @@ fn tool_json_vec(n: usize) -> Vec<Value> {
 const REQUEST_TEXT: &str = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"web_search","arguments":{"query":"rust criterion benchmarks"}}}"#;
 
 /// A canonical JSON-RPC response text payload.
-const RESPONSE_TEXT: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"hello world"}]}}"#;
+const RESPONSE_TEXT: &str =
+    r#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"hello world"}]}}"#;
 
 /// A canonical JSON-RPC notification text payload.
-const NOTIFICATION_TEXT: &str =
-    r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{"reason":"refresh"}}"#;
+const NOTIFICATION_TEXT: &str = r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{"reason":"refresh"}}"#;
 
 // ── tool_registry benchmarks ──────────────────────────────────────────────────
 
@@ -99,7 +99,9 @@ fn bench_tool_registry(c: &mut Criterion) {
 
     // Bulk replace_server (refresh a backend's tool list)
     {
-        let tools: Vec<Tool> = (0..50).map(|i| make_tool(&format!("tool_{i:04}"))).collect();
+        let tools: Vec<Tool> = (0..50)
+            .map(|i| make_tool(&format!("tool_{i:04}")))
+            .collect();
         group.bench_function("replace_server_50", |b| {
             b.iter_batched(
                 || {

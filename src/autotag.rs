@@ -407,7 +407,10 @@ mod tests {
         // GIVEN: "calendar calendar calendar"
         let keywords = extract_keywords("calendar events calendar schedule calendar");
         let calendar_count = keywords.iter().filter(|k| k.as_str() == "calendar").count();
-        assert_eq!(calendar_count, 1, "Duplicate 'calendar' found: {keywords:?}");
+        assert_eq!(
+            calendar_count, 1,
+            "Duplicate 'calendar' found: {keywords:?}"
+        );
     }
 
     #[test]
@@ -441,8 +444,7 @@ mod tests {
         // GIVEN: hyphenated word "entity-discovery"
         let keywords = extract_keywords("entity-discovery workflow");
         assert!(
-            keywords.contains(&"entity".to_string())
-                || keywords.contains(&"discovery".to_string()),
+            keywords.contains(&"entity".to_string()) || keywords.contains(&"discovery".to_string()),
             "Hyphen not split: {keywords:?}"
         );
     }
@@ -463,7 +465,11 @@ mod tests {
     fn extract_keywords_lowercases_all_output() {
         let keywords = extract_keywords("Authenticates OAuth Calendar");
         for kw in &keywords {
-            assert_eq!(kw.as_str(), kw.to_lowercase(), "Non-lowercase keyword: {kw}");
+            assert_eq!(
+                kw.as_str(),
+                kw.to_lowercase(),
+                "Non-lowercase keyword: {kw}"
+            );
         }
     }
 
@@ -537,8 +543,18 @@ mod tests {
 
     #[test]
     fn stopwords_contains_tool_generic_words() {
-        for word in &["tool", "tools", "returns", "parameter", "parameters", "data"] {
-            assert!(is_stopword(word), "'{word}' should be a tool-generic stopword");
+        for word in &[
+            "tool",
+            "tools",
+            "returns",
+            "parameter",
+            "parameters",
+            "data",
+        ] {
+            assert!(
+                is_stopword(word),
+                "'{word}' should be a tool-generic stopword"
+            );
         }
     }
 
@@ -581,7 +597,11 @@ mod tests {
         // "manages", "calendar", "entries" should be extracted; "cr" + "er" filtered by len
         assert!(result.contains("[keywords:"));
         let kws_part = result.split("[keywords:").nth(1).unwrap_or("");
-        assert!(kws_part.contains("calendar") || kws_part.contains("manages") || kws_part.contains("entries"));
+        assert!(
+            kws_part.contains("calendar")
+                || kws_part.contains("manages")
+                || kws_part.contains("entries")
+        );
     }
 
     #[test]

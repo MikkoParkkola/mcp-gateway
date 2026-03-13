@@ -35,7 +35,11 @@ fn build_suggestions_finds_tags_containing_query_word() {
 #[test]
 fn build_suggestions_finds_tags_by_prefix() {
     // GIVEN: tags include "scraping" and query word "scr" (3+ chars prefix match)
-    let tags = vec!["scraping".to_string(), "scripting".to_string(), "other".to_string()];
+    let tags = vec![
+        "scraping".to_string(),
+        "scripting".to_string(),
+        "other".to_string(),
+    ];
     let suggestions = build_suggestions("scr", &tags);
     assert!(suggestions.contains(&"scraping".to_string()));
     assert!(suggestions.contains(&"scripting".to_string()));
@@ -68,9 +72,16 @@ fn build_suggestions_returns_sorted_results() {
 #[test]
 fn build_suggestions_deduplicates_results() {
     // GIVEN: duplicate tags
-    let tags = vec!["search".to_string(), "search".to_string(), "lookup".to_string()];
+    let tags = vec![
+        "search".to_string(),
+        "search".to_string(),
+        "lookup".to_string(),
+    ];
     let suggestions = build_suggestions("search", &tags);
-    let unique_count = suggestions.iter().collect::<std::collections::HashSet<_>>().len();
+    let unique_count = suggestions
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     assert_eq!(suggestions.len(), unique_count);
 }
 
@@ -104,7 +115,10 @@ fn build_match_json_with_chains_includes_field_when_non_empty() {
     // WHEN: building match JSON with chains
     // THEN: "chains_with" array is present with correct values
     let tool = make_tool("linear_get_teams", Some("List teams"));
-    let chains = vec!["linear_create_issue".to_string(), "linear_list_projects".to_string()];
+    let chains = vec![
+        "linear_create_issue".to_string(),
+        "linear_list_projects".to_string(),
+    ];
     let result = build_match_json_with_chains("cap", &tool, &chains);
     let chains_val = result["chains_with"].as_array().unwrap();
     assert_eq!(chains_val.len(), 2);
@@ -146,27 +160,29 @@ fn build_routing_instructions_includes_chain_section_when_chains_present() {
     use crate::transform::TransformConfig;
     use std::collections::HashMap;
 
-    let make_cap = |name: &str, category: &str, chains: Vec<&str>| {
-        CapabilityDefinition {
-            fulcrum: "1.0".to_string(),
-            name: name.to_string(),
-            description: format!("{name} description"),
-            schema: SchemaDefinition::default(),
-            providers: ProvidersConfig::default(),
-            auth: AuthConfig::default(),
-            cache: CacheConfig::default(),
-            metadata: CapabilityMetadata {
-                category: category.to_string(),
-                chains_with: chains.into_iter().map(ToString::to_string).collect(),
-                ..Default::default()
-            },
-            transform: TransformConfig::default(),
-            webhooks: HashMap::new(),
-        }
+    let make_cap = |name: &str, category: &str, chains: Vec<&str>| CapabilityDefinition {
+        fulcrum: "1.0".to_string(),
+        name: name.to_string(),
+        description: format!("{name} description"),
+        schema: SchemaDefinition::default(),
+        providers: ProvidersConfig::default(),
+        auth: AuthConfig::default(),
+        cache: CacheConfig::default(),
+        metadata: CapabilityMetadata {
+            category: category.to_string(),
+            chains_with: chains.into_iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        },
+        transform: TransformConfig::default(),
+        webhooks: HashMap::new(),
     };
 
     let caps = vec![
-        make_cap("linear_get_teams", "productivity", vec!["linear_create_issue"]),
+        make_cap(
+            "linear_get_teams",
+            "productivity",
+            vec!["linear_create_issue"],
+        ),
         make_cap("linear_create_issue", "productivity", vec![]),
     ];
 
@@ -222,7 +238,10 @@ chains_with: [linear_create_issue, linear_update_issue]
     let meta: crate::capability::CapabilityMetadata = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(meta.produces, vec!["teamId", "issueId"]);
     assert_eq!(meta.consumes, vec!["teamId"]);
-    assert_eq!(meta.chains_with, vec!["linear_create_issue", "linear_update_issue"]);
+    assert_eq!(
+        meta.chains_with,
+        vec!["linear_create_issue", "linear_update_issue"]
+    );
 }
 
 #[test]

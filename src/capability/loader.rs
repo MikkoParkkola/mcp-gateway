@@ -22,13 +22,15 @@ impl CapabilityLoader {
 
         if !path.exists() {
             return Err(Error::Config(format!(
-                "Capabilities directory does not exist: {}", path.display()
+                "Capabilities directory does not exist: {}",
+                path.display()
             )));
         }
 
         if !path.is_dir() {
             return Err(Error::Config(format!(
-                "Capabilities path is not a directory: {}", path.display()
+                "Capabilities path is not a directory: {}",
+                path.display()
             )));
         }
 
@@ -49,9 +51,9 @@ impl CapabilityLoader {
         dir: &Path,
         capabilities: &mut Vec<CapabilityDefinition>,
     ) -> Result<()> {
-        let mut entries = tokio::fs::read_dir(dir)
-            .await
-            .map_err(|e| Error::Config(format!("Failed to read directory {}: {e}", dir.display())))?;
+        let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
+            Error::Config(format!("Failed to read directory {}: {e}", dir.display()))
+        })?;
 
         while let Some(entry) = entries
             .next_entry()
@@ -130,7 +132,10 @@ impl CapabilityLoader {
             return Err(Error::Config(format!(
                 "Capability '{}' has {} structural error(s); skipping",
                 path_str,
-                issues.iter().filter(|i| i.severity == IssueSeverity::Error).count(),
+                issues
+                    .iter()
+                    .filter(|i| i.severity == IssueSeverity::Error)
+                    .count(),
             )));
         }
 

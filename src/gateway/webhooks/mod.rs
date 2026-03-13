@@ -491,6 +491,5 @@ fn extract_json_path<'a>(path: &str, payload: &'a Value) -> Option<&'a Value> {
 // Tests
 // ============================================================================
 
-
 #[cfg(test)]
 mod tests;

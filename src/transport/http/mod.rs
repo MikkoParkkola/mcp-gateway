@@ -24,7 +24,9 @@ use url::Url;
 use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
-use crate::protocol::{JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, SUPPORTED_VERSIONS, RequestId};
+use crate::protocol::{
+    JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, SUPPORTED_VERSIONS,
+};
 use crate::{Error, Result};
 
 /// HTTP transport for MCP servers using SSE or Streamable HTTP protocol
@@ -141,10 +143,7 @@ impl HttpTransport {
             };
 
             // Spawn background refresh task now that we have a valid token
-            let handle = OAuthClient::spawn_refresh_task(
-                Arc::clone(oauth_arc),
-                backend_name,
-            );
+            let handle = OAuthClient::spawn_refresh_task(Arc::clone(oauth_arc), backend_name);
             *self.refresh_task.write() = Some(handle);
         }
 
@@ -165,7 +164,11 @@ impl HttpTransport {
 
         // Send initialize request via the message endpoint
         // Use configured protocol version if set, otherwise use latest
-        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+        let version = self
+            .protocol_version
+            .read()
+            .clone()
+            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -188,7 +191,9 @@ impl HttpTransport {
             let error_msg = &error.message;
 
             // If server rejected our protocol version, try to negotiate
-            if error_msg.contains("Unsupported protocol version") || error_msg.contains("protocol version") {
+            if error_msg.contains("Unsupported protocol version")
+                || error_msg.contains("protocol version")
+            {
                 // Try to extract supported versions from error message
                 if let Some(negotiated_version) = self.negotiate_protocol_version(error_msg).await {
                     warn!(
@@ -228,7 +233,9 @@ impl HttpTransport {
                     // Success with negotiated version
                     info!(url = %self.base_url, version = %negotiated_version, "Successfully negotiated protocol version");
                 } else {
-                    return Err(Error::Protocol(format!("Protocol version negotiation failed: {error_msg}")));
+                    return Err(Error::Protocol(format!(
+                        "Protocol version negotiation failed: {error_msg}"
+                    )));
                 }
             } else {
                 return Err(Error::Protocol(format!("Initialize failed: {error:?}")));
@@ -291,10 +298,7 @@ impl HttpTransport {
     #[allow(clippy::unused_self)] // method on self for logical grouping
     fn parse_supported_versions(&self, error_msg: &str) -> Option<Vec<String>> {
         // Look for pattern: "supported versions: X, Y, Z" or "supported: X, Y, Z"
-        let patterns = [
-            "supported versions:",
-            "supported:",
-        ];
+        let patterns = ["supported versions:", "supported:"];
 
         for pattern in &patterns {
             if let Some(versions_start) = error_msg.to_lowercase().find(pattern) {
@@ -327,7 +331,11 @@ impl HttpTransport {
     async fn establish_sse_connection(&self) -> Result<String> {
         use futures::StreamExt;
 
-        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+        let version = self
+            .protocol_version
+            .read()
+            .clone()
+            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         let mut headers = header::HeaderMap::new();
         headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
@@ -451,7 +459,11 @@ impl HttpTransport {
     /// Send a raw request to the message endpoint
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
-        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+        let version = self
+            .protocol_version
+            .read()
+            .clone()
+            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         let mut headers = header::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
@@ -583,7 +595,11 @@ impl Transport for HttpTransport {
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         let message_url = self.get_message_url();
-        let version = self.protocol_version.read().clone().unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+        let version = self
+            .protocol_version
+            .read()
+            .clone()
+            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
@@ -659,7 +675,6 @@ impl Transport for HttpTransport {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests;

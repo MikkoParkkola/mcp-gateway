@@ -145,10 +145,12 @@ fn test_fetch_from_file_invalid_format() {
     // No colon separator for field
     let result = executor.fetch_from_file("/path/to/file.json");
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid file credential format"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid file credential format")
+    );
 }
 
 #[test]
@@ -221,7 +223,9 @@ fn static_params_flow_into_query_params() {
 
     let caller_params = serde_json::json!({});
     let effective = config.merge_with_static_params(&caller_params);
-    let resolved = executor.substitute_params(&config.params, &effective).unwrap();
+    let resolved = executor
+        .substitute_params(&config.params, &effective)
+        .unwrap();
 
     let map: std::collections::HashMap<_, _> = resolved.into_iter().collect();
     assert_eq!(map["current"], "temperature_2m,weather_code");
@@ -312,7 +316,10 @@ static_params:
   forecast_days: 7
 ";
     let config: RestConfig = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(config.static_params["current"], "temperature_2m,weather_code");
+    assert_eq!(
+        config.static_params["current"],
+        "temperature_2m,weather_code"
+    );
     assert_eq!(config.static_params["timezone"], "auto");
     assert_eq!(config.static_params["forecast_days"], serde_json::json!(7));
 }
@@ -381,6 +388,9 @@ fn build_url_with_static_params_substitution_in_endpoint() {
     let caller_params = serde_json::json!({});
     let effective = config.merge_with_static_params(&caller_params);
     let url = executor.build_url(&config, &effective).unwrap();
-    assert!(url.contains("format=json"), "URL should contain format=json");
+    assert!(
+        url.contains("format=json"),
+        "URL should contain format=json"
+    );
     assert!(url.contains("version=2"), "URL should contain version=2");
 }

@@ -37,10 +37,20 @@ pub struct DiscoveredServer {
 pub enum DiscoverySource {
     /// Claude Desktop config
     ClaudeDesktop,
-    /// VS Code/Cursor MCP config
+    /// Claude Code CLI config (~/.claude.json)
+    ClaudeCode,
+    /// VS Code/Cursor MCP config (settings.json `mcp` key)
     VsCode,
+    /// Cursor standalone mcp.json (~/.cursor/mcp.json)
+    Cursor,
     /// Windsurf MCP config
     Windsurf,
+    /// Zed editor `context_servers` config
+    Zed,
+    /// Continue.dev mcpServers config
+    Continue,
+    /// `OpenAI` Codex CLI config
+    Codex,
     /// Generic MCP config in ~/.config/mcp/
     McpConfig,
     /// Running process
@@ -101,7 +111,7 @@ impl AutoDiscovery {
     pub async fn discover_all(&self) -> Result<Vec<DiscoveredServer>> {
         let mut servers = Vec::new();
 
-        // Scan config files
+        // Scan config files (includes all known AI clients)
         debug!("Scanning config files for MCP servers");
         match self.config_scanner.scan_all().await {
             Ok(mut config_servers) => servers.append(&mut config_servers),
@@ -140,24 +150,17 @@ impl AutoDiscovery {
         source: DiscoverySource,
     ) -> Result<Vec<DiscoveredServer>> {
         match source {
-            DiscoverySource::ClaudeDesktop => {
-                self.config_scanner.scan_claude_desktop().await
-            }
-            DiscoverySource::VsCode => {
-                self.config_scanner.scan_vscode().await
-            }
-            DiscoverySource::Windsurf => {
-                self.config_scanner.scan_windsurf().await
-            }
-            DiscoverySource::McpConfig => {
-                self.config_scanner.scan_mcp_config_dir().await
-            }
-            DiscoverySource::RunningProcess => {
-                self.process_scanner.scan().await
-            }
-            DiscoverySource::Environment => {
-                self.config_scanner.scan_environment()
-            }
+            DiscoverySource::ClaudeDesktop => self.config_scanner.scan_claude_desktop().await,
+            DiscoverySource::ClaudeCode => self.config_scanner.scan_claude_code().await,
+            DiscoverySource::VsCode => self.config_scanner.scan_vscode().await,
+            DiscoverySource::Cursor => self.config_scanner.scan_cursor_mcp_json().await,
+            DiscoverySource::Windsurf => self.config_scanner.scan_windsurf().await,
+            DiscoverySource::Zed => self.config_scanner.scan_zed().await,
+            DiscoverySource::Continue => self.config_scanner.scan_continue().await,
+            DiscoverySource::Codex => self.config_scanner.scan_codex().await,
+            DiscoverySource::McpConfig => self.config_scanner.scan_mcp_config_dir().await,
+            DiscoverySource::RunningProcess => self.process_scanner.scan().await,
+            DiscoverySource::Environment => self.config_scanner.scan_environment(),
         }
     }
 }

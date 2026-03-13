@@ -158,14 +158,9 @@ fn condition_equality_mismatch() {
 #[test]
 fn condition_length_greater_than() {
     let mut ctx = PlaybookContext::new(json!({}));
-    ctx.step_results.insert(
-        "search".to_string(),
-        json!({"web": {"results": [1, 2, 3]}}),
-    );
-    assert!(evaluate_condition(
-        "$search.web.results | length > 0",
-        &ctx
-    ));
+    ctx.step_results
+        .insert("search".to_string(), json!({"web": {"results": [1, 2, 3]}}));
+    assert!(evaluate_condition("$search.web.results | length > 0", &ctx));
     assert!(!evaluate_condition(
         "$search.web.results | length > 5",
         &ctx
@@ -177,10 +172,7 @@ fn condition_length_empty_array() {
     let mut ctx = PlaybookContext::new(json!({}));
     ctx.step_results
         .insert("search".to_string(), json!({"results": []}));
-    assert!(!evaluate_condition(
-        "$search.results | length > 0",
-        &ctx
-    ));
+    assert!(!evaluate_condition("$search.results | length > 0", &ctx));
 }
 
 #[test]
@@ -270,12 +262,7 @@ impl MockInvoker {
 
 #[async_trait::async_trait]
 impl ToolInvoker for MockInvoker {
-    async fn invoke(
-        &self,
-        _server: &str,
-        tool: &str,
-        _arguments: Value,
-    ) -> crate::Result<Value> {
+    async fn invoke(&self, _server: &str, tool: &str, _arguments: Value) -> crate::Result<Value> {
         self.responses
             .get(tool)
             .cloned()
@@ -331,10 +318,7 @@ async fn execute_with_variable_interpolation() {
                 name: "ground".to_string(),
                 tool: "brave_grounding".to_string(),
                 server: "cap".to_string(),
-                arguments: HashMap::from([(
-                    "query".to_string(),
-                    json!("$search.top_result"),
-                )]),
+                arguments: HashMap::from([("query".to_string(), json!("$search.top_result"))]),
                 condition: None,
             },
         ],
@@ -615,7 +599,10 @@ timeout: 30
     assert_eq!(def.name, "research_topic");
     assert_eq!(def.steps.len(), 2);
     assert_eq!(def.steps[0].name, "search");
-    assert_eq!(def.steps[1].condition, Some("$search.web.results | length > 0".to_string()));
+    assert_eq!(
+        def.steps[1].condition,
+        Some("$search.web.results | length > 0".to_string())
+    );
     assert!(def.output.is_some());
     assert_eq!(def.on_error, ErrorStrategy::Continue);
     assert_eq!(def.max_retries, 2);

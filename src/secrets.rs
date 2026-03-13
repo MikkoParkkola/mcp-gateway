@@ -95,9 +95,7 @@ impl SecretResolver {
         let output = Command::new("security")
             .args(["find-generic-password", "-s", service, "-w"])
             .output()
-            .map_err(|e| {
-                Error::Config(format!("Failed to access macOS Keychain: {e}"))
-            })?;
+            .map_err(|e| Error::Config(format!("Failed to access macOS Keychain: {e}")))?;
 
         if output.status.success() {
             let secret = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -267,9 +265,7 @@ mod tests {
     #[test]
     fn test_multiple_same_pattern() {
         let resolver = SecretResolver::new();
-        let result = resolver
-            .resolve("{env.PATH} and {env.PATH} again")
-            .unwrap();
+        let result = resolver.resolve("{env.PATH} and {env.PATH} again").unwrap();
 
         // Should replace both occurrences
         assert!(!result.contains("{env.PATH}"));

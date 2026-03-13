@@ -122,10 +122,7 @@ impl Provider for CompositeProvider {
         }
 
         if all_unavailable && !self.sources.is_empty() {
-            ProviderHealth::Unavailable(format!(
-                "All sources unavailable: {}",
-                degraded.join("; ")
-            ))
+            ProviderHealth::Unavailable(format!("All sources unavailable: {}", degraded.join("; ")))
         } else if degraded.is_empty() {
             ProviderHealth::Healthy
         } else {

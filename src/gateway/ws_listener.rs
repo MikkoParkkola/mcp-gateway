@@ -60,10 +60,7 @@ pub(crate) async fn run_websocket_listener(
 /// text frame is echoed back verbatim (loopback behaviour).  Ping frames are
 /// answered with a Pong.  The loop exits when the peer closes or an error
 /// occurs.
-async fn handle_ws_peer(
-    stream: tokio::net::TcpStream,
-    peer: std::net::SocketAddr,
-) {
+async fn handle_ws_peer(stream: tokio::net::TcpStream, peer: std::net::SocketAddr) {
     use futures::SinkExt as _;
     use futures::StreamExt as _;
     use tokio_tungstenite::tungstenite::Message;

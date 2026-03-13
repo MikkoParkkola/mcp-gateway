@@ -328,9 +328,7 @@ impl ProfileRegistry {
     ) -> Self {
         let profiles: HashMap<String, RoutingProfile> = configs
             .iter()
-            .map(|(name, cfg)| {
-                (name.clone(), RoutingProfile::from_config(name, cfg))
-            })
+            .map(|(name, cfg)| (name.clone(), RoutingProfile::from_config(name, cfg)))
             .collect();
 
         Self {
@@ -451,7 +449,6 @@ impl SessionProfileStore {
 // ============================================================================
 // Tests
 // ============================================================================
-
 
 #[cfg(test)]
 mod tests;

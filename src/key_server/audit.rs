@@ -158,7 +158,10 @@ pub fn emit(event: &AuditEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::key_server::{oidc::VerifiedIdentity, store::{InMemoryTokenStore, TemporaryToken, TokenScopes}};
+    use crate::key_server::{
+        oidc::VerifiedIdentity,
+        store::{InMemoryTokenStore, TemporaryToken, TokenScopes},
+    };
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn make_identity() -> VerifiedIdentity {

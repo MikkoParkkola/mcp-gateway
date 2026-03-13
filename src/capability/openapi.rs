@@ -547,7 +547,9 @@ impl OpenApiConverter {
 
         // Body placeholder for POST/PUT
         if has_body {
-            yaml.push_str("      body:\n        # Add body template with {param} substitutions\n        {}\n");
+            yaml.push_str(
+                "      body:\n        # Add body template with {param} substitutions\n        {}\n",
+            );
         }
 
         yaml.push('\n');

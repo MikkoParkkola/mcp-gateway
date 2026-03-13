@@ -458,10 +458,7 @@ mod tests {
     fn intersect_glob_policy_rejects_non_matching_request() {
         // GIVEN: policy allows brave_* only; client also requests tavily-search
         let policy = vec!["brave_*".to_string()];
-        let requested = vec![
-            "brave_search".to_string(),
-            "tavily-search".to_string(),
-        ];
+        let requested = vec!["brave_search".to_string(), "tavily-search".to_string()];
 
         // WHEN: intersect
         let result = intersect_scope_list(&policy, &requested);

@@ -89,10 +89,7 @@ impl TransitionTracker {
 
         // Record the transition if there was a previous tool.
         if let Some(from) = previous {
-            let inner = self
-                .transitions
-                .entry(from)
-                .or_default();
+            let inner = self.transitions.entry(from).or_default();
             inner
                 .entry(tool.to_string())
                 .or_insert_with(|| AtomicU64::new(0))
@@ -217,10 +214,7 @@ impl TransitionTracker {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         for entry in entries {
-            let inner = self
-                .transitions
-                .entry(entry.from)
-                .or_default();
+            let inner = self.transitions.entry(entry.from).or_default();
             inner
                 .entry(entry.to)
                 .or_insert_with(|| AtomicU64::new(0))
@@ -487,9 +481,7 @@ mod tests {
         tracker.record_transition("session-x", "s1:lonely_tool");
 
         assert_eq!(tracker.total_transitions(), 0);
-        assert!(tracker
-            .predict_next("s1:lonely_tool", 0.0, 1)
-            .is_empty());
+        assert!(tracker.predict_next("s1:lonely_tool", 0.0, 1).is_empty());
     }
 
     // ── persistence ──────────────────────────────────────────────────────

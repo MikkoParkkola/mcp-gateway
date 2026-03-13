@@ -132,9 +132,7 @@ impl IdempotencyCache {
                 debug!(key, "Evicted stale in-flight idempotency entry");
                 CheckOutcome::Proceed
             }
-            IdempotencyState::Completed(value, stored)
-                if stored.elapsed() <= COMPLETED_TTL =>
-            {
+            IdempotencyState::Completed(value, stored) if stored.elapsed() <= COMPLETED_TTL => {
                 CheckOutcome::Completed(value.clone())
             }
             IdempotencyState::Completed(_, _) => {

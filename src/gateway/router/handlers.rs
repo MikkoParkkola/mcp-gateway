@@ -584,4 +584,3 @@ pub(super) async fn meta_mcp_handler(
     );
     (StatusCode::OK, resp).into_response()
 }
-

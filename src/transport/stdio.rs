@@ -386,7 +386,8 @@ mod tests {
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         t.pending.insert("5".to_string(), tx);
 
-        let json = r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32601,"message":"Method not found"}}"#;
         t.handle_response(json).unwrap();
 
         let response = rx.try_recv().unwrap();

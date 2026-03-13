@@ -45,11 +45,10 @@ use std::collections::HashMap;
 
 use super::CapabilityDefinition;
 
- mod checks;
+mod checks;
 
 #[cfg(test)]
 mod tests;
-
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -112,7 +111,11 @@ impl Issue {
 impl std::fmt::Display for Issue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(field) = self.field {
-            write!(f, "[{}] {} ({}): {}", self.severity, self.code, field, self.message)
+            write!(
+                f,
+                "[{}] {} ({}): {}",
+                self.severity, self.code, field, self.message
+            )
         } else {
             write!(f, "[{}] {}: {}", self.severity, self.code, self.message)
         }

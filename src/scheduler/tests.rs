@@ -346,7 +346,10 @@ fn scheduler_record_failure_updates_snapshot() {
     let t = Utc::now();
     sched.record_failure("job2", t, "connection refused");
     let snap = sched.snapshot_by_name("job2").unwrap();
-    assert_eq!(snap.last_status, JobStatus::Error("connection refused".to_string()));
+    assert_eq!(
+        snap.last_status,
+        JobStatus::Error("connection refused".to_string())
+    );
 }
 
 #[test]

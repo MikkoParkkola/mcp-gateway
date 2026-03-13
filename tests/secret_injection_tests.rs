@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use mcp_gateway::secret_injection::{
-    glob_match, tool_matches_rule, CredentialRule, CredentialType, InjectTarget, SecretInjector,
+    CredentialRule, CredentialType, InjectTarget, SecretInjector, glob_match, tool_matches_rule,
 };
 use serde_json::json;
 
@@ -61,10 +61,7 @@ fn matches_rule_specific_pattern() {
         "weather_forecast",
         &["weather_*".to_string()]
     ));
-    assert!(!tool_matches_rule(
-        "search_web",
-        &["weather_*".to_string()]
-    ));
+    assert!(!tool_matches_rule("search_web", &["weather_*".to_string()]));
 }
 
 // ── inject ────────────────────────────────────────────────────────────
@@ -73,7 +70,9 @@ fn matches_rule_specific_pattern() {
 fn inject_no_rules_returns_unchanged() {
     let injector = SecretInjector::empty();
     let args = json!({"city": "Helsinki"});
-    let result = injector.inject("weather", "get_forecast", args.clone()).unwrap();
+    let result = injector
+        .inject("weather", "get_forecast", args.clone())
+        .unwrap();
     assert_eq!(result.arguments, args);
     assert_eq!(result.injected_count, 0);
     assert!(result.headers.is_empty());
@@ -130,7 +129,13 @@ fn inject_header_type() {
 
     // Arguments unchanged (injection goes to headers)
     assert_eq!(result.arguments["title"], "Bug report");
-    assert!(!result.arguments.as_object().unwrap().contains_key("Authorization"));
+    assert!(
+        !result
+            .arguments
+            .as_object()
+            .unwrap()
+            .contains_key("Authorization")
+    );
 
     // Header injected
     assert_eq!(
@@ -161,16 +166,12 @@ fn inject_tool_pattern_filtering() {
     let injector = SecretInjector::new(rules);
 
     // Matching tool: should inject
-    let result = injector
-        .inject("api", "create_item", json!({}))
-        .unwrap();
+    let result = injector.inject("api", "create_item", json!({})).unwrap();
     assert_eq!(result.injected_count, 1);
     assert_eq!(result.arguments["auth_token"], "write-secret");
 
     // Non-matching tool: should NOT inject
-    let result = injector
-        .inject("api", "list_items", json!({}))
-        .unwrap();
+    let result = injector.inject("api", "list_items", json!({})).unwrap();
     assert_eq!(result.injected_count, 0);
     assert!(result.arguments.as_object().unwrap().is_empty());
 
@@ -212,10 +213,7 @@ fn inject_multiple_rules() {
     assert_eq!(result.injected_count, 2);
     assert_eq!(result.arguments["key_a"], "key-a");
     assert_eq!(result.arguments["data"], 42);
-    assert_eq!(
-        result.headers.get("Authorization").unwrap(),
-        "Bearer key-b"
-    );
+    assert_eq!(result.headers.get("Authorization").unwrap(), "Bearer key-b");
 
     unsafe { std::env::remove_var("TEST_KEY_A_88") };
     unsafe { std::env::remove_var("TEST_KEY_B_88") };
@@ -270,7 +268,13 @@ fn inject_empty_resolved_value_skipped() {
     let result = injector.inject("backend", "search", args).unwrap();
 
     assert_eq!(result.injected_count, 0);
-    assert!(!result.arguments.as_object().unwrap().contains_key("api_key"));
+    assert!(
+        !result
+            .arguments
+            .as_object()
+            .unwrap()
+            .contains_key("api_key")
+    );
 }
 
 #[test]
@@ -289,7 +293,9 @@ fn inject_wrong_backend_returns_unchanged() {
 
     let injector = SecretInjector::new(rules);
     let args = json!({"query": "test"});
-    let result = injector.inject("other_backend", "search", args.clone()).unwrap();
+    let result = injector
+        .inject("other_backend", "search", args.clone())
+        .unwrap();
 
     assert_eq!(result.arguments, args);
     assert_eq!(result.injected_count, 0);
@@ -382,10 +388,7 @@ fn update_rules_adds_and_removes() {
 
 #[test]
 fn configured_backends_lists_names() {
-    let rules = HashMap::from([
-        ("alpha".to_string(), vec![]),
-        ("beta".to_string(), vec![]),
-    ]);
+    let rules = HashMap::from([("alpha".to_string(), vec![]), ("beta".to_string(), vec![])]);
     let injector = SecretInjector::new(rules);
     let mut backends = injector.configured_backends();
     backends.sort_unstable();

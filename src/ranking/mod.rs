@@ -122,7 +122,11 @@ fn keyword_tag_score(desc_lower: &str, words: &[&str]) -> (f64, bool) {
         return (6.0 + (exact_kw as f64) * 2.0, false);
     }
     let syn_kw = count_keyword_matches_with_synonyms(desc_lower, words);
-    if syn_kw > 0 { (6.0 + (syn_kw as f64) * 2.0, true) } else { (0.0, false) }
+    if syn_kw > 0 {
+        (6.0 + (syn_kw as f64) * 2.0, true)
+    } else {
+        (0.0, false)
+    }
 }
 
 /// Text-coverage scoring for multi-word queries: returns `(score, via_synonym)`.
@@ -142,7 +146,9 @@ fn text_coverage_score(combined: &str, words: &[&str]) -> (f64, bool) {
         .iter()
         .filter(|w| text_contains_with_synonyms(combined, w).0)
         .count();
-    let any_syn = words.iter().any(|w| text_contains_with_synonyms(combined, w).1);
+    let any_syn = words
+        .iter()
+        .any(|w| text_contains_with_synonyms(combined, w).1);
     if syn_matched == words.len() {
         (10.0 + (syn_matched as f64) * 2.0, any_syn)
     } else if syn_matched > 0 {
@@ -155,13 +161,13 @@ fn text_coverage_score(combined: &str, words: &[&str]) -> (f64, bool) {
 /// Select the winning `(score, via_synonym)` from the three scoring paths.
 ///
 /// Schema scores are never synonym-discounted (field names are exact identifiers).
-fn best_coverage_score(
-    kw: (f64, bool),
-    schema: f64,
-    text: (f64, bool),
-) -> (f64, bool) {
+fn best_coverage_score(kw: (f64, bool), schema: f64, text: (f64, bool)) -> (f64, bool) {
     let (kw_best, kw_syn) = if kw.0 >= text.0 { kw } else { text };
-    if schema > kw_best { (schema, false) } else { (kw_best, kw_syn) }
+    if schema > kw_best {
+        (schema, false)
+    } else {
+        (kw_best, kw_syn)
+    }
 }
 
 /// Compute text relevance score for a single result against a pre-lowercased query.
@@ -186,8 +192,12 @@ fn score_text_relevance(tool: &str, description: &str, query: &str, words: &[&st
         if words.iter().all(|w| tool_lower.contains(w)) {
             return 15.0;
         }
-        let syn_all_in_name = words.iter().all(|w| text_contains_with_synonyms(&tool_lower, w).0);
-        let any_synonym = words.iter().any(|w| text_contains_with_synonyms(&tool_lower, w).1);
+        let syn_all_in_name = words
+            .iter()
+            .all(|w| text_contains_with_synonyms(&tool_lower, w).0);
+        let any_synonym = words
+            .iter()
+            .any(|w| text_contains_with_synonyms(&tool_lower, w).1);
         if syn_all_in_name && any_synonym {
             return 15.0 * SYNONYM_MULTIPLIER;
         }
@@ -201,7 +211,11 @@ fn score_text_relevance(tool: &str, description: &str, query: &str, words: &[&st
         text_coverage_score(&combined, words),
     );
     if best > 0.0 {
-        return if via_syn { best * SYNONYM_MULTIPLIER } else { best };
+        return if via_syn {
+            best * SYNONYM_MULTIPLIER
+        } else {
+            best
+        };
     }
 
     // Single-word substring fallbacks (exact, then schema-field, then desc, then synonyms)
@@ -268,7 +282,10 @@ pub fn is_schema_field_match(desc_lower: &str, word: &str) -> bool {
 
 /// Count how many query words match schema fields in the description.
 fn count_schema_field_matches(desc_lower: &str, words: &[&str]) -> usize {
-    words.iter().filter(|w| is_schema_field_match(desc_lower, w)).count()
+    words
+        .iter()
+        .filter(|w| is_schema_field_match(desc_lower, w))
+        .count()
 }
 
 /// Compute the schema-field scoring tier for a query against a description.
@@ -300,7 +317,10 @@ fn is_keyword_match_with_synonyms(desc_lower: &str, word: &str) -> bool {
 
 /// Count how many query words match keywords in the description (exact only).
 fn count_keyword_matches(desc_lower: &str, words: &[&str]) -> usize {
-    words.iter().filter(|w| is_keyword_match(desc_lower, w)).count()
+    words
+        .iter()
+        .filter(|w| is_keyword_match(desc_lower, w))
+        .count()
 }
 
 /// Count how many query words match keywords in the description (exact or synonym).
@@ -385,7 +405,8 @@ impl SearchRanker {
         let words: Vec<&str> = query_lower.split_whitespace().collect();
 
         for result in &mut results {
-            let text_relevance = score_text_relevance(&result.tool, &result.description, &query_lower, &words);
+            let text_relevance =
+                score_text_relevance(&result.tool, &result.description, &query_lower, &words);
 
             let usage = self.usage_count(&result.server, &result.tool);
             #[allow(clippy::cast_precision_loss)]
@@ -442,8 +463,7 @@ impl SearchRanker {
 
         for entry in entries {
             let key = format!("{}:{}", entry.server, entry.tool);
-            self.usage_counts
-                .insert(key, AtomicU64::new(entry.count));
+            self.usage_counts.insert(key, AtomicU64::new(entry.count));
         }
 
         Ok(())
@@ -479,7 +499,6 @@ pub fn json_to_search_result(value: &Value) -> Option<SearchResult> {
         score: 0.0,
     })
 }
-
 
 #[cfg(test)]
 mod tests;

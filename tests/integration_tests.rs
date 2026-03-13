@@ -12,7 +12,7 @@
 //! Or individually with: `cargo test --test integration_tests` `test_name`
 
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 /// Gateway URL for testing
@@ -71,8 +71,7 @@ fn parse_tool_response(response: &Value) -> Result<Value, String> {
         .and_then(|t| t.as_str())
         .ok_or("Missing content.text in response")?;
 
-    serde_json::from_str(content_text)
-        .map_err(|e| format!("Failed to parse content JSON: {e}"))
+    serde_json::from_str(content_text).map_err(|e| format!("Failed to parse content JSON: {e}"))
 }
 
 #[tokio::test]
@@ -122,7 +121,10 @@ async fn test_gateway_get_stats() {
         stats.get("tokens_saved").is_some(),
         "Missing 'tokens_saved' field"
     );
-    assert!(stats.get("top_tools").is_some(), "Missing 'top_tools' field");
+    assert!(
+        stats.get("top_tools").is_some(),
+        "Missing 'top_tools' field"
+    );
     assert!(
         stats.get("cache_hit_rate").is_some(),
         "Missing 'cache_hit_rate' field"
@@ -153,7 +155,10 @@ async fn test_gateway_get_stats() {
         stats["tokens_saved"].is_number(),
         "tokens_saved should be a number"
     );
-    assert!(stats["top_tools"].is_array(), "top_tools should be an array");
+    assert!(
+        stats["top_tools"].is_array(),
+        "top_tools should be an array"
+    );
 
     println!("✅ Stats test passed: {stats:?}");
 }
@@ -210,11 +215,16 @@ async fn test_gateway_search_tools() {
     );
 
     // Verify matches array
-    let matches = results["matches"].as_array().expect("matches should be array");
+    let matches = results["matches"]
+        .as_array()
+        .expect("matches should be array");
 
     // Each match should have server, tool, description
     for m in matches {
-        assert!(m.get("server").is_some(), "Match missing 'server' field: {m:?}");
+        assert!(
+            m.get("server").is_some(),
+            "Match missing 'server' field: {m:?}"
+        );
         assert!(m.get("tool").is_some(), "Match missing 'tool' field: {m:?}");
         assert!(
             m.get("description").is_some(),
@@ -258,8 +268,7 @@ async fn test_invoke_caching() {
         .json()
         .await
         .expect("Failed to parse initial stats");
-    let initial_stats =
-        parse_tool_response(&initial_body).expect("Failed to parse initial stats");
+    let initial_stats = parse_tool_response(&initial_body).expect("Failed to parse initial stats");
     let initial_cache_hits = initial_stats["cache_hits"].as_u64().unwrap_or(0);
 
     // First invocation - should NOT be cached
@@ -285,7 +294,10 @@ async fn test_invoke_caching() {
     let duration1 = start1.elapsed();
 
     assert!(response1.status().is_success(), "First request failed");
-    let body1: Value = response1.json().await.expect("Failed to parse first response");
+    let body1: Value = response1
+        .json()
+        .await
+        .expect("Failed to parse first response");
     assert!(
         body1.get("error").is_none(),
         "First invocation error: {:?}",
@@ -397,8 +409,14 @@ async fn test_gateway_list_servers() {
 
     // Verify each server has required fields
     for server in servers {
-        assert!(server.get("name").is_some(), "Server missing 'name' field: {server:?}");
-        assert!(server.get("running").is_some(), "Server missing 'running' field: {server:?}");
+        assert!(
+            server.get("name").is_some(),
+            "Server missing 'name' field: {server:?}"
+        );
+        assert!(
+            server.get("running").is_some(),
+            "Server missing 'running' field: {server:?}"
+        );
         assert!(
             server.get("transport").is_some(),
             "Server missing 'transport' field: {server:?}"
@@ -415,7 +433,10 @@ async fn test_gateway_list_servers() {
         // Verify types
         assert!(server["name"].is_string(), "name should be string");
         assert!(server["running"].is_boolean(), "running should be boolean");
-        assert!(server["transport"].is_string(), "transport should be string");
+        assert!(
+            server["transport"].is_string(),
+            "transport should be string"
+        );
         assert!(
             server["tools_count"].is_number(),
             "tools_count should be number"
@@ -426,7 +447,10 @@ async fn test_gateway_list_servers() {
         );
     }
 
-    println!("✅ List servers test passed: found {} servers", servers.len());
+    println!(
+        "✅ List servers test passed: found {} servers",
+        servers.len()
+    );
 }
 
 #[tokio::test]

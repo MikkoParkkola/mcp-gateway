@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::{Error, Result};
 
-use super::{CapabilityExecutor, super::RestConfig};
 use super::xml::xml_to_json;
+use super::{super::RestConfig, CapabilityExecutor};
 
 impl CapabilityExecutor {
     /// Handle an API response.
@@ -207,7 +207,11 @@ impl CapabilityExecutor {
         if is_pure_placeholder(trimmed) {
             let key = &trimmed[1..trimmed.len() - 1];
             if let Some(value) = params.as_object().and_then(|m| m.get(key)) {
-                return Ok(if value.is_null() { Value::Null } else { value.clone() });
+                return Ok(if value.is_null() {
+                    Value::Null
+                } else {
+                    value.clone()
+                });
             }
         }
 

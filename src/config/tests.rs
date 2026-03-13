@@ -20,7 +20,10 @@ fn test_load_env_files_sets_env_vars() {
     };
     config.load_env_files();
 
-    assert_eq!(env::var("MCP_GW_TEST_KEY_A").unwrap(), "hello_from_env_file");
+    assert_eq!(
+        env::var("MCP_GW_TEST_KEY_A").unwrap(),
+        "hello_from_env_file"
+    );
     assert_eq!(env::var("MCP_GW_TEST_KEY_B").unwrap(), "42");
 
     // Note: env::remove_var is unsafe in edition 2024 and lib forbids unsafe.

@@ -8,14 +8,11 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use super::{
-    PlaybookDefinition, PlaybookContext, PlaybookResult,
-    ToolInvoker, ErrorStrategy, evaluate_condition,
+    ErrorStrategy, PlaybookContext, PlaybookDefinition, PlaybookResult, ToolInvoker,
+    evaluate_condition,
 };
 #[cfg(test)]
-use super::{
-    PlaybookStep, PlaybookOutput, OutputMapping,
-    extract_var_refs, is_truthy,
-};
+use super::{OutputMapping, PlaybookOutput, PlaybookStep, extract_var_refs, is_truthy};
 
 /// Engine that loads and executes playbooks.
 pub struct PlaybookEngine {
@@ -113,9 +110,9 @@ impl PlaybookEngine {
         inputs: Value,
         invoker: &dyn ToolInvoker,
     ) -> crate::Result<PlaybookResult> {
-        let definition = self.get(name).ok_or_else(|| {
-            crate::Error::Config(format!("Playbook not found: {name}"))
-        })?;
+        let definition = self
+            .get(name)
+            .ok_or_else(|| crate::Error::Config(format!("Playbook not found: {name}")))?;
 
         self.execute_definition(definition, inputs, invoker).await
     }
@@ -155,7 +152,10 @@ impl PlaybookEngine {
 
             // Interpolate arguments
             let arguments = ctx.interpolate(&Value::Object(
-                step.arguments.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                step.arguments
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             ));
 
             // Execute with retry
@@ -172,7 +172,10 @@ impl PlaybookEngine {
                     debug!(step = %step.name, attempt, "Retrying step");
                 }
 
-                match invoker.invoke(&step.server, &step.tool, arguments.clone()).await {
+                match invoker
+                    .invoke(&step.server, &step.tool, arguments.clone())
+                    .await
+                {
                     Ok(result) => {
                         debug!(step = %step.name, "Step completed");
                         ctx.step_results.insert(step.name.clone(), result);
@@ -258,7 +261,6 @@ fn build_output(definition: &PlaybookDefinition, ctx: &PlaybookContext) -> Value
 // ============================================================================
 // Tests
 // ============================================================================
-
 
 #[cfg(test)]
 mod tests;

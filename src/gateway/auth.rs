@@ -311,7 +311,9 @@ pub async fn auth_middleware(
     if let Some(ref ks) = state.key_server {
         if let Some((client, identity_token)) = ks.validate_token(token).await {
             debug!(client = %client.name, path = %path, "Authenticated via temporary token");
-            request.extensions_mut().insert(identity_token.identity.clone());
+            request
+                .extensions_mut()
+                .insert(identity_token.identity.clone());
             request.extensions_mut().insert(client);
             return next.run(request).await;
         }
@@ -517,10 +519,7 @@ mod tests {
             name: "restricted".to_string(),
             rate_limit: 0,
             backends: vec![],
-            allowed_tools: Some(vec![
-                "search_web".to_string(),
-                "read_file".to_string(),
-            ]),
+            allowed_tools: Some(vec!["search_web".to_string(), "read_file".to_string()]),
             denied_tools: None,
         };
 
@@ -539,10 +538,7 @@ mod tests {
             name: "search_only".to_string(),
             rate_limit: 0,
             backends: vec![],
-            allowed_tools: Some(vec![
-                "search_*".to_string(),
-                "read_*".to_string(),
-            ]),
+            allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
             denied_tools: None,
         };
 
@@ -554,7 +550,11 @@ mod tests {
 
         // Tools NOT matching glob patterns
         assert!(client.check_tool_scope("server", "write_file").is_err());
-        assert!(client.check_tool_scope("server", "execute_command").is_err());
+        assert!(
+            client
+                .check_tool_scope("server", "execute_command")
+                .is_err()
+        );
     }
 
     #[test]
@@ -564,10 +564,7 @@ mod tests {
             rate_limit: 0,
             backends: vec![],
             allowed_tools: None,
-            denied_tools: Some(vec![
-                "write_file".to_string(),
-                "delete_file".to_string(),
-            ]),
+            denied_tools: Some(vec!["write_file".to_string(), "delete_file".to_string()]),
         };
 
         // Tools in denylist
@@ -586,15 +583,20 @@ mod tests {
             rate_limit: 0,
             backends: vec![],
             allowed_tools: None,
-            denied_tools: Some(vec![
-                "filesystem_*".to_string(),
-                "exec_*".to_string(),
-            ]),
+            denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
         };
 
         // Tools matching deny glob patterns
-        assert!(client.check_tool_scope("server", "filesystem_read").is_err());
-        assert!(client.check_tool_scope("server", "filesystem_write").is_err());
+        assert!(
+            client
+                .check_tool_scope("server", "filesystem_read")
+                .is_err()
+        );
+        assert!(
+            client
+                .check_tool_scope("server", "filesystem_write")
+                .is_err()
+        );
         assert!(client.check_tool_scope("server", "exec_command").is_err());
         assert!(client.check_tool_scope("server", "exec_shell").is_err());
 
@@ -630,10 +632,7 @@ mod tests {
             name: "complex".to_string(),
             rate_limit: 0,
             backends: vec![],
-            allowed_tools: Some(vec![
-                "filesystem_*".to_string(),
-                "search_*".to_string(),
-            ]),
+            allowed_tools: Some(vec!["filesystem_*".to_string(), "search_*".to_string()]),
             denied_tools: Some(vec![
                 "filesystem_write".to_string(),
                 "filesystem_delete".to_string(),
@@ -645,11 +644,23 @@ mod tests {
         assert!(client.check_tool_scope("server", "search_web").is_ok());
 
         // In allowlist BUT in denylist (denylist wins)
-        assert!(client.check_tool_scope("server", "filesystem_write").is_err());
-        assert!(client.check_tool_scope("server", "filesystem_delete").is_err());
+        assert!(
+            client
+                .check_tool_scope("server", "filesystem_write")
+                .is_err()
+        );
+        assert!(
+            client
+                .check_tool_scope("server", "filesystem_delete")
+                .is_err()
+        );
 
         // NOT in allowlist
-        assert!(client.check_tool_scope("server", "execute_command").is_err());
+        assert!(
+            client
+                .check_tool_scope("server", "execute_command")
+                .is_err()
+        );
     }
 
     #[test]
@@ -662,7 +673,9 @@ mod tests {
             denied_tools: None,
         };
 
-        let err = client_allow.check_tool_scope("server", "write_file").unwrap_err();
+        let err = client_allow
+            .check_tool_scope("server", "write_file")
+            .unwrap_err();
         assert!(err.contains("write_file"));
         assert!(err.contains("server"));
         assert!(err.contains("allowlist"));
@@ -676,7 +689,9 @@ mod tests {
             denied_tools: Some(vec!["exec_*".to_string()]),
         };
 
-        let err = client_deny.check_tool_scope("server", "exec_command").unwrap_err();
+        let err = client_deny
+            .check_tool_scope("server", "exec_command")
+            .unwrap_err();
         assert!(err.contains("exec_command"));
         assert!(err.contains("server"));
         assert!(err.contains("blocked"));

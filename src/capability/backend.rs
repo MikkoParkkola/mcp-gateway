@@ -24,8 +24,8 @@ use parking_lot::RwLock;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use super::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
 use super::schema_validator::validate_arguments;
+use super::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
@@ -270,7 +270,10 @@ impl CapabilityBackend {
         }
 
         // Use the coerced arguments (e.g., "123" → 123 for integer fields).
-        let result = self.executor.execute(&capability, validation.coerced).await?;
+        let result = self
+            .executor
+            .execute(&capability, validation.coerced)
+            .await?;
 
         let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
 

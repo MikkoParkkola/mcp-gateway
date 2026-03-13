@@ -273,11 +273,7 @@ pub trait Transform: Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns an error on unexpected failures (not normal "deny" — use `None` for that).
-    async fn transform_invoke(
-        &self,
-        tool: &str,
-        args: Value,
-    ) -> Result<Option<(String, Value)>>;
+    async fn transform_invoke(&self, tool: &str, args: Value) -> Result<Option<(String, Value)>>;
 
     /// Transform the invocation result.
     ///

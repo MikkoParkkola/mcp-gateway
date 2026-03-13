@@ -93,9 +93,7 @@ fn session_allows_calls_within_duration() {
 #[test]
 fn session_rejects_after_duration_elapsed() {
     // Start the enforcer 2 seconds in the past so it appears expired.
-    let past = Instant::now()
-        .checked_sub(Duration::from_secs(2))
-        .unwrap();
+    let past = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
     let sandbox = SessionSandbox {
         max_duration: Duration::from_secs(1),
         ..Default::default()
@@ -256,9 +254,7 @@ fn zero_max_payload_bytes_means_unlimited() {
 #[test]
 fn expired_session_beats_backend_denylist() {
     // Both expire AND backend denylist would fire; expire comes first.
-    let past = Instant::now()
-        .checked_sub(Duration::from_secs(10))
-        .unwrap();
+    let past = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
     let sandbox = SessionSandbox {
         max_duration: Duration::from_secs(1),
         allowed_backends: Some(vec!["allowed".to_string()]),

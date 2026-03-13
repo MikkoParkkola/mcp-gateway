@@ -210,7 +210,9 @@ impl OAuthClient {
         let Some(ref t) = *token else { return false };
 
         // Tokens with no expiry never need proactive refresh
-        let Some(expires_at) = t.expires_at else { return false };
+        let Some(expires_at) = t.expires_at else {
+            return false;
+        };
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -248,11 +250,10 @@ impl OAuthClient {
             ));
         }
 
-        let client_id = self
-            .client_id
-            .read()
-            .clone()
-            .ok_or_else(|| Error::Internal("No client ID for client_credentials".to_string()))?;
+        let client_id =
+            self.client_id.read().clone().ok_or_else(|| {
+                Error::Internal("No client ID for client_credentials".to_string())
+            })?;
 
         let scope_str = self.scopes.join(" ");
         let mut params = HashMap::new();
@@ -655,7 +656,6 @@ fn generate_client_id() -> String {
     let id_bytes: [u8; 16] = rand::rng().random();
     URL_SAFE_NO_PAD.encode(id_bytes)
 }
-
 
 #[cfg(test)]
 mod tests;

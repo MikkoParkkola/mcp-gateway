@@ -23,7 +23,10 @@ use clap_complete::Shell;
 /// Static subcommands exposed by `mcp-gateway tool`.
 const TOOL_SUBCOMMANDS: &[(&str, &str)] = &[
     ("invoke", "Call a tool by name with JSON arguments"),
-    ("list", "List all available tools from the capability registry"),
+    (
+        "list",
+        "List all available tools from the capability registry",
+    ),
     ("inspect", "Show the input schema for a specific tool"),
     ("completions", "Generate shell completion scripts"),
 ];
@@ -92,7 +95,11 @@ impl ShellTarget {
 
 fn generate_bash(tool_names: &[String]) -> String {
     let tools_list = tool_names.join(" ");
-    let top_cmds: String = TOP_COMMANDS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(" ");
+    let top_cmds: String = TOP_COMMANDS
+        .iter()
+        .map(|(n, _)| *n)
+        .collect::<Vec<_>>()
+        .join(" ");
     let tool_subcmds: String = TOOL_SUBCOMMANDS
         .iter()
         .map(|(n, _)| *n)
@@ -318,7 +325,10 @@ mod tests {
     fn bash_completion_contains_top_level_commands() {
         let script = generate_completion(ShellTarget::Bash, &[]);
         for (cmd, _) in TOP_COMMANDS {
-            assert!(script.contains(cmd), "bash completion missing command: {cmd}");
+            assert!(
+                script.contains(cmd),
+                "bash completion missing command: {cmd}"
+            );
         }
     }
 
@@ -352,9 +362,15 @@ mod tests {
 
     #[test]
     fn shell_target_from_clap_shell_maps_known_shells() {
-        assert_eq!(ShellTarget::from_shell(Shell::Bash), Some(ShellTarget::Bash));
+        assert_eq!(
+            ShellTarget::from_shell(Shell::Bash),
+            Some(ShellTarget::Bash)
+        );
         assert_eq!(ShellTarget::from_shell(Shell::Zsh), Some(ShellTarget::Zsh));
-        assert_eq!(ShellTarget::from_shell(Shell::Fish), Some(ShellTarget::Fish));
+        assert_eq!(
+            ShellTarget::from_shell(Shell::Fish),
+            Some(ShellTarget::Fish)
+        );
     }
 
     #[test]

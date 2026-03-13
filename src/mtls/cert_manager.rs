@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Ia5String, KeyPair,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, Ia5String, IsCa, KeyPair,
     SanType, date_time_ymd,
 };
 use rustls::ServerConfig;
@@ -87,15 +87,12 @@ pub fn build_tls_config(config: &MtlsConfig) -> Result<ServerConfig> {
 /// certificate blocks.
 pub fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
     let pem_data = read_file(path)?;
-    let certs: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut pem_data.as_slice())
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| Error::Config(format!("Failed to parse certs from '{path}': {e}")))?;
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut pem_data.as_slice())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| Error::Config(format!("Failed to parse certs from '{path}': {e}")))?;
 
     if certs.is_empty() {
-        return Err(Error::Config(format!(
-            "No certificates found in '{path}'"
-        )));
+        return Err(Error::Config(format!("No certificates found in '{path}'")));
     }
 
     Ok(certs)
@@ -292,8 +289,7 @@ fn build_client_verifier(
     // Load CRL if configured
     let builder = if let Some(ref crl_path) = config.crl_path {
         let crls = load_crls(crl_path)?;
-        builder
-            .with_crls(crls)
+        builder.with_crls(crls)
     } else {
         builder
     };
@@ -340,10 +336,9 @@ fn validity_to_date(days: u32) -> Result<time::OffsetDateTime> {
 
     // Convert Unix timestamp to (year, month, day) using time crate (pulled in
     // transitively by rcgen).
-    let dt = time::OffsetDateTime::from_unix_timestamp(
-        i64::try_from(future_secs).unwrap_or(i64::MAX),
-    )
-    .map_err(|e| Error::Config(format!("Date calculation error: {e}")))?;
+    let dt =
+        time::OffsetDateTime::from_unix_timestamp(i64::try_from(future_secs).unwrap_or(i64::MAX))
+            .map_err(|e| Error::Config(format!("Date calculation error: {e}")))?;
 
     // Use rcgen's ymd helper to keep alignment with its internal representation
     Ok(date_time_ymd(dt.year(), dt.month() as u8, dt.day()))

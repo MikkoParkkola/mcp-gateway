@@ -774,4 +774,3 @@ fn tool_matches_query_multi_word_uses_synonym_for_one_word() {
         "should match: 'weather' in name, 'find'≈'search' in name"
     );
 }
-

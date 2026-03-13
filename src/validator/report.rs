@@ -199,9 +199,7 @@ impl ValidationReport {
             .count();
         let warnings = results
             .iter()
-            .filter(|r| {
-                !r.passed && (r.severity == Severity::Warn || r.severity == Severity::Info)
-            })
+            .filter(|r| !r.passed && (r.severity == Severity::Warn || r.severity == Severity::Info))
             .count();
 
         #[allow(clippy::cast_precision_loss)]
@@ -268,9 +266,7 @@ impl ValidationReport {
     pub fn warnings(&self) -> Vec<&ValidationResult> {
         self.results
             .iter()
-            .filter(|r| {
-                !r.passed && (r.severity == Severity::Warn || r.severity == Severity::Info)
-            })
+            .filter(|r| !r.passed && (r.severity == Severity::Warn || r.severity == Severity::Info))
             .collect()
     }
 
@@ -289,24 +285,41 @@ impl ValidationReport {
                ╚══════════════════════════════════════════════════════════════╝\n\n",
         );
 
-        let _ = writeln!(output, "Overall Score: {:.1}% ({})", self.overall_score * 100.0, self.grade);
+        let _ = writeln!(
+            output,
+            "Overall Score: {:.1}% ({})",
+            self.overall_score * 100.0,
+            self.grade
+        );
         let _ = writeln!(output, "Tools Validated: {}\n", self.total_tools);
 
         output.push_str("Summary:\n");
         let _ = writeln!(output, "  ✓ Passed:   {}", self.summary.passed);
         let _ = writeln!(output, "  ✗ Failed:   {}", self.summary.failed);
         let _ = writeln!(output, "  ⚠ Warnings: {}", self.summary.warnings);
-        let _ = writeln!(output, "  Pass Rate:  {:.1}%\n", self.summary.pass_rate * 100.0);
+        let _ = writeln!(
+            output,
+            "  Pass Rate:  {:.1}%\n",
+            self.summary.pass_rate * 100.0
+        );
 
         // Failures
         let failures = self.failures();
         if !failures.is_empty() {
             output.push_str("╔══════════════════════════════════════════════════════════════╗\n");
-            let _ = writeln!(output, "║ FAILURES ({})                                                  ", failures.len());
+            let _ = writeln!(
+                output,
+                "║ FAILURES ({})                                                  ",
+                failures.len()
+            );
             output.push_str("╚══════════════════════════════════════════════════════════════╝\n\n");
 
             for result in failures {
-                let _ = writeln!(output, "[{}] {} - {}", result.rule_code, result.tool_name, result.rule_name);
+                let _ = writeln!(
+                    output,
+                    "[{}] {} - {}",
+                    result.rule_code, result.tool_name, result.rule_name
+                );
                 for issue in &result.issues {
                     let _ = writeln!(output, "  ✗ {issue}");
                 }
@@ -324,11 +337,19 @@ impl ValidationReport {
         let warnings = self.warnings();
         if !warnings.is_empty() {
             output.push_str("╔══════════════════════════════════════════════════════════════╗\n");
-            let _ = writeln!(output, "║ WARNINGS ({})                                                  ", warnings.len());
+            let _ = writeln!(
+                output,
+                "║ WARNINGS ({})                                                  ",
+                warnings.len()
+            );
             output.push_str("╚══════════════════════════════════════════════════════════════╝\n\n");
 
             for result in warnings {
-                let _ = writeln!(output, "[{}] {} - {}", result.rule_code, result.tool_name, result.rule_name);
+                let _ = writeln!(
+                    output,
+                    "[{}] {} - {}",
+                    result.rule_code, result.tool_name, result.rule_name
+                );
                 for issue in &result.issues {
                     let _ = writeln!(output, "  ⚠ {issue}");
                 }

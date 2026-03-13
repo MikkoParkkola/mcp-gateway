@@ -572,14 +572,22 @@ mod tests {
     #[test]
     fn build_base_tools_all_have_descriptions() {
         for tool in build_base_tools() {
-            assert!(tool.description.is_some(), "Tool {} missing description", tool.name);
+            assert!(
+                tool.description.is_some(),
+                "Tool {} missing description",
+                tool.name
+            );
         }
     }
 
     #[test]
     fn build_base_tools_all_have_object_schema() {
         for tool in build_base_tools() {
-            assert_eq!(tool.input_schema["type"], "object", "Tool {} has non-object schema", tool.name);
+            assert_eq!(
+                tool.input_schema["type"], "object",
+                "Tool {} has non-object schema",
+                tool.name
+            );
         }
     }
 
@@ -623,7 +631,10 @@ mod tests {
     fn build_code_mode_search_tool_has_limit_and_schema_params() {
         let tool = build_code_mode_search_tool();
         assert_eq!(tool.input_schema["properties"]["limit"]["type"], "integer");
-        assert_eq!(tool.input_schema["properties"]["include_schema"]["type"], "boolean");
+        assert_eq!(
+            tool.input_schema["properties"]["include_schema"]["type"],
+            "boolean"
+        );
     }
 
     #[test]
@@ -631,7 +642,10 @@ mod tests {
         let tool = build_code_mode_execute_tool();
         assert_eq!(tool.input_schema["properties"]["tool"]["type"], "string");
         assert_eq!(tool.input_schema["properties"]["chain"]["type"], "array");
-        assert_eq!(tool.input_schema["properties"]["arguments"]["type"], "object");
+        assert_eq!(
+            tool.input_schema["properties"]["arguments"]["type"],
+            "object"
+        );
     }
 
     #[test]

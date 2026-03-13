@@ -16,9 +16,9 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::backend::BackendRegistry;
-use crate::config_reload::ReloadContext;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
+use crate::config_reload::ReloadContext;
 use crate::cost_accounting::CostTracker;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
@@ -205,11 +205,7 @@ impl MetaMcp {
 
     /// Enable idempotency support with a background cleanup task.
     #[allow(dead_code)]
-    pub fn enable_idempotency(
-        &mut self,
-        cache: Arc<IdempotencyCache>,
-        cleanup_interval: Duration,
-    ) {
+    pub fn enable_idempotency(&mut self, cache: Arc<IdempotencyCache>, cleanup_interval: Duration) {
         spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
         self.idempotency_cache = Some(cache);
     }
@@ -284,9 +280,7 @@ impl MetaMcp {
 // ============================================================================
 
 impl MetaMcp {
-    pub(super) fn get_webhook_registry(
-        &self,
-    ) -> Option<Arc<parking_lot::RwLock<WebhookRegistry>>> {
+    pub(super) fn get_webhook_registry(&self) -> Option<Arc<parking_lot::RwLock<WebhookRegistry>>> {
         self.webhook_registry.read().clone()
     }
 
@@ -393,7 +387,10 @@ impl MetaMcp {
                 true, // cost_report always enabled (tracker is always present)
             )
         };
-        let result = ToolsListResult { tools, next_cursor: None };
+        let result = ToolsListResult {
+            tools,
+            next_cursor: None,
+        };
         JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
     }
 
@@ -426,7 +423,10 @@ impl MetaMcp {
             "gateway_get_profile" => self.get_profile(session_id),
             "gateway_list_profiles" => self.list_profiles(),
             "gateway_reload_config" => self.reload_config().await,
-            _ => Err(Error::json_rpc(-32601, format!("Unknown tool: {tool_name}"))),
+            _ => Err(Error::json_rpc(
+                -32601,
+                format!("Unknown tool: {tool_name}"),
+            )),
         };
 
         match result {

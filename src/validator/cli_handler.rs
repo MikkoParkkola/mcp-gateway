@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use super::{
-    AgentUxValidator, ConflictDetectionRule, NamingConsistencyRule,
-    OutputFormat, ValidateConfig, Severity,
+    AgentUxValidator, ConflictDetectionRule, NamingConsistencyRule, OutputFormat, Severity,
+    ValidateConfig,
 };
 use crate::capability::parse_capability_file;
 
@@ -57,9 +57,21 @@ fn format_validate_text(
 
     let mut output = String::new();
 
-    let pass_marker = if config.color { "\x1b[32mPASS\x1b[0m" } else { "PASS" };
-    let warn_marker = if config.color { "\x1b[33mWARN\x1b[0m" } else { "WARN" };
-    let fail_marker = if config.color { "\x1b[31mFAIL\x1b[0m" } else { "FAIL" };
+    let pass_marker = if config.color {
+        "\x1b[32mPASS\x1b[0m"
+    } else {
+        "PASS"
+    };
+    let warn_marker = if config.color {
+        "\x1b[33mWARN\x1b[0m"
+    } else {
+        "WARN"
+    };
+    let fail_marker = if config.color {
+        "\x1b[31mFAIL\x1b[0m"
+    } else {
+        "FAIL"
+    };
 
     let mut total_pass = 0usize;
     let mut total_warn = 0usize;
@@ -110,10 +122,7 @@ fn format_validate_text(
 
 /// Run the validate command against one or more capability paths.
 #[allow(clippy::too_many_lines)]
-pub async fn run_validate_command(
-    paths: &[PathBuf],
-    config: &ValidateConfig,
-) -> ExitCode {
+pub async fn run_validate_command(paths: &[PathBuf], config: &ValidateConfig) -> ExitCode {
     let files = collect_capability_files(paths);
 
     if files.is_empty() {
@@ -156,9 +165,15 @@ pub async fn run_validate_command(
             let suggested = super::fix::CapabilityFixer::suggest_fixes(&report.results);
             if !suggested.is_empty() {
                 if let Ok(content) = std::fs::read_to_string(file) {
-                    if let Some(patched) = super::fix::CapabilityFixer::apply_fixes(&content, &suggested) {
+                    if let Some(patched) =
+                        super::fix::CapabilityFixer::apply_fixes(&content, &suggested)
+                    {
                         if std::fs::write(file, patched).is_ok() {
-                            eprintln!("Auto-fixed {} issue(s) in {}", suggested.len(), file.display());
+                            eprintln!(
+                                "Auto-fixed {} issue(s) in {}",
+                                suggested.len(),
+                                file.display()
+                            );
                         }
                     }
                 }
@@ -173,8 +188,12 @@ pub async fn run_validate_command(
     let conflict_results = ConflictDetectionRule::check_conflicts(&all_tools);
     let consistency_results = NamingConsistencyRule::check_consistency(&all_tools);
 
-    let has_cross_failures = conflict_results.iter().any(|r| !r.passed && r.severity == Severity::Fail)
-        || consistency_results.iter().any(|r| !r.passed && r.severity == Severity::Fail);
+    let has_cross_failures = conflict_results
+        .iter()
+        .any(|r| !r.passed && r.severity == Severity::Fail)
+        || consistency_results
+            .iter()
+            .any(|r| !r.passed && r.severity == Severity::Fail);
 
     if has_cross_failures {
         has_failures = true;
@@ -183,10 +202,8 @@ pub async fn run_validate_command(
     // Phase 3: Output
     match config.format {
         OutputFormat::Text => {
-            let refs: Vec<(&str, &super::ValidationReport)> = file_reports
-                .iter()
-                .map(|(p, r)| (p.as_str(), r))
-                .collect();
+            let refs: Vec<(&str, &super::ValidationReport)> =
+                file_reports.iter().map(|(p, r)| (p.as_str(), r)).collect();
 
             print!("{}", format_validate_text(&refs, config));
 
@@ -198,18 +215,33 @@ pub async fn run_validate_command(
                         continue;
                     }
                     let marker = if result.passed {
-                        if config.color { "\x1b[32mPASS\x1b[0m" } else { "PASS" }
+                        if config.color {
+                            "\x1b[32mPASS\x1b[0m"
+                        } else {
+                            "PASS"
+                        }
                     } else {
                         match result.severity {
                             Severity::Fail => {
-                                if config.color { "\x1b[31mFAIL\x1b[0m" } else { "FAIL" }
+                                if config.color {
+                                    "\x1b[31mFAIL\x1b[0m"
+                                } else {
+                                    "FAIL"
+                                }
                             }
                             _ => {
-                                if config.color { "\x1b[33mWARN\x1b[0m" } else { "WARN" }
+                                if config.color {
+                                    "\x1b[33mWARN\x1b[0m"
+                                } else {
+                                    "WARN"
+                                }
                             }
                         }
                     };
-                    println!("  [{marker}] [{}] {} - {}", result.rule_code, result.tool_name, result.rule_name);
+                    println!(
+                        "  [{marker}] [{}] {} - {}",
+                        result.rule_code, result.tool_name, result.rule_name
+                    );
                     for issue in &result.issues {
                         println!("         {issue}");
                     }
@@ -239,7 +271,10 @@ pub async fn run_validate_command(
                 },
             });
 
-            println!("{}", serde_json::to_string_pretty(&full).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&full).unwrap_or_default()
+            );
         }
 
         OutputFormat::Sarif => {
@@ -249,7 +284,10 @@ pub async fn run_validate_command(
                 .collect();
 
             let sarif = super::sarif::to_sarif_multi(&file_result_refs);
-            println!("{}", serde_json::to_string_pretty(&sarif).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&sarif).unwrap_or_default()
+            );
         }
     }
 

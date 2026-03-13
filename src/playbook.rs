@@ -163,9 +163,7 @@ impl PlaybookContext {
     /// Resolve a variable reference like `$inputs.query` or `$search.web.results[0].title`.
     pub(crate) fn resolve_var(&self, var_ref: &str) -> Value {
         let trimmed = var_ref.trim_start_matches('$');
-        let (step_name, remainder) = trimmed
-            .split_once('.')
-            .unwrap_or((trimmed, ""));
+        let (step_name, remainder) = trimmed.split_once('.').unwrap_or((trimmed, ""));
 
         let source = if step_name == "inputs" {
             &self.inputs
@@ -198,9 +196,7 @@ impl PlaybookContext {
                     .collect();
                 Value::Object(interpolated)
             }
-            Value::Array(arr) => {
-                Value::Array(arr.iter().map(|v| self.interpolate(v)).collect())
-            }
+            Value::Array(arr) => Value::Array(arr.iter().map(|v| self.interpolate(v)).collect()),
             other => other.clone(),
         }
     }

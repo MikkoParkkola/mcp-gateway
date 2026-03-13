@@ -49,10 +49,7 @@ impl CapabilityFixer {
     }
 
     /// Generate schema completeness fixes (add missing type/description).
-    fn suggest_schema_fixes(
-        result: &super::ValidationResult,
-        fixes: &mut Vec<SuggestedFix>,
-    ) {
+    fn suggest_schema_fixes(result: &super::ValidationResult, fixes: &mut Vec<SuggestedFix>) {
         for issue in &result.issues {
             if issue.contains("missing 'type'") {
                 // Extract property name from issue text
@@ -71,9 +68,7 @@ impl CapabilityFixer {
                         rule_code: "AX-007".to_string(),
                         description: format!("Add description to property '{name}'"),
                         field_path: format!("schema.input.properties.{name}.description"),
-                        suggested_value: serde_json::Value::String(
-                            format!("The {name} parameter"),
-                        ),
+                        suggested_value: serde_json::Value::String(format!("The {name} parameter")),
                     });
                 }
             }
@@ -81,20 +76,14 @@ impl CapabilityFixer {
     }
 
     /// Generate naming consistency fixes (convert to `snake_case`).
-    fn suggest_naming_fixes(
-        result: &super::ValidationResult,
-        fixes: &mut Vec<SuggestedFix>,
-    ) {
+    fn suggest_naming_fixes(result: &super::ValidationResult, fixes: &mut Vec<SuggestedFix>) {
         for issue in &result.issues {
             if issue.contains("kebab-case") || issue.contains("camelCase") {
                 let suggested = to_snake_case(&result.tool_name);
                 if suggested != result.tool_name {
                     fixes.push(SuggestedFix {
                         rule_code: "AX-009".to_string(),
-                        description: format!(
-                            "Rename '{}' to '{suggested}'",
-                            result.tool_name
-                        ),
+                        description: format!("Rename '{}' to '{suggested}'", result.tool_name),
                         field_path: "name".to_string(),
                         suggested_value: serde_json::Value::String(suggested),
                     });
@@ -228,10 +217,7 @@ mod tests {
 
         let fixes = CapabilityFixer::suggest_fixes(&[result]);
         assert_eq!(fixes.len(), 1);
-        assert_eq!(
-            fixes[0].suggested_value.as_str(),
-            Some("my_tool")
-        );
+        assert_eq!(fixes[0].suggested_value.as_str(), Some("my_tool"));
     }
 
     #[test]

@@ -17,10 +17,7 @@ fn schema_with_props(props: serde_json::Value, required: &[&str]) -> serde_json:
 #[test]
 fn required_param_missing_produces_violation() {
     // GIVEN: schema requiring "query", WHEN: args are empty
-    let schema = schema_with_props(
-        json!({ "query": { "type": "string" } }),
-        &["query"],
-    );
+    let schema = schema_with_props(json!({ "query": { "type": "string" } }), &["query"]);
     let result = validate_arguments(&json!({}), &schema);
 
     // THEN: violation for missing required param
@@ -32,10 +29,7 @@ fn required_param_missing_produces_violation() {
 #[test]
 fn required_param_null_produces_violation() {
     // GIVEN: schema requiring "symbol", WHEN: args provide null
-    let schema = schema_with_props(
-        json!({ "symbol": { "type": "string" } }),
-        &["symbol"],
-    );
+    let schema = schema_with_props(json!({ "symbol": { "type": "string" } }), &["symbol"]);
     let result = validate_arguments(&json!({ "symbol": null }), &schema);
 
     assert!(!result.is_valid());
@@ -45,10 +39,7 @@ fn required_param_null_produces_violation() {
 #[test]
 fn required_param_present_passes() {
     // GIVEN: schema requiring "query", WHEN: args supply it
-    let schema = schema_with_props(
-        json!({ "query": { "type": "string" } }),
-        &["query"],
-    );
+    let schema = schema_with_props(json!({ "query": { "type": "string" } }), &["query"]);
     let result = validate_arguments(&json!({ "query": "rust" }), &schema);
 
     assert!(result.is_valid());
@@ -59,10 +50,7 @@ fn required_param_present_passes() {
 #[test]
 fn unknown_param_produces_violation() {
     // GIVEN: schema with only "query", WHEN: args include "hallucinated_param"
-    let schema = schema_with_props(
-        json!({ "query": { "type": "string" } }),
-        &["query"],
-    );
+    let schema = schema_with_props(json!({ "query": { "type": "string" } }), &["query"]);
     let result = validate_arguments(
         &json!({ "query": "rust", "hallucinated_param": "bad" }),
         &schema,
@@ -80,10 +68,7 @@ fn unknown_param_produces_violation() {
 #[test]
 fn unknown_param_error_lists_valid_params() {
     // GIVEN: schema with "query" only, WHEN: unknown key sent
-    let schema = schema_with_props(
-        json!({ "query": { "type": "string" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "query": { "type": "string" } }), &[]);
     let result = validate_arguments(&json!({ "bad_key": "v" }), &schema);
 
     let v = &result.violations[0];
@@ -96,10 +81,7 @@ fn unknown_param_error_lists_valid_params() {
 #[test]
 fn string_value_for_integer_field_is_coerced() {
     // GIVEN: "count" declared as integer, WHEN: LLM passes "10" (string)
-    let schema = schema_with_props(
-        json!({ "count": { "type": "integer" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "count": { "type": "integer" } }), &[]);
     let result = validate_arguments(&json!({ "count": "10" }), &schema);
 
     // THEN: coercion succeeds, no violations
@@ -111,10 +93,7 @@ fn string_value_for_integer_field_is_coerced() {
 #[allow(clippy::approx_constant)] // 3.14 is the test input string, not π
 fn string_value_for_number_field_is_coerced() {
     // GIVEN: "price" declared as number, WHEN: LLM passes "3.14"
-    let schema = schema_with_props(
-        json!({ "price": { "type": "number" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "price": { "type": "number" } }), &[]);
     let result = validate_arguments(&json!({ "price": "3.14" }), &schema);
 
     assert!(result.is_valid());
@@ -124,10 +103,7 @@ fn string_value_for_number_field_is_coerced() {
 #[test]
 fn string_true_for_boolean_field_is_coerced() {
     // GIVEN: "spellcheck" declared as boolean, WHEN: LLM passes "true"
-    let schema = schema_with_props(
-        json!({ "spellcheck": { "type": "boolean" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "spellcheck": { "type": "boolean" } }), &[]);
     let result = validate_arguments(&json!({ "spellcheck": "true" }), &schema);
 
     assert!(result.is_valid());
@@ -137,10 +113,7 @@ fn string_true_for_boolean_field_is_coerced() {
 #[test]
 fn string_false_for_boolean_field_is_coerced() {
     // GIVEN: "active" declared as boolean, WHEN: LLM passes "false"
-    let schema = schema_with_props(
-        json!({ "active": { "type": "boolean" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "active": { "type": "boolean" } }), &[]);
     let result = validate_arguments(&json!({ "active": "false" }), &schema);
 
     assert!(result.is_valid());
@@ -150,10 +123,7 @@ fn string_false_for_boolean_field_is_coerced() {
 #[test]
 fn wrong_type_not_coercible_produces_violation() {
     // GIVEN: "count" declared as integer, WHEN: LLM passes an object
-    let schema = schema_with_props(
-        json!({ "count": { "type": "integer" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "count": { "type": "integer" } }), &[]);
     let result = validate_arguments(&json!({ "count": {"nested": true} }), &schema);
 
     assert!(!result.is_valid());
@@ -163,10 +133,7 @@ fn wrong_type_not_coercible_produces_violation() {
 #[test]
 fn non_numeric_string_for_integer_field_produces_violation() {
     // GIVEN: "limit" declared as integer, WHEN: LLM passes "hello"
-    let schema = schema_with_props(
-        json!({ "limit": { "type": "integer" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "limit": { "type": "integer" } }), &[]);
     let result = validate_arguments(&json!({ "limit": "hello" }), &schema);
 
     assert!(!result.is_valid());
@@ -177,10 +144,7 @@ fn non_numeric_string_for_integer_field_produces_violation() {
 #[test]
 fn array_field_with_non_array_value_produces_violation() {
     // GIVEN: "tags" declared as array, WHEN: LLM passes a string
-    let schema = schema_with_props(
-        json!({ "tags": { "type": "array" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "tags": { "type": "array" } }), &[]);
     let result = validate_arguments(&json!({ "tags": "rust,async" }), &schema);
 
     assert!(!result.is_valid());
@@ -268,20 +232,25 @@ fn string_shorter_than_min_length_produces_violation() {
     let result = validate_arguments(&json!({ "password": "abc" }), &schema);
 
     assert!(!result.is_valid());
-    assert!(result.violations[0].message.contains("at least 8 characters"));
+    assert!(
+        result.violations[0]
+            .message
+            .contains("at least 8 characters")
+    );
 }
 
 #[test]
 fn string_longer_than_max_length_produces_violation() {
     // GIVEN: "code" with maxLength 5, WHEN: "toolong" provided
-    let schema = schema_with_props(
-        json!({ "code": { "type": "string", "maxLength": 5 } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "code": { "type": "string", "maxLength": 5 } }), &[]);
     let result = validate_arguments(&json!({ "code": "toolong" }), &schema);
 
     assert!(!result.is_valid());
-    assert!(result.violations[0].message.contains("at most 5 characters"));
+    assert!(
+        result.violations[0]
+            .message
+            .contains("at most 5 characters")
+    );
 }
 
 // ── No schema / null schema ─────────────────────────────────────────────
@@ -379,10 +348,7 @@ fn arguments_not_an_object_produces_violation() {
 #[test]
 fn float_with_zero_fraction_coerced_to_integer() {
     // GIVEN: "count" declared integer, WHEN: 10.0 provided (float with no fractional part)
-    let schema = schema_with_props(
-        json!({ "count": { "type": "integer" } }),
-        &[],
-    );
+    let schema = schema_with_props(json!({ "count": { "type": "integer" } }), &[]);
     let result = validate_arguments(&json!({ "count": 10.0 }), &schema);
 
     assert!(result.is_valid());
@@ -458,8 +424,7 @@ fn coerced_args_used_in_valid_result() {
         }),
         &["query"],
     );
-    let result =
-        validate_arguments(&json!({ "query": "test", "count": "5" }), &schema);
+    let result = validate_arguments(&json!({ "query": "test", "count": "5" }), &schema);
 
     assert!(result.is_valid());
     // Coerced result must have integer 5, not string "5"

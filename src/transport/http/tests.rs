@@ -30,7 +30,13 @@ fn new_creates_transport_with_defaults() {
 fn new_with_custom_headers() {
     let mut headers = HashMap::new();
     headers.insert("X-Custom".to_string(), "value".to_string());
-    let t = HttpTransport::new("http://localhost:8080", headers, Duration::from_secs(5), false).unwrap();
+    let t = HttpTransport::new(
+        "http://localhost:8080",
+        headers,
+        Duration::from_secs(5),
+        false,
+    )
+    .unwrap();
     assert_eq!(t.headers.get("X-Custom").unwrap(), "value");
     assert!(!t.streamable_http);
 }
@@ -46,10 +52,7 @@ fn new_with_oauth_and_protocol_version() {
         Some("2024-11-05".to_string()),
     )
     .unwrap();
-    assert_eq!(
-        *t.protocol_version.read(),
-        Some("2024-11-05".to_string())
-    );
+    assert_eq!(*t.protocol_version.read(), Some("2024-11-05".to_string()));
 }
 
 // =========================================================================
@@ -109,7 +112,9 @@ fn resolve_message_url_absolute_http() {
 #[test]
 fn resolve_message_url_absolute_https() {
     let t = make_transport("https://api.example.com/sse");
-    let result = t.resolve_message_url("https://api.example.com/messages?session_id=abc").unwrap();
+    let result = t
+        .resolve_message_url("https://api.example.com/messages?session_id=abc")
+        .unwrap();
     assert_eq!(result, "https://api.example.com/messages?session_id=abc");
 }
 

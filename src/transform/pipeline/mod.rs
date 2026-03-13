@@ -4,10 +4,9 @@ use regex::Regex;
 use serde_json::Value;
 
 use super::{
-    TransformConfig, FormatConfig, FormatType, JsonPath,
-    resolve_path, resolve_path_single, parse_json_path
+    FormatConfig, FormatType, JsonPath, TransformConfig, parse_json_path, resolve_path,
+    resolve_path_single,
 };
-
 
 // ============================================================================
 // Compiled pipeline
@@ -52,10 +51,12 @@ impl TransformPipeline {
             .redact
             .iter()
             .filter_map(|rule| {
-                Regex::new(&rule.pattern).ok().map(|regex| CompiledRedaction {
-                    regex,
-                    replacement: rule.replacement.clone(),
-                })
+                Regex::new(&rule.pattern)
+                    .ok()
+                    .map(|regex| CompiledRedaction {
+                        regex,
+                        replacement: rule.replacement.clone(),
+                    })
             })
             .collect();
 
@@ -269,7 +270,6 @@ fn render_template(template: &str, value: &Value) -> String {
 // ============================================================================
 // Tests
 // ============================================================================
-
 
 #[cfg(test)]
 mod tests;

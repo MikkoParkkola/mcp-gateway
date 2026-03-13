@@ -75,7 +75,10 @@ mod tests {
     #[test]
     fn generate_returns_gw_prefixed_string() {
         let id = generate();
-        assert!(id.starts_with("gw-"), "trace ID must start with 'gw-': {id}");
+        assert!(
+            id.starts_with("gw-"),
+            "trace ID must start with 'gw-': {id}"
+        );
     }
 
     #[test]

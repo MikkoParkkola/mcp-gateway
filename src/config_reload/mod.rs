@@ -41,13 +41,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use notify::{Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use parking_lot::{Mutex, RwLock};
 use tracing::{info, warn};
 
+use crate::Result;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, Config, ServerConfig};
-use crate::Result;
 
 // ============================================================================
 // Public types
@@ -317,9 +319,7 @@ pub async fn apply_patch(
     cache_ttl: Duration,
 ) {
     if patch.server_changed {
-        warn!(
-            "Config reload: server host/port changed — restart required to apply this change"
-        );
+        warn!("Config reload: server host/port changed — restart required to apply this change");
     }
 
     for (name, cfg) in &patch.backends_added {
@@ -394,10 +394,8 @@ fn resolve_env_file_paths(raw: &[String]) -> Vec<PathBuf> {
 
 /// Returns `true` for create/modify events on the watched config file.
 fn is_config_event(event: &Event, config_path: &std::path::Path) -> bool {
-    matches!(
-        event.kind,
-        EventKind::Create(_) | EventKind::Modify(_)
-    ) && event.paths.iter().any(|p| p == config_path)
+    matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
+        && event.paths.iter().any(|p| p == config_path)
 }
 
 /// Returns `Some(path)` when the event matches any of the watched env files,
@@ -447,8 +445,7 @@ impl ConfigWatcher {
 
         let env_file_paths = resolve_env_file_paths(&initial_config.env_files);
 
-        let watcher =
-            Self::create_notify_watcher(event_tx, &config_path, &env_file_paths)?;
+        let watcher = Self::create_notify_watcher(event_tx, &config_path, &env_file_paths)?;
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
@@ -712,7 +709,13 @@ impl ReloadContext {
         }
 
         let summary = patch.summary();
-        apply_patch(&patch, &self.registry, &self.failsafe_config, self.cache_ttl).await;
+        apply_patch(
+            &patch,
+            &self.registry,
+            &self.failsafe_config,
+            self.cache_ttl,
+        )
+        .await;
         self.live_config.set(new_config);
 
         Ok(summary)
@@ -722,7 +725,6 @@ impl ReloadContext {
 // ============================================================================
 // Tests
 // ============================================================================
-
 
 #[cfg(test)]
 mod tests;
