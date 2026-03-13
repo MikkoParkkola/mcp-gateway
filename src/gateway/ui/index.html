@@ -154,6 +154,113 @@ tr:hover td { background: var(--bg3); }
   main { padding: 1rem; }
   .cards { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* YAML Editor Styles */
+.yaml-editor-wrap { position: relative; margin-bottom: 1rem; }
+.yaml-editor-wrap textarea {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  width: 100%;
+  min-height: 200px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem 0.5rem 3.5rem;
+  resize: vertical;
+  outline: none;
+  tab-size: 2;
+}
+.yaml-editor-wrap textarea:focus { border-color: var(--accent); }
+.yaml-editor-wrap textarea.yaml-error { border-color: var(--red); }
+.yaml-line-numbers {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3rem;
+  padding: 0.5rem 0.4rem;
+  text-align: right;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--fg2);
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  border-radius: var(--radius) 0 0 var(--radius);
+  pointer-events: none;
+  overflow: hidden;
+  user-select: none;
+}
+.yaml-error-msg {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--red);
+  min-height: 1.2em;
+}
+.yaml-toolbar { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
+.yaml-toolbar .cap-name { font-weight: 600; font-size: 0.95rem; flex: 1; }
+.btn-sm { padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+.btn-secondary { background: var(--bg3); color: var(--fg); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--bg2); }
+
+/* OpenAPI Import Modal */
+.modal-backdrop {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  width: min(600px, 95vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.modal-header { display: flex; justify-content: space-between; align-items: center; }
+.modal-header h2 { margin: 0; font-size: 1.1rem; color: var(--fg); }
+.modal-close { background: none; border: none; color: var(--fg2); font-size: 1.4rem; cursor: pointer; line-height: 1; padding: 0 0.25rem; }
+.modal-close:hover { color: var(--fg); }
+.modal-url-row { display: flex; gap: 0.5rem; }
+.modal-url-row input {
+  flex: 1;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--fg); padding: 0.5rem 0.75rem; font-size: 0.875rem;
+}
+.modal-url-row input::placeholder { color: var(--fg2); }
+.modal-preview {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  min-height: 80px;
+  max-height: 40vh;
+}
+.modal-preview .preview-hint { color: var(--fg2); font-size: 0.85rem; }
+.tool-check-item {
+  display: flex; align-items: flex-start; gap: 0.5rem;
+  padding: 0.4rem 0; border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.tool-check-item:last-child { border-bottom: none; }
+.tool-check-item input[type=checkbox] { margin-top: 0.15rem; flex-shrink: 0; }
+.tool-check-name { font-weight: 600; color: var(--fg); }
+.tool-check-desc { color: var(--fg2); font-size: 0.8rem; margin-top: 0.15rem; }
+.modal-footer { display: flex; gap: 0.5rem; justify-content: flex-end; align-items: center; }
+.modal-msg { flex: 1; font-size: 0.85rem; }
+.modal-msg.ok { color: var(--green); }
+.modal-msg.err { color: var(--red); }
+.modal-select-row { display: flex; gap: 0.75rem; font-size: 0.8rem; align-items: center; color: var(--fg2); }
+.modal-select-row a { cursor: pointer; color: var(--accent); }
 </style>
 </head>
 <body>
@@ -297,7 +404,11 @@ tr:hover td { background: var(--bg3); }
     <div id="page-capabilities" class="page">
       <div class="tab-header">
         <h1>Capabilities</h1>
-        <button class="btn btn-sm" onclick="newCapability()">+ New Capability</button>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <button class="btn btn-sm" onclick="newCapability()">+ New Capability</button>
+          <button class="btn btn-sm" onclick="showImportModal()">Import OpenAPI</button>
+          <button class="btn btn-sm btn-secondary" onclick="refreshCapabilities()">Refresh</button>
+        </div>
       </div>
       <div id="cap-list" class="cap-list">
         <div style="color:var(--fg2);font-size:0.9rem">Loading...</div>
@@ -314,6 +425,33 @@ tr:hover td { background: var(--bg3); }
       <div class="config-block" id="config-content">Loading...</div>
     </div>
   </main>
+</div>
+
+<!-- OpenAPI Import Modal -->
+<div id="import-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-title">Import OpenAPI Spec</h2>
+      <button class="modal-close" onclick="closeImportModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-url-row">
+      <input type="url" id="import-url" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autocomplete="off">
+      <button class="btn btn-sm" id="preview-btn" onclick="previewOpenAPI()">Preview</button>
+    </div>
+    <div class="modal-preview" id="import-preview">
+      <span class="preview-hint">Enter a URL and click Preview to see available tools.</span>
+    </div>
+    <div class="modal-select-row" id="import-select-row" style="display:none">
+      <a onclick="setAllChecks(true)">Select all</a>
+      <a onclick="setAllChecks(false)">Deselect all</a>
+      <span id="import-count"></span>
+    </div>
+    <div class="modal-footer">
+      <span class="modal-msg" id="import-msg"></span>
+      <button class="btn btn-sm btn-secondary" onclick="closeImportModal()">Cancel</button>
+      <button class="btn btn-sm" id="import-btn" onclick="doImport()" disabled>Import Selected</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -374,6 +512,7 @@ function onHash() {
   const hash = location.hash.replace('#', '') || 'dashboard';
   showPage(hash);
   if (hash === 'tools') refreshTools();
+  if (hash === 'capabilities') refreshCapabilities();
   if (hash === 'config') refreshConfig();
   if (hash === 'capabilities') refreshCapabilities();
 }
@@ -884,6 +1023,374 @@ function capTabIndent(e) {
   const end = ta.selectionEnd;
   ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
   ta.selectionStart = ta.selectionEnd = start + 2;
+}
+
+// ── OpenAPI import modal ──
+function showImportModal() {
+  const modal = document.getElementById('import-modal');
+  if (modal) { modal.classList.add('open'); }
+  const urlInput = document.getElementById('import-url');
+  if (urlInput) urlInput.focus();
+}
+
+function closeImportModal() {
+  const modal = document.getElementById('import-modal');
+  if (modal) modal.classList.remove('open');
+  const preview = document.getElementById('import-preview');
+  if (preview) preview.innerHTML = '<span style="color:var(--fg2)">Enter a URL and click Preview to see available tools.</span>';
+  const msg = document.getElementById('import-msg');
+  if (msg) { msg.textContent = ''; msg.className = 'modal-msg'; }
+  const btn = document.getElementById('import-btn');
+  if (btn) btn.disabled = true;
+  const selectRow = document.getElementById('import-select-row');
+  if (selectRow) selectRow.style.display = 'none';
+}
+
+document.addEventListener('click', (e) => {
+  const modal = document.getElementById('import-modal');
+  if (e.target === modal) closeImportModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const modal = document.getElementById('import-modal');
+    if (modal && modal.classList.contains('open')) closeImportModal();
+  }
+});
+
+async function previewOpenAPI() {
+  const url = document.getElementById('import-url').value.trim();
+  const preview = document.getElementById('import-preview');
+  const btn = document.getElementById('preview-btn');
+  const importBtn = document.getElementById('import-btn');
+  const selectRow = document.getElementById('import-select-row');
+  const msgEl = document.getElementById('import-msg');
+  if (!url) { msgEl.textContent = 'Please enter a URL.'; return; }
+  msgEl.textContent = '';
+  btn.disabled = true;
+  preview.innerHTML = '<span style="color:var(--fg2)">Loading...</span>';
+  importBtn.disabled = true;
+  selectRow.style.display = 'none';
+  try {
+    const r = await fetch('/ui/api/import/openapi/preview', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    const tools = data.tools || [];
+    if (tools.length === 0) {
+      preview.innerHTML = '<span style="color:var(--fg2)">No tools found in this spec.</span>';
+    } else {
+      preview.innerHTML = tools.map(t => `<div style="display:flex;gap:0.5rem;align-items:flex-start;padding:0.25rem 0">
+        <input type="checkbox" class="import-check" value="${esc(t.name)}" checked>
+        <div><strong>${esc(t.name)}</strong><br><span style="font-size:0.85rem;color:var(--fg2)">${esc(t.description || '')}</span></div>
+      </div>`).join('');
+      importBtn.disabled = false;
+      selectRow.style.display = 'flex';
+      updateImportCount();
+      preview.querySelectorAll('.import-check').forEach(cb => cb.addEventListener('change', updateImportCount));
+    }
+  } catch (e) {
+    preview.innerHTML = '';
+    msgEl.textContent = 'Preview failed: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+function updateImportCount() {
+  const all = document.querySelectorAll('.import-check');
+  const checked = document.querySelectorAll('.import-check:checked');
+  const el = document.getElementById('import-count');
+  if (el) el.textContent = checked.length + ' / ' + all.length + ' selected';
+}
+
+function setAllChecks(val) {
+  document.querySelectorAll('.import-check').forEach(cb => { cb.checked = val; });
+  updateImportCount();
+}
+
+async function doImport() {
+  const url = document.getElementById('import-url').value.trim();
+  const checked = [...document.querySelectorAll('.import-check:checked')].map(cb => cb.value);
+  const importBtn = document.getElementById('import-btn');
+  const msgEl = document.getElementById('import-msg');
+  if (!checked.length) { msgEl.textContent = 'Select at least one tool.'; return; }
+  importBtn.disabled = true;
+  msgEl.textContent = 'Importing...';
+  try {
+    const r = await fetch('/ui/api/import/openapi', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, selected_tools: checked })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    closeImportModal();
+    refreshCapabilities();
+  } catch (e) {
+    msgEl.textContent = 'Import failed: ' + e.message;
+    importBtn.disabled = false;
+  }
+}
+
+// XSS escape
+  const status = document.getElementById('cap-status');
+  if (!list) return;
+  try {
+    const data = await apiFetch('/ui/api/capabilities');
+    const caps = data.capabilities || [];
+    if (caps.length === 0) {
+      list.innerHTML = '<div style="color:var(--fg2);font-size:0.875rem">No capability files found.</div>';
+      return;
+    }
+    list.innerHTML = caps.map(c => capCard(c)).join('');
+    // Wire up textarea handlers after rendering
+    list.querySelectorAll('.yaml-ta').forEach(ta => initYamlEditor(ta));
+    status.textContent = caps.length + ' file' + (caps.length !== 1 ? 's' : '');
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--red);font-size:0.875rem">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+function capCard(c) {
+  const id = 'cap-' + c.name.replace(/[^a-z0-9_-]/gi, '_');
+  return `<div class="yaml-editor-wrap" id="wrap-${id}">
+    <div class="yaml-toolbar">
+      <span class="cap-name">${esc(c.name)}</span>
+      <span style="font-size:0.8rem;color:var(--fg2)">${c.tool_count != null ? c.tool_count + ' tools' : ''}</span>
+      <button class="btn btn-sm btn-secondary" onclick="revertCap('${esc(c.name)}','${id}')">Revert</button>
+      <button class="btn btn-sm" onclick="saveCap('${esc(c.name)}','${id}')">Save</button>
+    </div>
+    <div class="yaml-line-numbers" id="ln-${id}"></div>
+    <textarea class="yaml-ta" id="ta-${id}" data-cap="${esc(c.name)}" spellcheck="false">${esc(c.content || '')}</textarea>
+    <div class="yaml-error-msg" id="err-${id}"></div>
+  </div>`;
+}
+
+// ── YAML editor: line numbers + Tab key ──
+function initYamlEditor(ta) {
+  updateLineNumbers(ta);
+  ta.addEventListener('input', () => updateLineNumbers(ta));
+  ta.addEventListener('scroll', () => syncLineNumberScroll(ta));
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+      updateLineNumbers(ta);
+    }
+  });
+  ta.addEventListener('blur', () => validateCapBlur(ta));
+}
+
+function updateLineNumbers(ta) {
+  const id = ta.id.replace('ta-', '');
+  const ln = document.getElementById('ln-' + id);
+  if (!ln) return;
+  const lines = ta.value.split('\n').length;
+  ln.textContent = Array.from({length: lines}, (_, i) => i + 1).join('\n');
+}
+
+function syncLineNumberScroll(ta) {
+  const id = ta.id.replace('ta-', '');
+  const ln = document.getElementById('ln-' + id);
+  if (ln) ln.scrollTop = ta.scrollTop;
+}
+
+// ── YAML validation on blur ──
+async function validateCapBlur(ta) {
+  const capName = ta.dataset.cap;
+  const id = ta.id.replace('ta-', '');
+  const errDiv = document.getElementById('err-' + id);
+  if (!errDiv || !capName) return;
+  try {
+    const r = await fetch('/ui/api/capabilities/' + encodeURIComponent(capName) + '?validate=1', {
+      method: 'PUT',
+      headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml', 'X-Validate-Only': '1' },
+      body: ta.value
+    });
+    if (r.ok) {
+      ta.classList.remove('yaml-error');
+      errDiv.textContent = '';
+    } else {
+      const body = await r.json().catch(() => ({ error: r.statusText }));
+      ta.classList.add('yaml-error');
+      errDiv.textContent = body.error || 'Validation failed';
+    }
+  } catch (_) {
+    // Network error: silent (server may not support validate-only yet)
+  }
+}
+
+// ── Save capability ──
+async function saveCap(name, id) {
+  const ta = document.getElementById('ta-' + id);
+  const errDiv = document.getElementById('err-' + id);
+  if (!ta || !errDiv) return;
+  try {
+    const r = await fetch('/ui/api/capabilities/' + encodeURIComponent(name), {
+      method: 'PUT',
+      headers: { ...authHeaders(), 'Content-Type': 'application/x-yaml' },
+      body: ta.value
+    });
+    if (r.ok) {
+      ta.classList.remove('yaml-error');
+      errDiv.textContent = '';
+      errDiv.style.color = 'var(--green)';
+      errDiv.textContent = 'Saved.';
+      setTimeout(() => { errDiv.textContent = ''; errDiv.style.color = ''; }, 2000);
+    } else {
+      const body = await r.json().catch(() => ({ error: r.statusText }));
+      ta.classList.add('yaml-error');
+      errDiv.style.color = '';
+      errDiv.textContent = body.error || 'Save failed';
+    }
+  } catch (e) {
+    errDiv.textContent = 'Save error: ' + e.message;
+    errDiv.style.color = '';
+  }
+}
+
+// ── Revert capability ──
+async function revertCap(name, id) {
+  const ta = document.getElementById('ta-' + id);
+  const errDiv = document.getElementById('err-' + id);
+  if (!ta) return;
+  try {
+    const data = await apiFetch('/ui/api/capabilities/' + encodeURIComponent(name));
+    ta.value = data.content || '';
+    ta.classList.remove('yaml-error');
+    if (errDiv) errDiv.textContent = '';
+    updateLineNumbers(ta);
+  } catch (e) {
+    if (errDiv) errDiv.textContent = 'Revert error: ' + e.message;
+  }
+}
+
+// ── OpenAPI import modal ──
+function showImportModal() {
+  document.getElementById('import-modal').classList.add('open');
+  document.getElementById('import-url').focus();
+}
+
+function closeImportModal() {
+  document.getElementById('import-modal').classList.remove('open');
+  document.getElementById('import-preview').innerHTML =
+    '<span class="preview-hint">Enter a URL and click Preview to see available tools.</span>';
+  document.getElementById('import-msg').textContent = '';
+  document.getElementById('import-msg').className = 'modal-msg';
+  document.getElementById('import-btn').disabled = true;
+  document.getElementById('import-select-row').style.display = 'none';
+}
+
+// Close on backdrop click
+document.addEventListener('click', (e) => {
+  const modal = document.getElementById('import-modal');
+  if (e.target === modal) closeImportModal();
+});
+
+// Close on Escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('import-modal').classList.contains('open')) {
+    closeImportModal();
+  }
+});
+
+async function previewOpenAPI() {
+  const url = document.getElementById('import-url').value.trim();
+  const preview = document.getElementById('import-preview');
+  const btn = document.getElementById('preview-btn');
+  const importBtn = document.getElementById('import-btn');
+  const selectRow = document.getElementById('import-select-row');
+  const msgEl = document.getElementById('import-msg');
+
+  if (!url) { msgEl.textContent = 'Please enter a URL.'; msgEl.className = 'modal-msg err'; return; }
+  msgEl.textContent = '';
+  btn.disabled = true;
+  preview.innerHTML = '<span class="preview-hint">Loading...</span>';
+  importBtn.disabled = true;
+  selectRow.style.display = 'none';
+
+  try {
+    const r = await fetch('/ui/api/import/openapi/preview', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await r.json();
+    if (!r.ok) { throw new Error(data.error || r.statusText); }
+    const tools = data.tools || [];
+    if (tools.length === 0) {
+      preview.innerHTML = '<span class="preview-hint">No tools found in this spec.</span>';
+    } else {
+      preview.innerHTML = tools.map(t => `<div class="tool-check-item">
+        <input type="checkbox" class="import-check" value="${esc(t.name)}" checked>
+        <div>
+          <div class="tool-check-name">${esc(t.name)}</div>
+          <div class="tool-check-desc">${esc(t.description || '')}</div>
+        </div>
+      </div>`).join('');
+      importBtn.disabled = false;
+      selectRow.style.display = 'flex';
+      updateImportCount();
+      preview.querySelectorAll('.import-check').forEach(cb =>
+        cb.addEventListener('change', updateImportCount)
+      );
+    }
+  } catch (e) {
+    preview.innerHTML = '';
+    msgEl.textContent = 'Preview failed: ' + e.message;
+    msgEl.className = 'modal-msg err';
+  }
+  btn.disabled = false;
+}
+
+function updateImportCount() {
+  const all = document.querySelectorAll('.import-check');
+  const checked = document.querySelectorAll('.import-check:checked');
+  document.getElementById('import-count').textContent = checked.length + ' / ' + all.length + ' selected';
+}
+
+function setAllChecks(val) {
+  document.querySelectorAll('.import-check').forEach(cb => { cb.checked = val; });
+  updateImportCount();
+}
+
+async function doImport() {
+  const url = document.getElementById('import-url').value.trim();
+  const checked = [...document.querySelectorAll('.import-check:checked')].map(cb => cb.value);
+  const importBtn = document.getElementById('import-btn');
+  const msgEl = document.getElementById('import-msg');
+
+  if (!checked.length) { msgEl.textContent = 'Select at least one tool.'; msgEl.className = 'modal-msg err'; return; }
+  importBtn.disabled = true;
+  msgEl.textContent = 'Importing...';
+  msgEl.className = 'modal-msg';
+
+  try {
+    const r = await fetch('/ui/api/import/openapi', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, selected_tools: checked })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    closeImportModal();
+    const statusEl = document.getElementById('cap-status');
+    if (statusEl) {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = 'Imported ' + (data.imported || checked.length) + ' tools.';
+      setTimeout(() => { statusEl.style.color = ''; }, 3000);
+    }
+    refreshCapabilities();
+  } catch (e) {
+    msgEl.textContent = 'Import failed: ' + e.message;
+    msgEl.className = 'modal-msg err';
+    importBtn.disabled = false;
+  }
 }
 
 // XSS escape
