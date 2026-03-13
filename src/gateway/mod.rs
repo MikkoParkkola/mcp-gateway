@@ -10,6 +10,7 @@ pub mod proxy;
 mod router;
 mod server;
 pub mod streaming;
+mod ws_listener;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;

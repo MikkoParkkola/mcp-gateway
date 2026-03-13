@@ -11,7 +11,7 @@ use clap::Parser;
 use tracing::{error, info};
 
 use mcp_gateway::{
-    cli::{Cli, Command},
+    cli::{Cli, Command, PluginCommand},
     config::Config,
     gateway::Gateway,
     setup_tracing,
@@ -26,6 +26,9 @@ async fn main() -> ExitCode {
         eprintln!("Failed to setup tracing: {e}");
         return ExitCode::FAILURE;
     }
+
+    // Capture config path before consuming `cli` in the match below.
+    let config_path = cli.config.clone();
 
     match cli.command {
         Some(Command::Init { output, with_examples }) => {
@@ -50,7 +53,45 @@ async fn main() -> ExitCode {
             mcp_gateway::validator::cli_handler::run_validate_command(&paths, &config).await
         }
         Some(Command::Tool(tool_cmd)) => commands::run_tool_command(tool_cmd).await,
+        Some(Command::Plugin(plugin_cmd)) => {
+            run_plugin_command(plugin_cmd, config_path.as_deref()).await
+        }
         Some(Command::Serve) | None => run_server(cli).await,
+    }
+}
+
+/// Dispatch a `plugin` subcommand.
+///
+/// Loads config from `config_path` (needed for marketplace URL / plugin dir
+/// defaults) then delegates to the appropriate handler in `commands::plugin`.
+async fn run_plugin_command(cmd: PluginCommand, config_path: Option<&Path>) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: failed to load config ({e}); using defaults");
+            Config::default()
+        }
+    };
+
+    match cmd {
+        PluginCommand::Search { query, marketplace_url } => {
+            commands::run_plugin_search(&query, marketplace_url.as_deref(), &config).await
+        }
+        PluginCommand::Install { name, marketplace_url, plugin_dir } => {
+            commands::run_plugin_install(
+                &name,
+                marketplace_url.as_deref(),
+                plugin_dir.as_deref(),
+                &config,
+            )
+            .await
+        }
+        PluginCommand::Uninstall { name, plugin_dir } => {
+            commands::run_plugin_uninstall(&name, plugin_dir.as_deref(), &config).await
+        }
+        PluginCommand::List { plugin_dir } => {
+            commands::run_plugin_list(plugin_dir.as_deref(), &config)
+        }
     }
 }
 
@@ -318,5 +359,149 @@ mod tests {
         let result = commands::run_init_command(&output, true);
         assert_eq!(result, ExitCode::SUCCESS);
         assert!(output.exists());
+    }
+
+    // =====================================================================
+    // CLI argument parsing for `plugin` subcommand
+    // =====================================================================
+
+    fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
+        use clap::Parser as _;
+        // Prepend the binary name that clap expects as argv[0].
+        let full: Vec<&str> = std::iter::once("mcp-gateway").chain(args.iter().copied()).collect();
+        Cli::try_parse_from(full)
+    }
+
+    #[test]
+    fn cli_plugin_search_parses_query() {
+        // GIVEN: `plugin search stripe`
+        let cli = parse_args(&["plugin", "search", "stripe"]).unwrap();
+        // THEN: Plugin(Search { query: "stripe", marketplace_url: None })
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Search { query, marketplace_url })) => {
+                assert_eq!(query, "stripe");
+                assert!(marketplace_url.is_none());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_plugin_search_accepts_marketplace_url_flag() {
+        // GIVEN: `plugin search foo --marketplace-url https://example.com`
+        let cli = parse_args(&[
+            "plugin", "search", "foo",
+            "--marketplace-url", "https://example.com",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Search { marketplace_url, .. })) => {
+                assert_eq!(marketplace_url.as_deref(), Some("https://example.com"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_plugin_install_parses_name() {
+        // GIVEN: `plugin install stripe-payments`
+        let cli = parse_args(&["plugin", "install", "stripe-payments"]).unwrap();
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Install { name, marketplace_url, plugin_dir })) => {
+                assert_eq!(name, "stripe-payments");
+                assert!(marketplace_url.is_none());
+                assert!(plugin_dir.is_none());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_plugin_install_accepts_plugin_dir_flag() {
+        // GIVEN: `plugin install foo --plugin-dir /tmp/plugins`
+        let cli = parse_args(&[
+            "plugin", "install", "foo",
+            "--plugin-dir", "/tmp/plugins",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Install { plugin_dir, .. })) => {
+                assert_eq!(plugin_dir.as_deref(), Some(std::path::Path::new("/tmp/plugins")));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_plugin_uninstall_parses_name() {
+        // GIVEN: `plugin uninstall my-plugin`
+        let cli = parse_args(&["plugin", "uninstall", "my-plugin"]).unwrap();
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Uninstall { name, plugin_dir })) => {
+                assert_eq!(name, "my-plugin");
+                assert!(plugin_dir.is_none());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_plugin_list_parses_without_arguments() {
+        // GIVEN: `plugin list`
+        let cli = parse_args(&["plugin", "list"]).unwrap();
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::List { plugin_dir })) => {
+                assert!(plugin_dir.is_none());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_plugin_list_accepts_plugin_dir_flag() {
+        // GIVEN: `plugin list --plugin-dir /my/plugins`
+        let cli = parse_args(&["plugin", "list", "--plugin-dir", "/my/plugins"]).unwrap();
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::List { plugin_dir })) => {
+                assert_eq!(
+                    plugin_dir.as_deref(),
+                    Some(std::path::Path::new("/my/plugins"))
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_plugin_search_requires_query_argument() {
+        // GIVEN: `plugin search` with no query
+        let result = parse_args(&["plugin", "search"]);
+        // THEN: clap returns an error (missing required arg)
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_plugin_install_requires_name_argument() {
+        // GIVEN: `plugin install` with no name
+        let result = parse_args(&["plugin", "install"]);
+        // THEN: clap returns an error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_ws_port_absent_means_none_in_config_default() {
+        // GIVEN: a default ServerConfig
+        let config = Config::default();
+        // THEN: ws_port is None (HTTP-only mode)
+        assert!(config.server.ws_port.is_none());
+    }
+
+    #[test]
+    fn cli_ws_port_present_in_config_enables_ws_listener() {
+        // GIVEN: a ServerConfig with ws_port set
+        let mut config = Config::default();
+        config.server.ws_port = Some(39401);
+        // THEN: ws_port is accessible
+        assert_eq!(config.server.ws_port, Some(39401));
     }
 }

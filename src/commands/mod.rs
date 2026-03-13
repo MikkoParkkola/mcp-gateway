@@ -4,9 +4,11 @@
 //! returns an `ExitCode` so `main` can remain a thin dispatcher.
 
 mod cap;
+mod plugin;
 mod stats;
 
 pub use cap::run_cap_command;
+pub use plugin::{run_plugin_install, run_plugin_list, run_plugin_search, run_plugin_uninstall};
 pub use stats::run_stats_command;
 
 use std::process::ExitCode;

@@ -1,98 +1,179 @@
 # Contributing to MCP Gateway
 
-Thank you for your interest in contributing to MCP Gateway!
-
-## Getting Started
-
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/mcp-gateway`
-3. Create a feature branch: `git checkout -b feature/your-feature`
-
 ## Development Setup
 
+### Prerequisites
+
+- **Rust 1.85+** (edition 2024): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Node.js** (only for testing stdio backends that use `npx`)
+
+### Build and Test
+
 ```bash
-# Install Rust (1.85+)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build
+git clone https://github.com/YOUR_USERNAME/mcp-gateway
+cd mcp-gateway
 cargo build
-
-# Run tests
-cargo test
-
-# Run with example config
-cargo run -- --config examples/servers.yaml
+cargo test           # 1812+ tests, all must pass
+cargo run -- init    # Generate a starter config
+cargo run -- --config gateway.yaml --log-level debug
 ```
 
-## Code Standards
+### Full CI Check (Run Before Pushing)
 
-- **Edition**: Rust 2024 (edition = "2024"), minimum `rustc` 1.85
-- **Formatting**: Run `cargo fmt` before committing
-- **Linting**: Run `cargo clippy -- -W clippy::pedantic` and fix all warnings (pedantic is enforced in CI)
-- **Safety**: `unsafe` code is forbidden (`#[forbid(unsafe_code)]` in `Cargo.toml`)
-- **Tests**: Add tests for new functionality. Current: 1812 tests, 0 allowed to regress.
-- **Docs**: Update documentation for API changes
+```bash
+cargo fmt --check && cargo clippy -- -W clippy::pedantic && cargo test
+```
 
-## Pull Request Process
+## Code Organization
 
-1. Ensure CI passes: `cargo fmt --check && cargo clippy -- -W clippy::pedantic && cargo test`
-2. Update README.md if adding features
-3. Add entry to CHANGELOG.md
-4. Request review
-
-## Architecture Overview
+Source in `src/`, each module kept to **800 lines or fewer**. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full diagram.
 
 ```
 src/
-├── backend/       # Backend process management
-├── config.rs      # Configuration parsing
-├── failsafe/      # Circuit breaker, retry, rate limiting
-├── gateway/       # Core gateway logic + Meta-MCP
-├── protocol/      # MCP message types
-└── transport/     # stdio, HTTP, SSE transports
+  main.rs              Entry point, CLI dispatch
+  lib.rs               Library root, module declarations
+  error.rs             Unified error types (thiserror)
+  cli/                 CLI parsing (clap derive): Cli, Command, CapCommand, ToolCommand
+  config/              Configuration (figment: YAML + env vars)
+    mod.rs               Config, ServerConfig, BackendConfig, TransportConfig
+    features.rs          Auth, cache, security, key server, streaming configs
+  gateway/             Core server
+    server.rs            Gateway struct, startup, shutdown
+    router/              Axum router and request handlers
+    auth.rs              Bearer token / API key auth
+    proxy.rs             Backend proxy manager
+    streaming.rs         SSE notification multiplexer
+    meta_mcp/            Meta-MCP tool implementations (search, invoke, list)
+    oauth/               OAuth 2.0 (agent auth, OIDC JWT)
+    ui/                  Embedded web dashboard (feature: webui)
+    webhooks/            Webhook receiver
+  backend/             Backend lifecycle (spawn, connect, health, tool cache)
+  transport/           Wire protocols
+    mod.rs               Transport trait
+    stdio.rs             Subprocess I/O (stdin/stdout JSON-RPC)
+    http/                HTTP client (Streamable HTTP + SSE)
+    websocket.rs         WebSocket transport
+  protocol/            MCP JSON-RPC types, version negotiation
+  capability/          REST-to-MCP bridge (YAML defs, executor, hot-reload)
+  failsafe/            Circuit breaker, retry, rate limiter, health checks
+  security/            Tool policy engine, input sanitization
+  cache.rs             Response cache with TTL
+  secrets.rs           Keychain/env credential resolution
+  validator/           Capability YAML linter (agent-UX rules)
+  mtls/                Mutual TLS authentication
+  key_server/          OIDC identity to scoped API key exchange
 ```
 
-## Adding a New Backend Transport
+## Adding a New Capability (YAML)
 
-1. Implement `Transport` trait in `src/transport/`
-2. Add configuration variant in `src/config.rs`
-3. Register in `src/backend/mod.rs`
-4. Add tests in `tests/`
+The easiest way to contribute. No Rust needed.
 
-## Adding a Failsafe
+**1. Create** a YAML file in the appropriate `capabilities/` subdirectory:
 
-1. Add module in `src/failsafe/`
-2. Integrate with `BackendManager`
-3. Add configuration options
-4. Document in README.md
+```yaml
+fulcrum: "1.0"
+name: my_api_tool
+description: One sentence -- what it does, what API it uses.
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query
+    required: [query]
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.example.com
+      path: /v1/search
+      method: GET
+      params:
+        q: "{query}"
+cache:
+  strategy: exact
+  ttl: 300
+auth:
+  required: false
+  type: none
+metadata:
+  category: knowledge
+  tags: [search, free]
+  cost_category: free
+  read_only: true
+  rate_limit: 1000 req/day
+  docs: https://api.example.com/docs
+```
 
-## Adding Capabilities
+**2. Validate and test:**
 
-The easiest way to contribute is adding new API capabilities:
+```bash
+cargo run -- cap validate capabilities/knowledge/my_api_tool.yaml
+cargo run -- cap test capabilities/knowledge/my_api_tool.yaml --args '{"query": "test"}'
+cargo run -- validate capabilities/knowledge/my_api_tool.yaml
+```
 
-1. Copy an existing YAML from `capabilities/`
-2. Modify for your API
-3. Test it works
-4. Submit PR
+**Guidelines:**
+- Zero-config (no API key) capabilities are preferred.
+- Use `env:VAR_NAME` or `keychain:name` for credentials. Never hardcode secrets.
+- Write a clear, specific `description` -- the AI reads it to decide tool selection.
+- Set `read_only: true` for GET-only endpoints.
+- Document rate limits in `metadata.rate_limit`.
+- Place files in the correct category subdirectory.
 
-### Zero-Config Capabilities Welcome
+## Adding a New Transport
 
-APIs that work without authentication are especially valuable. Good candidates:
-- Government open data
-- Public datasets
-- Free utility APIs
+**1. Implement the `Transport` trait** in `src/transport/`:
 
-### Capability Guidelines
+```rust
+#[async_trait]
+impl Transport for MyTransport {
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse>;
+    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()>;
+    fn is_connected(&self) -> bool;
+    async fn close(&self) -> Result<()>;
+}
+```
 
-- Keep YAML clean and readable
-- Include realistic examples
-- Document rate limits
-- Add appropriate tags
+**2. Add config variant** to `TransportConfig` in `src/config/mod.rs`, update `transport_type()`.
 
-## Questions?
+**3. Wire into** `src/backend/mod.rs` for config-based selection.
 
-Open an issue for discussion before large changes.
+**4. Add tests** -- unit tests in the transport module, integration tests in `tests/`.
+
+## Code Style
+
+- **Formatting:** `cargo fmt` before every commit. CI rejects unformatted code.
+- **Linting:** `cargo clippy -- -W clippy::pedantic`. Pedantic is enforced in CI.
+- **Safety:** `unsafe` code is denied at the crate level. No exceptions.
+- **Errors:** `thiserror` for typed errors, `anyhow` for application-level.
+- **Logging:** `tracing` macros (`info!`, `debug!`, `warn!`), never `println!`.
+- **Concurrency:** `Arc` for shared state, `dashmap`/`parking_lot` for concurrent maps.
+- **Config structs:** derive `Serialize`, `Deserialize`, use `#[serde(default)]`.
+
+Allowed clippy exceptions (in `Cargo.toml`): `module_name_repetitions`, `must_use_candidate`, `missing_errors_doc`.
+
+## Pull Request Process
+
+1. **Branch** from `main`: `git checkout -b feature/your-feature`
+2. **Verify:** `cargo fmt --check && cargo clippy -- -W clippy::pedantic && cargo test`
+3. **Document:** Update README.md for user-facing features. Add CHANGELOG.md entry.
+4. **Open PR** with a clear description of what changed and why.
+5. **CI must pass.** Formatting, clippy pedantic, and the full test suite.
+
+Smaller PRs are reviewed faster. For large changes, open an issue first.
+
+## Architecture Decisions
+
+Changes affecting public API, config schema, new dependencies, transport protocols, or security features should be discussed in a GitHub issue before implementation. Design docs live in `docs/design/`.
+
+## Good First Issues
+
+Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted). Good starters: adding a zero-config capability, improving error messages, adding edge-case tests, documentation.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree your contributions will be licensed under the MIT License.

@@ -462,6 +462,25 @@ impl Gateway {
             );
         }
 
+        // Optionally spawn a WebSocket listener alongside the HTTP server.
+        if let Some(ws_port) = self.config.server.ws_port {
+            let ws_addr = SocketAddr::new(
+                self.config
+                    .server
+                    .host
+                    .parse()
+                    .map_err(|e| Error::Config(format!("Invalid host for WS: {e}")))?,
+                ws_port,
+            );
+            let ws_shutdown = shutdown_tx.subscribe();
+            tokio::spawn(super::ws_listener::run_websocket_listener(ws_addr, ws_shutdown));
+            info!(
+                host = %self.config.server.host,
+                port = ws_port,
+                "WebSocket listener spawned"
+            );
+        }
+
         // Bind listener
         let listener = TcpListener::bind(addr).await?;
 
