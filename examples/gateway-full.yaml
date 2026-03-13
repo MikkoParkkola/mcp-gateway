@@ -148,6 +148,50 @@ capabilities:
 #         action: Warn
 #         scan: [Credentials, SqlInjection]
 
+# --- Config Export (RFC-0070) ---
+
+# config_export:
+#   enabled: true                  # Enable `mcp-gateway config export` command
+#   format: yaml                   # Export format: yaml or json
+#   redact_secrets: true           # Mask secrets (env vars, tokens) as "***"
+#   include_defaults: true         # Include default values in export
+
+# --- Auto-Discovery (RFC-0074) ---
+
+# discovery:
+#   enabled: true                  # Enable automatic MCP server discovery
+#   scan_interval: 60s             # How often to scan for new servers
+#   sources:                       # Discovery sources to scan
+#     - type: npm                  # Scan node_modules for MCP servers
+#       enabled: true
+#     - type: pip                  # Scan pip packages for MCP servers
+#       enabled: true
+#     - type: docker               # Scan Docker containers exposing MCP
+#       enabled: false
+#   auto_register: false           # Auto-register discovered servers (requires confirmation if false)
+#   quality_threshold: 0.5         # Minimum quality score (0.0-1.0) to suggest a discovery
+
+# --- Semantic Search (RFC-0072) ---
+
+# semantic_search:
+#   enabled: true                  # Enable TF-IDF semantic tool search
+#   max_results: 10                # Maximum results per search query
+#   min_score: 0.1                 # Minimum relevance score (0.0-1.0)
+#   feedback_enabled: true         # Enable relevance feedback learning
+#   feedback_decay: 0.95           # Decay factor for older feedback signals
+
+# --- Tool Profiles (RFC-0073) ---
+
+# tool_profiles:
+#   enabled: true                  # Enable tool usage profiling and analytics
+#   persistence_path: ./data/tool_profiles.json  # Where to persist profile data
+#   persistence_interval: 300s     # How often to flush profiles to disk
+#   max_tools_tracked: 10000       # Maximum number of tools to track
+#   analytics:
+#     latency_histogram: true      # Track latency distribution per tool
+#     error_categorization: true   # Categorize errors by type
+#     usage_trends: true           # Track hourly/daily usage trends
+
 # --- Backends (MCP servers) ---
 
 backends:

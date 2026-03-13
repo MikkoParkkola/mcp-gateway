@@ -4,9 +4,9 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 2.6.x   | :white_check_mark: |
 | 2.5.x   | :white_check_mark: |
-| 2.4.x   | :white_check_mark: |
-| < 2.4   | :x:                |
+| < 2.5   | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -48,7 +48,8 @@ MCP Gateway implements defense-in-depth across six attack vectors identified by 
 ### Security Testing
 
 - **53 dedicated security integration tests** (`tests/security_tests.rs`)
-- **118+ unit tests** across security modules
+- **19 cross-feature integration tests** (`tests/cross_feature_tests.rs`)
+- **2,461+ total tests** across all modules (unit + integration + doc tests)
 - **Clippy pedantic** linting enforced in CI
 - **Dependency audit**: All crypto via `rustls` (no OpenSSL)
 

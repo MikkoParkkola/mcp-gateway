@@ -474,8 +474,7 @@ fn bench_budget_enforcer(c: &mut Criterion) {
             per_tool: std::collections::HashMap::new(),
             per_key: std::collections::HashMap::new(),
         };
-        cfg.tool_costs
-            .insert("bench_tool".to_string(), tool_cost);
+        cfg.tool_costs.insert("bench_tool".to_string(), tool_cost);
         let registry = Arc::new(CostRegistry::new(&cfg));
         BudgetEnforcer::new(cfg, registry)
     };
@@ -544,9 +543,7 @@ fn bench_semantic_search(c: &mut Criterion) {
     }
 
     fn tool_schema(i: usize) -> String {
-        format!(
-            r#"{{"id":"integer","path":"string","filter_{i}":"string","limit":"integer"}}"#
-        )
+        format!(r#"{{"id":"integer","path":"string","filter_{i}":"string","limit":"integer"}}"#)
     }
 
     /// Build an index with `n` tools and a handful of distinctive anchors
@@ -590,11 +587,9 @@ fn bench_semantic_search(c: &mut Criterion) {
     // Query over 500-tool corpus — the primary latency target (<2 ms).
     for size in [50_usize, 200, 500] {
         let idx = build_index(size);
-        group.bench_with_input(
-            BenchmarkId::new("query_top10", size),
-            &size,
-            |b, _| b.iter(|| idx.search("send email message", 10)),
-        );
+        group.bench_with_input(BenchmarkId::new("query_top10", size), &size, |b, _| {
+            b.iter(|| idx.search("send email message", 10))
+        });
     }
 
     // Limit-0 query (returns ALL non-zero matches) on 500-tool corpus.
