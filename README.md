@@ -2,8 +2,14 @@
 
 [![CI](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
+[![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.85+-blue.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-2000%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
+[![MCP Servers](https://img.shields.io/badge/MCP%20servers-48%20built--in-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Getting-Started)
+[![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Capabilities)
+[![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
+[![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers)
 
 **Give your AI access to every tool it needs -- without burning your context window or building MCP servers.**
 
