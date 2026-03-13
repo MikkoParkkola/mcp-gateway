@@ -7,6 +7,8 @@
 //!
 //! All UI code is gated behind the `webui` feature flag.
 
+pub mod capabilities;
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -49,6 +51,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/ui/api/config", get(config))
         .route("/ui/api/reload", post(reload))
         .route("/dashboard", get(dashboard_handler))
+        .merge(capabilities::capabilities_router())
 }
 
 /// Build the unauthenticated `/ui` route (serves static HTML, no data).
