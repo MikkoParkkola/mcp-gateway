@@ -76,10 +76,10 @@ async fn main() -> ExitCode {
             trailing_command,
         }) => {
             // Merge --command flag and trailing `-- cmd args...` (claude/codex style)
-            let effective_command = if !trailing_command.is_empty() {
-                Some(trailing_command.join(" "))
-            } else {
+            let effective_command = if trailing_command.is_empty() {
                 command
+            } else {
+                Some(trailing_command.join(" "))
             };
             commands::run_add_command(
                 &name,

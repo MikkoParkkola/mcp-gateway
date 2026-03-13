@@ -441,6 +441,7 @@ impl Gateway {
             inflight: Arc::clone(&inflight),
             agent_auth,
             gateway_key_pair,
+            config_path: self.config_path.clone(),
         });
 
         // Create router

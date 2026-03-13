@@ -288,6 +288,11 @@ impl MetaMcp {
         self.reload_context.read().clone()
     }
 
+    /// Public accessor for the reload context — used by UI management endpoints.
+    pub fn reload_context(&self) -> Option<Arc<ReloadContext>> {
+        self.reload_context.read().clone()
+    }
+
     pub(super) fn get_transition_tracker(&self) -> Option<Arc<TransitionTracker>> {
         self.transition_tracker.read().clone()
     }

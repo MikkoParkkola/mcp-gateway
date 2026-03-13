@@ -84,7 +84,7 @@ pub async fn run_add_command(
         TransportConfig::Stdio { .. } => "stdio",
         TransportConfig::Http { .. } => "http",
     };
-    println!("Added '{}' ({transport_label}).", name);
+    println!("Added '{name}' ({transport_label}).");
 
     if let Some(entry) = server_registry::lookup(name) {
         report_env_status(entry.required_env, &env);
@@ -142,8 +142,7 @@ fn resolve_transport(
     }
 
     Err(format!(
-        "'{}' is not in the built-in registry. Provide --command or --url.",
-        name
+        "'{name}' is not in the built-in registry. Provide --command or --url."
     ))
 }
 

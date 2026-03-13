@@ -22,6 +22,8 @@ use super::auth::AuthenticatedClient;
 use super::router::AppState;
 use crate::stats::StatsSnapshot;
 
+pub mod backends;
+
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
 const INDEX_HTML: &str = include_str!("index.html");
 
@@ -49,6 +51,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/ui/api/config", get(config))
         .route("/ui/api/reload", post(reload))
         .route("/dashboard", get(dashboard_handler))
+        .merge(backends::backends_router())
 }
 
 /// Build the unauthenticated `/ui` route (serves static HTML, no data).
