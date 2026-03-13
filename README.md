@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-2000%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
+[![Tests](https://img.shields.io/badge/tests-2461%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
 [![MCP Servers](https://img.shields.io/badge/MCP%20servers-48%20built--in-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Getting-Started)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
@@ -381,6 +381,70 @@ sandbox:
       max_duration: 0
 ```
 
+### Cost Governance
+
+Track and enforce per-tool, per-key, and global daily budgets in real time. Alerts fire at configurable thresholds (log, notify, or block). The dashboard shows live spend at `/ui/api/costs`.
+
+```yaml
+cost_governance:
+  enabled: true
+  currency: "USD"
+  default_cost: 0.0
+  budgets:
+    daily: 10.0
+    per_tool:
+      expensive_api: 2.0
+  alerts:
+    - at_percent: 80
+      action: Notify
+    - at_percent: 100
+      action: Block
+  tool_costs:
+    tavily_search: 0.01
+```
+
+### Security Firewall
+
+Bidirectional request/response scanning with credential redaction, prompt injection detection, and per-tool rules. Audit events are logged as NDJSON for compliance.
+
+```yaml
+security:
+  firewall:
+    enabled: true
+    scan_requests: true
+    scan_responses: true
+    credential_redaction: true
+    prompt_injection_detection: true
+    rules:
+      - tool_match: "exec_*"
+        action: Block
+        scan: [ShellInjection, PathTraversal]
+```
+
+### Config Export
+
+Export the running gateway configuration as sanitized YAML or JSON (secrets masked). Useful for auditing, backup, and reproducibility.
+
+```bash
+mcp-gateway config export --format yaml --redact-secrets
+```
+
+### Auto-Discovery
+
+Automatically discover MCP servers from npm, pip, and Docker sources. Quality scoring filters low-quality discoveries. Discovered servers can be auto-registered or presented for confirmation.
+
+```bash
+mcp-gateway discover --scan npm,pip
+```
+
+### Semantic Tool Search
+
+TF-IDF semantic search across all tool names and descriptions. Returns ranked results by relevance score with optional feedback learning to improve results over time.
+
+### Tool Profiles
+
+Usage analytics and profiling per tool: latency histograms, error categorization, usage trends, and success rates. Data persists to disk for cross-restart analysis.
+
 ### Config Validation (Linting)
 
 Validate capability definitions against agent-UX best practices with the built-in linter. Supports text, JSON, and SARIF output for CI integration, and can auto-fix common issues.
@@ -547,7 +611,7 @@ Point your MCP client to the gateway:
 ```json
 {
   "status": "healthy",
-  "version": "2.0.0",
+  "version": "2.6.0",
   "backends": {
     "tavily": {
       "name": "tavily",
