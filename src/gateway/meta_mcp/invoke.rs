@@ -437,9 +437,7 @@ impl MetaMcp {
             let message = if !cached_names.is_empty() && !tool_is_cached {
                 let candidates: Vec<&str> = cached_names.iter().map(String::as_str).collect();
                 match did_you_mean(tool, &candidates, 3, 3) {
-                    Some(hint) => format!(
-                        "Tool '{tool}' not found on server '{server}'. {hint}"
-                    ),
+                    Some(hint) => format!("Tool '{tool}' not found on server '{server}'. {hint}"),
                     None => format!(
                         "Tool '{tool}' not found on server '{server}'. {}",
                         error.message

@@ -250,10 +250,11 @@ impl OAuthClient {
             ));
         }
 
-        let client_id =
-            self.client_id.read().clone().ok_or_else(|| {
-                Error::OAuth("No client ID for client_credentials".to_string())
-            })?;
+        let client_id = self
+            .client_id
+            .read()
+            .clone()
+            .ok_or_else(|| Error::OAuth("No client ID for client_credentials".to_string()))?;
 
         let scope_str = self.scopes.join(" ");
         let mut params = HashMap::new();

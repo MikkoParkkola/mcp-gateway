@@ -53,10 +53,10 @@ mod invoke;
 mod protocol;
 mod resources;
 mod search;
-mod support;
-mod surfaced;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
+mod support;
+mod surfaced;
 
 // ============================================================================
 // Constants
@@ -422,7 +422,10 @@ impl MetaMcp {
     #[cfg(feature = "spec-preview")]
     pub fn clear_session_promoted(&self, session_id: &str) {
         self.session_promoted.remove(session_id);
-        debug!(session_id, "Cleared spec-preview promoted tools for session");
+        debug!(
+            session_id,
+            "Cleared spec-preview promoted tools for session"
+        );
     }
 
     /// Resolve the active `RoutingProfile` for a session.
@@ -588,8 +591,7 @@ impl MetaMcp {
     pub fn handle_tools_list_with_params(
         &self,
         id: RequestId,
-        #[cfg_attr(not(feature = "spec-preview"), allow(unused_variables))]
-        params: Option<&Value>,
+        #[cfg_attr(not(feature = "spec-preview"), allow(unused_variables))] params: Option<&Value>,
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
         #[cfg(feature = "spec-preview")]
@@ -621,7 +623,9 @@ impl MetaMcp {
                 "tool": tool_name,
                 "arguments": arguments,
             });
-            let result = self.invoke_tool(&invoke_args, session_id, api_key_name).await;
+            let result = self
+                .invoke_tool(&invoke_args, session_id, api_key_name)
+                .await;
             return match result {
                 Ok(content) => {
                     use super::meta_mcp_helpers::wrap_tool_success;
@@ -683,7 +687,6 @@ impl MetaMcp {
             Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
         }
     }
-
 }
 
 // ============================================================================

@@ -106,10 +106,18 @@ fn base_tool_read_only_hints_match_spec() {
     let by_name = |name: &str| tools.iter().find(|t| t.name == name).unwrap();
 
     // WHEN/THEN: search, list_tools, list_servers are read-only, idempotent, not open-world
-    for name in &["gateway_search_tools", "gateway_list_tools", "gateway_list_servers"] {
+    for name in &[
+        "gateway_search_tools",
+        "gateway_list_tools",
+        "gateway_list_servers",
+    ] {
         let ann = by_name(name).annotations.as_ref().unwrap();
         assert_eq!(ann.read_only_hint, Some(true), "{name}: read_only_hint");
-        assert_eq!(ann.destructive_hint, Some(false), "{name}: destructive_hint");
+        assert_eq!(
+            ann.destructive_hint,
+            Some(false),
+            "{name}: destructive_hint"
+        );
         assert_eq!(ann.idempotent_hint, Some(true), "{name}: idempotent_hint");
         assert_eq!(ann.open_world_hint, Some(false), "{name}: open_world_hint");
     }
@@ -128,8 +136,14 @@ fn search_tools_has_output_schema_with_matches_array() {
     // WHEN: building base tools
     // THEN: gateway_search_tools has an output_schema describing a matches array
     let tools = build_base_tools(0, 0);
-    let search = tools.iter().find(|t| t.name == "gateway_search_tools").unwrap();
-    let schema = search.output_schema.as_ref().expect("output_schema must be Some");
+    let search = tools
+        .iter()
+        .find(|t| t.name == "gateway_search_tools")
+        .unwrap();
+    let schema = search
+        .output_schema
+        .as_ref()
+        .expect("output_schema must be Some");
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["properties"]["matches"]["type"], "array");
     let item_props = &schema["properties"]["matches"]["items"]["properties"];
@@ -157,14 +171,20 @@ fn base_tool_descriptions_embed_dynamic_counts() {
 
     let search_desc = by_name("gateway_search_tools");
     assert!(search_desc.contains("77"), "search desc missing tool count");
-    assert!(search_desc.contains('4'), "search desc missing server count");
+    assert!(
+        search_desc.contains('4'),
+        "search desc missing server count"
+    );
 
     let list_desc = by_name("gateway_list_tools");
     assert!(list_desc.contains("77"), "list desc missing tool count");
     assert!(list_desc.contains('4'), "list desc missing server count");
 
     let servers_desc = by_name("gateway_list_servers");
-    assert!(servers_desc.contains('4'), "servers desc missing server count");
+    assert!(
+        servers_desc.contains('4'),
+        "servers desc missing server count"
+    );
 }
 
 #[test]

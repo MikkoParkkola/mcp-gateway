@@ -572,7 +572,10 @@ fn with_surfaced_tools_stores_valid_entries() {
     // THEN: entry is stored
     assert_eq!(mm.surfaced_tools.len(), 1);
     assert_eq!(mm.surfaced_tools[0].tool, "my_custom_tool");
-    assert_eq!(mm.surfaced_tools_map.get("my_custom_tool").unwrap(), "backend_a");
+    assert_eq!(
+        mm.surfaced_tools_map.get("my_custom_tool").unwrap(),
+        "backend_a"
+    );
 }
 
 #[test]

@@ -11,8 +11,8 @@ use crate::autotag;
 use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolsListResult};
 
 use super::super::meta_mcp_helpers::did_you_mean;
-use super::MetaMcp;
 use super::MAX_PROMOTED_PER_SESSION;
+use super::MetaMcp;
 
 // ============================================================================
 // SEP-1821: Filtered tools/list
@@ -341,10 +341,7 @@ mod tests {
         let resp = m.handle_tools_list_filtered(RequestId::Number(1), "  ", None);
         // THEN: no error, returns the standard meta-tool list
         assert!(resp.error.is_none());
-        let tools = resp.result.unwrap()["tools"]
-            .as_array()
-            .unwrap()
-            .len();
+        let tools = resp.result.unwrap()["tools"].as_array().unwrap().len();
         // Standard list has >0 tools (meta-tools)
         assert!(tools > 0);
     }
@@ -357,10 +354,7 @@ mod tests {
         let resp = m.handle_tools_list_filtered(RequestId::Number(2), "search", None);
         // THEN: no error, zero tools (no backends cached)
         assert!(resp.error.is_none());
-        let tools = resp.result.unwrap()["tools"]
-            .as_array()
-            .unwrap()
-            .len();
+        let tools = resp.result.unwrap()["tools"].as_array().unwrap().len();
         assert_eq!(tools, 0);
     }
 
@@ -470,8 +464,14 @@ mod tests {
         // THEN: total stays at MAX_PROMOTED_PER_SESSION and oldest is gone
         let entry = m.session_promoted.get("sess-3").unwrap();
         assert_eq!(entry.len(), MAX_PROMOTED_PER_SESSION);
-        assert!(!entry.contains(&"server:tool_0".to_string()), "oldest should be evicted");
-        assert!(entry.contains(&"server:new_tool".to_string()), "new tool should be present");
+        assert!(
+            !entry.contains(&"server:tool_0".to_string()),
+            "oldest should be evicted"
+        );
+        assert!(
+            entry.contains(&"server:new_tool".to_string()),
+            "new tool should be present"
+        );
     }
 
     #[test]
@@ -511,17 +511,20 @@ mod tests {
     fn build_initialize_result_advertises_filtering_and_resolve_capabilities() {
         // GIVEN: MetaMcp (spec-preview feature is enabled in this test build)
         let m = meta();
-        let resp = m.handle_initialize(
-            RequestId::Number(99),
-            None,
-            None,
-            None,
-        );
+        let resp = m.handle_initialize(RequestId::Number(99), None, None, None);
         // THEN: capabilities.tools.filtering = true and resolve = true
         let result = resp.result.unwrap();
         let filtering = &result["capabilities"]["tools"]["filtering"];
         let resolve = &result["capabilities"]["tools"]["resolve"];
-        assert_eq!(filtering, &serde_json::json!(true), "filtering capability must be true");
-        assert_eq!(resolve, &serde_json::json!(true), "resolve capability must be true");
+        assert_eq!(
+            filtering,
+            &serde_json::json!(true),
+            "filtering capability must be true"
+        );
+        assert_eq!(
+            resolve,
+            &serde_json::json!(true),
+            "resolve capability must be true"
+        );
     }
 }

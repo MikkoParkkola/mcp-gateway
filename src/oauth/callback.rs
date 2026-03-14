@@ -164,9 +164,7 @@ async fn handle_callback(
 
     // Extract code
     let Some(code) = params.code else {
-        let result = Err(Error::OAuth(
-            "No authorization code received".to_string(),
-        ));
+        let result = Err(Error::OAuth("No authorization code received".to_string()));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }

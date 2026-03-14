@@ -141,9 +141,7 @@ fn source_label(source: &DiscoverySource) -> String {
 /// numbers (or "all" / blank for everything).  Returns only the selected
 /// entries.  This replaces the `dialoguer::MultiSelect` dependency with a
 /// simple stdin-based prompt that works in any terminal.
-fn interactive_select(
-    servers: &[DiscoveredServer],
-) -> Result<Vec<&DiscoveredServer>, io::Error> {
+fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredServer>, io::Error> {
     let labels: Vec<String> = servers
         .iter()
         .map(|s| {
@@ -182,7 +180,10 @@ fn interactive_select(
         let part = part.trim();
         match part.parse::<usize>() {
             Ok(i) if i < servers.len() => selected.push(&servers[i]),
-            Ok(i) => eprintln!("  Warning: index {i} out of range (max {}), skipped", servers.len() - 1),
+            Ok(i) => eprintln!(
+                "  Warning: index {i} out of range (max {}), skipped",
+                servers.len() - 1
+            ),
             Err(_) => eprintln!("  Warning: '{part}' is not a valid number, skipped"),
         }
     }

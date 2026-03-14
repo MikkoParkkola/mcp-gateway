@@ -138,10 +138,9 @@ fn validate_default_config_passes() {
 fn validate_rejects_empty_backend_name() {
     // GIVEN: a config with an empty backend name
     let mut config = Config::default();
-    config.backends.insert(
-        String::new(),
-        BackendConfig::default(),
-    );
+    config
+        .backends
+        .insert(String::new(), BackendConfig::default());
     // WHEN: validate is called
     let result = config.validate();
     // THEN: returns ConfigValidation error
@@ -154,10 +153,9 @@ fn validate_rejects_empty_backend_name() {
 fn validate_rejects_backend_name_with_slash() {
     // GIVEN: a backend name containing a slash
     let mut config = Config::default();
-    config.backends.insert(
-        "a/b".to_string(),
-        BackendConfig::default(),
-    );
+    config
+        .backends
+        .insert("a/b".to_string(), BackendConfig::default());
     // WHEN: validate is called
     let result = config.validate();
     // THEN: returns ConfigValidation error mentioning the invalid char

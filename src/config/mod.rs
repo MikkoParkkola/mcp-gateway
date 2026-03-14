@@ -6,7 +6,12 @@
 
 mod features;
 
-use std::{collections::HashMap, env, path::{Path, PathBuf}, time::Duration};
+use std::{
+    collections::HashMap,
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use figment::{
     Figment,

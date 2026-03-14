@@ -363,8 +363,7 @@ fn expand_synonyms_all_groups_are_bidirectional() {
     // Every word in a returned group should map back to the same group.
     let seeds = [
         "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research", "send",
-        "delete", "list", "convert",
-        // new groups (T1.5)
+        "delete", "list", "convert", // new groups (T1.5)
         "execute", "show", "check", "modify", "count", "access", "store", "connect",
     ];
     for seed in seeds {
@@ -498,9 +497,9 @@ fn expand_synonyms_total_group_count_is_at_least_twenty() {
     // WHEN: counting distinct groups
     // THEN: at least 20 groups exist
     let all_seeds = [
-        "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research",
-        "send", "delete", "list", "convert",
-        "execute", "show", "check", "modify", "count", "access", "store", "connect",
+        "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research", "send",
+        "delete", "list", "convert", "execute", "show", "check", "modify", "count", "access",
+        "store", "connect",
     ];
     assert!(
         all_seeds.len() >= 20,
