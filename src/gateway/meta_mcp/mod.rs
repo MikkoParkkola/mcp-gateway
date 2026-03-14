@@ -416,16 +416,30 @@ impl MetaMcp {
         instructions
     }
 
+    /// Compute live (`tool_count`, `server_count`) from the cached backend statuses.
+    ///
+    /// Uses only the in-memory cache — no I/O.  Both counts are 0 when the
+    /// registry is empty (e.g. in unit tests).
+    fn backend_counts(&self) -> (usize, usize) {
+        let backends = self.backends.all();
+        let server_count = backends.len();
+        let tool_count = backends.iter().map(|b| b.status().tools_cached).sum();
+        (tool_count, server_count)
+    }
+
     /// Handle `tools/list` — Code Mode returns 2 tools; Traditional returns full set.
     pub fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
         let tools = if self.code_mode_enabled {
             build_code_mode_tools()
         } else {
+            let (tool_count, server_count) = self.backend_counts();
             build_meta_tools(
                 self.stats.is_some(),
                 self.get_webhook_registry().is_some(),
                 self.get_reload_context().is_some(),
                 true, // cost_report always enabled (tracker is always present)
+                tool_count,
+                server_count,
             )
         };
         let result = ToolsListResult {
