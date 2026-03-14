@@ -114,7 +114,13 @@ pub(crate) fn build_initialize_result(
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
         capabilities: ServerCapabilities {
-            tools: Some(ToolsCapability { list_changed: true }),
+            tools: Some(ToolsCapability {
+                list_changed: true,
+                #[cfg(feature = "spec-preview")]
+                filtering: Some(true),
+                #[cfg(feature = "spec-preview")]
+                resolve: Some(true),
+            }),
             resources: Some(ResourcesCapability {
                 subscribe: true,
                 list_changed: true,

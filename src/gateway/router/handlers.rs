@@ -352,7 +352,11 @@ pub(super) async fn meta_mcp_handler(
             Some(session_id.as_str()),
             header_profile.as_deref(),
         ),
-        "tools/list" => state.meta_mcp.handle_tools_list(id),
+        "tools/list" => state.meta_mcp.handle_tools_list_with_params(
+            id,
+            params.as_ref(),
+            Some(session_id.as_str()),
+        ),
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 
@@ -655,6 +659,15 @@ pub(super) async fn meta_mcp_handler(
                 Ok(result) => JsonRpcResponse::success(id, result),
                 Err(e) => JsonRpcResponse::error(Some(id), -32002, e.to_string()),
             }
+        }
+
+        // SEP-1862: resolve a single tool schema by name (spec-preview feature).
+        #[cfg(feature = "spec-preview")]
+        "tools/resolve" => {
+            state
+                .meta_mcp
+                .handle_tools_resolve(id, params.as_ref())
+                .await
         }
 
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),

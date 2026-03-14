@@ -300,6 +300,18 @@ pub struct ToolsCapability {
     /// List changed notification support
     #[serde(rename = "listChanged", default)]
     pub list_changed: bool,
+    /// SEP-1821: Server supports filtered `tools/list` with a `query` parameter.
+    ///
+    /// Only present when the `spec-preview` feature is enabled.
+    #[cfg(feature = "spec-preview")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filtering: Option<bool>,
+    /// SEP-1862: Server supports `tools/resolve` to fetch a full `Tool` schema by name.
+    ///
+    /// Only present when the `spec-preview` feature is enabled.
+    #[cfg(feature = "spec-preview")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolve: Option<bool>,
 }
 
 /// Client capabilities

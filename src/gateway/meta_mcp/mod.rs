@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "spec-preview")]
+use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
@@ -51,6 +53,19 @@ mod protocol;
 mod resources;
 mod search;
 mod support;
+#[cfg(feature = "spec-preview")]
+mod spec_preview;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Maximum number of dynamically promoted tools stored per session.
+///
+/// When a session exceeds this limit the oldest entry is evicted (FIFO).
+/// Configurable in future; hard-coded for Phase 3 initial implementation.
+#[cfg(feature = "spec-preview")]
+const MAX_PROMOTED_PER_SESSION: usize = 10;
 
 // ============================================================================
 // MetaMcp struct
@@ -103,6 +118,16 @@ pub struct MetaMcp {
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
     /// `HashMap` lookup instead of a linear scan on every call.
     pub(super) surfaced_tools_map: HashMap<String, String>,
+    /// Session-scoped dynamically promoted tools (SEP-1862 / Phase 3).
+    ///
+    /// Keyed by session ID.  Each entry is a list of `"server:tool"` strings
+    /// that were auto-promoted after a successful `gateway_invoke`.  Cleared on
+    /// session disconnect.  Maximum per-session size is [`MAX_PROMOTED_PER_SESSION`].
+    ///
+    /// Only compiled-in when the `spec-preview` feature is enabled so that the
+    /// `DashMap` allocation is completely absent in production builds.
+    #[cfg(feature = "spec-preview")]
+    pub(super) session_promoted: Arc<DashMap<String, Vec<String>>>,
 }
 
 // ============================================================================
@@ -141,6 +166,8 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
+            #[cfg(feature = "spec-preview")]
+            session_promoted: Arc::new(DashMap::new()),
         }
     }
 
@@ -180,6 +207,8 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
+            #[cfg(feature = "spec-preview")]
+            session_promoted: Arc::new(DashMap::new()),
         }
     }
 
@@ -415,6 +444,42 @@ impl MetaMcp {
         self.capabilities.read().clone()
     }
 
+    /// Return the full `Tool` objects for all dynamically promoted tools in a session.
+    ///
+    /// Promotion entries are stored as `"server:tool"` strings.  Each is resolved
+    /// against the backend cache; entries whose backend has gone offline (cache empty)
+    /// are silently omitted.
+    ///
+    /// Returns an empty `Vec` when no session ID is provided or when the session has
+    /// no promoted tools.
+    #[cfg(feature = "spec-preview")]
+    pub(super) fn promoted_tools_for_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Vec<crate::protocol::Tool> {
+        let Some(sid) = session_id else {
+            return Vec::new();
+        };
+        let Some(entry) = self.session_promoted.get(sid) else {
+            return Vec::new();
+        };
+        entry
+            .iter()
+            .filter_map(|key| {
+                let (server, tool) = key.split_once(':')?;
+                let backend = self.backends.get(server)?;
+                backend.get_cached_tool(tool)
+            })
+            .collect()
+    }
+
+    /// Remove all promoted tools for a session (called on session disconnect).
+    #[cfg(feature = "spec-preview")]
+    pub fn clear_session_promoted(&self, session_id: &str) {
+        self.session_promoted.remove(session_id);
+        debug!(session_id, "Cleared spec-preview promoted tools for session");
+    }
+
     /// Resolve the active `RoutingProfile` for a session.
     pub(super) fn active_profile(
         &self,
@@ -549,11 +614,44 @@ impl MetaMcp {
             }
         }
 
+        // Append session-promoted tools (spec-preview only).
+        // Promoted tools are de-duplicated against surfaced tools: if a tool
+        // was promoted AND is already surfaced, we skip the promoted copy.
+        #[cfg(feature = "spec-preview")]
+        if !self.code_mode_enabled {
+            let promoted = self.promoted_tools_for_session(session_id);
+            for tool in promoted {
+                let already_present = tools.iter().any(|t| t.name == tool.name);
+                if !already_present {
+                    tools.push(tool);
+                }
+            }
+        }
+
         let result = ToolsListResult {
             tools,
             next_cursor: None,
         };
         JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+    }
+
+    /// Dispatch the `tools/list` request with optional params — entry point for the router.
+    ///
+    /// When the `spec-preview` feature is active and the params contain a `query`
+    /// key, delegates to the filtered handler (SEP-1821).  Otherwise falls back to
+    /// the standard session-aware handler so baseline behaviour is unchanged.
+    pub fn handle_tools_list_with_params(
+        &self,
+        id: RequestId,
+        #[cfg_attr(not(feature = "spec-preview"), allow(unused_variables))]
+        params: Option<&Value>,
+        session_id: Option<&str>,
+    ) -> JsonRpcResponse {
+        #[cfg(feature = "spec-preview")]
+        if let Some(q) = params.and_then(|p| p.get("query")).and_then(Value::as_str) {
+            return self.handle_tools_list_filtered(id, q, session_id);
+        }
+        self.handle_tools_list_for_session(id, session_id)
     }
 
     /// Resolve a surfaced tool config to a [`Tool`] schema.

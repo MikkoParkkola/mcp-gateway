@@ -309,6 +309,15 @@ impl MetaMcp {
         }
 
         let predictions = self.record_and_predict(session_id, &tool_key);
+
+        // SEP-1862 dynamic promotion: auto-surface this tool in the session's
+        // tools/list after a successful invocation so the LLM can call it
+        // directly next time without going through gateway_invoke.
+        #[cfg(feature = "spec-preview")]
+        if let Some(sid) = session_id {
+            self.promote_tool_for_session(sid, &tool_key);
+        }
+
         Ok(augment_with_trace(
             augment_with_predictions(result, predictions),
             trace_id,

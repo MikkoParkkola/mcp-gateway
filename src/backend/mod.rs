@@ -280,6 +280,20 @@ impl Backend {
             .and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
     }
 
+    /// Return a snapshot of all cached tools (non-blocking, no network I/O).
+    ///
+    /// Returns an empty `Vec` when the cache is empty or has never been populated.
+    /// Used by the `spec-preview` filtered `tools/list` implementation to avoid
+    /// per-tool cache lock acquisition in the hot path.
+    #[must_use]
+    pub fn get_cached_tools_snapshot(&self) -> Vec<Tool> {
+        self.tools_cache
+            .read()
+            .as_ref()
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.

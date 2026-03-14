@@ -122,6 +122,9 @@ discovery = []
 semantic-search = []
 tool-profiles = []
 metrics = ["dep:metrics-exporter-prometheus"]
+## Opt-in preview of draft MCP spec extensions (SEP-1821, SEP-1862).
+## NOT included in default — operators must explicitly enable.
+spec-preview = []
 
 [[bin]]
 name = "mcp-gateway"
