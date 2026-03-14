@@ -95,6 +95,73 @@ fn build_suggestions_no_match_for_short_query_word_prefix() {
     assert!(suggestions.contains(&"xy_tool".to_string()));
 }
 
+// ── build_suggestions edge cases (T1.6) ─────────────────────────────
+
+#[test]
+fn build_suggestions_multi_word_query_with_partial_match() {
+    // GIVEN: query "entity discovery" and tags where only "entity" matches some tags
+    // WHEN: building suggestions
+    // THEN: tags containing "entity" are returned (partial match works)
+    let tags = vec![
+        "entity-type".to_string(),
+        "entity-list".to_string(),
+        "weather".to_string(),
+        "calendar".to_string(),
+    ];
+    let suggestions = build_suggestions("entity discovery", &tags);
+    // At least the entity tags should appear
+    assert!(
+        suggestions.contains(&"entity-type".to_string())
+            || suggestions.contains(&"entity-list".to_string()),
+        "expected entity tags in suggestions; got {suggestions:?}"
+    );
+    // Tags with no overlap to either word should be absent
+    assert!(!suggestions.contains(&"weather".to_string()));
+    assert!(!suggestions.contains(&"calendar".to_string()));
+}
+
+#[test]
+fn build_suggestions_hyphenated_tags_match_component_word() {
+    // GIVEN: query "entity" and tags containing "entity-discovery"
+    // WHEN: building suggestions
+    // THEN: the hyphenated tag is returned because it contains the word "entity" as substring
+    let tags = vec![
+        "entity-discovery".to_string(),
+        "entity-search".to_string(),
+        "unrelated-tag".to_string(),
+    ];
+    let suggestions = build_suggestions("entity", &tags);
+    assert!(
+        suggestions.contains(&"entity-discovery".to_string()),
+        "hyphenated tag 'entity-discovery' should match query 'entity'"
+    );
+    assert!(
+        suggestions.contains(&"entity-search".to_string()),
+        "hyphenated tag 'entity-search' should match query 'entity'"
+    );
+    assert!(
+        !suggestions.contains(&"unrelated-tag".to_string()),
+        "'unrelated-tag' should not match query 'entity'"
+    );
+}
+
+#[test]
+fn build_suggestions_empty_query_returns_empty() {
+    // GIVEN: an empty query string
+    // WHEN: building suggestions against any tag set
+    // THEN: returns empty (no query words means no match predicate fires)
+    let tags = vec![
+        "search".to_string(),
+        "entity".to_string(),
+        "weather".to_string(),
+    ];
+    let suggestions = build_suggestions("", &tags);
+    assert!(
+        suggestions.is_empty(),
+        "empty query should produce no suggestions; got {suggestions:?}"
+    );
+}
+
 // ── build_match_json_with_chains ────────────────────────────────────
 
 #[test]

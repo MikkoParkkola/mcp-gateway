@@ -79,6 +79,38 @@ pub fn expand_synonyms(word: &str) -> &'static [&'static str] {
         "convert" | "transform" | "translate" | "format" | "encode" => {
             &["convert", "transform", "translate", "format", "encode"]
         }
+        // execute group
+        "execute" | "run" | "invoke" | "call" | "trigger" => {
+            &["execute", "run", "invoke", "call", "trigger"]
+        }
+        // show group
+        "show" | "display" | "render" | "print" | "view" => {
+            &["show", "display", "render", "print", "view"]
+        }
+        // check group
+        "check" | "validate" | "verify" | "test" | "assert" => {
+            &["check", "validate", "verify", "test", "assert"]
+        }
+        // modify group
+        "modify" | "update" | "edit" | "change" | "patch" => {
+            &["modify", "update", "edit", "change", "patch"]
+        }
+        // count group
+        "count" | "aggregate" | "summarize" | "total" | "tally" => {
+            &["count", "aggregate", "summarize", "total", "tally"]
+        }
+        // access group
+        "access" | "read" | "get" | "retrieve" | "obtain" => {
+            &["access", "read", "get", "retrieve", "obtain"]
+        }
+        // store group
+        "store" | "save" | "write" | "persist" | "cache" => {
+            &["store", "save", "write", "persist", "cache"]
+        }
+        // connect group
+        "connect" | "link" | "attach" | "join" | "bind" => {
+            &["connect", "link", "attach", "join", "bind"]
+        }
         _ => &[],
     }
 }
