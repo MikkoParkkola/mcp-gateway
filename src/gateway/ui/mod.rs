@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::{Extension, Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -67,8 +67,14 @@ pub fn html_router() -> Router {
 // ── Handlers ────────────────────────────────────────────────────────
 
 /// `GET /ui` — serve the single-page HTML dashboard.
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+///
+/// Returns `Cache-Control: no-cache` so browsers always fetch fresh HTML
+/// after gateway restarts (the HTML is embedded via `include_str!`).
+async fn index() -> impl IntoResponse {
+    (
+        [(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")],
+        Html(INDEX_HTML),
+    )
 }
 
 /// `GET /dashboard` — operator dashboard: self-contained HTML, auto-refreshes every 5 s.

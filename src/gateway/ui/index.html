@@ -461,15 +461,22 @@ const authDot = document.getElementById('auth-dot');
 const authLabel = document.getElementById('auth-label');
 const authBtn = document.getElementById('auth-btn');
 
+let authDisabled = false;
 function updateAuthUI() {
-  if (apiKey) {
+  if (authDisabled) {
+    authDot.className = 'dot on';
+    authLabel.textContent = 'Auth disabled';
+    authBtn.style.display = 'none';
+  } else if (apiKey) {
     authDot.className = 'dot on';
     authLabel.textContent = 'Authenticated';
     authBtn.textContent = 'Change Key';
+    authBtn.style.display = '';
   } else {
     authDot.className = 'dot off';
     authLabel.textContent = 'Not authenticated';
     authBtn.textContent = 'Set API Key';
+    authBtn.style.display = '';
   }
 }
 authBtn.addEventListener('click', (e) => {
@@ -483,6 +490,13 @@ authBtn.addEventListener('click', (e) => {
     refreshAll();
   }
 });
+// Auto-detect if auth is disabled (API works without key)
+(async () => {
+  try {
+    const r = await fetch('/ui/api/status', { headers: { 'Accept': 'application/json' } });
+    if (r.ok) { authDisabled = true; updateAuthUI(); }
+  } catch (_) {}
+})();
 updateAuthUI();
 
 function authHeaders() {
@@ -1131,25 +1145,6 @@ async function doImport() {
   } catch (e) {
     msgEl.textContent = 'Import failed: ' + e.message;
     importBtn.disabled = false;
-  }
-}
-
-// XSS escape
-  const status = document.getElementById('cap-status');
-  if (!list) return;
-  try {
-    const data = await apiFetch('/ui/api/capabilities');
-    const caps = data.capabilities || [];
-    if (caps.length === 0) {
-      list.innerHTML = '<div style="color:var(--fg2);font-size:0.875rem">No capability files found.</div>';
-      return;
-    }
-    list.innerHTML = caps.map(c => capCard(c)).join('');
-    // Wire up textarea handlers after rendering
-    list.querySelectorAll('.yaml-ta').forEach(ta => initYamlEditor(ta));
-    status.textContent = caps.length + ' file' + (caps.length !== 1 ? 's' : '');
-  } catch (e) {
-    list.innerHTML = `<div style="color:var(--red);font-size:0.875rem">Error: ${esc(e.message)}</div>`;
   }
 }
 
