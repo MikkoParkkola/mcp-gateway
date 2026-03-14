@@ -14,6 +14,13 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     Config(String),
 
+    /// Configuration validation failure — semantically invalid config.
+    ///
+    /// Use this instead of `Internal` when a config value fails a semantic
+    /// constraint (e.g. conflicting fields, invalid URL, missing required key).
+    #[error("Configuration validation error: {0}")]
+    ConfigValidation(String),
+
     /// Backend not found
     #[error("Backend not found: {0}")]
     BackendNotFound(String),
@@ -21,6 +28,19 @@ pub enum Error {
     /// Backend unavailable (circuit open)
     #[error("Backend unavailable: {0}")]
     BackendUnavailable(String),
+
+    /// Circuit breaker is open — request rejected without being dispatched.
+    ///
+    /// Carries the backend name.  Use [`rpc_codes::SERVER_ERROR_START`] (-32000)
+    /// as the JSON-RPC code for this variant.
+    #[error("Circuit breaker open for backend '{0}'")]
+    CircuitOpen(String),
+
+    /// Tool not found in any connected backend.
+    ///
+    /// Carries the tool name that was requested.
+    #[error("Tool not found: '{0}'")]
+    ToolNotFound(String),
 
     /// Backend timeout
     #[error("Backend timeout: {0}")]
@@ -83,8 +103,11 @@ impl Error {
             Self::JsonRpc { code, .. } => *code,
             Self::Json(_) => -32700,     // Parse error
             Self::Protocol(_) => -32600, // Invalid request
-            Self::BackendNotFound(_) => -32001,
-            Self::BackendUnavailable(_) | Self::BackendTimeout(_) | Self::Transport(_) => -32000,
+            Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
+            Self::BackendUnavailable(_)
+            | Self::CircuitOpen(_)
+            | Self::BackendTimeout(_)
+            | Self::Transport(_) => -32000,
             _ => -32603, // Internal error
         }
     }

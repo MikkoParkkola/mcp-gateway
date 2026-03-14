@@ -440,10 +440,8 @@ impl Backend {
 
         // Check failsafe
         if !self.failsafe.can_proceed() {
-            let cb_stats = self.failsafe.circuit_breaker.stats();
-            let msg = crate::failsafe::build_circuit_breaker_error(&self.name, &cb_stats);
             tracing::warn!(backend = %self.name, "Request rejected by circuit breaker");
-            return Err(Error::json_rpc(-32000, msg));
+            return Err(Error::CircuitOpen(self.name.clone()));
         }
 
         // Acquire semaphore
