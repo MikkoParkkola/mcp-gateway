@@ -7,6 +7,7 @@
 //! - `resources.rs` — `handle_resources_*` and `find_resource_owner`
 //! - `protocol.rs` — `handle_prompts_*`, `handle_logging_*`, `current_log_level`
 //! - `support.rs` — free functions: tag collection, ranking helpers, `MetaMcpInvoker`, augment
+//! - `surfaced.rs` — `with_surfaced_tools`, `resolve_surfaced_tool`, `list_servers`
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,6 +54,7 @@ mod protocol;
 mod resources;
 mod search;
 mod support;
+mod surfaced;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
 
@@ -306,63 +308,6 @@ impl MetaMcp {
     #[allow(dead_code)]
     pub fn with_tool_registry(mut self, registry: std::sync::Arc<ToolRegistry>) -> Self {
         self.tool_registry = Some(registry);
-        self
-    }
-
-    /// Attach statically surfaced tools (consuming builder).
-    ///
-    /// Validates at construction time that:
-    /// 1. No surfaced tool name collides with a meta-tool name.
-    /// 2. No tool name appears more than once across all surfaced entries.
-    ///
-    /// Validation failures are logged as warnings rather than panics so the
-    /// gateway always starts — misconfigured surfaced tools are simply dropped.
-    #[must_use]
-    pub fn with_surfaced_tools(mut self, tools: Vec<SurfacedToolConfig>) -> Self {
-        const META_TOOL_NAMES: &[&str] = &[
-            "gateway_search",
-            "gateway_execute",
-            "gateway_list_servers",
-            "gateway_list_tools",
-            "gateway_search_tools",
-            "gateway_invoke",
-            "gateway_get_stats",
-            "gateway_cost_report",
-            "gateway_webhook_status",
-            "gateway_run_playbook",
-            "gateway_kill_server",
-            "gateway_revive_server",
-            "gateway_list_disabled_capabilities",
-            "gateway_set_profile",
-            "gateway_get_profile",
-            "gateway_list_profiles",
-            "gateway_reload_config",
-        ];
-
-        let mut map: HashMap<String, String> = HashMap::new();
-        let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
-
-        for cfg in tools {
-            if META_TOOL_NAMES.contains(&cfg.tool.as_str()) {
-                warn!(
-                    tool = %cfg.tool,
-                    "Surfaced tool name collides with a meta-tool — skipping"
-                );
-                continue;
-            }
-            if map.contains_key(&cfg.tool) {
-                warn!(
-                    tool = %cfg.tool,
-                    "Duplicate surfaced tool name — skipping second occurrence"
-                );
-                continue;
-            }
-            map.insert(cfg.tool.clone(), cfg.server.clone());
-            validated.push(cfg);
-        }
-
-        self.surfaced_tools = validated;
-        self.surfaced_tools_map = map;
         self
     }
 
@@ -654,41 +599,6 @@ impl MetaMcp {
         self.handle_tools_list_for_session(id, session_id)
     }
 
-    /// Resolve a surfaced tool config to a [`Tool`] schema.
-    ///
-    /// Returns `None` when:
-    /// - The backend is not found in the registry.
-    /// - The tool is not present in the backend's tool cache.
-    /// - The active routing profile denies access to `(server, tool)`.
-    fn resolve_surfaced_tool(
-        &self,
-        surfaced: &SurfacedToolConfig,
-        session_id: Option<&str>,
-    ) -> Option<crate::protocol::Tool> {
-        // T2.7: routing profile check.
-        let profile = self.active_profile(session_id);
-        if profile.check(&surfaced.server, &surfaced.tool).is_err() {
-            debug!(
-                server = %surfaced.server,
-                tool = %surfaced.tool,
-                profile = %profile.name,
-                "Surfaced tool excluded by routing profile"
-            );
-            return None;
-        }
-
-        let backend = self.backends.get(&surfaced.server)?;
-        let tool = backend.get_cached_tool(&surfaced.tool);
-        if tool.is_none() {
-            debug!(
-                server = %surfaced.server,
-                tool = %surfaced.tool,
-                "Surfaced tool not in backend cache — omitting from tools/list"
-            );
-        }
-        tool
-    }
-
     /// Handle `tools/call` — dispatch to the appropriate handler.
     ///
     /// Surfaced tool calls are intercepted before the meta-tool match arm and
@@ -774,42 +684,6 @@ impl MetaMcp {
         }
     }
 
-    /// `gateway_list_servers` — list all servers with kill-switch and circuit-breaker state.
-    #[allow(clippy::unnecessary_wraps)]
-    fn list_servers(&self) -> Result<Value> {
-        let mut servers: Vec<Value> = self
-            .backends
-            .all()
-            .iter()
-            .map(|b| {
-                let status = b.status();
-                let killed = self.kill_switch.is_killed(&status.name);
-                json!({
-                    "name": status.name,
-                    "running": status.running,
-                    "transport": status.transport,
-                    "tools_count": status.tools_cached,
-                    "circuit_breaker": status.circuit_state,
-                    "status": if killed { "disabled" } else { "active" }
-                })
-            })
-            .collect();
-
-        if let Some(cap) = self.get_capabilities() {
-            let status = cap.status();
-            let killed = self.kill_switch.is_killed(&status.name);
-            servers.push(json!({
-                "name": status.name,
-                "running": true,
-                "transport": "capability",
-                "tools_count": status.capabilities_count,
-                "circuit_breaker": "closed",
-                "status": if killed { "disabled" } else { "active" }
-            }));
-        }
-
-        Ok(json!({ "servers": servers }))
-    }
 }
 
 // ============================================================================
