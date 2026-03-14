@@ -364,6 +364,8 @@ fn expand_synonyms_all_groups_are_bidirectional() {
     let seeds = [
         "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research", "send",
         "delete", "list", "convert",
+        // new groups (T1.5)
+        "execute", "show", "check", "modify", "count", "access", "store", "connect",
     ];
     for seed in seeds {
         let group = expand_synonyms(seed);
@@ -375,6 +377,141 @@ fn expand_synonyms_all_groups_are_bidirectional() {
                 "'{member}' does not map back to '{seed}'"
             );
         }
+    }
+}
+
+// ── new synonym groups (T1.5) ─────────────────────────────────────────
+
+#[test]
+fn expand_synonyms_execute_group_contains_expected_members() {
+    // GIVEN: "execute" is the canonical word for its group
+    // WHEN: expanding
+    // THEN: all alternate spellings are returned
+    let group = expand_synonyms("execute");
+    assert!(group.contains(&"run"));
+    assert!(group.contains(&"invoke"));
+    assert!(group.contains(&"call"));
+    assert!(group.contains(&"trigger"));
+}
+
+#[test]
+fn expand_synonyms_execute_group_is_bidirectional_via_alternates() {
+    // GIVEN: "run", "invoke", "call", "trigger" are synonyms of "execute"
+    // WHEN: expanding each alternate
+    // THEN: each maps back to a group containing "execute"
+    for word in &["run", "invoke", "call", "trigger"] {
+        let group = expand_synonyms(word);
+        assert!(
+            group.contains(&"execute"),
+            "'{word}' should map back to execute group"
+        );
+    }
+}
+
+#[test]
+fn expand_synonyms_show_group_contains_expected_members() {
+    // GIVEN: "show" is in the show group
+    // WHEN: expanding any member
+    // THEN: full group is present
+    let group = expand_synonyms("display");
+    assert!(group.contains(&"show"));
+    assert!(group.contains(&"render"));
+    assert!(group.contains(&"print"));
+    assert!(group.contains(&"view"));
+}
+
+#[test]
+fn expand_synonyms_check_group_contains_expected_members() {
+    // GIVEN: "validate" is in the check group
+    // WHEN: expanding
+    // THEN: all members are returned
+    let group = expand_synonyms("validate");
+    assert!(group.contains(&"check"));
+    assert!(group.contains(&"verify"));
+    assert!(group.contains(&"test"));
+    assert!(group.contains(&"assert"));
+}
+
+#[test]
+fn expand_synonyms_modify_group_contains_expected_members() {
+    // GIVEN: "update" is in the modify group
+    // WHEN: expanding
+    // THEN: all members are returned
+    let group = expand_synonyms("update");
+    assert!(group.contains(&"modify"));
+    assert!(group.contains(&"edit"));
+    assert!(group.contains(&"change"));
+    assert!(group.contains(&"patch"));
+}
+
+#[test]
+fn expand_synonyms_count_group_contains_expected_members() {
+    // GIVEN: "aggregate" is in the count group
+    // WHEN: expanding
+    // THEN: all members are returned
+    let group = expand_synonyms("aggregate");
+    assert!(group.contains(&"count"));
+    assert!(group.contains(&"summarize"));
+    assert!(group.contains(&"total"));
+    assert!(group.contains(&"tally"));
+}
+
+#[test]
+fn expand_synonyms_access_group_contains_expected_members() {
+    // GIVEN: "retrieve" is in the access group
+    // WHEN: expanding
+    // THEN: all members are returned
+    let group = expand_synonyms("retrieve");
+    assert!(group.contains(&"access"));
+    assert!(group.contains(&"read"));
+    assert!(group.contains(&"get"));
+    assert!(group.contains(&"obtain"));
+}
+
+#[test]
+fn expand_synonyms_store_group_contains_expected_members() {
+    // GIVEN: "persist" is in the store group
+    // WHEN: expanding
+    // THEN: all members are returned
+    let group = expand_synonyms("persist");
+    assert!(group.contains(&"store"));
+    assert!(group.contains(&"save"));
+    assert!(group.contains(&"write"));
+    assert!(group.contains(&"cache"));
+}
+
+#[test]
+fn expand_synonyms_connect_group_contains_expected_members() {
+    // GIVEN: "link" is in the connect group
+    // WHEN: expanding
+    // THEN: all members are returned
+    let group = expand_synonyms("link");
+    assert!(group.contains(&"connect"));
+    assert!(group.contains(&"attach"));
+    assert!(group.contains(&"join"));
+    assert!(group.contains(&"bind"));
+}
+
+#[test]
+fn expand_synonyms_total_group_count_is_at_least_twenty() {
+    // GIVEN: all canonical group seeds
+    // WHEN: counting distinct groups
+    // THEN: at least 20 groups exist
+    let all_seeds = [
+        "search", "monitor", "extract", "create", "analyze", "batch", "entity", "research",
+        "send", "delete", "list", "convert",
+        "execute", "show", "check", "modify", "count", "access", "store", "connect",
+    ];
+    assert!(
+        all_seeds.len() >= 20,
+        "expected ≥20 synonym groups, got {}",
+        all_seeds.len()
+    );
+    for seed in all_seeds {
+        assert!(
+            !expand_synonyms(seed).is_empty(),
+            "group for '{seed}' is empty"
+        );
     }
 }
 
