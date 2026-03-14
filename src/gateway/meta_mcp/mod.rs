@@ -39,7 +39,8 @@ use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result, build_meta_tools,
-    build_routing_instructions, extract_client_version, extract_required_str, wrap_tool_success,
+    build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
+    wrap_tool_success,
 };
 use super::webhooks::WebhookRegistry;
 
@@ -405,7 +406,17 @@ impl MetaMcp {
     }
 
     fn build_instructions(&self) -> String {
-        let mut instructions = build_discovery_preamble();
+        let backends = self.backends.all();
+        let mut tool_count: usize = backends.iter().map(|b| b.cached_tools_count()).sum();
+        let mut server_count = backends.len();
+
+        if let Some(cap) = self.get_capabilities() {
+            tool_count += cap.get_tools().len();
+            server_count += 1;
+        }
+
+        let mut instructions = build_discovery_preamble(tool_count, server_count);
+
         if let Some(cap) = self.get_capabilities() {
             let caps = cap.list_capabilities();
             let routing = build_routing_instructions(&caps, &cap.name);
@@ -478,10 +489,33 @@ impl MetaMcp {
             "gateway_get_profile" => self.get_profile(session_id),
             "gateway_list_profiles" => self.list_profiles(),
             "gateway_reload_config" => self.reload_config().await,
-            _ => Err(Error::json_rpc(
-                -32601,
-                format!("Unknown tool: {tool_name}"),
-            )),
+            _ => {
+                const META_TOOLS: &[&str] = &[
+                    "gateway_search",
+                    "gateway_execute",
+                    "gateway_list_servers",
+                    "gateway_list_tools",
+                    "gateway_search_tools",
+                    "gateway_invoke",
+                    "gateway_get_stats",
+                    "gateway_cost_report",
+                    "gateway_webhook_status",
+                    "gateway_run_playbook",
+                    "gateway_kill_server",
+                    "gateway_revive_server",
+                    "gateway_list_disabled_capabilities",
+                    "gateway_set_profile",
+                    "gateway_get_profile",
+                    "gateway_list_profiles",
+                    "gateway_reload_config",
+                ];
+                let suggestion = did_you_mean(tool_name, META_TOOLS, 3, 3);
+                let msg = match suggestion {
+                    Some(hint) => format!("Unknown tool: {tool_name}. {hint}"),
+                    None => format!("Unknown tool: {tool_name}"),
+                };
+                Err(Error::json_rpc(-32601, msg))
+            }
         };
 
         match result {

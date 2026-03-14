@@ -28,6 +28,71 @@ pub(crate) use super::meta_mcp_tool_defs::{
 // Pure functions (testable without async or backends)
 // ============================================================================
 
+/// Compute the Levenshtein edit distance between two strings.
+///
+/// Returns `0` for identical strings, `1` for a single insertion, deletion,
+/// or substitution, and so on. Uses the standard two-row DP formulation for
+/// O(b_len) space.
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(levenshtein("gateway_invoke", "gateway_invoke"), 0);
+/// assert_eq!(levenshtein("gateway_invokee", "gateway_invoke"), 1);
+/// assert_eq!(levenshtein("gatway_invoke", "gateway_invoke"), 1);
+/// ```
+pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
+    let b_len = b.len();
+    let mut prev: Vec<usize> = (0..=b_len).collect();
+    let mut curr = vec![0; b_len + 1];
+    for (i, ca) in a.chars().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b.chars().enumerate() {
+            let cost = usize::from(ca != cb);
+            curr[j + 1] = (prev[j] + cost)
+                .min(prev[j + 1] + 1)
+                .min(curr[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b_len]
+}
+
+/// Build a "Did you mean?" suggestion message for an unknown tool name.
+///
+/// Searches `candidates` for names within Levenshtein distance ≤ `threshold`
+/// of `tool_name`, returns up to `max_suggestions` sorted by ascending
+/// distance. Returns `None` when no candidate is close enough.
+///
+/// # Examples
+///
+/// ```ignore
+/// let candidates = ["gateway_invoke", "gateway_search_tools", "gateway_list_tools"];
+/// let msg = did_you_mean("gateway_invokee", &candidates, 3, 3);
+/// assert!(msg.is_some_and(|m: &str| m.contains("gateway_invoke")));
+/// ```
+pub(crate) fn did_you_mean(
+    tool_name: &str,
+    candidates: &[&str],
+    threshold: usize,
+    max_suggestions: usize,
+) -> Option<String> {
+    let mut suggestions: Vec<(&str, usize)> = candidates
+        .iter()
+        .map(|name| (*name, levenshtein(tool_name, name)))
+        .filter(|(_, dist)| *dist <= threshold)
+        .collect();
+    suggestions.sort_by_key(|(_, d)| *d);
+    suggestions.truncate(max_suggestions);
+
+    if suggestions.is_empty() {
+        return None;
+    }
+
+    let names: Vec<&str> = suggestions.iter().map(|(n, _)| *n).collect();
+    Some(format!("Did you mean: {}?", names.join(", ")))
+}
+
 /// Extract the client protocol version from initialize params.
 ///
 /// Returns `"2024-11-05"` when params are `None` or missing `protocolVersion`.
@@ -70,14 +135,39 @@ pub(crate) fn build_initialize_result(
     }
 }
 
-/// Build the static discovery preamble shared by all initialize responses.
-pub(crate) fn build_discovery_preamble() -> String {
-    "Tool Discovery:\n\
-     - gateway_search_tools: Search by keyword (supports multi-word: \"batch research\")\n\
-     - gateway_list_tools: List all tools from a specific backend (omit server for ALL)\n\
-     - gateway_list_servers: List all available backends\n\
-     - gateway_invoke: Call any tool on any backend\n"
-        .to_string()
+/// Build the dynamic discovery preamble shared by all initialize responses.
+///
+/// Includes the live tool and server counts so the agent understands the
+/// scope of what is available without listing all schemas (which would cost
+/// ~95% more tokens).
+///
+/// # Arguments
+///
+/// * `tool_count`   — total number of tools currently cached across all backends
+/// * `server_count` — number of registered backends (running or not)
+///
+/// # Examples
+///
+/// ```ignore
+/// let preamble = build_discovery_preamble(42, 3);
+/// assert!(preamble.contains("42 tools"));
+/// assert!(preamble.contains("3 backends"));
+/// assert!(preamble.contains("FIRST"));
+/// ```
+pub(crate) fn build_discovery_preamble(tool_count: usize, server_count: usize) -> String {
+    format!(
+        "This server manages {tool_count} tools across {server_count} backends.\n\
+         Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n\
+         Tool schemas are not listed directly to save context (~95% token reduction).\n\
+         \n\
+         Discovery pattern:\n\
+         1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n\
+         2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={{...}}) -- call the tool\n\
+         \n\
+         Direct listing (when you know the backend):\n\
+         - gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n\
+         - gateway_list_servers -- list all backends with status\n"
+    )
 }
 
 /// Build dynamic routing instructions from capability metadata.

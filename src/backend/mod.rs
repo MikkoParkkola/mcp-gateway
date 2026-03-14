@@ -254,6 +254,19 @@ impl Backend {
             .map_or(0, std::vec::Vec::len)
     }
 
+    /// Return the names of all cached tools (non-blocking, no network I/O).
+    ///
+    /// Returns an empty `Vec` when the cache is empty or has never been populated.
+    /// Intended for producing "did you mean?" suggestions on unknown tool names.
+    #[must_use]
+    pub fn get_cached_tool_names(&self) -> Vec<String> {
+        self.tools_cache
+            .read()
+            .as_ref()
+            .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
