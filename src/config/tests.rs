@@ -61,3 +61,64 @@ server:
     assert_eq!(config.env_files.len(), 2);
     assert_eq!(config.env_files[0], "~/.claude/secrets.env");
 }
+
+// ── SurfacedToolConfig — config parsing (T2.2) ────────────────────────────────
+
+#[test]
+fn surfaced_tool_config_deserializes_from_yaml() {
+    // GIVEN: a YAML snippet with surfaced_tools entries
+    let yaml = r#"
+meta_mcp:
+  surfaced_tools:
+    - server: my_backend
+      tool: my_tool
+    - server: other_backend
+      tool: another_tool
+"#;
+    // WHEN: parsing as Config
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    // THEN: both entries are present with correct fields
+    let tools = &config.meta_mcp.surfaced_tools;
+    assert_eq!(tools.len(), 2);
+    assert_eq!(tools[0].server, "my_backend");
+    assert_eq!(tools[0].tool, "my_tool");
+    assert_eq!(tools[1].server, "other_backend");
+    assert_eq!(tools[1].tool, "another_tool");
+}
+
+#[test]
+fn surfaced_tools_defaults_to_empty_vec() {
+    // GIVEN: no surfaced_tools in config
+    // WHEN: default config is created
+    let config = Config::default();
+    // THEN: surfaced_tools is empty
+    assert!(config.meta_mcp.surfaced_tools.is_empty());
+}
+
+#[test]
+fn surfaced_tools_omitted_in_yaml_parses_to_empty() {
+    // GIVEN: a YAML with meta_mcp but no surfaced_tools key
+    let yaml = r#"
+meta_mcp:
+  warm_start:
+    - my_backend
+"#;
+    // WHEN: parsing
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    // THEN: surfaced_tools is empty (default applied)
+    assert!(config.meta_mcp.surfaced_tools.is_empty());
+}
+
+#[test]
+fn surfaced_tool_config_serializes_roundtrip() {
+    // GIVEN: a SurfacedToolConfig
+    let original = SurfacedToolConfig {
+        server: "srv".to_string(),
+        tool: "tl".to_string(),
+    };
+    // WHEN: round-tripping through JSON
+    let json = serde_json::to_string(&original).unwrap();
+    let deserialized: SurfacedToolConfig = serde_json::from_str(&json).unwrap();
+    // THEN: fields are preserved
+    assert_eq!(deserialized, original);
+}

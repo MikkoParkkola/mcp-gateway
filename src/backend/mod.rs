@@ -267,6 +267,19 @@ impl Backend {
             .unwrap_or_default()
     }
 
+    /// Return a single tool by exact name from the cache (non-blocking, no network I/O).
+    ///
+    /// Returns `None` when the cache is empty, has never been populated, or does
+    /// not contain a tool with the given name.  Intended for resolving surfaced
+    /// tool schemas at `tools/list` time.
+    #[must_use]
+    pub fn get_cached_tool(&self, name: &str) -> Option<Tool> {
+        self.tools_cache
+            .read()
+            .as_ref()
+            .and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
+    }
+
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.

@@ -246,6 +246,18 @@ impl Gateway {
             }
         };
 
+        // T2.6: warn when a surfaced tool's backend is not in warm_start.
+        for surfaced in &self.config.meta_mcp.surfaced_tools {
+            if !self.config.meta_mcp.warm_start.contains(&surfaced.server) {
+                warn!(
+                    tool = %surfaced.tool,
+                    server = %surfaced.server,
+                    "Surfaced tool's backend is not in meta_mcp.warm_start — \
+                     schema may be absent until the backend is first used"
+                );
+            }
+        }
+
         // Create app state with cache, stats, and ranking support
         #[allow(unused_mut)]
         let mut meta_mcp_builder = MetaMcp::with_features(
@@ -257,7 +269,8 @@ impl Gateway {
         )
         .with_profile_registry(profile_registry)
         .with_code_mode(self.config.code_mode.enabled)
-        .with_secret_injector(secret_injector);
+        .with_secret_injector(secret_injector)
+        .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone());
 
         // Attach cost governance if enabled
         #[cfg(feature = "cost-governance")]

@@ -32,7 +32,7 @@ pub(crate) use super::meta_mcp_tool_defs::{
 ///
 /// Returns `0` for identical strings, `1` for a single insertion, deletion,
 /// or substitution, and so on. Uses the standard two-row DP formulation for
-/// O(b_len) space.
+/// `O(b_len)` space.
 ///
 /// # Examples
 ///

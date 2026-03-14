@@ -348,6 +348,26 @@ impl ProxyManager {
         debug!("Broadcast roots/list_changed to all sessions");
     }
 
+    /// Broadcast `notifications/tools/list_changed` to all connected clients.
+    ///
+    /// Call this whenever the effective tool list may have changed — e.g. on
+    /// config reload, backend connect/disconnect, or surfaced-tool cache warm.
+    /// Follows the same pattern as [`Self::broadcast_roots_changed`].
+    pub fn broadcast_tools_list_changed(&self) {
+        let notification = TaggedNotification {
+            source: "gateway".to_string(),
+            event_type: "notification".to_string(),
+            data: json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/tools/list_changed"
+            }),
+            event_id: Some(self.multiplexer.next_event_id()),
+        };
+
+        self.multiplexer.broadcast(notification);
+        debug!("Broadcast notifications/tools/list_changed to all sessions");
+    }
+
     /// Update the cached roots (e.g., from a client's roots/list response).
     pub fn update_cached_roots(&self, roots: Vec<Root>) {
         debug!(count = roots.len(), "Updated cached roots");
@@ -659,5 +679,51 @@ mod tests {
         let r2 = rx2.recv().await.unwrap();
         assert_eq!(r1.data["method"], "notifications/roots/list_changed");
         assert_eq!(r2.data["method"], "notifications/roots/list_changed");
+    }
+
+    // ── T2.8: tools/list_changed broadcast ────────────────────────────
+
+    #[tokio::test]
+    async fn broadcast_tools_list_changed_reaches_all_sessions() {
+        // GIVEN: two connected sessions
+        let mux = make_multiplexer();
+        let (_id1, mut rx1) = mux.get_or_create_session(Some("tools-session-a"));
+        let (_id2, mut rx2) = mux.get_or_create_session(Some("tools-session-b"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+
+        // WHEN: broadcasting tools/list_changed
+        proxy.broadcast_tools_list_changed();
+
+        // THEN: both sessions receive the correct MCP notification
+        let r1 = rx1.recv().await.unwrap();
+        let r2 = rx2.recv().await.unwrap();
+        assert_eq!(r1.data["method"], "notifications/tools/list_changed");
+        assert_eq!(r2.data["method"], "notifications/tools/list_changed");
+    }
+
+    #[tokio::test]
+    async fn broadcast_tools_list_changed_uses_notification_event_type() {
+        // GIVEN: one session
+        let mux = make_multiplexer();
+        let (_id, mut rx) = mux.get_or_create_session(Some("tools-session-c"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+
+        // WHEN: broadcasting
+        proxy.broadcast_tools_list_changed();
+
+        // THEN: event_type is "notification" (same as roots_changed)
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.event_type, "notification");
+        assert_eq!(received.source, "gateway");
+    }
+
+    #[tokio::test]
+    async fn broadcast_tools_list_changed_no_op_when_no_sessions() {
+        // GIVEN: no connected sessions
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+
+        // WHEN / THEN: no panic
+        proxy.broadcast_tools_list_changed();
     }
 }

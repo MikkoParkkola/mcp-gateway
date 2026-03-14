@@ -8,6 +8,7 @@
 //! - `protocol.rs` — `handle_prompts_*`, `handle_logging_*`, `current_log_level`
 //! - `support.rs` — free functions: tag collection, ranking helpers, `MetaMcpInvoker`, augment
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ use tracing::{debug, warn};
 use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
+use crate::config::SurfacedToolConfig;
 use crate::config_reload::ReloadContext;
 use crate::cost_accounting::CostTracker;
 #[cfg(feature = "cost-governance")]
@@ -91,6 +93,16 @@ pub struct MetaMcp {
     /// Cost governance: tool-cost registry used by enforcer and suggestions.
     #[cfg(feature = "cost-governance")]
     pub(crate) cost_registry: Option<Arc<CostRegistry>>,
+    /// Statically surfaced tools — appear directly in `tools/list`.
+    ///
+    /// Built from `MetaMcpConfig::surfaced_tools` at construction time.
+    /// Empty by default; populated via [`MetaMcp::with_surfaced_tools`].
+    pub(super) surfaced_tools: Vec<SurfacedToolConfig>,
+    /// Fast lookup map for surfaced tool dispatch: tool name → server name.
+    ///
+    /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
+    /// `HashMap` lookup instead of a linear scan on every call.
+    pub(super) surfaced_tools_map: HashMap<String, String>,
 }
 
 // ============================================================================
@@ -127,6 +139,8 @@ impl MetaMcp {
             budget_enforcer: None,
             #[cfg(feature = "cost-governance")]
             cost_registry: None,
+            surfaced_tools: Vec::new(),
+            surfaced_tools_map: HashMap::new(),
         }
     }
 
@@ -164,6 +178,8 @@ impl MetaMcp {
             budget_enforcer: None,
             #[cfg(feature = "cost-governance")]
             cost_registry: None,
+            surfaced_tools: Vec::new(),
+            surfaced_tools_map: HashMap::new(),
         }
     }
 
@@ -261,6 +277,63 @@ impl MetaMcp {
     #[allow(dead_code)]
     pub fn with_tool_registry(mut self, registry: std::sync::Arc<ToolRegistry>) -> Self {
         self.tool_registry = Some(registry);
+        self
+    }
+
+    /// Attach statically surfaced tools (consuming builder).
+    ///
+    /// Validates at construction time that:
+    /// 1. No surfaced tool name collides with a meta-tool name.
+    /// 2. No tool name appears more than once across all surfaced entries.
+    ///
+    /// Validation failures are logged as warnings rather than panics so the
+    /// gateway always starts — misconfigured surfaced tools are simply dropped.
+    #[must_use]
+    pub fn with_surfaced_tools(mut self, tools: Vec<SurfacedToolConfig>) -> Self {
+        const META_TOOL_NAMES: &[&str] = &[
+            "gateway_search",
+            "gateway_execute",
+            "gateway_list_servers",
+            "gateway_list_tools",
+            "gateway_search_tools",
+            "gateway_invoke",
+            "gateway_get_stats",
+            "gateway_cost_report",
+            "gateway_webhook_status",
+            "gateway_run_playbook",
+            "gateway_kill_server",
+            "gateway_revive_server",
+            "gateway_list_disabled_capabilities",
+            "gateway_set_profile",
+            "gateway_get_profile",
+            "gateway_list_profiles",
+            "gateway_reload_config",
+        ];
+
+        let mut map: HashMap<String, String> = HashMap::new();
+        let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
+
+        for cfg in tools {
+            if META_TOOL_NAMES.contains(&cfg.tool.as_str()) {
+                warn!(
+                    tool = %cfg.tool,
+                    "Surfaced tool name collides with a meta-tool — skipping"
+                );
+                continue;
+            }
+            if map.contains_key(&cfg.tool) {
+                warn!(
+                    tool = %cfg.tool,
+                    "Duplicate surfaced tool name — skipping second occurrence"
+                );
+                continue;
+            }
+            map.insert(cfg.tool.clone(), cfg.server.clone());
+            validated.push(cfg);
+        }
+
+        self.surfaced_tools = validated;
+        self.surfaced_tools_map = map;
         self
     }
 
@@ -439,8 +512,21 @@ impl MetaMcp {
     }
 
     /// Handle `tools/list` — Code Mode returns 2 tools; Traditional returns full set.
+    ///
+    /// When surfaced tools are configured, their schemas are appended after the
+    /// meta-tools (subject to routing profile filtering).  Tools whose backend
+    /// cache is empty are silently omitted rather than blocking the response.
     pub fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
-        let tools = if self.code_mode_enabled {
+        self.handle_tools_list_for_session(id, None)
+    }
+
+    /// Session-aware variant of `handle_tools_list` used by the router.
+    pub fn handle_tools_list_for_session(
+        &self,
+        id: RequestId,
+        session_id: Option<&str>,
+    ) -> JsonRpcResponse {
+        let mut tools = if self.code_mode_enabled {
             build_code_mode_tools()
         } else {
             let (tool_count, server_count) = self.backend_counts();
@@ -453,6 +539,16 @@ impl MetaMcp {
                 server_count,
             )
         };
+
+        // Append surfaced tools (skip in Code Mode — it uses a fixed 2-tool schema).
+        if !self.code_mode_enabled {
+            for surfaced in &self.surfaced_tools {
+                if let Some(tool) = self.resolve_surfaced_tool(surfaced, session_id) {
+                    tools.push(tool);
+                }
+            }
+        }
+
         let result = ToolsListResult {
             tools,
             next_cursor: None,
@@ -460,7 +556,46 @@ impl MetaMcp {
         JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
     }
 
+    /// Resolve a surfaced tool config to a [`Tool`] schema.
+    ///
+    /// Returns `None` when:
+    /// - The backend is not found in the registry.
+    /// - The tool is not present in the backend's tool cache.
+    /// - The active routing profile denies access to `(server, tool)`.
+    fn resolve_surfaced_tool(
+        &self,
+        surfaced: &SurfacedToolConfig,
+        session_id: Option<&str>,
+    ) -> Option<crate::protocol::Tool> {
+        // T2.7: routing profile check.
+        let profile = self.active_profile(session_id);
+        if profile.check(&surfaced.server, &surfaced.tool).is_err() {
+            debug!(
+                server = %surfaced.server,
+                tool = %surfaced.tool,
+                profile = %profile.name,
+                "Surfaced tool excluded by routing profile"
+            );
+            return None;
+        }
+
+        let backend = self.backends.get(&surfaced.server)?;
+        let tool = backend.get_cached_tool(&surfaced.tool);
+        if tool.is_none() {
+            debug!(
+                server = %surfaced.server,
+                tool = %surfaced.tool,
+                "Surfaced tool not in backend cache — omitting from tools/list"
+            );
+        }
+        tool
+    }
+
     /// Handle `tools/call` — dispatch to the appropriate handler.
+    ///
+    /// Surfaced tool calls are intercepted before the meta-tool match arm and
+    /// proxied directly to the owning backend via `gateway_invoke` semantics,
+    /// giving callers transparent one-hop access to pinned tools.
     ///
     /// `api_key_name` — the name of the authenticated API key (for cost accounting).
     pub async fn handle_tools_call(
@@ -471,6 +606,23 @@ impl MetaMcp {
         session_id: Option<&str>,
         api_key_name: Option<&str>,
     ) -> JsonRpcResponse {
+        // T2.4: Check surfaced tools BEFORE the meta-tool match.
+        if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
+            let invoke_args = json!({
+                "server": server_name,
+                "tool": tool_name,
+                "arguments": arguments,
+            });
+            let result = self.invoke_tool(&invoke_args, session_id, api_key_name).await;
+            return match result {
+                Ok(content) => {
+                    use super::meta_mcp_helpers::wrap_tool_success;
+                    wrap_tool_success(id, &content)
+                }
+                Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+            };
+        }
+
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id).await,

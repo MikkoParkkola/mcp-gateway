@@ -307,6 +307,28 @@ impl Default for MarketplaceConfig {
 
 // ── Meta-MCP ──────────────────────────────────────────────────────────────────
 
+/// A single backend tool that is statically surfaced in `tools/list`.
+///
+/// Surfaced tools appear as first-class entries alongside meta-tools, giving
+/// LLMs direct one-hop access to high-value tools without the full discovery
+/// overhead.  The gateway proxies calls transparently to the configured backend.
+///
+/// # Example
+///
+/// ```yaml
+/// meta_mcp:
+///   surfaced_tools:
+///     - server: my_backend
+///       tool: my_important_tool
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SurfacedToolConfig {
+    /// Name of the backend server that owns the tool.
+    pub server: String,
+    /// Exact tool name as reported by the backend's `tools/list`.
+    pub tool: String,
+}
+
 /// Meta-MCP configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -321,6 +343,14 @@ pub struct MetaMcpConfig {
     /// Backends to warm-start on gateway startup.
     #[serde(default)]
     pub warm_start: Vec<String>,
+    /// Tools to surface directly in `tools/list` alongside meta-tools.
+    ///
+    /// Each entry pins one backend tool so that LLMs can call it directly
+    /// (one hop) instead of going through `gateway_invoke` (two hops).
+    /// The gateway validates at startup that surfaced tool names do not
+    /// collide with any meta-tool name.
+    #[serde(default)]
+    pub surfaced_tools: Vec<SurfacedToolConfig>,
 }
 
 impl Default for MetaMcpConfig {
@@ -330,6 +360,7 @@ impl Default for MetaMcpConfig {
             cache_tools: true,
             cache_ttl: Duration::from_secs(300),
             warm_start: Vec::new(),
+            surfaced_tools: Vec::new(),
         }
     }
 }
