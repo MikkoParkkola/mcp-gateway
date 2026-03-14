@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-03-14
+
+### Added
+
+- **Intelligent Tool Surfacing** (RFC-0081): Static tool pinning via `surfaced_tools` config — operators can expose high-value backend tools directly in `tools/list` for one-hop invocation while preserving ~95% context token savings for the rest.
+- **Tool Annotations** (MCP 2025-11-25): All meta-tools now carry `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` annotations. `gateway_search_tools` includes `outputSchema`.
+- **"Did You Mean?" suggestions**: Levenshtein-based typo correction on both meta-tool dispatch (`handle_tools_call`) and backend tool invocation (`gateway_invoke`).
+- **Dynamic meta-tool descriptions**: Tool and server counts are live (`format!()`) instead of static "150+".
+- **Enhanced initialize instructions**: Discovery-first pattern with "use `gateway_search_tools` FIRST" emphasis and dynamic counts.
+- **SEP-1821: Filtered `tools/list`** (behind `spec-preview` flag): Optional `query` parameter triggers semantic search returning filtered tools with full schemas.
+- **SEP-1862: `tools/resolve`** (behind `spec-preview` flag): Deferred schema loading — resolve a tool's full `inputSchema` by name on demand.
+- **Dynamic promotion** (behind `spec-preview` flag): Session-scoped auto-surfacing of tools after successful `gateway_invoke`, with FIFO eviction at configurable max (default: 10).
+- **`notifications/tools/list_changed`**: Gateway now sends the notification it already advertised — fired on backend connect/disconnect and config reload. Fixes MCP spec compliance gap.
+- **Config path discovery**: Auto-detect `gateway.yaml` / `config.yaml` in cwd, `~/.config/mcp-gateway/`, and `/etc/mcp-gateway/` when `--config` is omitted.
+- **Config validation**: `Config::validate()` checks port, backend name validity, and HTTP URL parseability at load time.
+- 8 new synonym groups in search ranking (12 → 20 total).
+- 78 new tests across both RFCs.
+
+### Changed
+
+- **Config split** (RFC-0080): `config/features.rs` (650 lines) split into 10 focused modules under `config/features/`.
+- **Error handling overhaul**: 48 of 58 `Error::Internal(String)` replaced with 6 typed variants (`ConfigValidation`, `CircuitOpen`, `ToolNotFound`, `OAuth`, `Tls`, `ConfigWatcher`).
+- **3 dependencies removed**: `dialoguer` (replaced with stdin prompt), `md5` (replaced with `sha2`), `open` (replaced with `std::process::Command`).
+- `derive(Default)` applied where manual impl was equivalent (`UsageStats`).
+- Surfaced tools respect routing profiles — blocked backends never leak through surfacing.
+- Collision detection prevents surfaced tool names from shadowing meta-tools.
+
+### Fixed
+
+- 112 `collapsible_if` clippy warnings for Rust 1.93 stable compatibility.
+- MSRV bumped to 1.88 (matching Docker image and CI).
+- `criterion` 0.7→0.8, `metrics-exporter-prometheus` 0.16→0.18.
+
 ## [2.6.0] - 2026-03-13
 
 ### Added
