@@ -710,7 +710,7 @@ impl Gateway {
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal(shutdown_tx))
                 .await
-                .map_err(|e| Error::Internal(e.to_string()))?;
+                .map_err(|e| Error::Tls(e.to_string()))?;
         }
 
         // Save search ranker usage data

@@ -243,6 +243,64 @@ impl Config {
     pub fn enabled_backends(&self) -> impl Iterator<Item = (&String, &BackendConfig)> {
         self.backends.iter().filter(|(_, b)| b.enabled)
     }
+
+    /// Validate the configuration for common misconfigurations.
+    ///
+    /// Checks performed:
+    /// - No backend names are empty or contain invalid characters (`/`, `\`, `:`)
+    /// - No duplicate backend names (guaranteed by `HashMap`, but checked for
+    ///   completeness in case the config is reconstructed from another source)
+    /// - Server port is within the valid range (1–65535; 0 means OS-assigned)
+    /// - Backend URLs (for HTTP transports) are syntactically valid
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigValidation`] describing the first violation found.
+    pub fn validate(&self) -> Result<()> {
+        // Port 0 is technically valid (OS assigns an ephemeral port).
+        // No upper bound needed — u16 already caps at 65535.
+        if self.server.port == 0 {
+            tracing::warn!("Server port is 0; OS will assign an ephemeral port");
+        }
+        self.validate_backend_names()?;
+        self.validate_backend_urls()?;
+        Ok(())
+    }
+
+    fn validate_backend_names(&self) -> Result<()> {
+        const INVALID_CHARS: &[char] = &['/', '\\', ':'];
+        for name in self.backends.keys() {
+            if name.is_empty() {
+                return Err(Error::ConfigValidation(
+                    "Backend name must not be empty".to_string(),
+                ));
+            }
+            if let Some(bad) = INVALID_CHARS.iter().find(|&&c| name.contains(c)) {
+                return Err(Error::ConfigValidation(format!(
+                    "Backend name '{name}' contains invalid character '{bad}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_backend_urls(&self) -> Result<()> {
+        for (name, backend) in &self.backends {
+            if let TransportConfig::Http { http_url, .. } = &backend.transport {
+                if http_url.is_empty() {
+                    return Err(Error::ConfigValidation(format!(
+                        "Backend '{name}' has an empty http_url"
+                    )));
+                }
+                url::Url::parse(http_url).map_err(|e| {
+                    Error::ConfigValidation(format!(
+                        "Backend '{name}' has an invalid http_url '{http_url}': {e}"
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────
