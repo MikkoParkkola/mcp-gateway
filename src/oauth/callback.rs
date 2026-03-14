@@ -68,7 +68,7 @@ impl CallbackServer {
         let result = self
             .receiver
             .await
-            .map_err(|_| Error::Internal("Callback channel closed unexpectedly".to_string()))?;
+            .map_err(|_| Error::OAuth("Callback channel closed unexpectedly".to_string()))?;
 
         // Abort the server (it's done its job)
         self.server_handle.abort();
@@ -89,11 +89,11 @@ pub async fn start_callback_server(
     let addr: SocketAddr = format!("127.0.0.1:{}", port.unwrap_or(0)).parse().unwrap();
     let listener = TcpListener::bind(addr)
         .await
-        .map_err(|e| Error::Internal(format!("Failed to bind callback server: {e}")))?;
+        .map_err(|e| Error::OAuth(format!("Failed to bind callback server: {e}")))?;
 
     let actual_addr = listener
         .local_addr()
-        .map_err(|e| Error::Internal(format!("Failed to get callback server address: {e}")))?;
+        .map_err(|e| Error::OAuth(format!("Failed to get callback server address: {e}")))?;
 
     let callback_url = format!("http://127.0.0.1:{}/oauth/callback", actual_addr.port());
     info!(url = %callback_url, "OAuth callback server listening");
@@ -115,7 +115,7 @@ pub async fn start_callback_server(
     let server = tokio::spawn(async move {
         axum::serve(listener, app)
             .await
-            .map_err(|e| Error::Internal(format!("Callback server error: {e}")))
+            .map_err(|e| Error::OAuth(format!("Callback server error: {e}")))
     });
 
     Ok(CallbackServer {
@@ -137,7 +137,7 @@ async fn handle_callback(
     // Check for errors
     if let Some(error) = params.error {
         let description = params.error_description.unwrap_or_default();
-        let result = Err(Error::Internal(format!(
+        let result = Err(Error::OAuth(format!(
             "OAuth error: {error} - {description}"
         )));
         if let Some(tx) = state.tx.take() {
@@ -150,7 +150,7 @@ async fn handle_callback(
 
     // Validate state
     if params.state.as_deref() != Some(&state.expected_state) {
-        let result = Err(Error::Internal(
+        let result = Err(Error::OAuth(
             "State mismatch - possible CSRF attack".to_string(),
         ));
         if let Some(tx) = state.tx.take() {
@@ -164,7 +164,7 @@ async fn handle_callback(
 
     // Extract code
     let Some(code) = params.code else {
-        let result = Err(Error::Internal(
+        let result = Err(Error::OAuth(
             "No authorization code received".to_string(),
         ));
         if let Some(tx) = state.tx.take() {

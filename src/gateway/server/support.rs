@@ -102,7 +102,7 @@ pub(super) async fn serve_tls(
         .handle(handle)
         .serve(app.into_make_service())
         .await
-        .map_err(|e| crate::Error::Internal(format!("TLS server error: {e}")))
+        .map_err(|e| crate::Error::Tls(format!("TLS server error: {e}")))
 }
 
 /// Shutdown signal handler.

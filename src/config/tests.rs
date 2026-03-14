@@ -122,3 +122,128 @@ fn surfaced_tool_config_serializes_roundtrip() {
     // THEN: fields are preserved
     assert_eq!(deserialized, original);
 }
+
+// ── Config::validate — gateway.yaml validation (T5.10) ───────────────────────
+
+#[test]
+fn validate_default_config_passes() {
+    // GIVEN: a default config (no backends, default port)
+    // WHEN: validate is called
+    // THEN: succeeds without error
+    let config = Config::default();
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn validate_rejects_empty_backend_name() {
+    // GIVEN: a config with an empty backend name
+    let mut config = Config::default();
+    config.backends.insert(
+        String::new(),
+        BackendConfig::default(),
+    );
+    // WHEN: validate is called
+    let result = config.validate();
+    // THEN: returns ConfigValidation error
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("empty"), "error should mention 'empty': {msg}");
+}
+
+#[test]
+fn validate_rejects_backend_name_with_slash() {
+    // GIVEN: a backend name containing a slash
+    let mut config = Config::default();
+    config.backends.insert(
+        "a/b".to_string(),
+        BackendConfig::default(),
+    );
+    // WHEN: validate is called
+    let result = config.validate();
+    // THEN: returns ConfigValidation error mentioning the invalid char
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("a/b"), "error should include name: {msg}");
+}
+
+#[test]
+fn validate_rejects_invalid_http_url() {
+    // GIVEN: a backend with a malformed http_url
+    let mut config = Config::default();
+    config.backends.insert(
+        "my_backend".to_string(),
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "not a url!@#".to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        },
+    );
+    // WHEN: validate is called
+    let result = config.validate();
+    // THEN: returns ConfigValidation error
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+}
+
+#[test]
+fn validate_rejects_empty_http_url() {
+    // GIVEN: a backend with an empty http_url
+    let mut config = Config::default();
+    config.backends.insert(
+        "my_backend".to_string(),
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: String::new(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        },
+    );
+    // WHEN: validate is called
+    let result = config.validate();
+    // THEN: returns ConfigValidation error
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+}
+
+#[test]
+fn validate_accepts_valid_http_backend() {
+    // GIVEN: a backend with a valid http_url
+    let mut config = Config::default();
+    config.backends.insert(
+        "my_backend".to_string(),
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "http://localhost:3000/mcp".to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        },
+    );
+    // WHEN: validate is called
+    // THEN: succeeds
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn validate_accepts_stdio_backend_without_url() {
+    // GIVEN: a stdio backend (no http_url)
+    let mut config = Config::default();
+    config.backends.insert(
+        "my_backend".to_string(),
+        BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "my-server".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        },
+    );
+    // WHEN: validate is called
+    // THEN: succeeds (stdio has no URL to validate)
+    assert!(config.validate().is_ok());
+}

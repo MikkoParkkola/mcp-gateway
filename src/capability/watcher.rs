@@ -91,7 +91,7 @@ impl CapabilityWatcher {
             },
             Config::default().with_poll_interval(Duration::from_secs(2)),
         )
-        .map_err(|e| crate::Error::Internal(format!("Failed to create file watcher: {e}")))?;
+        .map_err(|e| crate::Error::ConfigWatcher(format!("Failed to create file watcher: {e}")))?;
 
         // Watch all directories
         for dir in directories {
