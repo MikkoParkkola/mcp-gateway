@@ -52,6 +52,17 @@ meta_mcp:
   # warm_start:
   #   - tavily
 
+  # Pin high-value tools directly in tools/list for one-hop invocation.
+  # These tools appear with full schemas alongside the 4 meta-tools,
+  # while preserving ~95% context savings for everything else.
+  # Backends hosting surfaced tools are auto-added to warm_start.
+  surfaced_tools: []
+  # surfaced_tools:
+  #   - server: tavily
+  #     tool: tavily_search
+  #   - server: brave
+  #     tool: brave_web_search
+
 # --- Streaming ---
 
 streaming:

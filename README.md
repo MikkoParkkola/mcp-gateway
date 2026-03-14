@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-2461%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
+[![Tests](https://img.shields.io/badge/tests-2539%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
 [![MCP Servers](https://img.shields.io/badge/MCP%20servers-48%20built--in-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Getting-Started)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
@@ -132,7 +132,7 @@ One flaky MCP server shouldn't take down your entire toolchain.
 ┌─────────────────────────────────────────────────────────────────┐
 │                     MCP Gateway (:39400)                         │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Meta-MCP Mode: 4 Tools → Access 100+ Tools Dynamically  │    │
+│  │  Meta-MCP Mode: 4 Meta-Tools + Surfaced Tools              │    │
 │  │  • gateway_list_servers    • gateway_search_tools        │    │
 │  │  • gateway_list_tools      • gateway_invoke              │    │
 │  └─────────────────────────────────────────────────────────┘    │
@@ -445,6 +445,94 @@ TF-IDF semantic search across all tool names and descriptions. Returns ranked re
 
 Usage analytics and profiling per tool: latency histograms, error categorization, usage trends, and success rates. Data persists to disk for cross-restart analysis.
 
+### Surfaced Tools
+
+Pin high-value backend tools directly in `tools/list` for one-hop invocation. The AI calls them by name without going through `gateway_search_tools` → `gateway_invoke`, while the rest of your 100+ tools remain behind the meta-tool discovery pattern (~95% context savings preserved).
+
+```yaml
+meta_mcp:
+  enabled: true
+  surfaced_tools:
+    - server: tavily
+      tool: tavily_search
+    - server: brave
+      tool: brave_web_search
+```
+
+Surfaced tools:
+- Appear with full schemas in `tools/list` alongside the 4 meta-tools
+- Route through the full middleware chain (auth, rate limiting, circuit breakers)
+- Respect routing profiles — blocked backends never leak through surfacing
+- Collision detection prevents shadowing meta-tool names
+- Backends are auto-added to `warm_start` if not already present
+
+### Tool Annotations
+
+All meta-tools carry [MCP 2025-11-25 tool annotations](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#annotations):
+
+| Meta-Tool | `readOnlyHint` | `destructiveHint` | `openWorldHint` |
+|-----------|----------------|-------------------|-----------------|
+| `gateway_search_tools` | `true` | `false` | `false` |
+| `gateway_list_tools` | `true` | `false` | `false` |
+| `gateway_list_servers` | `true` | `false` | `false` |
+| `gateway_invoke` | `false` | — | `true` |
+
+`gateway_search_tools` also includes an `outputSchema` describing the matches array structure.
+
+### "Did You Mean?" Suggestions
+
+Typos in tool names now return Levenshtein-based suggestions instead of bare errors:
+
+```
+Error: Unknown tool "gateway_serch_tools". Did you mean: gateway_search_tools?
+```
+
+This works at both levels:
+- **Meta-tool typos**: misspelling `gateway_search_tools` in `tools/call`
+- **Backend tool typos**: misspelling a tool name in `gateway_invoke` arguments
+
+### Dynamic Descriptions
+
+Meta-tool descriptions show live counts instead of static text:
+
+```
+"Search across 183 tools from 12 servers. Use keywords..."
+```
+
+Counts update automatically as backends connect/disconnect — no stale "150+" claims.
+
+### Config Path Discovery
+
+The gateway auto-discovers config files when `--config` is omitted:
+
+1. `./gateway.yaml` or `./config.yaml` (current directory)
+2. `~/.config/mcp-gateway/gateway.yaml`
+3. `/etc/mcp-gateway/gateway.yaml`
+
+### Config Validation
+
+`Config::validate()` checks port ranges, backend name validity, and HTTP URL parseability at load time, failing fast with clear error messages instead of cryptic runtime panics.
+
+### `notifications/tools/list_changed`
+
+The gateway now sends the `notifications/tools/list_changed` notification it already advertised in its capabilities. Fired on backend connect/disconnect and config reload — MCP clients that support tool list change notifications will automatically refresh.
+
+### Spec Preview Features
+
+Optional draft MCP spec extensions behind the `spec-preview` feature flag (not enabled by default):
+
+```bash
+cargo build --features spec-preview
+```
+
+| Feature | Spec | Description |
+|---------|------|-------------|
+| **Filtered `tools/list`** | SEP-1821 | Pass a `query` parameter to `tools/list` for semantic-filtered results with full schemas |
+| **`tools/resolve`** | SEP-1862 | Resolve a single tool's full `inputSchema` by name (deferred schema loading) |
+| **Dynamic promotion** | — | After a successful `gateway_invoke`, the tool is auto-surfaced for the current session (FIFO eviction at configurable max, default 10) |
+
+These are experimental and may change as the MCP spec evolves.
+
 ### Config Validation (Linting)
 
 Validate capability definitions against agent-UX best practices with the built-in linter. Supports text, JSON, and SARIF output for CI integration, and can auto-fix common issues.
@@ -543,6 +631,9 @@ chmod +x mcp-gateway
 # Start with configuration file
 mcp-gateway --config servers.yaml
 
+# Auto-discover config (checks ./gateway.yaml, ~/.config/mcp-gateway/, /etc/mcp-gateway/)
+mcp-gateway
+
 # Override port
 mcp-gateway --config servers.yaml --port 8080
 
@@ -611,7 +702,7 @@ Point your MCP client to the gateway:
 ```json
 {
   "status": "healthy",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "backends": {
     "tavily": {
       "name": "tavily",
@@ -643,6 +734,7 @@ Point your MCP client to the gateway:
 | `enabled` | bool | `true` | Enable Meta-MCP mode |
 | `cache_tools` | bool | `true` | Cache tool lists |
 | `cache_ttl` | duration | `5m` | Cache TTL |
+| `surfaced_tools` | list | `[]` | Pin backend tools directly in `tools/list` (see [Surfaced Tools](#surfaced-tools)) |
 
 ### Failsafe
 
@@ -706,7 +798,7 @@ MCP Gateway is a local Rust proxy -- it adds minimal overhead between your clien
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Startup time** | ~8ms | Measured with `hyperfine` ([benchmarks](docs/BENCHMARKS.md)) |
-| **Binary size** | 7.1 MB | Release build with LTO, stripped |
+| **Binary size** | ~13 MB | Release build with LTO, stripped |
 | **Gateway overhead** | <2ms per request | Local routing + JSON-RPC parsing (does not include backend latency) |
 | **Memory** | Low | Async I/O via tokio; no per-request allocations for routing |
 
