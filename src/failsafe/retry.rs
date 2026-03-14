@@ -3,9 +3,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use backoff::ExponentialBackoff;
-use backoff::backoff::Backoff;
-use tokio::time::sleep;
+use backon::{ExponentialBuilder, Retryable};
 use tracing::debug;
 
 use crate::Error;
@@ -39,17 +37,15 @@ impl RetryPolicy {
         }
     }
 
-    /// Create an exponential backoff instance
+    /// Build an `ExponentialBuilder` from this policy's parameters.
     #[must_use]
-    pub fn create_backoff(&self) -> ExponentialBackoff {
-        ExponentialBackoff {
-            current_interval: self.initial_backoff,
-            initial_interval: self.initial_backoff,
-            max_interval: self.max_backoff,
-            multiplier: self.multiplier,
-            max_elapsed_time: None,
-            ..Default::default()
-        }
+    #[allow(clippy::cast_possible_truncation)]
+    fn backoff_builder(&self) -> ExponentialBuilder {
+        ExponentialBuilder::new()
+            .with_min_delay(self.initial_backoff)
+            .with_max_delay(self.max_backoff)
+            .with_factor(self.multiplier as f32)
+            .with_max_times(self.max_attempts as usize)
     }
 }
 
@@ -68,44 +64,21 @@ where
         return f().await;
     }
 
-    let mut backoff = policy.create_backoff();
-    let mut attempts = 0u32;
+    let builder = policy.backoff_builder();
+    let op_name = name.to_string();
 
-    loop {
-        attempts += 1;
-
-        match f().await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                // Don't retry certain errors
-                if !is_retryable(&e) {
-                    return Err(e);
-                }
-
-                if attempts >= policy.max_attempts {
-                    debug!(
-                        operation = name,
-                        attempts = attempts,
-                        "Max retry attempts reached"
-                    );
-                    return Err(e);
-                }
-
-                if let Some(duration) = backoff.next_backoff() {
-                    debug!(
-                        operation = name,
-                        attempt = attempts,
-                        delay_ms = duration.as_millis(),
-                        error = %e,
-                        "Retrying after backoff"
-                    );
-                    sleep(duration).await;
-                } else {
-                    return Err(e);
-                }
-            }
-        }
-    }
+    (move || f())
+        .retry(builder)
+        .when(is_retryable)
+        .notify(|e: &Error, dur| {
+            debug!(
+                operation = op_name,
+                delay_ms = dur.as_millis(),
+                error = %e,
+                "Retrying after backoff"
+            );
+        })
+        .await
 }
 
 /// Check if an error is retryable
