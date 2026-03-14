@@ -21,7 +21,7 @@ use crate::{Error, Result};
 
 use super::super::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
-    extract_price_per_million, extract_required_str, parse_tool_arguments,
+    did_you_mean, extract_price_per_million, extract_required_str, parse_tool_arguments,
 };
 use super::super::trace;
 use super::MetaMcp;
@@ -407,6 +407,12 @@ impl MetaMcp {
             .get(server)
             .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
+        // Eagerly check the cached tool list for a "did you mean?" hint.
+        // Only fires when the cache is populated and the tool is not found there.
+        // We still dispatch to the backend in case the cache is stale.
+        let cached_names = backend.get_cached_tool_names();
+        let tool_is_cached = cached_names.iter().any(|n| n == tool);
+
         // Build request params, injecting cache key into _meta when present.
         let base_params = json!({ "name": tool, "arguments": arguments });
         let params = match prompt_cache_key {
@@ -417,9 +423,25 @@ impl MetaMcp {
         let response = backend.request("tools/call", Some(params)).await?;
 
         if let Some(error) = response.error {
+            // When we have cached names and the tool wasn't in them, enrich
+            // the error with Levenshtein-based suggestions.
+            let message = if !cached_names.is_empty() && !tool_is_cached {
+                let candidates: Vec<&str> = cached_names.iter().map(String::as_str).collect();
+                match did_you_mean(tool, &candidates, 3, 3) {
+                    Some(hint) => format!(
+                        "Tool '{tool}' not found on server '{server}'. {hint}"
+                    ),
+                    None => format!(
+                        "Tool '{tool}' not found on server '{server}'. {}",
+                        error.message
+                    ),
+                }
+            } else {
+                error.message
+            };
             return Err(Error::JsonRpc {
                 code: error.code,
-                message: error.message,
+                message,
                 data: error.data,
             });
         }
