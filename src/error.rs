@@ -21,6 +21,13 @@ pub enum Error {
     #[error("Configuration validation error: {0}")]
     ConfigValidation(String),
 
+    /// Config watcher error — file watcher setup or event delivery failed.
+    ///
+    /// Use this instead of `Internal` for `notify`-crate failures in the
+    /// hot-reload subsystem.
+    #[error("Config watcher error: {0}")]
+    ConfigWatcher(String),
+
     /// Backend not found
     #[error("Backend not found: {0}")]
     BackendNotFound(String),
@@ -53,6 +60,21 @@ pub enum Error {
     /// Protocol error
     #[error("Protocol error: {0}")]
     Protocol(String),
+
+    /// OAuth client error — token acquisition, refresh, or callback failure.
+    ///
+    /// Use this instead of `Internal` for all errors originating in the
+    /// `oauth/client`, `oauth/metadata`, `oauth/callback`, and `oauth/storage`
+    /// modules.
+    #[error("OAuth error: {0}")]
+    OAuth(String),
+
+    /// TLS error — certificate loading, binding, or handshake failure.
+    ///
+    /// Use this instead of `Internal` for `rustls`/`axum-server` errors in
+    /// the TLS server path.
+    #[error("TLS error: {0}")]
+    Tls(String),
 
     /// JSON-RPC error
     #[error("JSON-RPC error {code}: {message}")]

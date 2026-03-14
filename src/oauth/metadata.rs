@@ -110,10 +110,10 @@ impl AuthorizationServerMetadata {
             .get(&url)
             .send()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to fetch OAuth metadata: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to fetch OAuth metadata: {e}")))?;
 
         if !response.status().is_success() {
-            return Err(Error::Internal(format!(
+            return Err(Error::OAuth(format!(
                 "OAuth metadata discovery failed: HTTP {}",
                 response.status()
             )));
@@ -122,7 +122,7 @@ impl AuthorizationServerMetadata {
         let metadata: Self = response
             .json()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to parse OAuth metadata: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to parse OAuth metadata: {e}")))?;
 
         debug!(issuer = %metadata.issuer, "Discovered authorization server");
         Ok(metadata)
@@ -150,18 +150,18 @@ impl ProtectedResourceMetadata {
         debug!(url = %url, "Discovering OAuth protected resource metadata");
 
         let response = client.get(&url).send().await.map_err(|e| {
-            Error::Internal(format!("Failed to fetch protected resource metadata: {e}"))
+            Error::OAuth(format!("Failed to fetch protected resource metadata: {e}"))
         })?;
 
         if !response.status().is_success() {
-            return Err(Error::Internal(format!(
+            return Err(Error::OAuth(format!(
                 "Protected resource metadata discovery failed: HTTP {}",
                 response.status()
             )));
         }
 
         let metadata: Self = response.json().await.map_err(|e| {
-            Error::Internal(format!("Failed to parse protected resource metadata: {e}"))
+            Error::OAuth(format!("Failed to parse protected resource metadata: {e}"))
         })?;
 
         debug!(resource = %metadata.resource, "Discovered protected resource");
@@ -178,7 +178,7 @@ impl ProtectedResourceMetadata {
 
 /// Extract the base URL (scheme + host + port) from a full URL
 pub fn base_url(url: &str) -> Result<String> {
-    let parsed = Url::parse(url).map_err(|e| Error::Internal(format!("Invalid URL: {e}")))?;
+    let parsed = Url::parse(url).map_err(|e| Error::OAuth(format!("Invalid URL: {e}")))?;
 
     let mut base = format!(
         "{}://{}",

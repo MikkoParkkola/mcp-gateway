@@ -126,7 +126,7 @@ impl TokenStorage {
         // Create directory if it doesn't exist
         if !base_dir.exists() {
             fs::create_dir_all(&base_dir)
-                .map_err(|e| Error::Internal(format!("Failed to create token storage dir: {e}")))?;
+                .map_err(|e| Error::OAuth(format!("Failed to create token storage dir: {e}")))?;
         }
 
         Ok(Self { base_dir })
@@ -140,7 +140,7 @@ impl TokenStorage {
     /// storage directory cannot be created.
     pub fn default_location() -> Result<Self> {
         let home = dirs::home_dir()
-            .ok_or_else(|| Error::Internal("Cannot determine home directory".to_string()))?;
+            .ok_or_else(|| Error::OAuth("Cannot determine home directory".to_string()))?;
 
         Self::new(home.join(".mcp-gateway").join("oauth"))
     }
@@ -203,10 +203,10 @@ impl TokenStorage {
         let path = self.token_path(backend_name, resource_url);
 
         let content = serde_json::to_string_pretty(token)
-            .map_err(|e| Error::Internal(format!("Failed to serialize token: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to serialize token: {e}")))?;
 
         fs::write(&path, content)
-            .map_err(|e| Error::Internal(format!("Failed to write token file: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to write token file: {e}")))?;
 
         // Set restrictive permissions (owner read/write only)
         #[cfg(unix)]
@@ -230,7 +230,7 @@ impl TokenStorage {
 
         if path.exists() {
             fs::remove_file(&path)
-                .map_err(|e| Error::Internal(format!("Failed to delete token file: {e}")))?;
+                .map_err(|e| Error::OAuth(format!("Failed to delete token file: {e}")))?;
             info!(backend = %backend_name, "Deleted OAuth token");
         }
 

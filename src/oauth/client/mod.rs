@@ -238,21 +238,21 @@ impl OAuthClient {
         let auth_meta = self
             .auth_metadata
             .as_ref()
-            .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
+            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
 
         if !auth_meta
             .grant_types_supported
             .iter()
             .any(|g| g == "client_credentials")
         {
-            return Err(Error::Internal(
+            return Err(Error::OAuth(
                 "Server does not support client_credentials grant".to_string(),
             ));
         }
 
         let client_id =
             self.client_id.read().clone().ok_or_else(|| {
-                Error::Internal("No client ID for client_credentials".to_string())
+                Error::OAuth("No client ID for client_credentials".to_string())
             })?;
 
         let scope_str = self.scopes.join(" ");
@@ -269,12 +269,12 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| Error::Internal(format!("Client credentials request failed: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Client credentials request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Internal(format!(
+            return Err(Error::OAuth(format!(
                 "Client credentials failed: HTTP {status} - {body}"
             )));
         }
@@ -282,7 +282,7 @@ impl OAuthClient {
         let token_response: TokenResponse = response
             .json()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to parse credentials response: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to parse credentials response: {e}")))?;
 
         let token = TokenInfo::from_response(
             token_response.access_token,
@@ -391,7 +391,7 @@ impl OAuthClient {
         let auth_meta = self
             .auth_metadata
             .as_ref()
-            .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
+            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
 
         // Generate PKCE parameters
         let (code_verifier, code_challenge) = generate_pkce();
@@ -409,7 +409,7 @@ impl OAuthClient {
 
         // Build authorization URL with the ACTUAL callback URL
         let mut auth_url = Url::parse(&auth_meta.authorization_endpoint)
-            .map_err(|e| Error::Internal(format!("Invalid auth endpoint: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Invalid auth endpoint: {e}")))?;
 
         {
             let mut params = auth_url.query_pairs_mut();
@@ -429,8 +429,8 @@ impl OAuthClient {
         let auth_url_str = auth_url.to_string();
         info!(url = %auth_url_str, "Opening browser for authorization");
 
-        if let Err(e) = open::that(&auth_url_str) {
-            warn!(error = %e, "Failed to open browser automatically");
+        if !open_browser(&auth_url_str) {
+            warn!("Failed to open browser automatically");
             println!("\nPlease authorize this client by visiting:\n{auth_url_str}\n");
         }
 
@@ -462,13 +462,13 @@ impl OAuthClient {
         let auth_meta = self
             .auth_metadata
             .as_ref()
-            .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
+            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
 
         let client_id = self
             .client_id
             .read()
             .clone()
-            .ok_or_else(|| Error::Internal("No client ID".to_string()))?;
+            .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
 
         let mut params = HashMap::new();
         params.insert("grant_type", "authorization_code");
@@ -483,12 +483,12 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| Error::Internal(format!("Token request failed: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Token request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Internal(format!(
+            return Err(Error::OAuth(format!(
                 "Token exchange failed: HTTP {status} - {body}"
             )));
         }
@@ -496,7 +496,7 @@ impl OAuthClient {
         let token_response: TokenResponse = response
             .json()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to parse token response: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to parse token response: {e}")))?;
 
         Ok(TokenInfo::from_response(
             token_response.access_token,
@@ -512,13 +512,13 @@ impl OAuthClient {
         let auth_meta = self
             .auth_metadata
             .as_ref()
-            .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
+            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
 
         let client_id = self
             .client_id
             .read()
             .clone()
-            .ok_or_else(|| Error::Internal("No client ID".to_string()))?;
+            .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
 
         let mut params = HashMap::new();
         params.insert("grant_type", "refresh_token");
@@ -531,12 +531,12 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| Error::Internal(format!("Token refresh failed: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Token refresh failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Internal(format!(
+            return Err(Error::OAuth(format!(
                 "Token refresh failed: HTTP {status} - {body}"
             )));
         }
@@ -544,7 +544,7 @@ impl OAuthClient {
         let token_response: TokenResponse = response
             .json()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to parse refresh response: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to parse refresh response: {e}")))?;
 
         let token = TokenInfo::from_response(
             token_response.access_token,
@@ -573,7 +573,7 @@ impl OAuthClient {
         let auth_meta = self
             .auth_metadata
             .as_ref()
-            .ok_or_else(|| Error::Internal("OAuth not initialized".to_string()))?;
+            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
 
         // Try dynamic registration if supported
         if let Some(ref reg_endpoint) = auth_meta.registration_endpoint {
@@ -610,12 +610,12 @@ impl OAuthClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::Internal(format!("Client registration failed: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Client registration failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Internal(format!(
+            return Err(Error::OAuth(format!(
                 "Client registration failed: HTTP {status} - {body}"
             )));
         }
@@ -623,7 +623,7 @@ impl OAuthClient {
         let reg_response: ClientRegistrationResponse = response
             .json()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to parse registration response: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to parse registration response: {e}")))?;
 
         info!(client_id = %reg_response.client_id, "Registered OAuth client");
         Ok(reg_response.client_id)
@@ -655,6 +655,28 @@ fn generate_state() -> String {
 fn generate_client_id() -> String {
     let id_bytes: [u8; 16] = rand::rng().random();
     URL_SAFE_NO_PAD.encode(id_bytes)
+}
+
+/// Open a URL in the system default browser.
+///
+/// Uses `open` on macOS, `xdg-open` on Linux, and `start` on Windows.
+/// Returns `true` if the command was spawned successfully.
+fn open_browser(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "linux")]
+    let cmd = "xdg-open";
+    #[cfg(target_os = "windows")]
+    let cmd = "cmd";
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new(cmd)
+        .args(["/c", "start", url])
+        .spawn();
+    #[cfg(not(target_os = "windows"))]
+    let result = std::process::Command::new(cmd).arg(url).spawn();
+
+    result.is_ok()
 }
 
 #[cfg(test)]

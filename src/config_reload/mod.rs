@@ -490,7 +490,7 @@ impl ConfigWatcher {
             },
             NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
         )
-        .map_err(|e| crate::Error::Internal(format!("Failed to create config watcher: {e}")))?;
+        .map_err(|e| crate::Error::ConfigWatcher(format!("Failed to create config watcher: {e}")))?;
 
         // Watch the config file's parent directory.
         let config_dir = config_path
@@ -499,7 +499,7 @@ impl ConfigWatcher {
             .to_path_buf();
         watcher
             .watch(&config_dir, RecursiveMode::NonRecursive)
-            .map_err(|e| crate::Error::Internal(format!("Failed to watch config path: {e}")))?;
+            .map_err(|e| crate::Error::ConfigWatcher(format!("Failed to watch config path: {e}")))?;
 
         // Watch each env file's parent directory (skip duplicates and missing).
         let mut watched_dirs = std::collections::HashSet::new();

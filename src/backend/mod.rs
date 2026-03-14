@@ -180,12 +180,12 @@ impl Backend {
         let http_client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .map_err(|e| Error::Internal(format!("Failed to create OAuth HTTP client: {e}")))?;
+            .map_err(|e| Error::OAuth(format!("Failed to create OAuth HTTP client: {e}")))?;
 
         // Get or create token storage
         let storage = Arc::new(
             TokenStorage::default_location()
-                .map_err(|e| Error::Internal(format!("Failed to create token storage: {e}")))?,
+                .map_err(|e| Error::OAuth(format!("Failed to create token storage: {e}")))?,
         );
 
         // Create OAuth client
