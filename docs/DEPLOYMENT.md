@@ -6,7 +6,7 @@ For quick-start and development usage, see the [README](../README.md). For every
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **Rust** | 1.85+ (edition 2024) | Latest stable |
+| **Rust** | 1.88+ (edition 2024) | Latest stable |
 | **OS** | Linux (x86_64, aarch64), macOS (ARM64) | Linux for production |
 | **Memory** | 64 MB | 256 MB+ (scales with backends) |
 | **Disk** | 50 MB (binary + config) | 200 MB (with capabilities) |

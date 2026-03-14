@@ -1,16 +1,16 @@
 # MCP Gateway Benchmarks
 
-Last updated: 2026-02-03
+Last updated: 2026-03-14
 
 ## Build Information
 
 | Metric | Value |
 |--------|-------|
-| Rust Version | 1.85+ (Edition 2024) |
-| Binary Size | 7.1 MB (release) |
-| Source Files | 38 Rust files |
-| Lines of Code | 6,714 |
-| Test Count | 55 (unit + integration) |
+| Rust Version | 1.88+ (Edition 2024) |
+| Binary Size | ~13 MB (release, all features) |
+| Source Files | 246 Rust files |
+| Lines of Code | ~92,000 |
+| Test Count | 2,554 (unit + integration + doc) |
 
 ## Startup Performance
 

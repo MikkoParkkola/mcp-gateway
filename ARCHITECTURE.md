@@ -1,10 +1,10 @@
 # Architecture
 
-`mcp-gateway` v2.4.0 -- Rust, 807 tests, ~178 tools across backends.
+`mcp-gateway` v2.7.0 -- Rust, 2,554 tests, dynamic tool counts across backends.
 
 ## System Overview
 
-The gateway sits between LLM clients (Claude Code, Cursor, etc.) and multiple MCP tool servers. Instead of loading all ~178 tool definitions into context (thousands of tokens), clients connect to the gateway and use a small set of **meta-tools** to discover and invoke tools on demand. This yields ~95% context token savings.
+The gateway sits between LLM clients (Claude Code, Cursor, etc.) and multiple MCP tool servers. Instead of loading all tool definitions into context (thousands of tokens), clients connect to the gateway and use a small set of **meta-tools** to discover and invoke tools on demand. This yields ~95% context token savings.
 
 ```
                             +-----------------------+
