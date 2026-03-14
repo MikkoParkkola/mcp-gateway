@@ -6,7 +6,7 @@
 
 mod features;
 
-use std::{collections::HashMap, env, path::Path, time::Duration};
+use std::{collections::HashMap, env, path::{Path, PathBuf}, time::Duration};
 
 use figment::{
     Figment,
@@ -93,21 +93,84 @@ fn default_routing_profile() -> String {
 }
 
 impl Config {
+    /// Candidate config file locations searched when `--config` is not specified.
+    ///
+    /// Checked in order; the first existing file wins.
+    const FALLBACK_PATHS: &'static [&'static str] = &[
+        "gateway.yaml",
+        "config.yaml",
+        // XDG / home-relative entries are generated at runtime by
+        // [`Config::fallback_config_path`].
+    ];
+
+    /// Discover the config file to load when none is explicitly provided.
+    ///
+    /// Search order:
+    /// 1. `./gateway.yaml`
+    /// 2. `./config.yaml`
+    /// 3. `~/.config/mcp-gateway/gateway.yaml`
+    /// 4. `/etc/mcp-gateway/gateway.yaml`
+    ///
+    /// Returns `None` if none of the candidates exist (caller uses defaults).
+    #[must_use]
+    pub fn fallback_config_path() -> Option<PathBuf> {
+        // Static relative candidates
+        for candidate in Self::FALLBACK_PATHS {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                tracing::debug!("Auto-discovered config: {}", p.display());
+                return Some(p);
+            }
+        }
+
+        // Home-relative candidate
+        if let Some(home) = dirs::home_dir() {
+            let p = home.join(".config/mcp-gateway/gateway.yaml");
+            if p.exists() {
+                tracing::debug!("Auto-discovered config: {}", p.display());
+                return Some(p);
+            }
+        }
+
+        // System-wide candidate
+        let system = PathBuf::from("/etc/mcp-gateway/gateway.yaml");
+        if system.exists() {
+            tracing::debug!("Auto-discovered config: {}", system.display());
+            return Some(system);
+        }
+
+        None
+    }
+
     /// Load configuration from file and environment.
+    ///
+    /// When `path` is `None`, the loader checks common locations in order
+    /// (see [`Config::fallback_config_path`]).  If no file is found anywhere,
+    /// it falls back to compiled-in defaults plus environment overrides.
     ///
     /// # Errors
     ///
-    /// Returns an error if the config file does not exist or cannot be parsed.
+    /// Returns an error if an explicit `path` is supplied but does not exist,
+    /// or if the config file cannot be parsed.
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let mut figment = Figment::new();
 
-        if let Some(p) = path {
-            if !p.exists() {
-                return Err(Error::Config(format!(
-                    "Config file not found: {}",
-                    p.display()
-                )));
+        // Resolve the config file: explicit path takes priority; otherwise
+        // search well-known fallback locations.
+        let resolved: Option<PathBuf> = match path {
+            Some(p) => {
+                if !p.exists() {
+                    return Err(Error::Config(format!(
+                        "Config file not found: {}",
+                        p.display()
+                    )));
+                }
+                Some(p.to_path_buf())
             }
+            None => Self::fallback_config_path(),
+        };
+
+        if let Some(ref p) = resolved {
             figment = figment.merge(Yaml::file(p));
         }
 

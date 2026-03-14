@@ -266,7 +266,7 @@ impl ToolInvoker for MockInvoker {
         self.responses
             .get(tool)
             .cloned()
-            .ok_or_else(|| crate::Error::Internal(format!("Mock: tool not found: {tool}")))
+            .ok_or_else(|| crate::Error::ToolNotFound(tool.to_string()))
     }
 }
 

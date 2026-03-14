@@ -135,12 +135,15 @@ fn source_label(source: &DiscoverySource) -> String {
 
 // ── Interactive selection ──────────────────────────────────────────────────────
 
+/// Prompt the user to select which servers to import via a numbered list.
+///
+/// Prints each server with its index, then reads a comma-separated list of
+/// numbers (or "all" / blank for everything).  Returns only the selected
+/// entries.  This replaces the `dialoguer::MultiSelect` dependency with a
+/// simple stdin-based prompt that works in any terminal.
 fn interactive_select(
     servers: &[DiscoveredServer],
-) -> Result<Vec<&DiscoveredServer>, dialoguer::Error> {
-    use dialoguer::MultiSelect;
-    use dialoguer::theme::ColorfulTheme;
-
+) -> Result<Vec<&DiscoveredServer>, io::Error> {
     let labels: Vec<String> = servers
         .iter()
         .map(|s| {
@@ -158,15 +161,33 @@ fn interactive_select(
         })
         .collect();
 
-    let defaults = vec![true; servers.len()];
+    println!("Select servers to import (default: all):");
+    for (i, label) in labels.iter().enumerate() {
+        println!("  [{i}] {label}");
+    }
+    println!();
+    print!("Enter numbers separated by commas, or press Enter to import all: ");
+    io::Write::flush(&mut io::stdout())?;
 
-    let chosen = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select servers to import (space to toggle, enter to confirm)")
-        .items(&labels)
-        .defaults(&defaults)
-        .interact()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let trimmed = input.trim();
 
-    Ok(chosen.into_iter().map(|i| &servers[i]).collect())
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
+        return Ok(servers.iter().collect());
+    }
+
+    let mut selected = Vec::new();
+    for part in trimmed.split(',') {
+        let part = part.trim();
+        match part.parse::<usize>() {
+            Ok(i) if i < servers.len() => selected.push(&servers[i]),
+            Ok(i) => eprintln!("  Warning: index {i} out of range (max {}), skipped", servers.len() - 1),
+            Err(_) => eprintln!("  Warning: '{part}' is not a valid number, skipped"),
+        }
+    }
+
+    Ok(selected)
 }
 
 // ── Config mutation ────────────────────────────────────────────────────────────

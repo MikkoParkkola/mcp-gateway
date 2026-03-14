@@ -9,6 +9,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
 /// Usage statistics for the gateway
+#[derive(Default)]
 pub struct UsageStats {
     /// Total tool invocations via `gateway_invoke`
     total_invocations: AtomicU64,
@@ -28,17 +29,10 @@ pub struct UsageStats {
 }
 
 impl UsageStats {
-    /// Create new statistics tracker
+    /// Create new statistics tracker.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            total_invocations: AtomicU64::new(0),
-            cache_hits: AtomicU64::new(0),
-            tools_discovered: AtomicU64::new(0),
-            tool_usage: DashMap::new(),
-            cached_tokens_by_server: DashMap::new(),
-            cached_tokens_by_session: DashMap::new(),
-        }
+        Self::default()
     }
 
     /// Record a tool invocation
@@ -191,12 +185,6 @@ impl UsageStats {
     pub fn cost_savings(&self, total_backend_tools: usize, price_per_million: f64) -> f64 {
         let snapshot = self.snapshot(total_backend_tools);
         snapshot.tokens_saved as f64 * price_per_million / 1_000_000.0
-    }
-}
-
-impl Default for UsageStats {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
