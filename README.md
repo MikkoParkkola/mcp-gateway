@@ -161,7 +161,7 @@ The gateway exposes 4 meta-tools that replace hundreds of individual tool defini
 | `gateway_search_tools` | Search tools by keyword across all backends |
 | `gateway_invoke` | Invoke any tool on any backend |
 
-**Example:** You have 12 MCP servers exposing 180+ tools. Without a gateway, every request carries all 180 definitions (~27,000 tokens). With the gateway, the AI discovers and invokes tools on demand:
+**Example:** You have 12 MCP servers exposing 260+ tools. Without a gateway, every request carries all 260 definitions (~39,000 tokens). With the gateway, the AI discovers and invokes tools on demand:
 
 **Step 1: Search for relevant tools**
 
@@ -205,7 +205,7 @@ Response:
 }
 ```
 
-The gateway routes the call to the Tavily backend, applies circuit breaker/retry logic, and returns the result. The AI never loaded all 180 tool schemas -- it discovered and used exactly the one it needed.
+The gateway routes the call to the Tavily backend, applies circuit breaker/retry logic, and returns the result. The AI never loaded all 260 tool schemas -- it discovered and used exactly the one it needed.
 
 ## Features
 
