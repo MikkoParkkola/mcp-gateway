@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-2539%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
+[![Tests](https://img.shields.io/badge/tests-2537%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
 [![MCP Servers](https://img.shields.io/badge/MCP%20servers-48%20built--in-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/QUICKSTART.md)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
