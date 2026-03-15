@@ -1,0 +1,37 @@
+{
+  "name": "mcp-gateway",
+  "version": "2.7.3",
+  "description": "Universal MCP Gateway — single-port multiplexing with Meta-MCP for ~95% context token savings",
+  "license": "MIT OR Apache-2.0",
+  "author": "Mikko Parkkola <mikko.parkkola@iki.fi>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MikkoParkkola/mcp-gateway"
+  },
+  "homepage": "https://github.com/MikkoParkkola/mcp-gateway",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gateway",
+    "proxy",
+    "ai",
+    "llm",
+    "tools"
+  ],
+  "bin": {
+    "mcp-gateway": "run.js"
+  },
+  "files": [
+    "run.js"
+  ],
+  "scripts": {
+    "postinstall": "node run.js --install"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
