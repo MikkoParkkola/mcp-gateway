@@ -4,7 +4,7 @@ Get from zero to a working gateway with tools your AI can use.
 
 ## Prerequisites
 
-- **Rust toolchain** (1.85+): [rustup.rs](https://rustup.rs)
+- **Rust toolchain** (1.88+): [rustup.rs](https://rustup.rs)
 
 ## 1. Install
 

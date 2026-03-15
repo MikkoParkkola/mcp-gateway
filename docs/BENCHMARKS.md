@@ -36,7 +36,7 @@ TBD - With actual backend connections
 
 | Gateway | Startup | Binary Size | Language |
 |---------|---------|-------------|----------|
-| mcp-gateway | ~8ms | 7.1MB | Rust |
+| mcp-gateway | ~8ms | ~12MB | Rust |
 | (Node.js equiv) | ~100ms | N/A | TypeScript |
 
 ## Running Benchmarks

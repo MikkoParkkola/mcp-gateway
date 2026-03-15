@@ -9,8 +9,8 @@
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Tests](https://img.shields.io/badge/tests-2539%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
-[![MCP Servers](https://img.shields.io/badge/MCP%20servers-48%20built--in-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Getting-Started)
-[![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/wiki/Capabilities)
+[![MCP Servers](https://img.shields.io/badge/MCP%20servers-48%20built--in-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/QUICKSTART.md)
+[![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 
@@ -89,7 +89,7 @@ providers:
 
 Drop the file in a capability directory -- **hot-reloaded in ~500ms**, no restart needed.
 
-The gateway ships with **42 starter capabilities** -- 25 work instantly with zero configuration:
+The gateway ships with **70+ starter capabilities** -- many work instantly with zero configuration:
 
 | Category | Zero-Config Tools | Source |
 |----------|------------------|--------|
@@ -431,10 +431,10 @@ mcp-gateway config export --format yaml --redact-secrets
 
 ### Auto-Discovery
 
-Automatically discover MCP servers from npm, pip, and Docker sources. Quality scoring filters low-quality discoveries. Discovered servers can be auto-registered or presented for confirmation.
+Automatically discover MCP servers from existing client configurations (Claude Desktop, Cursor, etc.) and running processes. Quality scoring filters low-quality discoveries. Discovered servers can be auto-registered or presented for confirmation.
 
 ```bash
-mcp-gateway discover --scan npm,pip
+mcp-gateway discover
 ```
 
 ### Semantic Tool Search
@@ -702,7 +702,7 @@ Point your MCP client to the gateway:
 ```json
 {
   "status": "healthy",
-  "version": "2.7.0",
+  "version": "2.7.3",
   "backends": {
     "tavily": {
       "name": "tavily",
@@ -798,7 +798,7 @@ MCP Gateway is a local Rust proxy -- it adds minimal overhead between your clien
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Startup time** | ~8ms | Measured with `hyperfine` ([benchmarks](docs/BENCHMARKS.md)) |
-| **Binary size** | ~13 MB | Release build with LTO, stripped |
+| **Binary size** | ~12 MB | Release build with LTO, stripped |
 | **Gateway overhead** | <2ms per request | Local routing + JSON-RPC parsing (does not include backend latency) |
 | **Memory** | Low | Async I/O via tokio; no per-request allocations for routing |
 
@@ -860,7 +860,7 @@ This shows: backend selection, tool invocations, circuit breaker state changes, 
 
 ## Community Registry
 
-Share, discover, and install capability definitions from the community. Browse the built-in registry of 52+ capabilities, search by keyword, or install from any GitHub repository.
+Share, discover, and install capability definitions from the community. Browse the built-in registry of 70+ capabilities, search by keyword, or install from any GitHub repository.
 
 ```bash
 mcp-gateway cap registry-list              # Browse all capabilities
@@ -898,7 +898,7 @@ Full details: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ## Credits
 
