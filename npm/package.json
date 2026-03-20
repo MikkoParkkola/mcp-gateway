@@ -1,8 +1,8 @@
 {
-  "name": "mcp-gateway",
+  "name": "@mikkoparkkola/mcp-gateway",
   "version": "2.7.3",
   "description": "Universal MCP Gateway — single-port multiplexing with Meta-MCP for ~95% context token savings",
-  "license": "MIT OR Apache-2.0",
+  "license": "MIT",
   "author": "Mikko Parkkola <mikko.parkkola@iki.fi>",
   "repository": {
     "type": "git",

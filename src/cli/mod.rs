@@ -28,6 +28,7 @@
 pub mod completion;
 pub mod invoke;
 pub mod output;
+pub mod skills;
 pub mod subcommands;
 
 use std::path::PathBuf;
@@ -37,6 +38,7 @@ use clap_complete::Shell;
 
 use crate::cli::output::OutputFormat;
 
+pub use skills::SkillsCommand;
 pub use subcommands::{CapCommand, PluginCommand, TlsCommand};
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
@@ -202,6 +204,13 @@ pub enum Command {
     ///   `echo '{"location":"London"}' | mcp-gateway tool invoke weather_current`
     #[command(subcommand, about = "Invoke gateway tools directly from the CLI")]
     Tool(ToolCommand),
+
+    /// Generate agent skill bundles from capability definitions
+    ///
+    /// Converts loaded capability YAML files into Markdown skill bundles
+    /// that AI agents can discover and load via the `loadSkill` convention.
+    #[command(subcommand, about = "Generate agent skill bundles")]
+    Skills(SkillsCommand),
 
     /// Manage gateway plugins from the marketplace
     ///
