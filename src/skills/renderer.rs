@@ -87,13 +87,13 @@ fn render_skill_index(category: &str, capabilities: &[&CapabilityDefinition]) ->
     )
 }
 
-fn generate_category_description(
-    category: &str,
-    capabilities: &[&CapabilityDefinition],
-) -> String {
+fn generate_category_description(category: &str, capabilities: &[&CapabilityDefinition]) -> String {
     let display = capitalize(category);
     let count = capabilities.len();
-    format!("{display} tools via MCP Gateway ({count} command{s})", s = plural(count))
+    format!(
+        "{display} tools via MCP Gateway ({count} command{s})",
+        s = plural(count)
+    )
 }
 
 fn render_index_table(capabilities: &[&CapabilityDefinition]) -> String {
@@ -133,11 +133,7 @@ fn render_parameters_section(schema: &serde_json::Value) -> String {
     let required_set: std::collections::HashSet<&str> = schema
         .get("required")
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
 
     let mut table = String::from(
@@ -151,11 +147,12 @@ fn render_parameters_section(schema: &serde_json::Value) -> String {
     names.sort_unstable();
     for name in names {
         let prop = &props[name];
-        let typ = prop
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("any");
-        let req = if required_set.contains(name) { "yes" } else { "no" };
+        let typ = prop.get("type").and_then(|v| v.as_str()).unwrap_or("any");
+        let req = if required_set.contains(name) {
+            "yes"
+        } else {
+            "no"
+        };
         let desc = prop
             .get("description")
             .and_then(|v| v.as_str())
@@ -189,9 +186,7 @@ fn render_auth_section(auth: &AuthConfig) -> String {
 }
 
 fn render_cost_section(cap: &CapabilityDefinition) -> String {
-    let cost = cap
-        .primary_provider()
-        .map_or(0.0, |p| p.cost_per_call);
+    let cost = cap.primary_provider().map_or(0.0, |p| p.cost_per_call);
 
     let cost_category = &cap.metadata.cost_category;
 
@@ -220,9 +215,7 @@ fn render_guidance_section(cap: &CapabilityDefinition) -> String {
         points.push("Mutating operation — confirm intent before invoking.".to_owned());
     }
 
-    let cost = cap
-        .primary_provider()
-        .map_or(0.0, |p| p.cost_per_call);
+    let cost = cap.primary_provider().map_or(0.0, |p| p.cost_per_call);
     if cost > 0.0 {
         points.push(format!("Costs ~${cost:.4} per call."));
     }
@@ -237,8 +230,7 @@ fn render_guidance_section(cap: &CapabilityDefinition) -> String {
     if cap.is_cacheable() {
         points.push(format!(
             "Responses cached for {} seconds ({}).",
-            cap.cache.ttl,
-            cap.cache.strategy
+            cap.cache.ttl, cap.cache.strategy
         ));
     }
 
@@ -295,12 +287,17 @@ fn plural(n: usize) -> &'static str {
 mod tests {
     use super::*;
     use crate::capability::{
-        AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProvidersConfig,
-        ProviderConfig, SchemaDefinition,
+        AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProviderConfig,
+        ProvidersConfig, SchemaDefinition,
     };
     use serde_json::json;
 
-    fn make_cap(name: &str, category: &str, read_only: bool, auth_required: bool) -> CapabilityDefinition {
+    fn make_cap(
+        name: &str,
+        category: &str,
+        read_only: bool,
+        auth_required: bool,
+    ) -> CapabilityDefinition {
         CapabilityDefinition {
             fulcrum: "1.0".to_owned(),
             name: name.to_owned(),
@@ -318,18 +315,32 @@ mod tests {
             },
             providers: {
                 let mut named = std::collections::HashMap::new();
-                named.insert("primary".to_owned(), ProviderConfig {
-                    service: "rest".to_owned(),
-                    cost_per_call: 0.0,
-                    timeout: 30,
-                    config: Default::default(),
-                });
-                ProvidersConfig { named, fallback: vec![] }
+                named.insert(
+                    "primary".to_owned(),
+                    ProviderConfig {
+                        service: "rest".to_owned(),
+                        cost_per_call: 0.0,
+                        timeout: 30,
+                        config: Default::default(),
+                    },
+                );
+                ProvidersConfig {
+                    named,
+                    fallback: vec![],
+                }
             },
             auth: AuthConfig {
                 required: auth_required,
-                auth_type: if auth_required { "api_key".to_owned() } else { String::new() },
-                key: if auth_required { "env:API_KEY".to_owned() } else { String::new() },
+                auth_type: if auth_required {
+                    "api_key".to_owned()
+                } else {
+                    String::new()
+                },
+                key: if auth_required {
+                    "env:API_KEY".to_owned()
+                } else {
+                    String::new()
+                },
                 ..Default::default()
             },
             cache: CacheConfig::default(),
