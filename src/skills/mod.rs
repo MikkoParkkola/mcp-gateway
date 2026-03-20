@@ -42,8 +42,8 @@ use std::path::Path;
 
 use tracing::info;
 
-use crate::capability::CapabilityDefinition;
 use crate::Result;
+use crate::capability::CapabilityDefinition;
 
 /// Regenerate skill docs for a single capability definition.
 ///
@@ -82,8 +82,8 @@ fn effective_category(cap: &CapabilityDefinition) -> String {
 mod tests {
     use super::*;
     use crate::capability::{
-        AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProvidersConfig,
-        ProviderConfig, SchemaDefinition,
+        AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProviderConfig,
+        ProvidersConfig, SchemaDefinition,
     };
     use tempfile::TempDir;
 
@@ -103,7 +103,10 @@ mod tests {
             name: name.to_owned(),
             description: format!("Desc of {name}"),
             schema: SchemaDefinition::default(),
-            providers: ProvidersConfig { named, fallback: vec![] },
+            providers: ProvidersConfig {
+                named,
+                fallback: vec![],
+            },
             auth: AuthConfig::default(),
             cache: CacheConfig::default(),
             metadata: CapabilityMetadata {
@@ -121,15 +124,23 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cap = make_cap("search_web", "search");
         // WHEN: regenerated
-        regenerate_for_capability(&cap, tmp.path(), &[]).await.unwrap();
+        regenerate_for_capability(&cap, tmp.path(), &[])
+            .await
+            .unwrap();
         // THEN: skill bundle dir exists
-        assert!(tmp.path().join("mcp-gateway-search").join("SKILL.md").exists());
-        assert!(tmp
-            .path()
-            .join("mcp-gateway-search")
-            .join("commands")
-            .join("search_web.md")
-            .exists());
+        assert!(
+            tmp.path()
+                .join("mcp-gateway-search")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            tmp.path()
+                .join("mcp-gateway-search")
+                .join("commands")
+                .join("search_web.md")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -138,7 +149,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cap = make_cap("misc_tool", "");
         // WHEN
-        regenerate_for_capability(&cap, tmp.path(), &[]).await.unwrap();
+        regenerate_for_capability(&cap, tmp.path(), &[])
+            .await
+            .unwrap();
         // THEN: placed under "general"
         assert!(tmp.path().join("mcp-gateway-general").exists());
     }

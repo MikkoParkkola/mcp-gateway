@@ -36,9 +36,9 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use super::regenerate_for_capability;
 use crate::Result;
 use crate::capability::parse_capability_file;
-use super::regenerate_for_capability;
 
 /// Hot-reload watcher that regenerates skill bundles on capability file changes.
 pub struct SkillsWatcher {
@@ -64,14 +64,18 @@ impl SkillsWatcher {
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
         if directories.is_empty() {
-            return Ok(Self { _watcher: Mutex::new(None) });
+            return Ok(Self {
+                _watcher: Mutex::new(None),
+            });
         }
 
         let (event_tx, event_rx) = mpsc::channel::<PathBuf>(100);
         let watcher = Self::create_watcher(event_tx, directories)?;
         Self::spawn_regen_task(event_rx, shutdown_rx, out_dir, agent_paths);
 
-        Ok(Self { _watcher: Mutex::new(Some(watcher)) })
+        Ok(Self {
+            _watcher: Mutex::new(Some(watcher)),
+        })
     }
 
     /// Create the notify watcher, forwarding changed YAML paths.
@@ -82,10 +86,8 @@ impl SkillsWatcher {
         let mut watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 if let Ok(event) = result {
-                    let is_relevant = matches!(
-                        event.kind,
-                        EventKind::Create(_) | EventKind::Modify(_)
-                    );
+                    let is_relevant =
+                        matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_));
                     if is_relevant {
                         for path in event.paths {
                             if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
@@ -222,6 +224,11 @@ metadata:
         // WHEN
         regenerate_changed_files(&[yaml_path], &out_dir, &[]).await;
         // THEN: skill bundle created
-        assert!(out_dir.join("mcp-gateway-test_hot").join("SKILL.md").exists());
+        assert!(
+            out_dir
+                .join("mcp-gateway-test_hot")
+                .join("SKILL.md")
+                .exists()
+        );
     }
 }

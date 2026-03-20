@@ -67,10 +67,8 @@ async fn main() -> ExitCode {
             install,
             dry_run,
         })) => {
-            commands::run_skills_generate(
-                capabilities, server, category, out_dir, install, dry_run,
-            )
-            .await
+            commands::run_skills_generate(capabilities, server, category, out_dir, install, dry_run)
+                .await
         }
         Some(Command::Plugin(plugin_cmd)) => {
             run_plugin_command(plugin_cmd, config_path.as_deref()).await

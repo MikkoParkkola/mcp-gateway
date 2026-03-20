@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, info, warn};
 
-use crate::Result;
 use super::renderer::SkillBundle;
+use crate::Result;
 
 /// Static content for the `crust.json` ownership marker.
 const CRUST_JSON: &str = concat!(
@@ -74,9 +74,9 @@ pub async fn install_bundle(
     let bundle_dir = out_dir.join(format!("mcp-gateway-{}", bundle.category));
     let commands_dir = bundle_dir.join("commands");
 
-    fs::create_dir_all(&commands_dir).await.map_err(|e| {
-        crate::Error::Io(e)
-    })?;
+    fs::create_dir_all(&commands_dir)
+        .await
+        .map_err(|e| crate::Error::Io(e))?;
 
     // Write SKILL.md
     fs::write(bundle_dir.join("SKILL.md"), &bundle.skill_index)
@@ -163,9 +163,7 @@ async fn link_or_copy(src: &Path, dst: &Path) -> Result<()> {
     // Try symlink first (Unix), fall back to copy
     #[cfg(unix)]
     {
-        tokio::fs::symlink(src, dst)
-            .await
-            .map_err(crate::Error::Io)
+        tokio::fs::symlink(src, dst).await.map_err(crate::Error::Io)
     }
     #[cfg(not(unix))]
     {
@@ -177,14 +175,8 @@ async fn link_or_copy(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(not(unix))]
 async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst).await.map_err(crate::Error::Io)?;
-    let mut entries = fs::read_dir(src)
-        .await
-        .map_err(crate::Error::Io)?;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(crate::Error::Io)?
-    {
+    let mut entries = fs::read_dir(src).await.map_err(crate::Error::Io)?;
+    while let Some(entry) = entries.next_entry().await.map_err(crate::Error::Io)? {
         let dst_entry = dst.join(entry.file_name());
         if entry.path().is_dir() {
             Box::pin(copy_dir_recursive(&entry.path(), &dst_entry)).await?;
@@ -241,10 +233,9 @@ mod tests {
         // WHEN
         install_bundle(&bundle, tmp.path(), &[]).await.unwrap();
         // THEN: crust.json contains generator marker
-        let crust = std::fs::read_to_string(
-            tmp.path().join("mcp-gateway-utility").join("crust.json"),
-        )
-        .unwrap();
+        let crust =
+            std::fs::read_to_string(tmp.path().join("mcp-gateway-utility").join("crust.json"))
+                .unwrap();
         assert!(crust.contains("mcp-gateway"));
     }
 
@@ -290,7 +281,11 @@ mod tests {
         let bundle2 = make_bundle("search", &["new_tool"]);
         install_bundle(&bundle2, tmp.path(), &[]).await.unwrap();
         // THEN: new file exists
-        assert!(tmp.path().join("mcp-gateway-search/commands/new_tool.md").exists());
+        assert!(
+            tmp.path()
+                .join("mcp-gateway-search/commands/new_tool.md")
+                .exists()
+        );
     }
 
     // ── default_agent_paths ───────────────────────────────────────────────────
