@@ -11,7 +11,7 @@ use clap::Parser;
 use tracing::{error, info};
 
 use mcp_gateway::{
-    cli::{Cli, Command, PluginCommand, SetupCommand},
+    cli::{Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
     config::Config,
     gateway::Gateway,
     setup_tracing,
@@ -59,6 +59,19 @@ async fn main() -> ExitCode {
             mcp_gateway::validator::cli_handler::run_validate_command(&paths, &config).await
         }
         Some(Command::Tool(tool_cmd)) => commands::run_tool_command(tool_cmd).await,
+        Some(Command::Skills(SkillsCommand::Generate {
+            capabilities,
+            server,
+            category,
+            out_dir,
+            install,
+            dry_run,
+        })) => {
+            commands::run_skills_generate(
+                capabilities, server, category, out_dir, install, dry_run,
+            )
+            .await
+        }
         Some(Command::Plugin(plugin_cmd)) => {
             run_plugin_command(plugin_cmd, config_path.as_deref()).await
         }
