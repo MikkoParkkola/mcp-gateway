@@ -20,19 +20,30 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact: mcp-gateway-linux-x86_64
+            packages: musl-tools
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: mcp-gateway-linux-aarch64
+            packages: musl-tools gcc-aarch64-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: mcp-gateway-darwin-arm64
+            packages: ""
           - os: macos-15
             target: x86_64-apple-darwin
             artifact: mcp-gateway-darwin-x86_64
+            packages: ""
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system packages
+        if: matrix.packages != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -98,7 +109,8 @@ jobs:
             **Supported platforms:**
             - `mcp-gateway-darwin-arm64` - macOS Apple Silicon (M1/M2/M3)
             - `mcp-gateway-darwin-x86_64` - macOS Intel
-            - `mcp-gateway-linux-x86_64` - Linux x86_64
+            - `mcp-gateway-linux-x86_64` - Linux x86_64 (static musl)
+            - `mcp-gateway-linux-aarch64` - Linux ARM64 (static musl)
 
             ## Verify checksums
             ```bash
