@@ -76,7 +76,7 @@ pub async fn install_bundle(
 
     fs::create_dir_all(&commands_dir)
         .await
-        .map_err(|e| crate::Error::Io(e))?;
+        .map_err(crate::Error::Io)?;
 
     // Write SKILL.md
     fs::write(bundle_dir.join("SKILL.md"), &bundle.skill_index)

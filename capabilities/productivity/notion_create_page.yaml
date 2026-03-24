@@ -8,7 +8,14 @@ schema:
     properties:
       parent_id:
         type: string
-        description: "ID of the parent page or database. For databases use a database ID; for pages use a page ID. Find IDs in the Notion URL after the last '-' (32-char hex)."
+        description: "ID of the parent page or database (32-char hex, found in the Notion URL after the last '-')."
+      parent_type:
+        type: string
+        enum: [page_id, database_id]
+        default: page_id
+        description: >
+          Type of the parent object. Use 'page_id' when creating a sub-page under an existing page;
+          use 'database_id' when adding a new entry (row) to a Notion database. Defaults to 'page_id'.
       title:
         type: string
         description: Title of the new page
@@ -66,7 +73,7 @@ providers:
         Notion-Version: "2022-06-28"
       body:
         parent:
-          page_id: "{parent_id}"
+          "{parent_type}": "{parent_id}"
         properties:
           title:
             title:

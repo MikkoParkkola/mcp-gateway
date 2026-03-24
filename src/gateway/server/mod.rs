@@ -55,6 +55,28 @@ pub struct Gateway {
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
 }
 
+/// Shared components produced by [`Gateway::build_meta_mcp`].
+///
+/// Both the HTTP server (`Gateway::run`) and the stdio server
+/// (`Gateway::run_stdio`) require identical `MetaMcp` initialisation.  This
+/// struct carries the results so callers can destructure exactly what they need
+/// without duplicating the construction logic.
+struct BuiltMetaMcp {
+    meta_mcp: Arc<MetaMcp>,
+    tool_policy: Arc<ToolPolicy>,
+    mtls_policy: Arc<MtlsPolicy>,
+    /// Ranker handle retained for graceful-shutdown persistence (HTTP mode).
+    ranker: Arc<SearchRanker>,
+    /// On-disk path for ranker persistence.
+    ranker_path: std::path::PathBuf,
+    /// Transition tracker retained for shutdown persistence (HTTP mode).
+    transition_tracker: Arc<TransitionTracker>,
+    /// On-disk path for transition persistence.
+    transition_path: std::path::PathBuf,
+    /// Data directory used by cost-governance persistence.
+    data_dir: std::path::PathBuf,
+}
+
 impl Gateway {
     /// Create a new gateway
     ///
@@ -101,6 +123,129 @@ impl Gateway {
         })
     }
 
+    /// Build [`MetaMcp`] and all supporting components shared between HTTP and
+    /// stdio modes.
+    ///
+    /// Eliminates ~100 lines of duplication between [`Self::run`] and
+    /// [`Self::run_stdio`].  The returned [`BuiltMetaMcp`] carries handles that
+    /// callers may need for graceful shutdown or further wiring.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; returns `Result` for forward-compatibility.
+    async fn build_meta_mcp(&self) -> Result<BuiltMetaMcp> {
+        // ── Response cache ───────────────────────────────────────────────────
+        let cache = if self.config.cache.enabled {
+            let cache = if self.config.cache.max_entries > 0 {
+                Arc::new(ResponseCache::with_max_entries(
+                    self.config.cache.max_entries,
+                ))
+            } else {
+                Arc::new(ResponseCache::new())
+            };
+            Some(cache)
+        } else {
+            None
+        };
+
+        // ── Security policies ────────────────────────────────────────────────
+        let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
+        let mtls_policy = Arc::new(MtlsPolicy::from_config(&self.config.mtls));
+
+        // ── Usage stats + search ranker with on-disk persistence ─────────────
+        let usage_stats = Some(Arc::new(UsageStats::new()));
+
+        let data_dir = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".mcp-gateway");
+        if let Err(e) = std::fs::create_dir_all(&data_dir) {
+            warn!(error = %e, "Failed to create data directory");
+        }
+
+        let ranker_path = data_dir.join("usage.json");
+        let ranker = Arc::new(SearchRanker::new());
+        if ranker_path.exists() {
+            if let Err(e) = ranker.load(&ranker_path) {
+                warn!(error = %e, "Failed to load search ranker usage data");
+            } else {
+                info!("Loaded search ranking usage data");
+            }
+        }
+
+        // ── Transition tracker ───────────────────────────────────────────────
+        let transition_path = data_dir.join("transitions.json");
+        let transition_tracker = Arc::new(TransitionTracker::new());
+        if transition_path.exists() {
+            if let Err(e) = transition_tracker.load(&transition_path) {
+                warn!(error = %e, "Failed to load transition tracking data");
+            } else {
+                info!("Loaded transition tracking data");
+            }
+        }
+
+        // ── Routing profiles + secret injector ──────────────────────────────
+        let profile_registry = ProfileRegistry::from_config(
+            &self.config.routing_profiles,
+            &self.config.default_routing_profile,
+        );
+        let secret_injector =
+            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends);
+
+        // ── Cost governance (feature-gated) ──────────────────────────────────
+        #[cfg(feature = "cost-governance")]
+        let (cost_registry_opt, budget_enforcer_opt) = {
+            let cg_cfg = self.config.cost_governance.clone();
+            if cg_cfg.enabled {
+                let registry = Arc::new(CostRegistry::new(&cg_cfg));
+                let costs_path = data_dir.join("costs.json");
+                if costs_path.exists() {
+                    match persistence::load(&costs_path) {
+                        Ok(_persisted) => info!("Loaded persisted cost data"),
+                        Err(e) => warn!(error = %e, "Failed to load persisted cost data"),
+                    }
+                }
+                let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
+                info!("Cost governance enabled");
+                (Some(registry), Some(enforcer))
+            } else {
+                (None, None)
+            }
+        };
+
+        // ── MetaMcp builder ──────────────────────────────────────────────────
+        #[allow(unused_mut)]
+        let mut meta_mcp_builder = MetaMcp::with_features(
+            Arc::clone(&self.backends),
+            cache,
+            usage_stats,
+            Some(Arc::clone(&ranker)),
+            self.config.cache.default_ttl,
+        )
+        .with_profile_registry(profile_registry)
+        .with_code_mode(self.config.code_mode.enabled)
+        .with_secret_injector(secret_injector)
+        .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone());
+
+        #[cfg(feature = "cost-governance")]
+        if let (Some(registry), Some(enforcer)) = (cost_registry_opt, budget_enforcer_opt) {
+            meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
+        }
+
+        let meta_mcp = Arc::new(meta_mcp_builder);
+        meta_mcp.set_transition_tracker(Arc::clone(&transition_tracker));
+
+        Ok(BuiltMetaMcp {
+            meta_mcp,
+            tool_policy,
+            mtls_policy,
+            ranker,
+            ranker_path,
+            transition_tracker,
+            transition_path,
+            data_dir,
+        })
+    }
+
     /// Run the gateway.
     ///
     /// # Errors
@@ -126,34 +271,22 @@ impl Gateway {
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
 
-        // Create cache if enabled (with bounded max-size eviction)
-        let cache = if self.config.cache.enabled {
-            let cache = if self.config.cache.max_entries > 0 {
-                Arc::new(ResponseCache::with_max_entries(
-                    self.config.cache.max_entries,
-                ))
-            } else {
-                Arc::new(ResponseCache::new())
-            };
-            info!(
-                enabled = true,
-                default_ttl = ?self.config.cache.default_ttl,
-                max_entries = self.config.cache.max_entries,
-                "Response cache initialized"
-            );
-            Some(cache)
-        } else {
-            None
-        };
+        // ── Shared MetaMcp initialisation ────────────────────────────────────
+        let BuiltMetaMcp {
+            meta_mcp,
+            tool_policy,
+            mtls_policy,
+            ranker,
+            ranker_path,
+            transition_tracker,
+            transition_path,
+            data_dir,
+        } = self.build_meta_mcp().await?;
 
-        // Compile tool policy
-        let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
+        // Log policy and feature states now that the shared builder has run.
         if self.config.security.tool_policy.enabled {
             info!("Tool security policy enabled");
         }
-
-        // Compile mTLS access control policy
-        let mtls_policy = Arc::new(MtlsPolicy::from_config(&self.config.mtls));
         if self.config.mtls.enabled {
             info!(
                 policies = self.config.mtls.policies.len(),
@@ -161,53 +294,15 @@ impl Gateway {
                 "mTLS enabled"
             );
         }
-
-        // Create usage stats (always enabled for now)
-        let usage_stats = Some(Arc::new(UsageStats::new()));
-        if usage_stats.is_some() {
-            info!("Usage statistics tracking enabled");
+        info!("Usage statistics tracking enabled");
+        if self.config.cache.enabled {
+            info!(
+                enabled = true,
+                default_ttl = ?self.config.cache.default_ttl,
+                max_entries = self.config.cache.max_entries,
+                "Response cache initialized"
+            );
         }
-
-        // Create search ranker with persistence
-        let ranker_path = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".mcp-gateway")
-            .join("usage.json");
-
-        let ranker = Arc::new(SearchRanker::new());
-        if let Some(parent) = ranker_path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        if ranker_path.exists() {
-            if let Err(e) = ranker.load(&ranker_path) {
-                warn!(error = %e, "Failed to load search ranker usage data");
-            } else {
-                info!("Loaded search ranking usage data");
-            }
-        }
-        let ranker_for_shutdown = Arc::clone(&ranker);
-
-        // Create transition tracker with persistence
-        let transition_path = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".mcp-gateway")
-            .join("transitions.json");
-
-        let transition_tracker = Arc::new(TransitionTracker::new());
-        if transition_path.exists() {
-            if let Err(e) = transition_tracker.load(&transition_path) {
-                warn!(error = %e, "Failed to load transition tracking data");
-            } else {
-                info!("Loaded transition tracking data");
-            }
-        }
-        let tracker_for_shutdown = Arc::clone(&transition_tracker);
-
-        // Build routing profile registry from config
-        let profile_registry = ProfileRegistry::from_config(
-            &self.config.routing_profiles,
-            &self.config.default_routing_profile,
-        );
         if !self.config.routing_profiles.is_empty() {
             info!(
                 profiles = ?self.config.routing_profiles.keys().collect::<Vec<_>>(),
@@ -216,36 +311,8 @@ impl Gateway {
             );
         }
 
-        // Build secret injector from backend configs (credential brokering)
-        let secret_injector =
-            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends);
-
-        // Resolve cost-governance data directory (shared with ranker/transitions)
-        #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
-        let data_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".mcp-gateway");
-
-        // Build cost governance components if feature + config enabled
-        #[cfg(feature = "cost-governance")]
-        let (cost_registry_opt, budget_enforcer_opt) = {
-            let cg_cfg = self.config.cost_governance.clone();
-            if cg_cfg.enabled {
-                let registry = Arc::new(CostRegistry::new(&cg_cfg));
-                let costs_path = data_dir.join("costs.json");
-                if costs_path.exists() {
-                    match persistence::load(&costs_path) {
-                        Ok(_persisted) => info!("Loaded persisted cost data"),
-                        Err(e) => warn!(error = %e, "Failed to load persisted cost data"),
-                    }
-                }
-                let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
-                info!("Cost governance enabled");
-                (Some(registry), Some(enforcer))
-            } else {
-                (None, None)
-            }
-        };
+        let ranker_for_shutdown = Arc::clone(&ranker);
+        let tracker_for_shutdown = Arc::clone(&transition_tracker);
 
         // T2.6: warn when a surfaced tool's backend is not in warm_start.
         for surfaced in &self.config.meta_mcp.surfaced_tools {
@@ -258,31 +325,6 @@ impl Gateway {
                 );
             }
         }
-
-        // Create app state with cache, stats, and ranking support
-        #[allow(unused_mut)]
-        let mut meta_mcp_builder = MetaMcp::with_features(
-            Arc::clone(&self.backends),
-            cache,
-            usage_stats,
-            Some(ranker),
-            self.config.cache.default_ttl,
-        )
-        .with_profile_registry(profile_registry)
-        .with_code_mode(self.config.code_mode.enabled)
-        .with_secret_injector(secret_injector)
-        .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone());
-
-        // Attach cost governance if enabled
-        #[cfg(feature = "cost-governance")]
-        if let (Some(registry), Some(enforcer)) = (cost_registry_opt, budget_enforcer_opt) {
-            meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
-        }
-
-        let meta_mcp = Arc::new(meta_mcp_builder);
-
-        // Attach transition tracker for predictive tool prefetch
-        meta_mcp.set_transition_tracker(transition_tracker);
 
         // Create webhook registry
         let webhook_registry = Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
@@ -776,83 +818,30 @@ impl Gateway {
     /// Run the gateway in stdio mode.
     ///
     /// Reads newline-delimited JSON-RPC from stdin and writes responses to stdout.
-    /// Reuses the same MetaMcp dispatch logic as the HTTP server so all meta-tools
+    /// Reuses the same `MetaMcp` dispatch logic as the HTTP server so all meta-tools
     /// (`gateway_search_tools`, `gateway_invoke`, etc.) work identically.
     ///
     /// # Errors
     ///
-    /// Returns an error if backend registration or MetaMcp initialisation fails.
+    /// Returns an error if backend registration or `MetaMcp` initialisation fails.
     ///
     /// # Panics
     ///
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run_stdio(self) -> Result<()> {
-        info!(version = env!("CARGO_PKG_VERSION"), "Starting MCP Gateway (stdio mode)");
-
-        // ── Build the same MetaMcp and supporting components as run() ──────────
-        let cache = if self.config.cache.enabled {
-            let cache = if self.config.cache.max_entries > 0 {
-                Arc::new(ResponseCache::with_max_entries(self.config.cache.max_entries))
-            } else {
-                Arc::new(ResponseCache::new())
-            };
-            Some(cache)
-        } else {
-            None
-        };
-
-        let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
-        let mtls_policy = Arc::new(MtlsPolicy::from_config(&self.config.mtls));
-        let usage_stats = Some(Arc::new(UsageStats::new()));
-        let ranker = Arc::new(SearchRanker::new());
-        let transition_tracker = Arc::new(TransitionTracker::new());
-
-        let profile_registry = ProfileRegistry::from_config(
-            &self.config.routing_profiles,
-            &self.config.default_routing_profile,
+        info!(
+            version = env!("CARGO_PKG_VERSION"),
+            "Starting MCP Gateway (stdio mode)"
         );
-        let secret_injector =
-            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends);
 
-        #[cfg(feature = "cost-governance")]
-        #[allow(unused_variables)]
-        let data_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".mcp-gateway");
-
-        #[cfg(feature = "cost-governance")]
-        let (cost_registry_opt, budget_enforcer_opt) = {
-            let cg_cfg = self.config.cost_governance.clone();
-            if cg_cfg.enabled {
-                let registry = Arc::new(CostRegistry::new(&cg_cfg));
-                let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
-                (Some(registry), Some(enforcer))
-            } else {
-                (None, None)
-            }
-        };
-
-        #[allow(unused_mut)]
-        let mut meta_mcp_builder = MetaMcp::with_features(
-            Arc::clone(&self.backends),
-            cache,
-            usage_stats,
-            Some(ranker),
-            self.config.cache.default_ttl,
-        )
-        .with_profile_registry(profile_registry)
-        .with_code_mode(self.config.code_mode.enabled)
-        .with_secret_injector(secret_injector)
-        .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone());
-
-        #[cfg(feature = "cost-governance")]
-        if let (Some(registry), Some(enforcer)) = (cost_registry_opt, budget_enforcer_opt) {
-            meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
-        }
-
-        let meta_mcp = Arc::new(meta_mcp_builder);
-        meta_mcp.set_transition_tracker(transition_tracker);
+        // ── Shared MetaMcp initialisation ────────────────────────────────────
+        let BuiltMetaMcp {
+            meta_mcp,
+            tool_policy,
+            mtls_policy,
+            ..
+        } = self.build_meta_mcp().await?;
 
         if self.config.capabilities.enabled {
             let executor = Arc::new(CapabilityExecutor::new());
@@ -881,17 +870,21 @@ impl Gateway {
         // Warm-start backends (same as HTTP mode)
         {
             let warm_start_list = if self.config.meta_mcp.warm_start.is_empty() {
-                self.backends.all().iter().map(|b| b.name.clone()).collect::<Vec<_>>()
+                self.backends
+                    .all()
+                    .iter()
+                    .map(|b| b.name.clone())
+                    .collect::<Vec<_>>()
             } else {
                 self.config.meta_mcp.warm_start.clone()
             };
             let backends_clone = Arc::clone(&self.backends);
             tokio::spawn(async move {
                 for name in warm_start_list {
-                    if let Some(backend) = backends_clone.get(&name) {
-                        if let Err(e) = backend.start().await {
-                            warn!(backend = %name, error = %e, "Warm-start failed (stdio)");
-                        }
+                    if let Some(backend) = backends_clone.get(&name)
+                        && let Err(e) = backend.start().await
+                    {
+                        warn!(backend = %name, error = %e, "Warm-start failed (stdio)");
                     }
                 }
             });
@@ -947,14 +940,9 @@ impl Gateway {
             }
 
             // Single request
-            let response_opt = Self::dispatch_single(
-                &meta_mcp,
-                &tool_policy,
-                &mtls_policy,
-                &request,
-                session_id,
-            )
-            .await;
+            let response_opt =
+                Self::dispatch_single(&meta_mcp, &tool_policy, &mtls_policy, &request, session_id)
+                    .await;
 
             if let Some(response) = response_opt {
                 Self::write_response(&mut stdout, &response).await;
@@ -989,7 +977,7 @@ impl Gateway {
         }
     }
 
-    /// Dispatch a single JSON-RPC request through MetaMcp.
+    /// Dispatch a single JSON-RPC request through `MetaMcp`.
     ///
     /// Returns `None` for notifications (no response expected per JSON-RPC spec).
     async fn dispatch_single(
@@ -1012,12 +1000,11 @@ impl Gateway {
 
         let id = request.get("id").and_then(extract_request_id);
 
-        let method = match request.get("method").and_then(|v| v.as_str()) {
-            Some(m) => m.to_string(),
-            None => {
-                let resp = JsonRpcResponse::error(id, -32600, "Missing method");
-                return Some(serde_json::to_value(resp).unwrap());
-            }
+        let method = if let Some(m) = request.get("method").and_then(|v| v.as_str()) {
+            m.to_string()
+        } else {
+            let resp = JsonRpcResponse::error(id, -32600, "Missing method");
+            return Some(serde_json::to_value(resp).unwrap());
         };
 
         let params = request.get("params").cloned();
@@ -1029,12 +1016,9 @@ impl Gateway {
         }
 
         // Requests must have an id
-        let id = match id {
-            Some(i) => i,
-            None => {
-                let resp = JsonRpcResponse::error(None, -32600, "Missing id");
-                return Some(serde_json::to_value(resp).unwrap());
-            }
+        let Some(id) = id else {
+            let resp = JsonRpcResponse::error(None, -32600, "Missing id");
+            return Some(serde_json::to_value(resp).unwrap());
         };
 
         let response = match method.as_str() {
@@ -1047,24 +1031,24 @@ impl Gateway {
                 let tool_name = tool_name.to_string();
 
                 // Apply tool policy check for gateway_invoke calls
-                if tool_name == "gateway_invoke" {
-                    if let Some(ref p) = params {
-                        let server = p
-                            .get("arguments")
-                            .and_then(|a| a.get("server"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let tool = p
-                            .get("arguments")
-                            .and_then(|a| a.get("tool"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if !server.is_empty() && !tool.is_empty() {
-                            if let Err(e) = tool_policy.check(server, tool) {
-                                let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
-                                return Some(serde_json::to_value(resp).unwrap());
-                            }
-                        }
+                if tool_name == "gateway_invoke"
+                    && let Some(ref p) = params
+                {
+                    let server = p
+                        .get("arguments")
+                        .and_then(|a| a.get("server"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let tool = p
+                        .get("arguments")
+                        .and_then(|a| a.get("tool"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !server.is_empty() && !tool.is_empty()
+                        && let Err(e) = tool_policy.check(server, tool)
+                    {
+                        let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
+                        return Some(serde_json::to_value(resp).unwrap());
                     }
                 }
 
@@ -1077,11 +1061,11 @@ impl Gateway {
             "resources/list" => meta_mcp.handle_resources_list(id, params.as_ref()).await,
             "resources/read" => meta_mcp.handle_resources_read(id, params.as_ref()).await,
             "resources/templates/list" => {
-                meta_mcp.handle_resources_templates_list(id, params.as_ref()).await
+                meta_mcp
+                    .handle_resources_templates_list(id, params.as_ref())
+                    .await
             }
-            "logging/setLevel" => {
-                meta_mcp.handle_logging_set_level(id, params.as_ref()).await
-            }
+            "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params.as_ref()).await,
             "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
             other => {
                 debug!(method = %other, "stdio: unknown method");
