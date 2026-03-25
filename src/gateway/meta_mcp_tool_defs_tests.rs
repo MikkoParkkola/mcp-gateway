@@ -122,12 +122,12 @@ fn base_tool_read_only_hints_match_spec() {
         assert_eq!(ann.open_world_hint, Some(false), "{name}: open_world_hint");
     }
 
-    // WHEN/THEN: invoke is NOT read-only and IS open-world; destructive/idempotent are None
+    // WHEN/THEN: invoke is NOT read-only, IS open-world, NOT destructive, NOT idempotent
     let invoke_ann = by_name("gateway_invoke").annotations.as_ref().unwrap();
     assert_eq!(invoke_ann.read_only_hint, Some(false));
     assert_eq!(invoke_ann.open_world_hint, Some(true));
-    assert!(invoke_ann.destructive_hint.is_none());
-    assert!(invoke_ann.idempotent_hint.is_none());
+    assert_eq!(invoke_ann.destructive_hint, Some(false));
+    assert_eq!(invoke_ann.idempotent_hint, Some(false));
 }
 
 #[test]
@@ -199,6 +199,73 @@ fn build_revive_server_tool_requires_server_param() {
     let tool = build_revive_server_tool();
     assert_eq!(tool.name, "gateway_revive_server");
     assert_eq!(tool.input_schema["required"][0], "server");
+}
+
+// ── Annotations on management meta-tools ────────────────────────────────
+
+#[test]
+fn stats_tool_has_read_only_annotations() {
+    // GIVEN: stats tool definition
+    // WHEN: inspecting annotations
+    // THEN: readOnly=true, destructive=false, idempotent=true
+    let ann = build_stats_tool().annotations.expect("annotations must be Some");
+    assert_eq!(ann.read_only_hint, Some(true));
+    assert_eq!(ann.destructive_hint, Some(false));
+    assert_eq!(ann.idempotent_hint, Some(true));
+}
+
+#[test]
+fn cost_report_tool_has_read_only_annotations() {
+    // GIVEN: cost_report tool definition
+    // WHEN: inspecting annotations
+    // THEN: readOnly=true, destructive=false, idempotent=true
+    let ann = build_cost_report_tool()
+        .annotations
+        .expect("annotations must be Some");
+    assert_eq!(ann.read_only_hint, Some(true));
+    assert_eq!(ann.destructive_hint, Some(false));
+    assert_eq!(ann.idempotent_hint, Some(true));
+}
+
+#[test]
+fn kill_server_tool_has_destructive_idempotent_annotations() {
+    // GIVEN: kill_server tool definition
+    // WHEN: inspecting annotations
+    // THEN: readOnly=false, destructive=true, idempotent=true (kill is idempotent — calling twice is safe)
+    let ann = build_kill_server_tool()
+        .annotations
+        .expect("annotations must be Some");
+    assert_eq!(ann.read_only_hint, Some(false));
+    assert_eq!(ann.destructive_hint, Some(true));
+    assert_eq!(ann.idempotent_hint, Some(true));
+    assert_eq!(ann.open_world_hint, Some(false));
+}
+
+#[test]
+fn revive_server_tool_has_write_idempotent_annotations() {
+    // GIVEN: revive_server tool definition
+    // WHEN: inspecting annotations
+    // THEN: readOnly=false, destructive=false, idempotent=true
+    let ann = build_revive_server_tool()
+        .annotations
+        .expect("annotations must be Some");
+    assert_eq!(ann.read_only_hint, Some(false));
+    assert_eq!(ann.destructive_hint, Some(false));
+    assert_eq!(ann.idempotent_hint, Some(true));
+    assert_eq!(ann.open_world_hint, Some(false));
+}
+
+#[test]
+fn reload_config_tool_has_write_idempotent_annotations() {
+    // GIVEN: reload_config tool definition
+    // WHEN: inspecting annotations
+    // THEN: readOnly=false, destructive=false, idempotent=true
+    let ann = build_reload_config_tool()
+        .annotations
+        .expect("annotations must be Some");
+    assert_eq!(ann.read_only_hint, Some(false));
+    assert_eq!(ann.destructive_hint, Some(false));
+    assert_eq!(ann.idempotent_hint, Some(true));
 }
 
 // ── Code Mode tool definitions ──────────────────────────────────────────
