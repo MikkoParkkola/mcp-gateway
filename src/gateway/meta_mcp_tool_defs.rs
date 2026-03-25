@@ -134,8 +134,8 @@ fn build_invoke_tool() -> Tool {
         annotations: Some(ToolAnnotations {
             title: None,
             read_only_hint: Some(false),
-            destructive_hint: None,
-            idempotent_hint: None,
+            destructive_hint: Some(false),
+            idempotent_hint: Some(false),
             open_world_hint: Some(true),
         }),
     }
@@ -178,7 +178,7 @@ pub(crate) fn build_stats_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(read_only_annotations()),
     }
 }
 
@@ -227,7 +227,29 @@ pub(crate) fn build_webhook_status_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(read_only_annotations()),
+    }
+}
+
+/// Annotations for write operations that are destructive but idempotent (kill switch).
+fn destructive_idempotent_annotations() -> ToolAnnotations {
+    ToolAnnotations {
+        title: None,
+        read_only_hint: Some(false),
+        destructive_hint: Some(true),
+        idempotent_hint: Some(true),
+        open_world_hint: Some(false),
+    }
+}
+
+/// Annotations for write operations that are non-destructive and idempotent.
+fn write_idempotent_annotations() -> ToolAnnotations {
+    ToolAnnotations {
+        title: None,
+        read_only_hint: Some(false),
+        destructive_hint: Some(false),
+        idempotent_hint: Some(true),
+        open_world_hint: Some(false),
     }
 }
 
@@ -252,7 +274,7 @@ pub(crate) fn build_kill_server_tool() -> Tool {
             "required": ["server"]
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(destructive_idempotent_annotations()),
     }
 }
 
@@ -277,7 +299,7 @@ pub(crate) fn build_revive_server_tool() -> Tool {
             "required": ["server"]
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(write_idempotent_annotations()),
     }
 }
 
@@ -389,7 +411,7 @@ pub(crate) fn build_reload_config_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(write_idempotent_annotations()),
     }
 }
 
@@ -425,7 +447,7 @@ pub(crate) fn build_cost_report_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(read_only_annotations()),
     }
 }
 
