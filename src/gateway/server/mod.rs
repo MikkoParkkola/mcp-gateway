@@ -2,6 +2,7 @@
 
 mod persistence;
 mod support;
+mod warmstart;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,6 +38,7 @@ use crate::security::firewall::Firewall;
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
+use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
 #[cfg(feature = "cost-governance")]
 use support::build_persisted_costs;
@@ -615,50 +617,13 @@ impl Gateway {
         // Warm-start backends: connect + prefetch tools into cache
         // If warm_start list is empty, warm ALL backends (makes list/search fast)
         {
-            let warm_start_list = if self.config.meta_mcp.warm_start.is_empty() {
-                let all_names: Vec<String> =
-                    self.backends.all().iter().map(|b| b.name.clone()).collect();
-                info!(
-                    "Warm-starting ALL {} backends (tool prefetch)",
-                    all_names.len()
-                );
-                all_names
-            } else {
-                info!(
-                    "Warm-starting backends: {:?}",
-                    self.config.meta_mcp.warm_start
-                );
-                self.config.meta_mcp.warm_start.clone()
-            };
-
-            let backends_clone = Arc::clone(&self.backends);
-
-            tokio::spawn(async move {
-                for name in warm_start_list {
-                    if let Some(backend) = backends_clone.get(&name) {
-                        match backend.start().await {
-                            Ok(()) => {
-                                // Prefetch tools into cache after successful start
-                                match backend.get_tools().await {
-                                    Ok(tools) => info!(
-                                        backend = %name,
-                                        tools = tools.len(),
-                                        "Warm-started + tools cached"
-                                    ),
-                                    Err(e) => warn!(
-                                        backend = %name,
-                                        error = %e,
-                                        "Warm-started but tool prefetch failed"
-                                    ),
-                                }
-                            }
-                            Err(e) => warn!(backend = %name, error = %e, "Warm-start failed"),
-                        }
-                    } else {
-                        warn!(backend = %name, "Backend not found for warm-start");
-                    }
-                }
-            });
+            let warm_start_list =
+                build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, true);
+            spawn_warm_start_task(
+                Arc::clone(&self.backends),
+                warm_start_list,
+                WarmStartMode::Http,
+            );
         }
 
         // Start health check task
@@ -865,25 +830,13 @@ impl Gateway {
 
         // Warm-start backends (same as HTTP mode)
         {
-            let warm_start_list = if self.config.meta_mcp.warm_start.is_empty() {
-                self.backends
-                    .all()
-                    .iter()
-                    .map(|b| b.name.clone())
-                    .collect::<Vec<_>>()
-            } else {
-                self.config.meta_mcp.warm_start.clone()
-            };
-            let backends_clone = Arc::clone(&self.backends);
-            tokio::spawn(async move {
-                for name in warm_start_list {
-                    if let Some(backend) = backends_clone.get(&name)
-                        && let Err(e) = backend.start().await
-                    {
-                        warn!(backend = %name, error = %e, "Warm-start failed (stdio)");
-                    }
-                }
-            });
+            let warm_start_list =
+                build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, false);
+            spawn_warm_start_task(
+                Arc::clone(&self.backends),
+                warm_start_list,
+                WarmStartMode::Stdio,
+            );
         }
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
