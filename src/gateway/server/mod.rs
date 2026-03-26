@@ -1,5 +1,6 @@
 //! Gateway server
 
+mod persistence;
 mod support;
 
 use std::net::SocketAddr;
@@ -23,9 +24,7 @@ use crate::config::Config;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::{
-    enforcer::BudgetEnforcer,
-    persistence::{self},
-    registry::CostRegistry,
+    enforcer::BudgetEnforcer, persistence as cost_persistence, registry::CostRegistry,
 };
 use crate::key_server::{KeyServer, store::spawn_reaper};
 use crate::mtls::MtlsPolicy;
@@ -155,33 +154,27 @@ impl Gateway {
         // ── Usage stats + search ranker with on-disk persistence ─────────────
         let usage_stats = Some(Arc::new(UsageStats::new()));
 
-        let data_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".mcp-gateway");
-        if let Err(e) = std::fs::create_dir_all(&data_dir) {
-            warn!(error = %e, "Failed to create data directory");
-        }
+        let data_dir = persistence::standard_data_dir();
+        persistence::ensure_data_dir(&data_dir);
 
         let ranker_path = data_dir.join("usage.json");
         let ranker = Arc::new(SearchRanker::new());
-        if ranker_path.exists() {
-            if let Err(e) = ranker.load(&ranker_path) {
-                warn!(error = %e, "Failed to load search ranker usage data");
-            } else {
-                info!("Loaded search ranking usage data");
-            }
-        }
+        persistence::load_if_exists(
+            &ranker_path,
+            |path| ranker.load(path),
+            "Failed to load search ranker usage data",
+            "Loaded search ranking usage data",
+        );
 
         // ── Transition tracker ───────────────────────────────────────────────
         let transition_path = data_dir.join("transitions.json");
         let transition_tracker = Arc::new(TransitionTracker::new());
-        if transition_path.exists() {
-            if let Err(e) = transition_tracker.load(&transition_path) {
-                warn!(error = %e, "Failed to load transition tracking data");
-            } else {
-                info!("Loaded transition tracking data");
-            }
-        }
+        persistence::load_if_exists(
+            &transition_path,
+            |path| transition_tracker.load(path),
+            "Failed to load transition tracking data",
+            "Loaded transition tracking data",
+        );
 
         // ── Routing profiles + secret injector ──────────────────────────────
         let profile_registry = ProfileRegistry::from_config(
@@ -198,12 +191,12 @@ impl Gateway {
             if cg_cfg.enabled {
                 let registry = Arc::new(CostRegistry::new(&cg_cfg));
                 let costs_path = data_dir.join("costs.json");
-                if costs_path.exists() {
-                    match persistence::load(&costs_path) {
-                        Ok(_persisted) => info!("Loaded persisted cost data"),
-                        Err(e) => warn!(error = %e, "Failed to load persisted cost data"),
-                    }
-                }
+                persistence::load_if_exists(
+                    &costs_path,
+                    |path| cost_persistence::load(path).map(|_persisted| ()),
+                    "Failed to load persisted cost data",
+                    "Loaded persisted cost data",
+                );
                 let enforcer = Arc::new(BudgetEnforcer::new(cg_cfg, Arc::clone(&registry)));
                 info!("Cost governance enabled");
                 (Some(registry), Some(enforcer))
@@ -732,7 +725,7 @@ impl Gateway {
                         _ = interval.tick() => {
                             let snap = enforcer_persist.snapshot();
                             let persisted = build_persisted_costs(&snap);
-                            if let Err(e) = persistence::save(&costs_path_periodic, &persisted) {
+                            if let Err(e) = cost_persistence::save(&costs_path_periodic, &persisted) {
                                 warn!(error = %e, "Periodic cost persistence failed");
                             } else {
                                 debug!("Periodic cost data saved");
@@ -757,18 +750,20 @@ impl Gateway {
         }
 
         // Save search ranker usage data
-        if let Err(e) = ranker_for_shutdown.save(&ranker_path) {
-            warn!(error = %e, "Failed to save search ranker usage data");
-        } else {
-            info!("Saved search ranking usage data");
-        }
+        persistence::save_with_logging(
+            &ranker_path,
+            |path| ranker_for_shutdown.save(path),
+            "Failed to save search ranker usage data",
+            "Saved search ranking usage data",
+        );
 
         // Save transition tracking data
-        if let Err(e) = tracker_for_shutdown.save(&transition_path) {
-            warn!(error = %e, "Failed to save transition tracking data");
-        } else {
-            info!("Saved transition tracking data");
-        }
+        persistence::save_with_logging(
+            &transition_path,
+            |path| tracker_for_shutdown.save(path),
+            "Failed to save transition tracking data",
+            "Saved transition tracking data",
+        );
 
         // Save cost governance data on graceful shutdown
         #[cfg(feature = "cost-governance")]
@@ -776,11 +771,12 @@ impl Gateway {
             let costs_path = data_dir.join("costs.json");
             let snap = enforcer.snapshot();
             let persisted = build_persisted_costs(&snap);
-            if let Err(e) = persistence::save(&costs_path, &persisted) {
-                warn!(error = %e, "Failed to save cost data on shutdown");
-            } else {
-                info!("Saved cost governance data");
-            }
+            persistence::save_with_logging(
+                &costs_path,
+                |path| cost_persistence::save(path, &persisted),
+                "Failed to save cost data on shutdown",
+                "Saved cost governance data",
+            );
         }
 
         // Graceful drain: wait for in-flight requests to complete.
