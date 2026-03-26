@@ -13,7 +13,8 @@ use tracing::{debug, info, warn};
 
 use super::AppState;
 use super::helpers::{
-    build_response, extract_tools_call_params, parse_request, parse_sampling_params,
+    build_accepted_response, build_error_response, build_response, extract_tools_call_params,
+    parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::streaming::create_sse_response;
@@ -271,13 +272,13 @@ pub(super) async fn meta_mcp_handler(
         match sanitize_json_value(&request) {
             Ok(sanitized) => sanitized,
             Err(e) => {
-                let response = JsonRpcResponse::error(None, -32600, e.to_string());
-                let mut resp = Json(serde_json::to_value(response).unwrap()).into_response();
-                resp.headers_mut().insert(
-                    axum::http::header::HeaderName::from_static("mcp-session-id"),
-                    session_id.parse().unwrap(),
+                return build_error_response(
+                    None,
+                    -32600,
+                    e.to_string(),
+                    &session_id,
+                    StatusCode::BAD_REQUEST,
                 );
-                return (StatusCode::BAD_REQUEST, resp).into_response();
             }
         }
     } else {
@@ -301,24 +302,14 @@ pub(super) async fn meta_mcp_handler(
         } else {
             warn!(id = %resp_id, "No pending request for response");
         }
-        let mut resp = Json(json!({})).into_response();
-        resp.headers_mut().insert(
-            axum::http::header::HeaderName::from_static("mcp-session-id"),
-            session_id.parse().unwrap(),
-        );
-        return (StatusCode::ACCEPTED, resp).into_response();
+        return build_accepted_response(&session_id);
     }
 
     // Parse request
     let (id, method, params) = match parse_request(&request) {
         Ok(parsed) => parsed,
         Err(response) => {
-            let mut resp = Json(serde_json::to_value(response).unwrap()).into_response();
-            resp.headers_mut().insert(
-                axum::http::header::HeaderName::from_static("mcp-session-id"),
-                session_id.parse().unwrap(),
-            );
-            return (StatusCode::BAD_REQUEST, resp).into_response();
+            return build_response(response, &session_id, StatusCode::BAD_REQUEST);
         }
     };
 
@@ -327,12 +318,7 @@ pub(super) async fn meta_mcp_handler(
     // Handle notifications (no id) - return 202 Accepted with empty body
     if method.starts_with("notifications/") {
         debug!(notification = %method, "Handling notification");
-        let mut resp = Json(json!({})).into_response();
-        resp.headers_mut().insert(
-            axum::http::header::HeaderName::from_static("mcp-session-id"),
-            session_id.parse().unwrap(),
-        );
-        return (StatusCode::ACCEPTED, resp).into_response();
+        return build_accepted_response(&session_id);
     }
 
     // For requests, id is guaranteed to exist (checked in parse_request)
@@ -377,14 +363,13 @@ pub(super) async fn meta_mcp_handler(
                 if !server.is_empty() && !tool.is_empty() {
                     // Global policy check
                     if let Err(e) = state.tool_policy.check(server, tool) {
-                        let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
-                        let mut response =
-                            Json(serde_json::to_value(resp).unwrap()).into_response();
-                        response.headers_mut().insert(
-                            axum::http::header::HeaderName::from_static("mcp-session-id"),
-                            session_id.parse().unwrap(),
+                        return build_error_response(
+                            Some(id),
+                            -32600,
+                            e.to_string(),
+                            &session_id,
+                            StatusCode::FORBIDDEN,
                         );
-                        return (StatusCode::FORBIDDEN, response).into_response();
                     }
 
                     // mTLS certificate-based policy check (defense-in-depth layer)
@@ -404,21 +389,16 @@ pub(super) async fn meta_mcp_handler(
                                 identity = identity_label,
                                 "Tool invocation denied by mTLS policy"
                             );
-                            let resp = JsonRpcResponse::error(
+                            return build_error_response(
                                 Some(id),
                                 -32600,
                                 format!(
                                     "Tool '{tool}' on server '{server}' is blocked by \
                                          certificate policy"
                                 ),
+                                &session_id,
+                                StatusCode::FORBIDDEN,
                             );
-                            let mut response =
-                                Json(serde_json::to_value(resp).unwrap()).into_response();
-                            response.headers_mut().insert(
-                                axum::http::header::HeaderName::from_static("mcp-session-id"),
-                                session_id.parse().unwrap(),
-                            );
-                            return (StatusCode::FORBIDDEN, response).into_response();
                         }
                     }
 
@@ -426,14 +406,13 @@ pub(super) async fn meta_mcp_handler(
                     if let Some(ref c) = client
                         && let Err(e) = c.check_tool_scope(server, tool)
                     {
-                        let resp = JsonRpcResponse::error(Some(id), -32600, e);
-                        let mut response =
-                            Json(serde_json::to_value(resp).unwrap()).into_response();
-                        response.headers_mut().insert(
-                            axum::http::header::HeaderName::from_static("mcp-session-id"),
-                            session_id.parse().unwrap(),
+                        return build_error_response(
+                            Some(id),
+                            -32600,
+                            e,
+                            &session_id,
+                            StatusCode::FORBIDDEN,
                         );
-                        return (StatusCode::FORBIDDEN, response).into_response();
                     }
                 }
 
@@ -465,18 +444,13 @@ pub(super) async fn meta_mcp_handler(
                             .map_or("Security firewall blocked this request", |f| {
                                 f.description.as_str()
                             });
-                        let resp = JsonRpcResponse::error(
+                        return build_error_response(
                             Some(id),
                             -32600,
                             format!("Firewall blocked: {reason}"),
+                            &session_id,
+                            StatusCode::BAD_REQUEST,
                         );
-                        let mut response =
-                            Json(serde_json::to_value(resp).unwrap()).into_response();
-                        response.headers_mut().insert(
-                            axum::http::header::HeaderName::from_static("mcp-session-id"),
-                            session_id.parse().unwrap(),
-                        );
-                        return (StatusCode::BAD_REQUEST, response).into_response();
                     }
                 }
 
@@ -487,13 +461,13 @@ pub(super) async fn meta_mcp_handler(
                     && let Some(url) = backend.transport_url()
                     && let Err(e) = validate_url_not_ssrf(url)
                 {
-                    let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
-                    let mut response = Json(serde_json::to_value(resp).unwrap()).into_response();
-                    response.headers_mut().insert(
-                        axum::http::header::HeaderName::from_static("mcp-session-id"),
-                        session_id.parse().unwrap(),
+                    return build_error_response(
+                        Some(id),
+                        -32600,
+                        e.to_string(),
+                        &session_id,
+                        StatusCode::FORBIDDEN,
                     );
-                    return (StatusCode::FORBIDDEN, response).into_response();
                 }
             }
 
@@ -629,20 +603,20 @@ pub(super) async fn meta_mcp_handler(
                 Some(p) => match serde_json::from_value(p) {
                     Ok(ep) => ep,
                     Err(e) => {
-                        return build_response(
-                            JsonRpcResponse::error(
-                                Some(id),
-                                -32602,
-                                format!("Invalid elicitation params: {e}"),
-                            ),
+                        return build_error_response(
+                            Some(id),
+                            -32602,
+                            format!("Invalid elicitation params: {e}"),
                             &session_id,
                             StatusCode::OK,
                         );
                     }
                 },
                 None => {
-                    return build_response(
-                        JsonRpcResponse::error(Some(id), -32602, "Missing elicitation params"),
+                    return build_error_response(
+                        Some(id),
+                        -32602,
+                        "Missing elicitation params",
                         &session_id,
                         StatusCode::OK,
                     );
@@ -674,10 +648,5 @@ pub(super) async fn meta_mcp_handler(
     };
 
     // Return response with session ID header
-    let mut resp = Json(serde_json::to_value(response).unwrap()).into_response();
-    resp.headers_mut().insert(
-        axum::http::header::HeaderName::from_static("mcp-session-id"),
-        session_id.parse().unwrap(),
-    );
-    (StatusCode::OK, resp).into_response()
+    build_response(response, &session_id, StatusCode::OK)
 }

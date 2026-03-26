@@ -1,9 +1,11 @@
 use super::helpers::{
-    extract_request_id, extract_tools_call_params, is_notification_method, parse_request,
+    build_accepted_response, build_error_response, extract_request_id, extract_tools_call_params,
+    is_notification_method, parse_request,
 };
 use crate::protocol::RequestId;
+use axum::{body::to_bytes, http::StatusCode};
 use pretty_assertions::assert_eq;
-use serde_json::json;
+use serde_json::{Value, json};
 
 // =====================================================================
 // extract_request_id
@@ -286,4 +288,41 @@ fn parse_request_initialize_method() {
     assert_eq!(id, Some(RequestId::String("init-1".to_string())));
     assert_eq!(method, "initialize");
     assert!(params.is_some());
+}
+
+// =====================================================================
+// response helpers
+// =====================================================================
+
+#[tokio::test]
+async fn build_error_response_sets_status_session_header_and_rpc_body() {
+    let response = build_error_response(
+        Some(RequestId::Number(7)),
+        -32602,
+        "Missing parameter",
+        "sess-123",
+        StatusCode::BAD_REQUEST,
+    );
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["mcp-session-id"], "sess-123");
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["error"]["code"], -32602);
+    assert_eq!(json["error"]["message"], "Missing parameter");
+    assert_eq!(json["id"], json!(7));
+}
+
+#[tokio::test]
+async fn build_accepted_response_sets_status_session_header_and_empty_body() {
+    let response = build_accepted_response("sess-accepted");
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.headers()["mcp-session-id"], "sess-accepted");
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json, json!({}));
 }

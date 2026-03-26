@@ -5,18 +5,47 @@ use serde_json::{Value, json};
 
 use crate::protocol::{JsonRpcResponse, RequestId, SamplingCreateMessageParams};
 
+/// Build an HTTP response with a `mcp-session-id` header from an arbitrary JSON body.
+pub(super) fn build_json_response(
+    body: Value,
+    session_id: &str,
+    status: StatusCode,
+) -> axum::response::Response {
+    let mut resp = Json(body).into_response();
+    resp.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("mcp-session-id"),
+        session_id.parse().unwrap(),
+    );
+    (status, resp).into_response()
+}
+
 /// Build an HTTP response with a `mcp-session-id` header and a given status.
 pub(super) fn build_response(
     rpc: JsonRpcResponse,
     session_id: &str,
     status: StatusCode,
 ) -> axum::response::Response {
-    let mut resp = Json(serde_json::to_value(rpc).unwrap()).into_response();
-    resp.headers_mut().insert(
-        axum::http::header::HeaderName::from_static("mcp-session-id"),
-        session_id.parse().unwrap(),
-    );
-    (status, resp).into_response()
+    build_json_response(serde_json::to_value(rpc).unwrap(), session_id, status)
+}
+
+/// Build a JSON-RPC error response with a `mcp-session-id` header and status.
+pub(super) fn build_error_response(
+    id: Option<RequestId>,
+    code: i32,
+    message: impl Into<String>,
+    session_id: &str,
+    status: StatusCode,
+) -> axum::response::Response {
+    build_response(
+        JsonRpcResponse::error(id, code, message.into()),
+        session_id,
+        status,
+    )
+}
+
+/// Build a `202 Accepted` response with an empty JSON body and session header.
+pub(super) fn build_accepted_response(session_id: &str) -> axum::response::Response {
+    build_json_response(json!({}), session_id, StatusCode::ACCEPTED)
 }
 
 /// Parse `sampling/createMessage` params from raw JSON, returning an early
