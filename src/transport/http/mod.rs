@@ -60,6 +60,14 @@ pub struct HttpTransport {
     protocol_version: RwLock<Option<String>>,
 }
 
+/// Outgoing header modes for the three HTTP transport call-sites.
+#[derive(Clone, Copy)]
+enum HeaderMode<'a> {
+    Sse,
+    Request { method: &'a str },
+    Notify,
+}
+
 impl HttpTransport {
     /// Create a new HTTP transport
     ///
@@ -250,6 +258,86 @@ impl HttpTransport {
         Ok(())
     }
 
+    /// Build an [`header::HeaderMap`] according to `mode`.
+    ///
+    /// This is the single source of truth for all outgoing request headers in
+    /// this transport. The three behavioral variants are captured in
+    /// [`HeaderMode`] so the asymmetries stay explicit.
+    async fn build_mcp_headers(&self, mode: HeaderMode<'_>) -> Result<header::HeaderMap> {
+        let version = self
+            .protocol_version
+            .read()
+            .clone()
+            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+
+        let mut headers = header::HeaderMap::new();
+
+        if !matches!(mode, HeaderMode::Sse) {
+            headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        }
+
+        if matches!(mode, HeaderMode::Sse) {
+            headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
+        } else {
+            headers.insert(
+                header::ACCEPT,
+                "application/json, text/event-stream".parse().unwrap(),
+            );
+        }
+
+        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
+
+        // OAuth token — SSE path emits an extra debug line.
+        if let Some(token) = self.get_oauth_token().await? {
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {token}").parse().unwrap(),
+            );
+            if matches!(mode, HeaderMode::Sse) {
+                debug!(url = %self.base_url, "SSE connection with OAuth token");
+            }
+        }
+
+        // Session ID — send_request logs whether session is present or absent;
+        // notify includes the header silently; SSE skips it entirely.
+        if let Some(ref session_id) = *self.session_id.read() {
+            match mode {
+                HeaderMode::Request { method } => {
+                    debug!(session_id = %session_id, method = %method, "Sending request with session ID");
+                    headers.insert("MCP-Session-Id", session_id.parse().unwrap());
+                }
+                HeaderMode::Notify => {
+                    headers.insert("MCP-Session-Id", session_id.parse().unwrap());
+                }
+                HeaderMode::Sse => {}
+            }
+        } else if let HeaderMode::Request { method } = mode {
+            debug!(method = %method, "Sending request without session ID");
+        }
+
+        // User-supplied custom headers (SSE + send_request only; not notify).
+        if !matches!(mode, HeaderMode::Notify) {
+            for (key, value) in &self.headers {
+                if let (Ok(k), Ok(v)) = (
+                    key.parse::<reqwest::header::HeaderName>(),
+                    value.parse::<reqwest::header::HeaderValue>(),
+                ) {
+                    headers.insert(k, v);
+                }
+            }
+        }
+
+        // Ambient trace ID (send_request only; not SSE or notify).
+        if matches!(mode, HeaderMode::Request { .. })
+            && let Some(trace_id) = trace::current()
+            && let Ok(v) = trace_id.parse::<reqwest::header::HeaderValue>()
+        {
+            headers.insert("x-trace-id", v);
+        }
+
+        Ok(headers)
+    }
+
     /// Get OAuth access token if OAuth is configured
     async fn get_oauth_token(&self) -> Result<Option<String>> {
         if let Some(ref oauth_mutex) = self.oauth_client {
@@ -291,34 +379,7 @@ impl HttpTransport {
     async fn establish_sse_connection(&self) -> Result<String> {
         use futures::StreamExt;
 
-        let version = self
-            .protocol_version
-            .read()
-            .clone()
-            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
-
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
-        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
-
-        // Add OAuth token if available
-        if let Some(token) = self.get_oauth_token().await? {
-            headers.insert(
-                header::AUTHORIZATION,
-                format!("Bearer {token}").parse().unwrap(),
-            );
-            debug!(url = %self.base_url, "SSE connection with OAuth token");
-        }
-
-        // Add custom headers (for auth, etc.)
-        for (key, value) in &self.headers {
-            if let (Ok(k), Ok(v)) = (
-                key.parse::<reqwest::header::HeaderName>(),
-                value.parse::<reqwest::header::HeaderValue>(),
-            ) {
-                headers.insert(k, v);
-            }
-        }
+        let headers = self.build_mcp_headers(HeaderMode::Sse).await?;
 
         debug!(url = %self.base_url, "Establishing SSE connection");
 
@@ -419,53 +480,12 @@ impl HttpTransport {
     /// Send a raw request to the message endpoint
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
-        let version = self
-            .protocol_version
-            .read()
-            .clone()
-            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-        // Accept both JSON and SSE - some servers return SSE for POST requests
-        headers.insert(
-            header::ACCEPT,
-            "application/json, text/event-stream".parse().unwrap(),
-        );
-        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
-
-        // Add OAuth token if available (refreshes automatically if expired)
-        if let Some(token) = self.get_oauth_token().await? {
-            headers.insert(
-                header::AUTHORIZATION,
-                format!("Bearer {token}").parse().unwrap(),
-            );
-        }
-
-        // Add session ID if available
-        if let Some(ref session_id) = *self.session_id.read() {
-            debug!(session_id = %session_id, method = %request.method, "Sending request with session ID");
-            headers.insert("MCP-Session-Id", session_id.parse().unwrap());
-        } else {
-            debug!(method = %request.method, "Sending request without session ID");
-        }
-
-        // Add custom headers
-        for (key, value) in &self.headers {
-            if let (Ok(k), Ok(v)) = (
-                key.parse::<reqwest::header::HeaderName>(),
-                value.parse::<reqwest::header::HeaderValue>(),
-            ) {
-                headers.insert(k, v);
-            }
-        }
-
-        // Propagate ambient trace ID (set by gateway_invoke) as X-Trace-Id.
-        if let Some(trace_id) = trace::current()
-            && let Ok(v) = trace_id.parse::<reqwest::header::HeaderValue>()
-        {
-            headers.insert("x-trace-id", v);
-        }
+        let headers = self
+            .build_mcp_headers(HeaderMode::Request {
+                method: &request.method,
+            })
+            .await?;
 
         let response = self
             .client
@@ -555,11 +575,6 @@ impl Transport for HttpTransport {
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         let message_url = self.get_message_url();
-        let version = self
-            .protocol_version
-            .read()
-            .clone()
-            .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
@@ -567,26 +582,7 @@ impl Transport for HttpTransport {
             "params": params
         });
 
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-        // Accept both JSON and SSE - some servers (Beeper) require this for all requests
-        headers.insert(
-            header::ACCEPT,
-            "application/json, text/event-stream".parse().unwrap(),
-        );
-        headers.insert("MCP-Protocol-Version", version.parse().unwrap());
-
-        // Add OAuth token if available
-        if let Some(token) = self.get_oauth_token().await? {
-            headers.insert(
-                header::AUTHORIZATION,
-                format!("Bearer {token}").parse().unwrap(),
-            );
-        }
-
-        if let Some(ref session_id) = *self.session_id.read() {
-            headers.insert("MCP-Session-Id", session_id.parse().unwrap());
-        }
+        let headers = self.build_mcp_headers(HeaderMode::Notify).await?;
 
         let response = self
             .client

@@ -11,6 +11,10 @@ fn make_transport_sse(url: &str) -> Arc<HttpTransport> {
     HttpTransport::new(url, HashMap::new(), Duration::from_secs(30), false).unwrap()
 }
 
+fn make_transport_with_headers(url: &str, hdrs: HashMap<String, String>) -> Arc<HttpTransport> {
+    HttpTransport::new(url, hdrs, Duration::from_secs(30), true).unwrap()
+}
+
 // =========================================================================
 // Construction
 // =========================================================================
@@ -185,4 +189,201 @@ fn connected_state_toggles() {
     assert!(t.is_connected());
     t.connected.store(false, Ordering::Relaxed);
     assert!(!t.is_connected());
+}
+
+// =========================================================================
+// build_mcp_headers — regression tests for the header builder
+//
+// These tests verify the behavioral asymmetries across SSE, send_request,
+// and notify modes are preserved by the shared helper. No network calls are
+// made; HeaderMode is exercised directly.
+// =========================================================================
+
+/// SSE mode: no Content-Type, SSE-only Accept, no session header even when
+/// session is set, custom headers included, no x-trace-id.
+#[tokio::test]
+async fn build_headers_sse_mode_baseline() {
+    let mut custom = HashMap::new();
+    custom.insert("X-Auth-Token".to_string(), "secret".to_string());
+    let t = make_transport_with_headers("http://localhost", custom);
+    // Pretend a session was established — SSE must NOT forward it.
+    *t.session_id.write() = Some("should-not-appear".to_string());
+
+    let map = t.build_mcp_headers(HeaderMode::Sse).await.unwrap();
+
+    assert!(
+        !map.contains_key(header::CONTENT_TYPE),
+        "SSE must not set Content-Type"
+    );
+    assert_eq!(
+        map[header::ACCEPT],
+        "text/event-stream",
+        "SSE Accept must be text/event-stream only"
+    );
+    assert!(
+        map.contains_key("mcp-protocol-version"),
+        "protocol version header must be present"
+    );
+    assert!(
+        !map.contains_key("mcp-session-id"),
+        "SSE must not include session header"
+    );
+    assert!(
+        map.contains_key("x-auth-token"),
+        "SSE must include custom headers"
+    );
+    assert!(
+        !map.contains_key("x-trace-id"),
+        "SSE must not include trace header"
+    );
+}
+
+/// send_request mode: Content-Type + combined Accept, session forwarded when
+/// present, custom headers included, x-trace-id from ambient trace context.
+#[tokio::test]
+async fn build_headers_send_request_with_session_and_trace() {
+    use crate::gateway::trace;
+
+    let mut custom = HashMap::new();
+    custom.insert("X-Custom".to_string(), "val".to_string());
+    let t = make_transport_with_headers("http://localhost", custom);
+    *t.session_id.write() = Some("sess-abc".to_string());
+
+    let map = trace::with_trace_id("gw-trace-123".to_string(), async {
+        t.build_mcp_headers(HeaderMode::Request {
+            method: "tools/list",
+        })
+        .await
+        .unwrap()
+    })
+    .await;
+
+    assert_eq!(map[header::CONTENT_TYPE], "application/json");
+    assert_eq!(map[header::ACCEPT], "application/json, text/event-stream");
+    assert_eq!(
+        map["mcp-session-id"], "sess-abc",
+        "session header must be forwarded"
+    );
+    assert!(
+        map.contains_key("x-custom"),
+        "send_request must include custom headers"
+    );
+    assert_eq!(
+        map["x-trace-id"], "gw-trace-123",
+        "trace header must be propagated"
+    );
+}
+
+/// send_request mode without a session: no mcp-session-id header at all.
+#[tokio::test]
+async fn build_headers_send_request_no_session() {
+    let t = make_transport("http://localhost");
+
+    let map = t
+        .build_mcp_headers(HeaderMode::Request {
+            method: "tools/list",
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        !map.contains_key("mcp-session-id"),
+        "no session must produce no session header"
+    );
+    assert!(
+        !map.contains_key("x-trace-id"),
+        "no ambient trace must produce no trace header"
+    );
+}
+
+/// notify mode: Content-Type + combined Accept, session forwarded, NO custom
+/// headers, NO x-trace-id even when ambient trace and custom headers exist.
+#[tokio::test]
+async fn build_headers_notify_excludes_custom_and_trace() {
+    use crate::gateway::trace;
+
+    let mut custom = HashMap::new();
+    custom.insert("X-Should-Not-Appear".to_string(), "nope".to_string());
+    let t = make_transport_with_headers("http://localhost", custom);
+    *t.session_id.write() = Some("notify-sess".to_string());
+
+    let map = trace::with_trace_id("gw-trace-xyz".to_string(), async {
+        t.build_mcp_headers(HeaderMode::Notify).await.unwrap()
+    })
+    .await;
+
+    assert_eq!(map[header::CONTENT_TYPE], "application/json");
+    assert_eq!(map[header::ACCEPT], "application/json, text/event-stream");
+    assert_eq!(
+        map["mcp-session-id"], "notify-sess",
+        "notify must include session header"
+    );
+    assert!(
+        !map.contains_key("x-should-not-appear"),
+        "notify must NOT include custom headers"
+    );
+    assert!(
+        !map.contains_key("x-trace-id"),
+        "notify must NOT include trace header"
+    );
+}
+
+/// notify mode without session: no mcp-session-id header.
+#[tokio::test]
+async fn build_headers_notify_no_session_when_unset() {
+    let t = make_transport("http://localhost");
+
+    let map = t.build_mcp_headers(HeaderMode::Notify).await.unwrap();
+
+    assert!(!map.contains_key("mcp-session-id"));
+}
+
+/// Protocol version override is honoured by the helper.
+#[tokio::test]
+async fn build_headers_uses_overridden_protocol_version() {
+    let t = HttpTransport::new_with_oauth(
+        "http://localhost",
+        HashMap::new(),
+        Duration::from_secs(5),
+        true,
+        None,
+        Some("2024-11-05".to_string()),
+    )
+    .unwrap();
+
+    let map = t.build_mcp_headers(HeaderMode::Sse).await.unwrap();
+
+    assert_eq!(map["mcp-protocol-version"], "2024-11-05");
+}
+
+/// Only request mode emits `x-trace-id`; notify mode suppresses it.
+#[tokio::test]
+async fn build_headers_trace_flag_gates_trace_header() {
+    use crate::gateway::trace;
+
+    let t = make_transport("http://localhost");
+
+    // Notify mode must suppress trace propagation even when ambient trace exists.
+    let map_no_trace = trace::with_trace_id("gw-abc".to_string(), async {
+        t.build_mcp_headers(HeaderMode::Notify).await.unwrap()
+    })
+    .await;
+
+    assert!(
+        !map_no_trace.contains_key("x-trace-id"),
+        "trace:false must suppress x-trace-id"
+    );
+
+    // Request mode must include trace propagation when ambient trace exists.
+    let map_with_trace = trace::with_trace_id("gw-abc".to_string(), async {
+        t.build_mcp_headers(HeaderMode::Request { method: "m" })
+            .await
+            .unwrap()
+    })
+    .await;
+
+    assert_eq!(
+        map_with_trace["x-trace-id"], "gw-abc",
+        "trace:true must emit x-trace-id"
+    );
 }
