@@ -208,7 +208,9 @@ fn stats_tool_has_read_only_annotations() {
     // GIVEN: stats tool definition
     // WHEN: inspecting annotations
     // THEN: readOnly=true, destructive=false, idempotent=true
-    let ann = build_stats_tool().annotations.expect("annotations must be Some");
+    let ann = build_stats_tool()
+        .annotations
+        .expect("annotations must be Some");
     assert_eq!(ann.read_only_hint, Some(true));
     assert_eq!(ann.destructive_hint, Some(false));
     assert_eq!(ann.idempotent_hint, Some(true));

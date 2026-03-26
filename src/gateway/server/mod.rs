@@ -1044,7 +1044,8 @@ impl Gateway {
                         .and_then(|a| a.get("tool"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    if !server.is_empty() && !tool.is_empty()
+                    if !server.is_empty()
+                        && !tool.is_empty()
                         && let Err(e) = tool_policy.check(server, tool)
                     {
                         let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());

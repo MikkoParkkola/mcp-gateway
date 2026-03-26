@@ -62,12 +62,11 @@ const GATEWAY_PROMPT_PREFIX: &str = "gateway/";
 
 /// Serve the `gateway-discover` prompt for a given task.
 fn discover_prompt_messages(task: &str) -> Vec<PromptMessage> {
-    vec![
-        PromptMessage {
-            role: "user".to_string(),
-            content: Content::Text {
-                text: format!(
-                    "I want to: {task}\n\n\
+    vec![PromptMessage {
+        role: "user".to_string(),
+        content: Content::Text {
+            text: format!(
+                "I want to: {task}\n\n\
                      Please use gateway_search_tools to find relevant tools, \
                      then call gateway_invoke with the best match.\n\n\
                      Steps:\n\
@@ -75,32 +74,29 @@ fn discover_prompt_messages(task: &str) -> Vec<PromptMessage> {
                      2. Pick the best match from the results\n\
                      3. Call gateway_invoke(server=\"<server>\", tool=\"<tool>\", arguments={{...}})\n\
                      4. Report the result"
-                ),
-                annotations: None,
-            },
+            ),
+            annotations: None,
         },
-    ]
+    }]
 }
 
 /// Serve the `gateway-compose` prompt for a given goal.
 fn compose_prompt_messages(goal: &str) -> Vec<PromptMessage> {
-    vec![
-        PromptMessage {
-            role: "user".to_string(),
-            content: Content::Text {
-                text: format!(
-                    "Build a multi-step workflow to: {goal}\n\n\
+    vec![PromptMessage {
+        role: "user".to_string(),
+        content: Content::Text {
+            text: format!(
+                "Build a multi-step workflow to: {goal}\n\n\
                      Use gateway tools as building blocks:\n\
                      1. Call gateway_search_tools to find candidate tools for each step\n\
                      2. Check \"chains_with\" hints in results to find pre-defined composition paths\n\
                      3. Execute each step via gateway_invoke, feeding outputs into subsequent steps\n\
                      4. Use gateway_cost_report() at the end to summarise spend\n\n\
                      Prefer composition chains over ad-hoc sequences when they are available."
-                ),
-                annotations: None,
-            },
+            ),
+            annotations: None,
         },
-    ]
+    }]
 }
 
 /// Try to serve a gateway-owned meta-prompt by name.

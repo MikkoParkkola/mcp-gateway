@@ -21,8 +21,8 @@ use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::protocol::{
-    JsonRpcResponse, RequestId, Resource, ResourceContents, ResourceTemplate,
-    ResourcesListResult, ResourcesTemplatesListResult,
+    JsonRpcResponse, RequestId, Resource, ResourceContents, ResourceTemplate, ResourcesListResult,
+    ResourcesTemplatesListResult,
 };
 use crate::security::sanitize_resource_metadata;
 
@@ -57,8 +57,7 @@ fn guide_resources() -> [Resource; 2] {
             name: "gateway-routing".to_string(),
             title: Some("Gateway Routing Guide".to_string()),
             description: Some(
-                "Backend categories, composition chains, and routing profiles."
-                    .to_string(),
+                "Backend categories, composition chains, and routing profiles.".to_string(),
             ),
             mime_type: Some("text/plain".to_string()),
             size: None,
