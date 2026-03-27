@@ -13,6 +13,7 @@ pub mod report;
 pub mod rules;
 pub mod rules_schema;
 pub mod sarif;
+pub(crate) mod schema_helpers;
 
 use crate::Result;
 use crate::protocol::Tool;

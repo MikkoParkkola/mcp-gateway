@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::capability::{CapabilityDefinition, RestConfig};
+use crate::validator::schema_helpers;
 
 use super::Issue;
 
@@ -147,7 +148,7 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
         return;
     }
 
-    let schema_props = extract_input_property_names(&cap.schema.input);
+    let schema_props = schema_helpers::input_property_names(&cap.schema.input);
 
     for (provider_name, provider) in &cap.providers.named {
         let ctx = format!("providers.{provider_name}");
@@ -430,13 +431,4 @@ pub(super) fn extract_placeholders(text: &str) -> impl Iterator<Item = String> +
     }
 
     out.into_iter()
-}
-
-/// Collect all top-level property names from a JSON Schema input.
-pub(super) fn extract_input_property_names(input: &serde_json::Value) -> HashSet<String> {
-    input
-        .get("properties")
-        .and_then(|p| p.as_object())
-        .map(|props| props.keys().cloned().collect())
-        .unwrap_or_default()
 }

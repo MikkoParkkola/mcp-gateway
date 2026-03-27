@@ -3,6 +3,7 @@
 //! These rules validate JSON Schema completeness, detect conflicts across tools,
 //! and enforce naming consistency.
 
+use super::schema_helpers;
 use super::{Rule, Severity, ValidationResult};
 use crate::Result;
 use crate::protocol::Tool;
@@ -29,10 +30,7 @@ impl Rule for SchemaCompletenessRule {
     fn check(&self, tool: &Tool) -> Result<ValidationResult> {
         let mut result = ValidationResult::new(self.code(), self.name(), &tool.name);
 
-        let properties = tool
-            .input_schema
-            .get("properties")
-            .and_then(|p| p.as_object());
+        let properties = schema_helpers::input_properties(&tool.input_schema);
 
         let Some(props) = properties else {
             result.add_issue("No input properties defined");
@@ -66,10 +64,7 @@ impl Rule for SchemaCompletenessRule {
         }
 
         // Check for required array
-        let has_required = tool
-            .input_schema
-            .get("required")
-            .is_some_and(|r| r.as_array().is_some_and(|a| !a.is_empty()));
+        let has_required = schema_helpers::has_required_array(&tool.input_schema);
 
         if !has_required {
             result.add_issue("Missing 'required' array in input schema");
