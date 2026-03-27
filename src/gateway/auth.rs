@@ -9,23 +9,16 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    body::Body,
-    extract::State,
-    http::{Request, StatusCode},
-    middleware::Next,
-    response::{IntoResponse, Response},
-};
+use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
 use dashmap::DashMap;
 use governor::{
     Quota, RateLimiter,
     clock::DefaultClock,
     state::{InMemoryState, NotKeyed},
 };
-use serde_json::json;
 use tracing::{debug, warn};
 
+use super::middleware::{bearer_unauthorized_response, rate_limited_response};
 use crate::config::AuthConfig;
 use crate::key_server::KeyServer;
 
@@ -291,7 +284,7 @@ pub async fn auth_middleware(
 
     let Some(token) = token else {
         warn!(path = %path, "Missing Authorization header");
-        return unauthorized_response(
+        return bearer_unauthorized_response(
             "Missing Authorization header. Use: Authorization: Bearer <token>",
         );
     };
@@ -300,7 +293,10 @@ pub async fn auth_middleware(
     if let Some(client) = auth_config.validate_token(token) {
         if !auth_config.check_rate_limit(&client.name) {
             warn!(client = %client.name, path = %path, "Rate limit exceeded");
-            return rate_limited_response(&client.name);
+            return rate_limited_response(format!(
+                "Rate limit exceeded for client '{}'. Try again later.",
+                client.name
+            ));
         }
         debug!(client = %client.name, path = %path, "Authenticated via static key");
         request.extensions_mut().insert(client);
@@ -321,41 +317,7 @@ pub async fn auth_middleware(
 
     // 3. Reject
     warn!(path = %path, "Invalid token");
-    unauthorized_response("Invalid token")
-}
-
-/// Create a 401 Unauthorized response
-fn unauthorized_response(message: &str) -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        [("WWW-Authenticate", "Bearer")],
-        Json(json!({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": -32000,
-                "message": message
-            },
-            "id": null
-        })),
-    )
-        .into_response()
-}
-
-/// Create a 429 Rate Limited response
-fn rate_limited_response(client_name: &str) -> Response {
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        [("Retry-After", "60")],
-        Json(json!({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": -32000,
-                "message": format!("Rate limit exceeded for client '{client_name}'. Try again later.")
-            },
-            "id": null
-        })),
-    )
-        .into_response()
+    bearer_unauthorized_response("Invalid token")
 }
 
 #[cfg(test)]

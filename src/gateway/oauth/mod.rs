@@ -38,8 +38,9 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use serde_json::json;
 use tracing::{debug, warn};
+
+use crate::gateway::middleware::{bearer_unauthorized_response, forbidden_response};
 
 pub use agents::{AgentDefinition, AgentRegistry};
 pub use audit::{Decision, ToolInvocationAudit, emit as emit_audit};
@@ -107,7 +108,7 @@ pub async fn agent_auth_middleware(
 
     let Some(token_str) = token_str else {
         warn!(path = %request.uri().path(), "Agent auth: missing Authorization header");
-        return agent_unauthorized(
+        return bearer_unauthorized_response(
             "Missing Authorization header. Use: Authorization: Bearer <token>",
         );
     };
@@ -131,11 +132,11 @@ pub async fn agent_auth_middleware(
         }
         Err(JwtError::UnknownAgent(id)) => {
             warn!(agent = %id, "Agent auth: unknown agent");
-            agent_unauthorized("Unknown agent")
+            bearer_unauthorized_response("Unknown agent")
         }
         Err(ref e) => {
             warn!(error = %e, "Agent auth: JWT validation failed");
-            agent_unauthorized("Invalid or expired token")
+            bearer_unauthorized_response("Invalid or expired token")
         }
     }
 }
@@ -185,42 +186,9 @@ pub fn check_agent_scope_and_audit(
                 action = %raw_action,
                 "Agent scope denied: {reason}"
             );
-            Err(agent_forbidden(&reason))
+            Err(forbidden_response(&reason))
         }
     }
-}
-
-// ── HTTP response helpers ─────────────────────────────────────────────────────
-
-fn agent_unauthorized(message: &str) -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        [("WWW-Authenticate", "Bearer")],
-        Json(json!({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": -32000,
-                "message": message
-            },
-            "id": null
-        })),
-    )
-        .into_response()
-}
-
-fn agent_forbidden(message: &str) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": -32003,
-                "message": message
-            },
-            "id": null
-        })),
-    )
-        .into_response()
 }
 
 // ── JWKS endpoint handler ─────────────────────────────────────────────────────

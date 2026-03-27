@@ -5,6 +5,7 @@ mod differential;
 mod meta_mcp;
 mod meta_mcp_helpers;
 mod meta_mcp_tool_defs;
+mod middleware;
 pub mod oauth;
 pub mod proxy;
 mod router;
