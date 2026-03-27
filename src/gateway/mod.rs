@@ -2,6 +2,7 @@
 
 pub mod auth;
 mod differential;
+mod http_error;
 mod meta_mcp;
 mod meta_mcp_helpers;
 mod meta_mcp_tool_defs;

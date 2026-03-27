@@ -1,9 +1,6 @@
-use axum::{
-    Json,
-    http::{HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
-};
-use serde_json::json;
+use axum::{http::StatusCode, response::Response};
+
+use crate::gateway::http_error::{attach_static_header, json_response, jsonrpc_error_body};
 
 pub(crate) fn bearer_unauthorized_response(message: &str) -> Response {
     jsonrpc_error_response(
@@ -33,23 +30,10 @@ fn jsonrpc_error_response(
     message: impl Into<String>,
     header: Option<(&'static str, &'static str)>,
 ) -> Response {
-    let mut response = (
-        status,
-        Json(json!({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": code,
-                "message": message.into()
-            },
-            "id": null
-        })),
-    )
-        .into_response();
+    let mut response = json_response(status, jsonrpc_error_body(code, message));
 
     if let Some((name, value)) = header {
-        response
-            .headers_mut()
-            .insert(name, HeaderValue::from_static(value));
+        attach_static_header(&mut response, name, value);
     }
 
     response

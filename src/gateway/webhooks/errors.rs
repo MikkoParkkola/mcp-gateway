@@ -1,20 +1,15 @@
 use axum::Json;
 use axum::http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use crate::gateway::http_error::{json_body, request_scoped_error_body};
 
 fn webhook_error(
     status: StatusCode,
     message: impl Into<String>,
     request_id: &str,
 ) -> (StatusCode, Json<Value>) {
-    let message = message.into();
-    (
-        status,
-        Json(json!({
-            "error": message,
-            "request_id": request_id,
-        })),
-    )
+    json_body(status, request_scoped_error_body(message, request_id))
 }
 
 pub(super) fn invalid_json(
@@ -39,6 +34,7 @@ pub(super) fn transformation_failed(request_id: &str) -> (StatusCode, Json<Value
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn invalid_json_shape_is_stable() {

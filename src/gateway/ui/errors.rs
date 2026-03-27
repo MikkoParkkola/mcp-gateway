@@ -1,13 +1,14 @@
 use axum::Json;
 use axum::http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use crate::gateway::http_error::{flat_error_body, json_body, structured_error_body};
 
 pub(super) fn flat_error(
     status: StatusCode,
     message: impl Into<String>,
 ) -> (StatusCode, Json<Value>) {
-    let message = message.into();
-    (status, Json(json!({ "error": message })))
+    json_body(status, flat_error_body(message))
 }
 
 pub(super) fn structured_error(
@@ -15,14 +16,7 @@ pub(super) fn structured_error(
     code: &'static str,
     message: impl Into<String>,
 ) -> (StatusCode, Json<Value>) {
-    let message = message.into();
-    (
-        status,
-        Json(json!({
-            "error": code,
-            "message": message,
-        })),
-    )
+    json_body(status, structured_error_body(code, message))
 }
 
 pub(super) fn admin_auth_required() -> (StatusCode, Json<Value>) {
