@@ -10,6 +10,7 @@
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod errors;
 pub mod import;
 
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use self::errors::{admin_auth_required, auth_required};
 use super::auth::AuthenticatedClient;
 use super::router::AppState;
 use crate::stats::StatsSnapshot;
@@ -536,11 +538,7 @@ async fn tools(
     let client = client.map(|Extension(c)| c);
 
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Authentication required"})),
-        )
-            .into_response();
+        return auth_required(StatusCode::FORBIDDEN).into_response();
     }
 
     let backends = state.backends.all();
@@ -595,11 +593,7 @@ async fn config(
     let client = client.map(|Extension(c)| c);
 
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Authentication required"})),
-        )
-            .into_response();
+        return auth_required(StatusCode::FORBIDDEN).into_response();
     }
 
     // Build a sanitized config snapshot from AppState
@@ -632,10 +626,7 @@ async fn reload(client: Option<Extension<AuthenticatedClient>>) -> impl IntoResp
     let client = client.map(|Extension(c)| c);
 
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        );
+        return admin_auth_required();
     }
 
     // Hot-reload is handled by the file watcher in the gateway server.
@@ -655,11 +646,7 @@ async fn costs(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Authentication required"})),
-        )
-            .into_response();
+        return auth_required(StatusCode::UNAUTHORIZED).into_response();
     }
     let tracker = state.meta_mcp.cost_tracker();
     Json(serde_json::json!({
