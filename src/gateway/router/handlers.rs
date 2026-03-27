@@ -614,6 +614,13 @@ pub(super) async fn meta_mcp_handler(
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
+    telemetry_metrics::counter!(
+        "mcp_jsonrpc_requests_total",
+        "method" => method.clone(),
+        "status" => if response.error.is_some() { "error" } else { "ok" }
+    )
+    .increment(1);
+
     // Return response with session ID header
     build_response(response, &session_id, StatusCode::OK)
 }
