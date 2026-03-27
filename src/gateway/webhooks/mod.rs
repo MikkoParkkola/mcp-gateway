@@ -22,10 +22,13 @@ use tracing::{debug, error, info, warn};
 use hmac::Mac as _;
 use sha2::Sha256;
 
+use self::errors::{invalid_json, invalid_signature, transformation_failed};
 use super::streaming::{NotificationMultiplexer, TaggedNotification};
 use crate::capability::{CapabilityDefinition, WebhookDefinition};
 use crate::config::WebhookConfig;
 use crate::secrets::SecretResolver;
+
+mod errors;
 
 // ============================================================================
 // Stats types
@@ -252,17 +255,16 @@ async fn webhook_handler(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    let request_id = uuid::Uuid::new_v4().to_string();
+
     // Parse JSON from raw bytes (keep raw bytes for signature validation).
     let payload: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": format!("Invalid JSON: {e}") })),
-            );
+            warn!(request_id = %request_id, error = %e, "Webhook JSON parse failed");
+            return invalid_json(format!("Invalid JSON: {e}"), &request_id);
         }
     };
-    let request_id = uuid::Uuid::new_v4().to_string();
 
     state.stats.record_received();
 
@@ -287,13 +289,7 @@ async fn webhook_handler(
             error = %e,
             "Webhook signature validation failed"
         );
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": "Invalid signature",
-                "request_id": request_id
-            })),
-        );
+        return invalid_signature(&request_id);
     }
 
     // Transform payload to notification.
@@ -309,13 +305,7 @@ async fn webhook_handler(
                 error = %e,
                 "Failed to transform webhook payload"
             );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "Transformation failed",
-                    "request_id": request_id
-                })),
-            );
+            return transformation_failed(&request_id);
         }
     };
 

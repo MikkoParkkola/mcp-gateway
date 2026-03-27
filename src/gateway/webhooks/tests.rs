@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use serde_json::json;
+use axum::body::to_bytes;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::backend::BackendRegistry;
@@ -313,6 +317,35 @@ fn endpoint_stats_delivery_counter_independent_of_received() {
     let snap = stats.snapshot();
     assert_eq!(snap.received, 2);
     assert_eq!(snap.delivered, 1);
+}
+
+#[tokio::test]
+async fn webhook_handler_invalid_json_returns_flat_bad_request_with_request_id() {
+    let multiplexer = make_multiplexer();
+    let state = make_handler_state(multiplexer, make_definition(true));
+
+    let response = webhook_handler(
+        State(state),
+        HeaderMap::new(),
+        axum::body::Bytes::from_static(br#"{"broken":"json""#),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("Invalid JSON:"))
+    );
+    assert!(
+        json["request_id"]
+            .as_str()
+            .is_some_and(|request_id| !request_id.is_empty())
+    );
 }
 
 // ── method_to_filter ──────────────────────────────────────────────────
