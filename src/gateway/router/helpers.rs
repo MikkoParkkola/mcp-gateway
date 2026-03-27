@@ -22,10 +22,15 @@ where
     T: Serialize,
 {
     let mut resp = Json(body).into_response();
+    attach_session_header(resp.headers_mut(), session_id);
 
+    (status, resp).into_response()
+}
+
+pub(super) fn attach_session_header(headers: &mut axum::http::HeaderMap, session_id: &str) {
     match HeaderValue::from_str(session_id) {
         Ok(value) => {
-            resp.headers_mut().insert(
+            headers.insert(
                 axum::http::header::HeaderName::from_static("mcp-session-id"),
                 value,
             );
@@ -34,8 +39,6 @@ where
             warn!(%session_id, %err, "failed to set mcp-session-id response header");
         }
     }
-
-    (status, resp).into_response()
 }
 
 /// Build an HTTP response with a `mcp-session-id` header from an arbitrary JSON body.
@@ -69,6 +72,32 @@ pub(super) fn build_error_response(
         session_id,
         status,
     )
+}
+
+/// Build a JSON-RPC HTTP response body without attaching a session header.
+pub(super) fn build_http_response(
+    rpc: JsonRpcResponse,
+    status: StatusCode,
+) -> (StatusCode, Json<Value>) {
+    let body = serde_json::to_value(rpc).unwrap_or_else(|err| {
+        warn!(%err, "failed to serialize JSON-RPC response");
+        json!({
+            "jsonrpc": "2.0",
+            "error": {"code": -32603, "message": "Internal error"},
+            "id": null
+        })
+    });
+    (status, Json(body))
+}
+
+/// Build a JSON-RPC HTTP error body without attaching a session header.
+pub(super) fn build_http_error_response(
+    id: Option<RequestId>,
+    code: i32,
+    message: impl Into<String>,
+    status: StatusCode,
+) -> (StatusCode, Json<Value>) {
+    build_http_response(JsonRpcResponse::error(id, code, message.into()), status)
 }
 
 /// Build a `202 Accepted` response with an empty JSON body and session header.

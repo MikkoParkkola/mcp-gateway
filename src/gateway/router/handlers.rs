@@ -13,8 +13,9 @@ use tracing::{debug, info, warn};
 
 use super::AppState;
 use super::helpers::{
-    build_accepted_response, build_error_response, build_response, extract_tools_call_params,
-    parse_elicitation_params, parse_request, parse_sampling_params,
+    attach_session_header, build_accepted_response, build_error_response,
+    build_http_error_response, build_response, extract_tools_call_params, parse_elicitation_params,
+    parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::streaming::create_sse_response;
@@ -33,18 +34,13 @@ pub(super) async fn mcp_sse_handler(
 ) -> impl IntoResponse {
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
-        return (
+        return build_http_error_response(
+            None,
+            -32600,
+            "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
             StatusCode::METHOD_NOT_ALLOWED,
-            Json(json!({
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32600,
-                    "message": "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp"
-                },
-                "id": null
-            })),
         )
-            .into_response();
+        .into_response();
     }
 
     // Check Accept header - must accept text/event-stream
@@ -101,9 +97,7 @@ pub(super) async fn mcp_sse_handler(
         Some(sse) => {
             // Add session ID header to response
             let mut response = sse.into_response();
-            response
-                .headers_mut()
-                .insert("mcp-session-id", session_id.parse().unwrap());
+            attach_session_header(response.headers_mut(), &session_id);
             response
         }
         None => (
@@ -212,30 +206,26 @@ pub(super) async fn meta_mcp_handler(
     let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            return (
+            return build_http_error_response(
+                None,
+                -32700,
+                format!("Failed to read body: {e}"),
                 StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": format!("Failed to read body: {e}")},
-                    "id": null
-                })),
             )
-                .into_response();
+            .into_response();
         }
     };
 
     let request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
-            return (
+            return build_http_error_response(
+                None,
+                -32700,
+                format!("Invalid JSON: {e}"),
                 StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": format!("Invalid JSON: {e}")},
-                    "id": null
-                })),
             )
-                .into_response();
+            .into_response();
         }
     };
     // Track in-flight request for graceful drain
@@ -243,16 +233,11 @@ pub(super) async fn meta_mcp_handler(
 
     if !state.meta_mcp_enabled {
         return (
-            StatusCode::FORBIDDEN,
             [(
                 axum::http::header::HeaderName::from_static("content-type"),
                 axum::http::header::HeaderValue::from_static("application/json"),
             )],
-            Json(json!({
-                "jsonrpc": "2.0",
-                "error": {"code": -32600, "message": "Meta-MCP disabled"},
-                "id": null
-            })),
+            build_http_error_response(None, -32600, "Meta-MCP disabled", StatusCode::FORBIDDEN),
         )
             .into_response();
     }

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tracing::{debug, error, warn};
 
 use super::AppState;
-use super::helpers::parse_request;
+use super::helpers::{build_http_error_response, build_http_response, parse_request};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::{sanitize_json_value, validate_tool_name};
@@ -62,14 +62,7 @@ fn apply_backend_tool_call_security(
 
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
 fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({
-            "jsonrpc": "2.0",
-            "error": {"code": -32600, "message": message},
-            "id": serde_json::to_value(id).unwrap_or(Value::Null)
-        })),
-    )
+    build_http_error_response(Some(id.clone()), -32600, message, StatusCode::FORBIDDEN)
 }
 
 /// Backend handler (POST /mcp/{name})
@@ -89,16 +82,14 @@ pub(super) async fn backend_handler(
     if let Some(ref client) = client
         && !client.can_access_backend(&name)
     {
-        return (
+        return build_http_error_response(
+            None,
+            -32003,
+            format!(
+                "Client '{}' not authorized for backend '{}'",
+                client.name, name
+            ),
             StatusCode::FORBIDDEN,
-            Json(json!({
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32003,
-                    "message": format!("Client '{}' not authorized for backend '{}'", client.name, name)
-                },
-                "id": null
-            })),
         );
     }
 
@@ -106,13 +97,11 @@ pub(super) async fn backend_handler(
     let body_bytes = match axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            return (
+            return build_http_error_response(
+                None,
+                -32700,
+                format!("Failed to read body: {e}"),
                 StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": format!("Failed to read body: {e}")},
-                    "id": null
-                })),
             );
         }
     };
@@ -120,26 +109,22 @@ pub(super) async fn backend_handler(
     let json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
-            return (
+            return build_http_error_response(
+                None,
+                -32700,
+                format!("Invalid JSON: {e}"),
                 StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32700, "message": format!("Invalid JSON: {e}")},
-                    "id": null
-                })),
             );
         }
     };
 
     // Find backend
     let Some(backend) = state.backends.get(&name) else {
-        return (
+        return build_http_error_response(
+            None,
+            -32001,
+            format!("Backend not found: {name}"),
             StatusCode::NOT_FOUND,
-            Json(json!({
-                "jsonrpc": "2.0",
-                "error": {"code": -32001, "message": format!("Backend not found: {name}")},
-                "id": null
-            })),
         );
     };
 
@@ -147,10 +132,7 @@ pub(super) async fn backend_handler(
     let (id, method, params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::to_value(response).unwrap()),
-            );
+            return build_http_response(response, StatusCode::BAD_REQUEST);
         }
     };
 
@@ -174,18 +156,12 @@ pub(super) async fn backend_handler(
             Some(Ok(sanitized_params)) => {
                 // Forward the sanitized params to the backend
                 return match backend.request(&method, Some(sanitized_params)).await {
-                    Ok(response) => (
-                        StatusCode::OK,
-                        Json(serde_json::to_value(response).unwrap()),
-                    ),
+                    Ok(response) => build_http_response(response, StatusCode::OK),
                     Err(e) => {
                         error!(backend = %name, error = %e, "Backend request failed");
                         let response =
                             JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::to_value(response).unwrap()),
-                        )
+                        build_http_response(response, StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 };
             }
@@ -196,17 +172,11 @@ pub(super) async fn backend_handler(
 
     // Forward to backend
     match backend.request(&method, params).await {
-        Ok(response) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(response).unwrap()),
-        ),
+        Ok(response) => build_http_response(response, StatusCode::OK),
         Err(e) => {
             error!(backend = %name, error = %e, "Backend request failed");
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::to_value(response).unwrap()),
-            )
+            build_http_response(response, StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
