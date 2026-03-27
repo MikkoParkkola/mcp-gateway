@@ -20,6 +20,7 @@ use serde_json::json;
 
 use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
+use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
 
@@ -93,28 +94,20 @@ async fn preview_handler(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     let spec_content = match resolve_spec(&state, &body).await {
         Ok(s) => s,
         Err((status, msg)) => {
-            return (status, Json(json!({"error": msg}))).into_response();
+            return flat_error(status, msg).into_response();
         }
     };
 
     let caps = match parse_spec(&spec_content) {
         Ok(c) => c,
         Err(msg) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"error": msg})),
-            )
-                .into_response();
+            return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
         }
     };
 
@@ -135,11 +128,7 @@ async fn import_handler(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     // Determine output directory — use first configured cap dir, fall back to "capabilities".
@@ -152,18 +141,14 @@ async fn import_handler(
     let spec_content = match resolve_spec(&state, &body).await {
         Ok(s) => s,
         Err((status, msg)) => {
-            return (status, Json(json!({"error": msg}))).into_response();
+            return flat_error(status, msg).into_response();
         }
     };
 
     let caps = match parse_spec(&spec_content) {
         Ok(c) => c,
         Err(msg) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"error": msg})),
-            )
-                .into_response();
+            return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
         }
     };
 

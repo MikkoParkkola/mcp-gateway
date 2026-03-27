@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 
 use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
+use super::errors::{admin_auth_required, structured_error};
 use super::is_admin;
 
 // ── Public router builder ─────────────────────────────────────────────────────
@@ -115,14 +116,12 @@ fn is_safe_name(name: &str) -> bool {
 
 /// Return a 400 rejection response for invalid capability names.
 fn bad_name(name: &str) -> (StatusCode, Json<Value>) {
-    (
+    structured_error(
         StatusCode::BAD_REQUEST,
-        Json(json!({
-            "error": "invalid_name",
-            "message": format!(
-                "Capability name '{name}' is invalid. Names must match [a-z0-9_-] and be ≤128 chars."
-            ),
-        })),
+        "invalid_name",
+        format!(
+            "Capability name '{name}' is invalid. Names must match [a-z0-9_-] and be ≤128 chars."
+        ),
     )
 }
 
@@ -218,11 +217,7 @@ pub async fn list_capabilities(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     let dirs = state.capability_dirs.as_slice();
@@ -284,11 +279,7 @@ pub async fn get_capability(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     if !is_safe_name(&name) {
@@ -297,14 +288,12 @@ pub async fn get_capability(
 
     let dirs = state.capability_dirs.as_slice();
     let Some(path) = find_capability_file(dirs, &name) else {
-        return (
+        return structured_error(
             StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": "not_found",
-                "message": format!("Capability '{name}' not found"),
-            })),
+            "not_found",
+            format!("Capability '{name}' not found"),
         )
-            .into_response();
+        .into_response();
     };
 
     match tokio::fs::read_to_string(&path).await {
@@ -314,14 +303,12 @@ pub async fn get_capability(
             content,
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "read_error",
-                "message": format!("Failed to read capability file: {e}"),
-            })),
+            "read_error",
+            format!("Failed to read capability file: {e}"),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 
@@ -334,11 +321,7 @@ pub async fn put_capability(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     if !is_safe_name(&name) {
@@ -348,13 +331,7 @@ pub async fn put_capability(
     // Validate YAML structure before writing.
     let validation = validate_yaml_body(&body);
     if let Some(err) = validation {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({
-                "error": "validation_error",
-                "message": err,
-            })),
-        )
+        return structured_error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", err)
             .into_response();
     }
 
@@ -370,14 +347,12 @@ pub async fn put_capability(
     if let Some(parent) = target_path.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
     {
-        return (
+        return structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "io_error",
-                "message": format!("Failed to create directory: {e}"),
-            })),
+            "io_error",
+            format!("Failed to create directory: {e}"),
         )
-            .into_response();
+        .into_response();
     }
 
     match tokio::fs::write(&target_path, body.as_bytes()).await {
@@ -390,14 +365,12 @@ pub async fn put_capability(
             })),
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "write_error",
-                "message": format!("Failed to write capability file: {e}"),
-            })),
+            "write_error",
+            format!("Failed to write capability file: {e}"),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 
@@ -425,11 +398,7 @@ pub async fn create_capability(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     let Json(req) = body.unwrap_or_default();
@@ -447,14 +416,12 @@ pub async fn create_capability(
 
     let yaml = req.yaml.unwrap_or_default();
     let Some(name) = req.name else {
-        return (
+        return structured_error(
             StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "missing_name",
-                "message": "Field 'name' is required when providing 'yaml'",
-            })),
+            "missing_name",
+            "Field 'name' is required when providing 'yaml'",
         )
-            .into_response();
+        .into_response();
     };
 
     if !is_safe_name(&name) {
@@ -463,13 +430,7 @@ pub async fn create_capability(
 
     // Validate YAML
     if let Some(err) = validate_yaml_body(&yaml) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({
-                "error": "validation_error",
-                "message": err,
-            })),
-        )
+        return structured_error(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", err)
             .into_response();
     }
 
@@ -477,14 +438,12 @@ pub async fn create_capability(
 
     // Conflict check
     if find_capability_file(dirs, &name).is_some() {
-        return (
+        return structured_error(
             StatusCode::CONFLICT,
-            Json(json!({
-                "error": "already_exists",
-                "message": format!("Capability '{name}' already exists. Use PUT to update."),
-            })),
+            "already_exists",
+            format!("Capability '{name}' already exists. Use PUT to update."),
         )
-            .into_response();
+        .into_response();
     }
 
     let dir = primary_write_dir(dirs).unwrap_or("capabilities");
@@ -493,14 +452,12 @@ pub async fn create_capability(
     if let Some(parent) = target_path.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
     {
-        return (
+        return structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "io_error",
-                "message": format!("Failed to create directory: {e}"),
-            })),
+            "io_error",
+            format!("Failed to create directory: {e}"),
         )
-            .into_response();
+        .into_response();
     }
 
     match tokio::fs::write(&target_path, yaml.as_bytes()).await {
@@ -513,14 +470,12 @@ pub async fn create_capability(
             })),
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "write_error",
-                "message": format!("Failed to write capability file: {e}"),
-            })),
+            "write_error",
+            format!("Failed to write capability file: {e}"),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 
@@ -532,11 +487,7 @@ pub async fn delete_capability(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     if !is_safe_name(&name) {
@@ -545,14 +496,12 @@ pub async fn delete_capability(
 
     let dirs = state.capability_dirs.as_slice();
     let Some(path) = find_capability_file(dirs, &name) else {
-        return (
+        return structured_error(
             StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": "not_found",
-                "message": format!("Capability '{name}' not found"),
-            })),
+            "not_found",
+            format!("Capability '{name}' not found"),
         )
-            .into_response();
+        .into_response();
     };
 
     match tokio::fs::remove_file(&path).await {
@@ -565,14 +514,12 @@ pub async fn delete_capability(
             })),
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "delete_error",
-                "message": format!("Failed to delete capability file: {e}"),
-            })),
+            "delete_error",
+            format!("Failed to delete capability file: {e}"),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 

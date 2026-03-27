@@ -27,6 +27,7 @@ use super::{
         remove_backend as remove_backend_config, resolve_transport,
         update_backend as update_backend_config,
     },
+    errors::{admin_auth_required, config_path_unavailable, flat_error},
     is_admin,
 };
 use crate::config::TransportConfig;
@@ -143,29 +144,17 @@ async fn add_backend(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     // Sanitize name
     if let Err(msg) = validate_backend_name(&req.name) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error": msg})),
-        )
-            .into_response();
+        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
     }
 
     // Require a config path to write to
     let Some(ref config_path) = state.config_path else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "Config file path not available; cannot persist changes"})),
-        )
-            .into_response();
+        return config_path_unavailable().into_response();
     };
 
     // Resolve transport and description
@@ -177,22 +166,18 @@ async fn add_backend(
     ) {
         Ok(t) => t,
         Err(msg) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"error": msg})),
-            )
-                .into_response();
+            return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
         }
     };
 
     // Load current config and check for duplicates
     let mut config = load_config_or_default(config_path);
     if add_backend_config(&mut config, &req.name, transport, description, req.env).is_err() {
-        return (
+        return flat_error(
             StatusCode::CONFLICT,
-            Json(json!({"error": format!("Backend '{}' already exists", req.name)})),
+            format!("Backend '{}' already exists", req.name),
         )
-            .into_response();
+        .into_response();
     }
 
     // Persist and reload
@@ -203,7 +188,7 @@ async fn add_backend(
     )
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (
@@ -223,28 +208,20 @@ async fn remove_backend(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     let Some(ref config_path) = state.config_path else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "Config file path not available; cannot persist changes"})),
-        )
-            .into_response();
+        return config_path_unavailable().into_response();
     };
 
     let mut config = load_config_or_default(config_path);
     if remove_backend_config(&mut config, &name).is_err() {
-        return (
+        return flat_error(
             StatusCode::NOT_FOUND,
-            Json(json!({"error": format!("Backend '{}' not found", name)})),
+            format!("Backend '{}' not found", name),
         )
-            .into_response();
+        .into_response();
     }
 
     if let Err(e) = write_config_and_reload(
@@ -254,7 +231,7 @@ async fn remove_backend(
     )
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
@@ -272,19 +249,11 @@ async fn update_backend(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     let Some(ref config_path) = state.config_path else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "Config file path not available; cannot persist changes"})),
-        )
-            .into_response();
+        return config_path_unavailable().into_response();
     };
 
     let UpdateBackendRequest {
@@ -297,20 +266,20 @@ async fn update_backend(
 
     // Validate: only one of command/url may be specified
     if command.is_some() && url.is_some() {
-        return (
+        return flat_error(
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error": "Provide either 'command' or 'url', not both"})),
+            "Provide either 'command' or 'url', not both",
         )
-            .into_response();
+        .into_response();
     }
 
     let mut config = load_config_or_default(config_path);
     if !config.backends.contains_key(&name) {
-        return (
+        return flat_error(
             StatusCode::NOT_FOUND,
-            Json(json!({"error": format!("Backend '{}' not found", name)})),
+            format!("Backend '{}' not found", name),
         )
-            .into_response();
+        .into_response();
     }
 
     let transport = command
@@ -350,11 +319,11 @@ async fn update_backend(
     )
     .is_err()
     {
-        return (
+        return flat_error(
             StatusCode::NOT_FOUND,
-            Json(json!({"error": format!("Backend '{}' not found", name)})),
+            format!("Backend '{}' not found", name),
         )
-            .into_response();
+        .into_response();
     }
 
     if let Err(e) = write_config_and_reload(
@@ -364,7 +333,7 @@ async fn update_backend(
     )
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     Json(json!({"status": "updated", "name": name})).into_response()
@@ -374,11 +343,7 @@ async fn update_backend(
 async fn list_registry(client: Option<Extension<AuthenticatedClient>>) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     let entries: Vec<RegistryEntryJson> = server_registry::all()
@@ -398,11 +363,7 @@ async fn search_registry(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Admin authentication required"})),
-        )
-            .into_response();
+        return admin_auth_required().into_response();
     }
 
     let q = params.q.as_deref().unwrap_or("").trim().to_string();
