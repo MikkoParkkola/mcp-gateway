@@ -1,11 +1,63 @@
 use super::helpers::{
-    build_accepted_response, build_error_response, build_json_response, extract_request_id,
-    extract_tools_call_params, is_notification_method, parse_elicitation_params, parse_request,
+    attach_session_header, build_accepted_response, build_error_response,
+    build_http_error_response, build_json_response, extract_request_id, extract_tools_call_params,
+    is_notification_method, parse_elicitation_params, parse_request,
 };
+use super::{AppState, create_router};
+use crate::backend::BackendRegistry;
+use crate::config::{AuthConfig, StreamingConfig};
+use crate::gateway::test_helpers::MetaMcp;
+use crate::gateway::{
+    AgentAuthState, AgentRegistry, GatewayKeyPair, NotificationMultiplexer, ProxyManager,
+    ResolvedAuthConfig,
+};
+use crate::mtls::{MtlsConfig, MtlsPolicy};
 use crate::protocol::RequestId;
-use axum::{body::to_bytes, http::StatusCode};
+use axum::{
+    body::to_bytes,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
+use std::sync::Arc;
+use tower::ServiceExt;
+
+fn test_router_app_state() -> Arc<AppState> {
+    let backends = Arc::new(BackendRegistry::new());
+    let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
+    let streaming_config = StreamingConfig::default();
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        streaming_config.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
+
+    Arc::new(AppState {
+        backends,
+        meta_mcp,
+        meta_mcp_enabled: true,
+        multiplexer,
+        proxy_manager,
+        streaming_config,
+        auth_config,
+        key_server: None,
+        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+        sanitize_input: false,
+        ssrf_protection: false,
+        inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+        agent_auth,
+        gateway_key_pair,
+        capability_dirs: Vec::new(),
+        config_path: None,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+    })
+}
 
 // =====================================================================
 // extract_request_id
@@ -339,6 +391,36 @@ async fn build_json_response_skips_invalid_session_header_without_panicking() {
     assert_eq!(json, json!({"ok": true}));
 }
 
+#[test]
+fn attach_session_header_skips_invalid_session_header_without_panicking() {
+    let mut headers = HeaderMap::new();
+
+    attach_session_header(&mut headers, "sess\n123");
+
+    assert!(headers.get("mcp-session-id").is_none());
+}
+
+#[tokio::test]
+async fn build_http_error_response_sets_status_and_jsonrpc_body() {
+    let (status, body) = build_http_error_response(
+        Some(RequestId::String("req-403".to_string())),
+        -32003,
+        "Forbidden",
+        StatusCode::FORBIDDEN,
+    );
+    let response = (status, body).into_response();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(response.headers().get("mcp-session-id").is_none());
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["error"]["code"], -32003);
+    assert_eq!(json["error"]["message"], "Forbidden");
+    assert_eq!(json["id"], json!("req-403"));
+}
+
 #[tokio::test]
 async fn parse_elicitation_params_missing_returns_bad_request_with_session_header() {
     let response = parse_elicitation_params(RequestId::Number(9), None, "sess-elicit").unwrap_err();
@@ -375,4 +457,63 @@ async fn parse_elicitation_params_invalid_returns_bad_request_with_context() {
             .starts_with("Invalid elicitation params:")
     );
     assert_eq!(json["id"], json!("req-1"));
+}
+
+#[tokio::test]
+async fn backend_handler_invalid_json_returns_jsonrpc_parse_error() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from("{not json"))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["error"]["code"], -32700);
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Invalid JSON:")
+    );
+    assert_eq!(json["id"], Value::Null);
+}
+
+#[tokio::test]
+async fn backend_handler_missing_backend_returns_jsonrpc_not_found() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/missing-backend")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "ping"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["error"]["code"], -32001);
+    assert_eq!(
+        json["error"]["message"],
+        "Backend not found: missing-backend"
+    );
+    assert_eq!(json["id"], Value::Null);
 }
