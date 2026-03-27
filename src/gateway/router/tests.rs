@@ -517,3 +517,28 @@ async fn backend_handler_missing_backend_returns_jsonrpc_not_found() {
     );
     assert_eq!(json["id"], Value::Null);
 }
+
+#[tokio::test]
+async fn sse_handler_rejects_non_sse_accept_with_jsonrpc_error_shape() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/mcp")
+        .header("accept", "application/json")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["error"]["code"], -32600);
+    assert_eq!(
+        json["error"]["message"],
+        "Must accept text/event-stream for SSE notifications"
+    );
+    assert_eq!(json["id"], Value::Null);
+}

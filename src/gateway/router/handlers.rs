@@ -50,13 +50,13 @@ pub(super) async fn mcp_sse_handler(
         .unwrap_or("");
 
     if !accept.contains("text/event-stream") {
-        return (
+        return build_http_error_response(
+            None,
+            -32600,
+            "Must accept text/event-stream for SSE notifications",
             StatusCode::NOT_ACCEPTABLE,
-            Json(json!({
-                "error": "Must accept text/event-stream for SSE notifications"
-            })),
         )
-            .into_response();
+        .into_response();
     }
 
     // Get or create session - convert to owned strings for Rust 2024 lifetime rules
