@@ -489,3 +489,23 @@ fn matching_env_file_returns_first_matching_path_among_multiple() {
     // THEN: returns the matching path
     assert_eq!(result, Some(path_b));
 }
+
+#[test]
+fn load_config_patch_rejects_invalid_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+backends:
+  invalid_backend:
+    http_url: "not a url"
+"#,
+    )
+    .unwrap();
+
+    let live_config = std::sync::Arc::new(LiveConfig::new(Config::default()));
+    let result = load_config_patch(&config_path, &live_config);
+
+    assert!(matches!(result, Err(msg) if msg.contains("Configuration validation error")));
+}

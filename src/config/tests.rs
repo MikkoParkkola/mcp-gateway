@@ -41,6 +41,34 @@ fn test_load_env_files_skips_missing() {
 }
 
 #[test]
+fn test_load_env_files_later_file_overrides_earlier_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let first_path = dir.path().join("first.env");
+    let second_path = dir.path().join("second.env");
+    let key = "MCP_GW_TEST_OVERRIDE_KEY";
+
+    let mut first = std::fs::File::create(&first_path).unwrap();
+    writeln!(first, "{key}=from_first").unwrap();
+    drop(first);
+
+    let mut second = std::fs::File::create(&second_path).unwrap();
+    writeln!(second, "{key}=from_second").unwrap();
+    drop(second);
+
+    let config = Config {
+        env_files: vec![
+            first_path.to_string_lossy().to_string(),
+            second_path.to_string_lossy().to_string(),
+        ],
+        ..Default::default()
+    };
+
+    config.load_env_files();
+
+    assert_eq!(env::var(key).unwrap(), "from_second");
+}
+
+#[test]
 fn test_load_env_files_empty() {
     let config = Config::default();
     assert!(config.env_files.is_empty());
@@ -244,4 +272,23 @@ fn validate_accepts_stdio_backend_without_url() {
     // WHEN: validate is called
     // THEN: succeeds (stdio has no URL to validate)
     assert!(config.validate().is_ok());
+}
+
+#[test]
+fn config_load_rejects_invalid_http_url_from_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        r#"
+backends:
+  invalid_backend:
+    http_url: "not a url"
+"#,
+    )
+    .unwrap();
+
+    let result = Config::load(Some(&path));
+
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
 }

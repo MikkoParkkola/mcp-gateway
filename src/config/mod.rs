@@ -97,6 +97,12 @@ fn default_routing_profile() -> String {
     "default".to_string()
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct EnvFileConfig {
+    env_files: Vec<String>,
+}
+
 impl Config {
     /// Candidate config file locations searched when `--config` is not specified.
     ///
@@ -158,8 +164,6 @@ impl Config {
     /// Returns an error if an explicit `path` is supplied but does not exist,
     /// or if the config file cannot be parsed.
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let mut figment = Figment::new();
-
         // Resolve the config file: explicit path takes priority; otherwise
         // search well-known fallback locations.
         let resolved: Option<PathBuf> = match path {
@@ -175,26 +179,40 @@ impl Config {
             None => Self::fallback_config_path(),
         };
 
-        if let Some(ref p) = resolved {
-            figment = figment.merge(Yaml::file(p));
-        }
-
-        figment = figment.merge(Env::prefixed("MCP_GATEWAY_").split("__"));
-
-        let mut config: Self = figment
+        let env_file_config: EnvFileConfig = Self::figment(resolved.as_deref())
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
 
-        config.load_env_files();
+        Self::load_env_files_from_paths(&env_file_config.env_files);
+
+        let mut config: Self = Self::figment(resolved.as_deref())
+            .extract()
+            .map_err(|e| Error::Config(e.to_string()))?;
         config.expand_env_vars();
+        config.validate()?;
 
         Ok(config)
     }
 
     /// Load environment files into the process environment.
-    /// Supports ~ expansion. Files that don't exist are silently skipped.
+    /// Supports `~` expansion. Files are processed in order, and later files
+    /// override earlier values. Files that don't exist are silently skipped.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn load_env_files(&self) {
-        for path_str in &self.env_files {
+        Self::load_env_files_from_paths(&self.env_files);
+    }
+
+    fn figment(path: Option<&Path>) -> Figment {
+        let mut figment = Figment::new();
+        if let Some(path) = path {
+            figment = figment.merge(Yaml::file(path));
+        }
+
+        figment.merge(Env::prefixed("MCP_GATEWAY_").split("__"))
+    }
+
+    fn load_env_files_from_paths(env_files: &[String]) {
+        for path_str in env_files {
             let expanded = if path_str.starts_with('~') {
                 if let Some(home) = dirs::home_dir() {
                     path_str.replacen('~', &home.display().to_string(), 1)
@@ -207,7 +225,7 @@ impl Config {
 
             let path = Path::new(&expanded);
             if path.exists() {
-                match dotenvy::from_path(path) {
+                match dotenvy::from_path_override(path) {
                     Ok(()) => tracing::info!("Loaded env file: {expanded}"),
                     Err(e) => tracing::warn!("Failed to load env file {expanded}: {e}"),
                 }

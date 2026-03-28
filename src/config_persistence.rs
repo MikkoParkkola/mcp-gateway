@@ -36,8 +36,11 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 ///
 /// # Errors
 ///
-/// Returns `Err` on serialisation or I/O failure.
+/// Returns `Err` on validation, serialisation, or I/O failure.
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
+    config
+        .validate()
+        .map_err(|e| format!("Failed to validate config: {e}"))?;
     let yaml =
         serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
     write_yaml(path, &yaml)
@@ -45,6 +48,11 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 
 /// Serialize `config`, write it atomically, then trigger hot-reload when a
 /// reload context is available.
+///
+/// Persistence is always authoritative for the on-disk file. Hot-reload then
+/// applies only the subset of changes supported by [`ReloadContext`] (for
+/// example, backend changes); server listener changes remain on disk until the
+/// process is restarted.
 ///
 /// # Errors
 ///
@@ -110,6 +118,29 @@ mod tests {
         assert!(path.exists());
         let loaded = Config::load(Some(&path)).unwrap();
         assert_eq!(loaded.backends.len(), config.backends.len());
+    }
+
+    #[test]
+    fn write_config_rejects_invalid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        let mut config = Config::default();
+        config.backends.insert(
+            "invalid_backend".to_string(),
+            crate::config::BackendConfig {
+                transport: crate::config::TransportConfig::Http {
+                    http_url: "not a url".to_string(),
+                    streamable_http: false,
+                    protocol_version: None,
+                },
+                ..crate::config::BackendConfig::default()
+            },
+        );
+
+        let result = write_config(&path, &config);
+
+        assert!(matches!(result, Err(msg) if msg.contains("Failed to validate config")));
+        assert!(!path.exists());
     }
 
     #[tokio::test]
