@@ -221,11 +221,19 @@ fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     }
 }
 
+fn apply_cli_overrides_and_validate(config: &mut Config, cli: &Cli) -> mcp_gateway::Result<()> {
+    apply_cli_overrides(config, cli);
+    config.validate()
+}
+
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).
 async fn run_stdio_server(cli: Cli) -> ExitCode {
     let config = match Config::load(cli.config.as_deref()) {
         Ok(mut config) => {
-            apply_cli_overrides(&mut config, &cli);
+            if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
+                eprintln!("Failed to apply configuration overrides: {e}");
+                return ExitCode::FAILURE;
+            }
             config
         }
         Err(e) => {
@@ -255,7 +263,10 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
 async fn run_server(cli: Cli) -> ExitCode {
     let config = match Config::load(cli.config.as_deref()) {
         Ok(mut config) => {
-            apply_cli_overrides(&mut config, &cli);
+            if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
+                error!("Failed to apply configuration overrides: {e}");
+                return ExitCode::FAILURE;
+            }
             config
         }
         Err(e) => {
