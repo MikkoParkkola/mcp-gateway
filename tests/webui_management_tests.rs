@@ -299,6 +299,12 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
     assert_eq!(status, StatusCode::CREATED, "Expected 201, got: {body}");
     assert_eq!(body["status"], "created");
     assert_eq!(body["name"], "integration-test-backend");
+    // AND: reload is null — no ReloadContext in test state (no live watcher)
+    assert!(
+        body["reload"].is_null(),
+        "reload should be null without a live ReloadContext, got: {}",
+        body["reload"]
+    );
 
     // AND: the config file was updated
     let saved = std::fs::read_to_string(&config_path).unwrap();
@@ -438,6 +444,12 @@ async fn test_patch_backend_updates_description() {
     assert_eq!(status, StatusCode::OK, "Expected 200 on PATCH, got: {body}");
     assert_eq!(body["status"], "updated");
     assert_eq!(body["name"], "patch-me");
+    // AND: reload is null — no ReloadContext in test state (no live watcher)
+    assert!(
+        body["reload"].is_null(),
+        "reload should be null without a live ReloadContext, got: {}",
+        body["reload"]
+    );
 
     // AND: config file reflects the change
     let saved = std::fs::read_to_string(&config_path).unwrap();

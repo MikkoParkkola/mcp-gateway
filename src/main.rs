@@ -505,9 +505,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("discovered.yaml");
         let mut existing = Config::default();
-        existing
-            .backends
-            .insert("existing".to_string(), BackendConfig::default());
+        // Use a valid stdio transport — BackendConfig::default() produces Http with
+        // an empty http_url, which is rejected by config validation.
+        existing.backends.insert(
+            "existing".to_string(),
+            BackendConfig {
+                transport: TransportConfig::Stdio {
+                    command: "echo existing".to_string(),
+                    cwd: None,
+                    protocol_version: None,
+                },
+                ..BackendConfig::default()
+            },
+        );
         write_config(&output, &existing).expect("initial write should succeed");
 
         let server = make_discovered_server("tavily");

@@ -260,9 +260,16 @@ fn profiles_changed(old: &Config, new: &Config) -> bool {
     fields_changed(old, new)
 }
 
-/// Comparable snapshot of everything except backends and server address.
+/// Comparable snapshot of every top-level [`Config`] field **except**:
+///
+/// - `backends` — tracked individually via the `backends_added/removed/modified` buckets.
+/// - `server.host` / `server.port` — tracked separately via `server_changed`
+///   because they require a process restart to take effect.
+/// - `env_files` — loaded once at process startup; changes only take effect
+///   after a full process restart, so they are excluded from hot-reload detection.
 #[derive(PartialEq)]
 struct MetaFields {
+    // ── Always-tracked feature sections ─────────────────────────────────────
     auth: String,
     meta_mcp: String,
     streaming: String,
@@ -272,6 +279,16 @@ struct MetaFields {
     playbooks: String,
     security: String,
     webhooks: String,
+    // ── Additional top-level fields (previously missing from diff) ───────────
+    routing_profiles: String,
+    default_routing_profile: String,
+    code_mode: String,
+    mtls: String,
+    key_server: String,
+    agent_auth: String,
+    marketplace: String,
+    #[cfg(feature = "cost-governance")]
+    cost_governance: String,
 }
 
 impl MetaFields {
@@ -286,6 +303,15 @@ impl MetaFields {
             playbooks: serde_json::to_string(&c.playbooks).unwrap_or_default(),
             security: serde_json::to_string(&c.security).unwrap_or_default(),
             webhooks: serde_json::to_string(&c.webhooks).unwrap_or_default(),
+            routing_profiles: serde_json::to_string(&c.routing_profiles).unwrap_or_default(),
+            default_routing_profile: c.default_routing_profile.clone(),
+            code_mode: serde_json::to_string(&c.code_mode).unwrap_or_default(),
+            mtls: serde_json::to_string(&c.mtls).unwrap_or_default(),
+            key_server: serde_json::to_string(&c.key_server).unwrap_or_default(),
+            agent_auth: serde_json::to_string(&c.agent_auth).unwrap_or_default(),
+            marketplace: serde_json::to_string(&c.marketplace).unwrap_or_default(),
+            #[cfg(feature = "cost-governance")]
+            cost_governance: serde_json::to_string(&c.cost_governance).unwrap_or_default(),
         }
     }
 }

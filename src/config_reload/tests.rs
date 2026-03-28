@@ -532,3 +532,60 @@ backends:
 
     assert!(matches!(result, Err(msg) if msg.contains("Configuration validation error")));
 }
+
+// -------------------------------------------------------------------------
+// compute_diff: MetaFields coverage — previously-missing top-level fields
+// -------------------------------------------------------------------------
+
+#[test]
+fn diff_detects_routing_profiles_change() {
+    // GIVEN: old has no routing profiles; new adds one
+    use crate::routing_profile::RoutingProfileConfig;
+
+    let old = Config::default();
+    let mut new = Config::default();
+    new.routing_profiles.insert(
+        "limited".to_string(),
+        RoutingProfileConfig {
+            description: "limited profile".to_string(),
+            ..RoutingProfileConfig::default()
+        },
+    );
+    // WHEN
+    let patch = compute_diff(&old, &new);
+    // THEN: profiles_changed is set (routing_profiles is now covered by MetaFields)
+    assert!(
+        patch.profiles_changed,
+        "adding a routing profile should set profiles_changed"
+    );
+}
+
+#[test]
+fn diff_detects_default_routing_profile_change() {
+    // GIVEN: default_routing_profile differs
+    let old = Config::default();
+    let mut new = Config::default();
+    new.default_routing_profile = "custom".to_string();
+    // WHEN
+    let patch = compute_diff(&old, &new);
+    // THEN
+    assert!(
+        patch.profiles_changed,
+        "changing default_routing_profile should set profiles_changed"
+    );
+}
+
+#[test]
+fn diff_detects_marketplace_change() {
+    // GIVEN: marketplace plugin_dir differs
+    let old = Config::default();
+    let mut new = Config::default();
+    new.marketplace.plugin_dir = "/tmp/plugins".to_string();
+    // WHEN
+    let patch = compute_diff(&old, &new);
+    // THEN
+    assert!(
+        patch.profiles_changed,
+        "changing marketplace config should set profiles_changed"
+    );
+}
