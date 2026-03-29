@@ -14,7 +14,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all-features
+
+      - name: Verify publish package
+        run: cargo publish --locked --dry-run
+
   build:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
