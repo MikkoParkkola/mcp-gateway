@@ -46,6 +46,7 @@ use notify::{
 };
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
+use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::Result;
@@ -58,9 +59,9 @@ use crate::config::{BackendConfig, Config, ServerConfig};
 
 /// Structural diff computed between two [`Config`] snapshots.
 ///
-/// Only the `backends` and high-level flags that can be applied without a
-/// restart are included.  Server address changes are flagged separately so the
-/// caller can warn the operator.
+/// Only the `backends` and other hot-reloadable config sections are included.
+/// Server address changes are flagged separately so the caller can warn the
+/// operator.
 #[derive(Debug, Default, Clone)]
 pub struct ConfigPatch {
     /// Backends that exist in `new` but not in `old` (enabled flag respected).
@@ -246,8 +247,8 @@ fn server_address_changed(old: &ServerConfig, new: &ServerConfig) -> bool {
 
 /// Returns `true` when any non-backend, non-server field differs.
 ///
-/// Uses YAML serialization as a cheap structural equality check so we don't
-/// need to `PartialEq` every nested config type.
+/// Uses canonical JSON with sorted object keys as a cheap structural equality
+/// check so we don't need to `PartialEq` every nested config type.
 fn profiles_changed(old: &Config, new: &Config) -> bool {
     // Compare the sections that can be applied without backend restart.
     let fields_changed = |a: &Config, b: &Config| -> bool {
@@ -258,6 +259,37 @@ fn profiles_changed(old: &Config, new: &Config) -> bool {
         old_meta != new_meta
     };
     fields_changed(old, new)
+}
+
+/// Serialize a value to canonical JSON with object keys sorted recursively.
+///
+/// This keeps diff detection stable across logically-equivalent `HashMap` and
+/// JSON object instances that may iterate in a different order between reloads.
+fn canonical_json<T: Serialize + ?Sized>(value: &T) -> String {
+    fn sort_json_value(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                let mut entries: Vec<_> = std::mem::take(map).into_iter().collect();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+                for (_, entry_value) in &mut entries {
+                    sort_json_value(entry_value);
+                }
+
+                *map = entries.into_iter().collect();
+            }
+            Value::Array(values) => {
+                for entry in values {
+                    sort_json_value(entry);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+
+    let mut json = serde_json::to_value(value).unwrap_or(Value::Null);
+    sort_json_value(&mut json);
+    serde_json::to_string(&json).unwrap_or_default()
 }
 
 /// Comparable snapshot of every top-level [`Config`] field **except**:
@@ -294,24 +326,24 @@ struct MetaFields {
 impl MetaFields {
     fn from(c: &Config) -> Self {
         Self {
-            auth: serde_json::to_string(&c.auth).unwrap_or_default(),
-            meta_mcp: serde_json::to_string(&c.meta_mcp).unwrap_or_default(),
-            streaming: serde_json::to_string(&c.streaming).unwrap_or_default(),
-            failsafe: serde_json::to_string(&c.failsafe).unwrap_or_default(),
-            capabilities: serde_json::to_string(&c.capabilities).unwrap_or_default(),
-            cache: serde_json::to_string(&c.cache).unwrap_or_default(),
-            playbooks: serde_json::to_string(&c.playbooks).unwrap_or_default(),
-            security: serde_json::to_string(&c.security).unwrap_or_default(),
-            webhooks: serde_json::to_string(&c.webhooks).unwrap_or_default(),
-            routing_profiles: serde_json::to_string(&c.routing_profiles).unwrap_or_default(),
+            auth: canonical_json(&c.auth),
+            meta_mcp: canonical_json(&c.meta_mcp),
+            streaming: canonical_json(&c.streaming),
+            failsafe: canonical_json(&c.failsafe),
+            capabilities: canonical_json(&c.capabilities),
+            cache: canonical_json(&c.cache),
+            playbooks: canonical_json(&c.playbooks),
+            security: canonical_json(&c.security),
+            webhooks: canonical_json(&c.webhooks),
+            routing_profiles: canonical_json(&c.routing_profiles),
             default_routing_profile: c.default_routing_profile.clone(),
-            code_mode: serde_json::to_string(&c.code_mode).unwrap_or_default(),
-            mtls: serde_json::to_string(&c.mtls).unwrap_or_default(),
-            key_server: serde_json::to_string(&c.key_server).unwrap_or_default(),
-            agent_auth: serde_json::to_string(&c.agent_auth).unwrap_or_default(),
-            marketplace: serde_json::to_string(&c.marketplace).unwrap_or_default(),
+            code_mode: canonical_json(&c.code_mode),
+            mtls: canonical_json(&c.mtls),
+            key_server: canonical_json(&c.key_server),
+            agent_auth: canonical_json(&c.agent_auth),
+            marketplace: canonical_json(&c.marketplace),
             #[cfg(feature = "cost-governance")]
-            cost_governance: serde_json::to_string(&c.cost_governance).unwrap_or_default(),
+            cost_governance: canonical_json(&c.cost_governance),
         }
     }
 }
@@ -362,10 +394,10 @@ fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPatch) {
 
 /// Returns `true` when any observable field of a backend config differs.
 ///
-/// Uses JSON serialization for a stable, deep equality check without requiring
+/// Uses canonical JSON for a stable, deep equality check without requiring
 /// `PartialEq` on all nested types.
 fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
-    serde_json::to_string(old).ok() != serde_json::to_string(new).ok()
+    canonical_json(old) != canonical_json(new)
 }
 
 // ============================================================================

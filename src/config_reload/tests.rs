@@ -589,3 +589,88 @@ fn diff_detects_marketplace_change() {
         "changing marketplace config should set profiles_changed"
     );
 }
+
+#[test]
+fn diff_same_routing_profiles_in_different_order_is_not_changed() {
+    use crate::routing_profile::RoutingProfileConfig;
+
+    let mut old = Config::default();
+    old.routing_profiles.insert(
+        "research".to_string(),
+        RoutingProfileConfig {
+            description: "Research only".to_string(),
+            allow_tools: Some(vec!["search_*".to_string()]),
+            ..RoutingProfileConfig::default()
+        },
+    );
+    old.routing_profiles.insert(
+        "ops".to_string(),
+        RoutingProfileConfig {
+            description: "Operations".to_string(),
+            allow_backends: Some(vec!["ops_*".to_string()]),
+            ..RoutingProfileConfig::default()
+        },
+    );
+    old.default_routing_profile = "research".to_string();
+
+    let mut new = Config::default();
+    new.routing_profiles.insert(
+        "ops".to_string(),
+        RoutingProfileConfig {
+            description: "Operations".to_string(),
+            allow_backends: Some(vec!["ops_*".to_string()]),
+            ..RoutingProfileConfig::default()
+        },
+    );
+    new.routing_profiles.insert(
+        "research".to_string(),
+        RoutingProfileConfig {
+            description: "Research only".to_string(),
+            allow_tools: Some(vec!["search_*".to_string()]),
+            ..RoutingProfileConfig::default()
+        },
+    );
+    new.default_routing_profile = "research".to_string();
+
+    let patch = compute_diff(&old, &new);
+
+    assert!(
+        patch.is_empty(),
+        "routing profile key order should not trigger reloads: {}",
+        patch.summary()
+    );
+}
+
+#[test]
+fn diff_same_backend_maps_in_different_order_is_not_modified() {
+    let mut old_cfg = http_backend("http://localhost:8080/mcp");
+    old_cfg.env.insert("ALPHA".to_string(), "1".to_string());
+    old_cfg.env.insert("BETA".to_string(), "2".to_string());
+    old_cfg
+        .headers
+        .insert("X-Trace".to_string(), "enabled".to_string());
+    old_cfg
+        .headers
+        .insert("X-Client".to_string(), "gateway".to_string());
+
+    let mut new_cfg = http_backend("http://localhost:8080/mcp");
+    new_cfg.env.insert("BETA".to_string(), "2".to_string());
+    new_cfg.env.insert("ALPHA".to_string(), "1".to_string());
+    new_cfg
+        .headers
+        .insert("X-Client".to_string(), "gateway".to_string());
+    new_cfg
+        .headers
+        .insert("X-Trace".to_string(), "enabled".to_string());
+
+    let old = config_with_backends([("svc".to_string(), old_cfg)].into());
+    let new = config_with_backends([("svc".to_string(), new_cfg)].into());
+
+    let patch = compute_diff(&old, &new);
+
+    assert!(
+        patch.is_empty(),
+        "backend map key order should not trigger reloads: {}",
+        patch.summary()
+    );
+}

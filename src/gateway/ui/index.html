@@ -875,9 +875,16 @@ async function doReload() {
   const status = document.getElementById('reload-status');
   btn.disabled = true;
   try {
-    await apiFetch('/ui/api/reload', { method: 'POST' });
-    status.textContent = 'Reload requested at ' + new Date().toLocaleTimeString();
-    status.style.color = 'var(--green)';
+    const result = await apiFetch('/ui/api/reload', { method: 'POST' });
+    const stamp = new Date().toLocaleTimeString();
+    if (result.restart_required) {
+      const reason = result.restart_reason ? ` (${result.restart_reason})` : '';
+      status.textContent = `${result.changes} — restart required${reason} at ${stamp}`;
+      status.style.color = 'var(--yellow)';
+    } else {
+      status.textContent = `${result.changes} at ${stamp}`;
+      status.style.color = 'var(--green)';
+    }
   } catch (e) {
     status.textContent = 'Failed: ' + e.message;
     status.style.color = 'var(--red)';

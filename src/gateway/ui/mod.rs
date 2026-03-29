@@ -24,7 +24,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use self::errors::{admin_auth_required, auth_required};
+use self::errors::{admin_auth_required, auth_required, flat_error};
 use super::auth::AuthenticatedClient;
 use super::router::AppState;
 use crate::stats::StatsSnapshot;
@@ -621,18 +621,38 @@ async fn config(
     .into_response()
 }
 
-/// `POST /ui/api/reload` — trigger hot-reload (admin only).
-async fn reload(client: Option<Extension<AuthenticatedClient>>) -> impl IntoResponse {
+/// `POST /ui/api/reload` — trigger an immediate config reload (admin only).
+async fn reload(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
 
     if !is_admin(client.as_ref()) {
-        return admin_auth_required();
+        return admin_auth_required().into_response();
     }
 
-    // Hot-reload is handled by the file watcher in the gateway server.
-    // This endpoint signals intent — the actual reload happens via notify/SIGHUP.
-    // For now, return success to indicate the request was accepted.
-    (StatusCode::OK, Json(json!({"status": "reload_requested"})))
+    let Some(reload_context) = state.meta_mcp.reload_context() else {
+        return flat_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Config reload is not enabled on this gateway",
+        )
+        .into_response();
+    };
+
+    match reload_context.reload_outcome().await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            Json(json!({
+                "status": "ok",
+                "changes": outcome.changes,
+                "restart_required": outcome.restart_required,
+                "restart_reason": outcome.restart_reason,
+            })),
+        )
+            .into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 /// `GET /ui/api/costs` — aggregate cost data for the web UI (admin only).

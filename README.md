@@ -153,11 +153,11 @@ Turn any REST API into a tool by dropping a YAML file (~30 seconds) or importing
 mcp-gateway cap import stripe-openapi.yaml --output capabilities/ --prefix stripe
 ```
 
-The gateway ships with **70+ starter capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Hot-reloaded in ~500ms, no restart needed.
+The gateway ships with **70+ starter capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload in ~500ms, no restart needed.
 
 ### 3. Change Your MCP Stack Without Losing Your AI Session
 
-Your AI connects once to `localhost:39400`. Behind it, REST API capabilities hot-reload automatically. MCP backends require a gateway restart -- but it starts in **~8ms**. Your AI session stays connected.
+Your AI connects once to `localhost:39400`. Behind it, capability YAMLs plus reloadable gateway config sections (including backend add/remove/update and routing/profile changes) can reload live via file watching, `gateway_reload_config`, or `POST /ui/api/reload`. Listener address changes report `restart_required`; `env_files` list changes stay startup-only and take effect after restart. Your AI session stays connected.
 
 ### 4. Production Resilience
 
@@ -221,7 +221,8 @@ Embedded web UI at `/ui` -- live status, searchable tools, server health, config
 
 - **MCP Version**: 2025-11-25 (latest spec)
 - **Transports**: stdio, Streamable HTTP, SSE, WebSocket
-- **Hot Reload**: Config and capability files watched and reloaded live
+- **Hot Reload**: Capability YAMLs plus reloadable gateway config sections are watched and reloaded live
+- **Reload Outcomes**: `gateway_reload_config` and `/ui/api/reload` return `restart_required` for listener changes (for example `server.host` / `server.port`); `env_files` list edits remain startup-only
 - **Config Discovery**: Auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, `/etc/mcp-gateway/`
 - **"Did You Mean?"**: Levenshtein-based typo correction on tool names
 - **Tool Annotations**: MCP 2025-11-25 `readOnlyHint`, `destructiveHint`, `openWorldHint`

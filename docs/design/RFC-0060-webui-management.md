@@ -40,7 +40,7 @@ Users can manage backends via CLI (`add`/`remove`/`list`) but the Web UI at `/ui
 | `/ui/api/capabilities` | POST | Create new capability YAML |
 | `/ui/api/import/openapi` | POST | Import OpenAPI spec `{url}` or `{spec: "yaml/json string"}` |
 | `/ui/api/import/openapi/preview` | POST | Preview generated tools without saving |
-| `/ui/api/reload` | POST | Trigger hot-reload (existing) |
+| `/ui/api/reload` | POST | Trigger immediate config reload; returns `{status, changes, restart_required, restart_reason}` |
 
 ### UI Tabs (extend existing htmx app)
 
@@ -101,7 +101,7 @@ User pastes URL -> "Preview" ->
 - No new database or state files
 - Backends: read/write `gateway.yaml` (same as CLI `add`/`remove`)
 - Capabilities: read/write YAML files in capability directories
-- Hot-reload after every write operation
+- Hot-reload after every supported write operation; restart-only changes stay on disk and are surfaced via `restart_required`
 
 ## Acceptance Criteria
 
@@ -113,7 +113,7 @@ User pastes URL -> "Preview" ->
 6. **AC-6**: User can delete capability YAML files with confirmation
 7. **AC-7**: User can import an OpenAPI spec by URL with tool preview and selection
 8. **AC-8**: YAML validation errors are shown inline before save
-9. **AC-9**: All changes trigger hot-reload automatically
+9. **AC-9**: All supported changes trigger hot-reload automatically, and restart-only changes are reported explicitly
 10. **AC-10**: All management endpoints require admin authentication
 11. **AC-11**: Path traversal is prevented on all file operations
 
@@ -123,7 +123,7 @@ User pastes URL -> "Preview" ->
 - Existing `run_add_command`/`run_remove_command` operate on config files -- extract core logic into reusable functions (currently they're CLI-specific with `ExitCode` returns)
 - htmx forms with `hx-post`/`hx-delete` keep the UI simple (no React/Vue needed)
 - Registry data from `server_registry.rs` is already compiled in -- just needs a JSON endpoint
-- Capability hot-reload via existing `config_reload` module
+- Capability hot-reload uses the existing capability watcher; gateway config writes reuse `config_reload::ReloadContext`
 
 ## Estimated Scope
 

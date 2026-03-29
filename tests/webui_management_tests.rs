@@ -31,6 +31,7 @@ use tower::ServiceExt;
 use axum::Router;
 use mcp_gateway::backend::BackendRegistry;
 use mcp_gateway::config::Config;
+use mcp_gateway::config_reload::{LiveConfig, ReloadContext};
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
@@ -89,6 +90,63 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         #[cfg(feature = "firewall")]
         firewall: None,
     })
+}
+
+fn make_app_state_with_reload(
+    config: Config,
+    cap_dir: Option<&str>,
+    config_path: std::path::PathBuf,
+) -> (Arc<AppState>, Arc<LiveConfig>) {
+    let backends = Arc::new(BackendRegistry::new());
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        config.streaming.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
+    let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
+    let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
+    let inflight = Arc::new(tokio::sync::Semaphore::new(100));
+    let agent_registry = Arc::new(AgentRegistry::new());
+    let agent_auth = AgentAuthState::new(false, Arc::clone(&agent_registry));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("RSA key gen failed"));
+    let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
+    let live_config = Arc::new(LiveConfig::new(config.clone()));
+    let reload_context = Arc::new(ReloadContext::new(
+        config_path.clone(),
+        Arc::clone(&live_config),
+        Arc::clone(&backends),
+        config.failsafe.clone(),
+        config.meta_mcp.cache_ttl,
+    ));
+    meta_mcp.set_reload_context(reload_context);
+
+    let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
+
+    (
+        Arc::new(AppState {
+            backends,
+            meta_mcp,
+            meta_mcp_enabled: false,
+            multiplexer,
+            proxy_manager,
+            streaming_config: config.streaming.clone(),
+            auth_config,
+            key_server: None,
+            tool_policy,
+            mtls_policy,
+            sanitize_input: false,
+            ssrf_protection: false,
+            inflight,
+            agent_auth,
+            gateway_key_pair,
+            capability_dirs,
+            config_path: Some(config_path),
+            #[cfg(feature = "firewall")]
+            firewall: None,
+        }),
+        live_config,
+    )
 }
 
 /// Send a JSON-body request and return `(StatusCode, parsed JSON body)`.
@@ -456,6 +514,131 @@ async fn test_patch_backend_updates_description() {
     assert!(
         saved.contains("Updated description"),
         "Config should contain updated description"
+    );
+}
+
+#[tokio::test]
+async fn test_add_backend_returns_reload_outcome_when_context_available() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("gateway.yaml");
+    let cfg = Config::default();
+    std::fs::write(&config_path, serde_yaml::to_string(&cfg).unwrap()).unwrap();
+
+    let (state, _) = make_app_state_with_reload(cfg, None, config_path.clone());
+    let router = create_router(Arc::clone(&state));
+
+    let (status, body) = send_json(
+        &router,
+        Method::POST,
+        "/ui/api/backends",
+        Some(json!({
+            "name": "live-reload-backend",
+            "command": "echo hello"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "Expected 201, got: {body}");
+    assert_eq!(body["status"], "created");
+    assert_eq!(body["reload"]["restart_required"], false);
+    assert!(
+        body["reload"]["changes"].as_str().is_some_and(|changes| {
+            changes.contains("added backends") && changes.contains("live-reload-backend")
+        }),
+        "expected backend reload summary, got: {body}"
+    );
+    assert!(
+        state.backends.get("live-reload-backend").is_some(),
+        "backend should be registered after live reload"
+    );
+}
+
+#[tokio::test]
+async fn test_reload_endpoint_without_reload_context_returns_503() {
+    let state = make_app_state(None, None);
+    let router = create_router(state);
+
+    let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
+
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Expected 503 without reload context, got: {body}"
+    );
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Config reload is not enabled")),
+        "unexpected reload-unavailable body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_reload_endpoint_returns_structured_outcome_for_profile_change() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("gateway.yaml");
+    let initial = Config::default();
+    std::fs::write(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+
+    let (state, live_config) =
+        make_app_state_with_reload(initial.clone(), None, config_path.clone());
+    let router = create_router(state);
+
+    let mut updated = initial;
+    updated.routing_profiles.insert(
+        "research".to_string(),
+        mcp_gateway::routing_profile::RoutingProfileConfig {
+            description: "Research only".to_string(),
+            allow_tools: Some(vec!["search_*".to_string()]),
+            ..mcp_gateway::routing_profile::RoutingProfileConfig::default()
+        },
+    );
+    updated.default_routing_profile = "research".to_string();
+    std::fs::write(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
+
+    let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
+
+    assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["restart_required"], false);
+    assert!(
+        body["restart_reason"].is_null(),
+        "expected no restart reason: {body}"
+    );
+    assert!(
+        body["changes"]
+            .as_str()
+            .is_some_and(|changes| changes.contains("profiles/meta config changed")),
+        "expected profiles reload summary, got: {body}"
+    );
+    assert_eq!(live_config.get().default_routing_profile, "research");
+}
+
+#[tokio::test]
+async fn test_reload_endpoint_reports_restart_required_for_server_change() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("gateway.yaml");
+    let initial = Config::default();
+    std::fs::write(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+
+    let (state, _) = make_app_state_with_reload(initial.clone(), None, config_path.clone());
+    let router = create_router(state);
+
+    let mut updated = initial;
+    updated.server.port += 1;
+    std::fs::write(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
+
+    let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
+
+    assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["restart_required"], true);
+    assert_eq!(body["restart_reason"], "server_address_changed");
+    assert!(
+        body["changes"]
+            .as_str()
+            .is_some_and(|changes| changes.contains("restart required")),
+        "expected restart-required summary, got: {body}"
     );
 }
 
