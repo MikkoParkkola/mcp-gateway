@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::{Provider, ProviderHealth};
+use super::{Provider, ProviderHealth, flatten_tool_call_result};
 use crate::Result;
 use crate::capability::CapabilityBackend;
 use crate::protocol::Tool;
@@ -59,24 +59,7 @@ impl Provider for CapabilityProvider {
 
     async fn invoke(&self, tool: &str, args: Value) -> Result<Value> {
         let result = self.backend.call_tool(tool, args).await?;
-
-        // Convert ToolsCallResult to a single JSON value.
-        let texts: Vec<Value> = result
-            .content
-            .into_iter()
-            .filter_map(|c| match c {
-                crate::protocol::Content::Text { text, .. } => serde_json::from_str(&text)
-                    .ok()
-                    .or(Some(Value::String(text))),
-                _ => None,
-            })
-            .collect();
-
-        Ok(match texts.len() {
-            0 => Value::Null,
-            1 => texts.into_iter().next().unwrap_or(Value::Null),
-            _ => Value::Array(texts),
-        })
+        flatten_tool_call_result(result)
     }
 
     async fn health(&self) -> ProviderHealth {
