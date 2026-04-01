@@ -41,8 +41,7 @@ pub struct JsonRpcNotification {
 pub struct JsonRpcResponse {
     /// JSON-RPC version (always "2.0")
     pub jsonrpc: String,
-    /// Request ID
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Request ID (`null` when the response cannot be correlated to a request)
     pub id: Option<RequestId>,
     /// Result (on success)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,6 +75,12 @@ impl JsonRpcResponse {
                 data: None,
             }),
         }
+    }
+
+    /// Create a standard internal error response.
+    #[must_use]
+    pub fn internal_error(id: Option<RequestId>) -> Self {
+        Self::error(id, -32603, "Internal error")
     }
 
     /// Create an error response with data
@@ -776,6 +781,29 @@ mod tests {
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32601);
         assert_eq!(err.message, "Method not found");
+    }
+
+    #[test]
+    fn json_rpc_response_without_request_id_serializes_explicit_null_id() {
+        let resp = JsonRpcResponse::error(None, -32700, "Parse error");
+        let json = serde_json::to_value(&resp).unwrap();
+
+        let object = json.as_object().unwrap();
+        assert!(object.contains_key("id"));
+        assert_eq!(json["id"], Value::Null);
+        assert_eq!(json["jsonrpc"], "2.0");
+        assert_eq!(json["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn json_rpc_response_internal_error_uses_standard_contract() {
+        let resp = JsonRpcResponse::internal_error(None);
+        let json = serde_json::to_value(&resp).unwrap();
+
+        assert_eq!(json["jsonrpc"], "2.0");
+        assert_eq!(json["id"], Value::Null);
+        assert_eq!(json["error"]["code"], -32603);
+        assert_eq!(json["error"]["message"], "Internal error");
     }
 
     #[test]

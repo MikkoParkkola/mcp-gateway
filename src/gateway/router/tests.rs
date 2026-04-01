@@ -23,10 +23,9 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn test_router_app_state() -> Arc<AppState> {
+fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Arc<AppState> {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
-    let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::clone(&backends),
         streaming_config.clone(),
@@ -57,6 +56,10 @@ fn test_router_app_state() -> Arc<AppState> {
         #[cfg(feature = "firewall")]
         firewall: None,
     })
+}
+
+fn test_router_app_state() -> Arc<AppState> {
+    test_router_app_state_with_streaming(StreamingConfig::default())
 }
 
 // =====================================================================
@@ -422,6 +425,24 @@ async fn build_http_error_response_sets_status_and_jsonrpc_body() {
 }
 
 #[tokio::test]
+async fn build_http_error_response_without_request_id_includes_null_id_field() {
+    let (status, body) =
+        build_http_error_response(None, -32700, "Parse error", StatusCode::BAD_REQUEST);
+    let response = (status, body).into_response();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let object = json.as_object().unwrap();
+    assert!(object.contains_key("id"));
+    assert_eq!(json["id"], Value::Null);
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["error"]["code"], -32700);
+    assert_eq!(json["error"]["message"], "Parse error");
+}
+
+#[tokio::test]
 async fn parse_elicitation_params_missing_returns_bad_request_with_session_header() {
     let response = parse_elicitation_params(RequestId::Number(9), None, "sess-elicit").unwrap_err();
 
@@ -541,6 +562,70 @@ async fn sse_handler_rejects_non_sse_accept_with_jsonrpc_error_shape() {
         "Must accept text/event-stream for SSE notifications"
     );
     assert_eq!(json["id"], Value::Null);
+}
+
+#[tokio::test]
+async fn sse_handler_streaming_disabled_returns_jsonrpc_internal_shape() {
+    let mut streaming_config = StreamingConfig::default();
+    streaming_config.enabled = false;
+
+    let router = create_router(test_router_app_state_with_streaming(streaming_config));
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/mcp")
+        .header("accept", "text/event-stream")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let object = json.as_object().unwrap();
+    assert!(object.contains_key("id"));
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], Value::Null);
+    assert_eq!(json["error"]["code"], -32600);
+    assert_eq!(
+        json["error"]["message"],
+        "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp"
+    );
+}
+
+#[tokio::test]
+async fn sse_deprecated_endpoint_returns_jsonrpc_error_with_migration_data() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/sse")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::GONE);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let object = json.as_object().unwrap();
+    assert!(object.contains_key("id"));
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], Value::Null);
+    assert_eq!(json["error"]["code"], -32600);
+    assert_eq!(
+        json["error"]["message"],
+        "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead."
+    );
+    assert_eq!(
+        json["error"]["data"]["migration"],
+        "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\""
+    );
+    assert_eq!(
+        json["error"]["data"]["spec"],
+        "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
+    );
 }
 
 // =====================================================================
