@@ -940,30 +940,16 @@ impl Gateway {
         request: &serde_json::Value,
         session_id: &str,
     ) -> Option<serde_json::Value> {
-        use super::router::helpers::{
-            extract_request_id, extract_tools_call_params, is_notification_method,
-        };
+        use super::router::helpers::{extract_tools_call_params, parse_request};
         use crate::protocol::JsonRpcResponse;
 
-        // Validate jsonrpc version
-        if request.get("jsonrpc").and_then(|v| v.as_str()) != Some("2.0") {
-            let resp = JsonRpcResponse::error(None, -32600, "Invalid JSON-RPC version");
-            return Some(serde_json::to_value(resp).unwrap());
-        }
-
-        let id = request.get("id").and_then(extract_request_id);
-
-        let method = if let Some(m) = request.get("method").and_then(|v| v.as_str()) {
-            m.to_string()
-        } else {
-            let resp = JsonRpcResponse::error(id, -32600, "Missing method");
-            return Some(serde_json::to_value(resp).unwrap());
+        let (id, method, params) = match parse_request(request) {
+            Ok(parsed) => parsed,
+            Err(response) => return Some(serde_json::to_value(response).unwrap()),
         };
 
-        let params = request.get("params").cloned();
-
         // Notifications have no id — send no response
-        if is_notification_method(&method) {
+        if method.starts_with("notifications/") {
             debug!(notification = %method, "stdio: notification (no response)");
             return None;
         }
@@ -1039,8 +1025,26 @@ impl Gateway {
         session_id: &str,
     ) -> Vec<serde_json::Value> {
         let Some(requests) = batch.as_array() else {
-            return vec![];
+            return vec![
+                serde_json::to_value(crate::protocol::JsonRpcResponse::error(
+                    None,
+                    -32600,
+                    "Invalid Request",
+                ))
+                .unwrap(),
+            ];
         };
+
+        if requests.is_empty() {
+            return vec![
+                serde_json::to_value(crate::protocol::JsonRpcResponse::error(
+                    None,
+                    -32600,
+                    "Invalid Request",
+                ))
+                .unwrap(),
+            ];
+        }
 
         let mut responses = Vec::new();
         for req in requests {
@@ -1051,5 +1055,64 @@ impl Gateway {
             }
         }
         responses
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::Gateway;
+    use crate::{
+        backend::BackendRegistry,
+        gateway::meta_mcp::MetaMcp,
+        mtls::{MtlsConfig, MtlsPolicy},
+        security::ToolPolicy,
+    };
+
+    fn test_meta_mcp() -> Arc<MetaMcp> {
+        Arc::new(MetaMcp::new(Arc::new(BackendRegistry::new())))
+    }
+
+    fn test_tool_policy() -> Arc<ToolPolicy> {
+        Arc::new(ToolPolicy::default())
+    }
+
+    fn test_mtls_policy() -> Arc<MtlsPolicy> {
+        Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()))
+    }
+
+    #[tokio::test]
+    async fn dispatch_single_reuses_shared_request_parser_for_missing_id() {
+        let response = Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({"jsonrpc": "2.0", "method": "ping"}),
+            "stdio-session",
+        )
+        .await
+        .expect("request without id should return an error response");
+
+        assert_eq!(response["error"]["code"], -32600);
+        assert_eq!(response["error"]["message"], "Missing id");
+    }
+
+    #[tokio::test]
+    async fn dispatch_batch_returns_invalid_request_for_empty_batch() {
+        let responses = Gateway::dispatch_batch(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            json!([]),
+            "stdio-session",
+        )
+        .await;
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0]["error"]["code"], -32600);
+        assert_eq!(responses[0]["error"]["message"], "Invalid Request");
     }
 }

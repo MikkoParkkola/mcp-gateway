@@ -189,10 +189,12 @@ pub(crate) fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value)
     (tool_name, arguments)
 }
 
-/// Parse JSON-RPC request or notification
-/// Returns (Option<RequestId>, method, params) - id is None for notifications
-#[allow(clippy::result_large_err)] // JsonRpcResponse used directly as HTTP error body
-pub(super) fn parse_request(
+/// Parse JSON-RPC request or notification.
+///
+/// Returns `(Option<RequestId>, method, params)` where `id` is `None` for
+/// notifications without request IDs.
+#[allow(clippy::result_large_err)] // JsonRpcResponse used directly as HTTP/server error body
+pub(crate) fn parse_request(
     value: &Value,
 ) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
     // Check jsonrpc version
