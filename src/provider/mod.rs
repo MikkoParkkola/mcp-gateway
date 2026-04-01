@@ -52,7 +52,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use serde_json::Value;
 
-use crate::protocol::{Resource, Tool};
+use crate::protocol::{Content, Resource, Tool, ToolsCallResult};
 use crate::{Error, Result};
 
 // ============================================================================
@@ -237,6 +237,49 @@ impl Default for ProviderRegistry {
 }
 
 // ============================================================================
+// Shared tool-result flattening
+// ============================================================================
+
+/// Flatten an MCP `tools/call` result into the gateway's provider `Value` shape.
+///
+/// Text content preserves the existing "parse JSON, fall back to string" behavior.
+/// Resource content keeps the embedded resource payload. Other content variants are
+/// serialized explicitly so they are no longer silently dropped.
+///
+/// # Errors
+///
+/// Returns `Error::Protocol` when the backend returns an empty content array or
+/// when a non-text content item cannot be serialized.
+pub(crate) fn flatten_tool_call_result(result: ToolsCallResult) -> Result<Value> {
+    if result.content.is_empty() {
+        return Err(Error::Protocol(
+            "ToolsCallResult contained no content items".to_string(),
+        ));
+    }
+
+    let flattened = result
+        .content
+        .into_iter()
+        .map(|content| match content {
+            Content::Text { text, .. } => {
+                Ok(serde_json::from_str(&text).unwrap_or(Value::String(text)))
+            }
+            Content::Resource { resource, .. } => serde_json::to_value(resource)
+                .map_err(|e| Error::Protocol(format!("Failed to serialize resource content: {e}"))),
+            other => serde_json::to_value(&other).map_err(|e| {
+                Error::Protocol(format!("Failed to serialize tool content item: {e}"))
+            }),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(match flattened.len() {
+        0 => Value::Null,
+        1 => flattened.into_iter().next().unwrap_or(Value::Null),
+        _ => Value::Array(flattened),
+    })
+}
+
+// ============================================================================
 // Transform trait
 // ============================================================================
 
@@ -284,4 +327,90 @@ pub trait Transform: Send + Sync + 'static {
     ///
     /// Returns an error if result transformation fails.
     async fn transform_result(&self, tool: &str, result: Value) -> Result<Value>;
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::flatten_tool_call_result;
+    use crate::Error;
+    use crate::protocol::{Content, ResourceContents, ToolsCallResult};
+
+    #[test]
+    fn flatten_tool_call_result_rejects_empty_content() {
+        let err = flatten_tool_call_result(ToolsCallResult {
+            content: vec![],
+            is_error: false,
+        })
+        .unwrap_err();
+
+        assert!(matches!(err, Error::Protocol(message) if message.contains("no content items")));
+    }
+
+    #[test]
+    fn flatten_tool_call_result_parses_json_text_and_falls_back_to_plain_string() {
+        let result = flatten_tool_call_result(ToolsCallResult {
+            content: vec![
+                Content::Text {
+                    text: r#"{"ok":true}"#.to_string(),
+                    annotations: None,
+                },
+                Content::Text {
+                    text: "plain text".to_string(),
+                    annotations: None,
+                },
+            ],
+            is_error: false,
+        })
+        .unwrap();
+
+        assert_eq!(
+            result,
+            Value::Array(vec![
+                json!({ "ok": true }),
+                Value::String("plain text".to_string())
+            ])
+        );
+    }
+
+    #[test]
+    fn flatten_tool_call_result_preserves_resource_and_non_text_content() {
+        let result = flatten_tool_call_result(ToolsCallResult {
+            content: vec![
+                Content::Resource {
+                    resource: ResourceContents::Text {
+                        uri: "file://guide.txt".to_string(),
+                        mime_type: Some("text/plain".to_string()),
+                        text: "hello".to_string(),
+                    },
+                    annotations: None,
+                },
+                Content::ResourceLink {
+                    uri: "file://guide.txt".to_string(),
+                    name: Some("Guide".to_string()),
+                    description: None,
+                    mime_type: Some("text/plain".to_string()),
+                    annotations: None,
+                },
+                Content::Image {
+                    data: "ZmFrZQ==".to_string(),
+                    mime_type: "image/png".to_string(),
+                    annotations: None,
+                },
+            ],
+            is_error: false,
+        })
+        .unwrap();
+
+        let items = result
+            .as_array()
+            .expect("mixed content should return an array");
+        assert_eq!(items[0]["uri"], "file://guide.txt");
+        assert_eq!(items[0]["text"], "hello");
+        assert_eq!(items[1]["type"], "resource_link");
+        assert_eq!(items[1]["name"], "Guide");
+        assert_eq!(items[2]["type"], "image");
+        assert_eq!(items[2]["mimeType"], "image/png");
+    }
 }
