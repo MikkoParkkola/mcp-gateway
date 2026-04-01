@@ -14,8 +14,8 @@ use tracing::{debug, info, warn};
 use super::AppState;
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
-    build_http_error_response, build_response, extract_tools_call_params, parse_elicitation_params,
-    parse_request, parse_sampling_params,
+    build_http_error_response, build_http_response, build_response, extract_tools_call_params,
+    parse_elicitation_params, parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::streaming::create_sse_response;
@@ -100,13 +100,13 @@ pub(super) async fn mcp_sse_handler(
             attach_session_header(response.headers_mut(), &session_id);
             response
         }
-        None => (
+        None => build_http_error_response(
+            None,
+            -32603,
+            "Failed to create SSE stream",
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "Failed to create SSE stream"
-            })),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 
@@ -134,13 +134,17 @@ pub(super) async fn mcp_delete_handler(
 
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
 pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
-    (
+    build_http_response(
+        JsonRpcResponse::error_with_data(
+            None,
+            -32600,
+            "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
+            json!({
+                "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
+                "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
+            }),
+        ),
         StatusCode::GONE,
-        Json(json!({
-            "error": "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
-            "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
-            "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
-        })),
     )
 }
 

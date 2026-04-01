@@ -81,11 +81,8 @@ pub(super) fn build_http_response(
 ) -> (StatusCode, Json<Value>) {
     let body = serde_json::to_value(rpc).unwrap_or_else(|err| {
         warn!(%err, "failed to serialize JSON-RPC response");
-        json!({
-            "jsonrpc": "2.0",
-            "error": {"code": -32603, "message": "Internal error"},
-            "id": null
-        })
+        serde_json::to_value(JsonRpcResponse::internal_error(None))
+            .expect("internal JSON-RPC fallback must serialize")
     });
     (status, Json(body))
 }
