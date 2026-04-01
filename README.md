@@ -7,7 +7,6 @@
 [![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Tests](https://img.shields.io/badge/tests-2537%2B-brightgreen.svg)](https://github.com/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -17,6 +16,8 @@
 ![demo](demo.gif)
 
 MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets 4 meta-tools and discovers the right one on demand -- like searching an app store instead of installing every app.
+
+Public benchmark-backed claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
 
 ## Why
 
@@ -141,7 +142,7 @@ That's it. Your AI now has access to all backends through 4 meta-tools. It searc
 
 The gateway exposes 4 meta-tools. Your AI searches for what it needs, then invokes it. Tool definitions load on demand, not upfront. Connect 500 tools and pay the token cost of 4.
 
-**Token math** (Claude Opus @ $15/M input tokens):
+**Token math** (Claude Opus @ $15/M input tokens, reproducible via `python benchmarks/token_savings.py --scenario readme`):
 - **Without**: 100 tools x 150 tokens x 1,000 requests = 15M tokens = **$225**
 - **With**: 4 meta-tools x 100 tokens x 1,000 requests = 0.4M tokens = **$6**
 
@@ -257,9 +258,9 @@ Any MCP-compliant server works. All three transport types supported:
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Startup time** | ~8ms | Measured with `hyperfine` ([benchmarks](docs/BENCHMARKS.md)) |
-| **Binary size** | ~12 MB | Release build with LTO, stripped |
-| **Gateway overhead** | <2ms per request | Local routing + JSON-RPC parsing |
-| **Memory** | Low | Async I/O via tokio; no per-request allocations for routing |
+| **Binary size** | ~12-13 MB | Release build with LTO, stripped |
+| **Hot-path microbenchmarks** | Included | Criterion suite covers registry, parsing, cache-key, firewall, and semantic search hot paths |
+| **End-to-end latency** | Backend-dependent | Measure with your real MCP servers and REST APIs rather than relying on a synthetic single number |
 
 ## Documentation
 

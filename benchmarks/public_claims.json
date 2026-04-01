@@ -1,0 +1,20 @@
+{
+  "last_verified": "2026-03-14",
+  "meta_tools": 4,
+  "startup_benchmark": {
+    "command": "hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'",
+    "mean_ms": 8.0,
+    "stddev_ms": 1.2,
+    "min_ms": 5.4,
+    "max_ms": 9.7
+  },
+  "readme_token_savings": {
+    "direct_tools": 100,
+    "direct_tokens_per_tool": 150,
+    "gateway_tools": 4,
+    "gateway_tokens_per_tool": 100,
+    "requests": 1000,
+    "model": "Claude Opus",
+    "input_cost_per_million_usd": 15.0
+  }
+}

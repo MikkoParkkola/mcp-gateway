@@ -42,11 +42,22 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  public-claims:
+    name: Public claims
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate README benchmark scenario script
+        run: python3 benchmarks/token_savings.py --scenario readme --json
+      - name: Validate public claim consistency
+        run: cargo test --test public_claims_validation
+
   docker:
     name: Docker
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, test, fmt]
+    needs: [check, test, fmt, public-claims]
     permissions:
       contents: read
       packages: write

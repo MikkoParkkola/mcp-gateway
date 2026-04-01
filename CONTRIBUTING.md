@@ -13,7 +13,7 @@
 git clone https://github.com/YOUR_USERNAME/mcp-gateway
 cd mcp-gateway
 cargo build
-cargo test           # 1812+ tests, all must pass
+cargo test --all-features   # full suite, all must pass
 cargo run -- init    # Generate a starter config
 cargo run -- --config gateway.yaml --log-level debug
 ```

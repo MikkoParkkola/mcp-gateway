@@ -2,27 +2,28 @@
 """
 MCP Gateway Token Savings Benchmark
 
-Demonstrates the ~95% context token reduction achieved by the meta-MCP
+Demonstrates the ~95%+ context token reduction achieved by the meta-MCP
 gateway pattern compared to direct tool registration.
 
 Direct approach: Every backend's tools are individually registered in the
 LLM's system prompt, consuming context tokens proportional to the total
 number of tools across all backends.
 
-Meta-MCP approach: Only 3 gateway tools are registered (gateway_list_servers,
-gateway_search_tools, gateway_invoke), regardless of how many backends or
-tools exist behind the gateway.
+Meta-MCP approach: Only 4 gateway tools are registered (gateway_list_servers,
+gateway_list_tools, gateway_search_tools, gateway_invoke), regardless of how
+many backends or tools exist behind the gateway.
 
 Usage:
     python benchmarks/token_savings.py
     python benchmarks/token_savings.py --backends 10 --tools-per-backend 30
+    python benchmarks/token_savings.py --scenario readme
+    python benchmarks/token_savings.py --scenario readme --json
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import textwrap
 
 # ---------------------------------------------------------------------------
 # Token estimation
@@ -82,7 +83,7 @@ def generate_backend_tools(backend: str, n_tools: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Meta-MCP gateway tool definitions (fixed — always 3)
+# Meta-MCP gateway tool definitions (fixed — always 4)
 # ---------------------------------------------------------------------------
 
 GATEWAY_TOOLS = [
@@ -96,6 +97,22 @@ GATEWAY_TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {},
+        },
+    },
+    {
+        "name": "gateway_list_tools",
+        "description": (
+            "List tools available through the gateway. "
+            "Supports optional filtering by server to inspect a backend's tool catalog."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "server": {
+                    "type": "string",
+                    "description": "Optional backend MCP server name to filter by.",
+                },
+            },
         },
     },
     {
@@ -144,12 +161,21 @@ GATEWAY_TOOLS = [
     },
 ]
 
+README_SCENARIO = {
+    "direct_tools": 100,
+    "direct_tokens_per_tool": 150,
+    "gateway_tokens_per_tool": 100,
+    "requests": 1_000,
+    "input_cost_per_million_usd": 15,
+}
+
 
 # ---------------------------------------------------------------------------
 # Benchmark
 # ---------------------------------------------------------------------------
 
-def run_benchmark(n_backends: int, tools_per_backend: int) -> None:
+def synthetic_results(n_backends: int, tools_per_backend: int) -> dict:
+    """Return synthetic benchmark results for arbitrary backend counts."""
     backend_names = [
         "slack", "github", "jira", "confluence", "linear",
         "notion", "postgres", "stripe", "sendgrid", "datadog",
@@ -157,7 +183,6 @@ def run_benchmark(n_backends: int, tools_per_backend: int) -> None:
         "mongodb", "snowflake", "bigquery", "s3", "cloudflare",
     ]
 
-    # --- Direct approach: all tools in system prompt ---
     all_direct_tools = []
     for i in range(n_backends):
         name = backend_names[i % len(backend_names)]
@@ -168,14 +193,34 @@ def run_benchmark(n_backends: int, tools_per_backend: int) -> None:
     direct_json = json.dumps(all_direct_tools, indent=2)
     direct_tokens = estimate_tokens(direct_json)
 
-    # --- Meta-MCP approach: only 3 gateway tools ---
     gateway_json = json.dumps(GATEWAY_TOOLS, indent=2)
     gateway_tokens = estimate_tokens(gateway_json)
 
-    # --- Results ---
     total_tools = n_backends * tools_per_backend
     savings_pct = (1 - gateway_tokens / direct_tokens) * 100
     ratio = direct_tokens / gateway_tokens
+
+    return {
+        "scenario": "synthetic",
+        "backends": n_backends,
+        "tools_per_backend": tools_per_backend,
+        "total_tools": total_tools,
+        "gateway_tools": len(GATEWAY_TOOLS),
+        "direct_tokens": direct_tokens,
+        "gateway_tokens": gateway_tokens,
+        "savings_percent": savings_pct,
+        "reduction_ratio": ratio,
+        "tokens_saved": direct_tokens - gateway_tokens,
+    }
+
+
+def print_synthetic_results(results: dict) -> None:
+    """Pretty-print synthetic benchmark results."""
+    total_tools = results["total_tools"]
+    direct_tokens = results["direct_tokens"]
+    gateway_tokens = results["gateway_tokens"]
+    savings_pct = results["savings_percent"]
+    ratio = results["reduction_ratio"]
 
     w = 60  # inner width between | borders
 
@@ -191,8 +236,8 @@ def run_benchmark(n_backends: int, tools_per_backend: int) -> None:
     print(row())
     print(row("Configuration"))
     print(row("-------------"))
-    print(row(f"  Backends:          {n_backends:>4}"))
-    print(row(f"  Tools per backend: {tools_per_backend:>4}"))
+    print(row(f"  Backends:          {results['backends']:>4}"))
+    print(row(f"  Tools per backend: {results['tools_per_backend']:>4}"))
     print(row(f"  Total tools:       {total_tools:>4}"))
     print(row())
     print(sep())
@@ -200,41 +245,93 @@ def run_benchmark(n_backends: int, tools_per_backend: int) -> None:
     print(row("Approach              Tools in Prompt    Est. Tokens"))
     print(row("--------              ---------------    -----------"))
     print(row(f"Direct (all tools)    {total_tools:>15,}    {direct_tokens:>11,}"))
-    print(row(f"Meta-MCP (gateway)    {3:>15,}    {gateway_tokens:>11,}"))
+    print(row(f"Meta-MCP (gateway)    {len(GATEWAY_TOOLS):>15,}    {gateway_tokens:>11,}"))
     print(row())
     print(sep())
     print(row())
     print(row(f"Token savings:        {savings_pct:>5.1f}%"))
     print(row(f"Reduction ratio:      {ratio:>5.0f}x fewer tokens"))
-    print(row(f"Tokens saved:         {direct_tokens - gateway_tokens:>11,}"))
+    print(row(f"Tokens saved:         {results['tokens_saved']:>11,}"))
     print(row())
     print(sep("="))
     print()
 
-    # Scaling table
     print("  Scaling comparison:")
     print("  Backends  Tools  Direct (tokens)  Gateway (tokens)  Savings")
     print("  --------  -----  --------------  ----------------  -------")
 
+    backend_names = [
+        "slack", "github", "jira", "confluence", "linear",
+        "notion", "postgres", "stripe", "sendgrid", "datadog",
+        "sentry", "pagerduty", "grafana", "elasticsearch", "redis",
+        "mongodb", "snowflake", "bigquery", "s3", "cloudflare",
+    ]
     for nb, tpb in [(1, 10), (3, 15), (5, 20), (10, 20), (10, 30), (20, 25)]:
         tools = []
         for i in range(nb):
             name = backend_names[i % len(backend_names)]
             tools.extend(generate_backend_tools(name, tpb))
         d_tok = estimate_tokens(json.dumps(tools, indent=2))
-        g_tok = gateway_tokens  # always the same 3 tools
+        g_tok = gateway_tokens
         pct = (1 - g_tok / d_tok) * 100
         total = nb * tpb
         print(f"  {nb:>8}  {total:>5}  {d_tok:>14,}  {g_tok:>16,}  {pct:>5.1f}%")
     print()
     print("  Note: Token estimates use ~3.5 chars/token heuristic.")
-    print("  Gateway tools are constant (3) regardless of backend count.")
+    print(f"  Gateway tools are constant ({len(GATEWAY_TOOLS)}) regardless of backend count.")
+    print()
+
+
+def readme_results() -> dict:
+    """Return the exact token/cost scenario published in README.md."""
+    direct_tokens = README_SCENARIO["direct_tools"] * README_SCENARIO["direct_tokens_per_tool"]
+    gateway_tokens = len(GATEWAY_TOOLS) * README_SCENARIO["gateway_tokens_per_tool"]
+    direct_cost = (
+        direct_tokens * README_SCENARIO["requests"] / 1_000_000
+    ) * README_SCENARIO["input_cost_per_million_usd"]
+    gateway_cost = (
+        gateway_tokens * README_SCENARIO["requests"] / 1_000_000
+    ) * README_SCENARIO["input_cost_per_million_usd"]
+
+    return {
+        "scenario": "readme",
+        "direct_tools": README_SCENARIO["direct_tools"],
+        "gateway_tools": len(GATEWAY_TOOLS),
+        "direct_tokens": direct_tokens,
+        "gateway_tokens": gateway_tokens,
+        "requests": README_SCENARIO["requests"],
+        "input_cost_per_million_usd": README_SCENARIO["input_cost_per_million_usd"],
+        "savings_percent": (1 - gateway_tokens / direct_tokens) * 100,
+        "direct_cost_usd": direct_cost,
+        "gateway_cost_usd": gateway_cost,
+        "savings_usd": direct_cost - gateway_cost,
+    }
+
+
+def print_readme_results(results: dict) -> None:
+    """Pretty-print the README reference scenario."""
+    print("README reference scenario")
+    print("=========================")
+    print(f"Direct tools:    {results['direct_tools']}")
+    print(f"Gateway tools:   {results['gateway_tools']}")
+    print(f"Direct tokens:   {results['direct_tokens']:,}")
+    print(f"Gateway tokens:  {results['gateway_tokens']:,}")
+    print(f"Token savings:   {results['savings_percent']:.1f}%")
+    print(f"Direct cost:     ${results['direct_cost_usd']:.0f} / 1K requests")
+    print(f"Gateway cost:    ${results['gateway_cost_usd']:.0f} / 1K requests")
+    print(f"Savings:         ${results['savings_usd']:.0f} / 1K requests")
     print()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Benchmark context token savings of the MCP Gateway meta-MCP pattern."
+    )
+    parser.add_argument(
+        "--scenario",
+        choices=("synthetic", "readme"),
+        default="synthetic",
+        help="Benchmark scenario to run (default: synthetic)",
     )
     parser.add_argument(
         "--backends", type=int, default=5,
@@ -244,8 +341,24 @@ def main() -> None:
         "--tools-per-backend", type=int, default=20,
         help="Number of tools per backend (default: 20)",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human-readable report.",
+    )
     args = parser.parse_args()
-    run_benchmark(args.backends, args.tools_per_backend)
+    results = (
+        readme_results()
+        if args.scenario == "readme"
+        else synthetic_results(args.backends, args.tools_per_backend)
+    )
+
+    if args.json:
+        print(json.dumps(results, indent=2))
+    elif args.scenario == "readme":
+        print_readme_results(results)
+    else:
+        print_synthetic_results(results)
 
 
 if __name__ == "__main__":
