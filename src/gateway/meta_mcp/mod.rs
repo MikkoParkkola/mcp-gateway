@@ -137,17 +137,21 @@ pub struct MetaMcp {
 // ============================================================================
 
 impl MetaMcp {
-    /// Create a new Meta-MCP handler.
-    #[allow(dead_code)]
-    pub fn new(backends: Arc<BackendRegistry>) -> Self {
+    fn build(
+        backends: Arc<BackendRegistry>,
+        cache: Option<Arc<ResponseCache>>,
+        stats: Option<Arc<UsageStats>>,
+        ranker: Option<Arc<SearchRanker>>,
+        default_cache_ttl: Duration,
+    ) -> Self {
         Self {
             backends,
             capabilities: RwLock::new(None),
-            cache: None,
-            default_cache_ttl: Duration::from_secs(60),
+            cache,
+            default_cache_ttl,
             idempotency_cache: None,
-            stats: None,
-            ranker: None,
+            stats,
+            ranker,
             transition_tracker: RwLock::new(None),
             webhook_registry: RwLock::new(None),
             playbook_engine: RwLock::new(PlaybookEngine::new()),
@@ -173,6 +177,11 @@ impl MetaMcp {
         }
     }
 
+    /// Create a new Meta-MCP handler.
+    pub fn new(backends: Arc<BackendRegistry>) -> Self {
+        Self::build(backends, None, None, None, Duration::from_secs(60))
+    }
+
     /// Create a new Meta-MCP handler with cache, stats, and ranking support.
     pub fn with_features(
         backends: Arc<BackendRegistry>,
@@ -181,37 +190,7 @@ impl MetaMcp {
         ranker: Option<Arc<SearchRanker>>,
         default_ttl: Duration,
     ) -> Self {
-        Self {
-            backends,
-            capabilities: RwLock::new(None),
-            cache,
-            default_cache_ttl: default_ttl,
-            idempotency_cache: None,
-            stats,
-            ranker,
-            transition_tracker: RwLock::new(None),
-            playbook_engine: RwLock::new(PlaybookEngine::new()),
-            log_level: RwLock::new(LoggingLevel::default()),
-            kill_switch: Arc::new(KillSwitch::new()),
-            error_budget_config: RwLock::new(ErrorBudgetConfig::default()),
-            capability_budget_config: RwLock::new(CapabilityErrorBudgetConfig::default()),
-            webhook_registry: RwLock::new(None),
-            profile_registry: Arc::new(ProfileRegistry::default()),
-            session_profiles: Arc::new(SessionProfileStore::new()),
-            reload_context: RwLock::new(None),
-            code_mode_enabled: false,
-            secret_injector: crate::secret_injection::SecretInjector::empty(),
-            cost_tracker: Arc::new(CostTracker::new()),
-            tool_registry: None,
-            #[cfg(feature = "cost-governance")]
-            budget_enforcer: None,
-            #[cfg(feature = "cost-governance")]
-            cost_registry: None,
-            surfaced_tools: Vec::new(),
-            surfaced_tools_map: HashMap::new(),
-            #[cfg(feature = "spec-preview")]
-            session_promoted: Arc::new(DashMap::new()),
-        }
+        Self::build(backends, cache, stats, ranker, default_ttl)
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).

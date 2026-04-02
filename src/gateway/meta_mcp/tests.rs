@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 
@@ -102,6 +103,36 @@ fn make_meta_mcp() -> MetaMcp {
 
 fn make_meta_mcp_code_mode() -> MetaMcp {
     MetaMcp::new(Arc::new(BackendRegistry::new())).with_code_mode(true)
+}
+
+#[test]
+fn new_matches_featureless_constructor_defaults() {
+    let backends = Arc::new(BackendRegistry::new());
+    let from_new = MetaMcp::new(Arc::clone(&backends));
+    let from_with_features =
+        MetaMcp::with_features(backends, None, None, None, Duration::from_secs(60));
+
+    assert!(from_new.cache.is_none());
+    assert!(from_with_features.cache.is_none());
+    assert_eq!(from_new.default_cache_ttl, Duration::from_secs(60));
+    assert_eq!(
+        from_new.default_cache_ttl,
+        from_with_features.default_cache_ttl
+    );
+    assert!(from_new.stats.is_none());
+    assert!(from_with_features.stats.is_none());
+    assert!(from_new.ranker.is_none());
+    assert!(from_with_features.ranker.is_none());
+    assert!(from_new.capabilities.read().is_none());
+    assert!(from_with_features.capabilities.read().is_none());
+    assert!(from_new.reload_context.read().is_none());
+    assert!(from_with_features.reload_context.read().is_none());
+    assert!(!from_new.code_mode_enabled);
+    assert!(!from_with_features.code_mode_enabled);
+    assert!(from_new.surfaced_tools.is_empty());
+    assert!(from_with_features.surfaced_tools.is_empty());
+    assert!(from_new.surfaced_tools_map.is_empty());
+    assert!(from_with_features.surfaced_tools_map.is_empty());
 }
 
 #[test]
