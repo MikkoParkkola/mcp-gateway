@@ -54,6 +54,49 @@ impl TransformChain {
             transforms: Vec::new(),
         }
     }
+
+    fn format_tool_context(original_tool: Option<&str>, current_tool: Option<&str>) -> String {
+        match (original_tool, current_tool) {
+            (Some(original_tool), Some(current_tool)) if original_tool != current_tool => {
+                format!("'{original_tool}' (current '{current_tool}')")
+            }
+            (Some(tool), _) | (_, Some(tool)) => format!("'{tool}'"),
+            (None, None) => String::new(),
+        }
+    }
+
+    fn transform_stage_error(
+        &self,
+        transform_index: usize,
+        stage: &'static str,
+        original_tool: Option<&str>,
+        current_tool: Option<&str>,
+        error: &Error,
+    ) -> Error {
+        let tool_context = Self::format_tool_context(original_tool, current_tool);
+        let tool_context = if tool_context.is_empty() {
+            String::new()
+        } else {
+            format!(" for tool {tool_context}")
+        };
+        Error::Config(format!(
+            "Transform[{transform_index}] failed during {stage} in provider '{}'{}: {error}",
+            self.name, tool_context
+        ))
+    }
+
+    fn blocked_tool_error(
+        &self,
+        transform_index: usize,
+        original_tool: &str,
+        current_tool: &str,
+    ) -> Error {
+        let tool_context = Self::format_tool_context(Some(original_tool), Some(current_tool));
+        Error::Config(format!(
+            "Tool {tool_context} blocked by Transform[{transform_index}] during invoke-pass in provider '{}'",
+            self.name
+        ))
+    }
 }
 
 /// Builder for [`TransformChain`].
@@ -90,8 +133,10 @@ impl Provider for TransformChain {
 
     async fn list_tools(&self) -> Result<Vec<Tool>> {
         let mut tools = self.inner.list_tools().await?;
-        for t in &self.transforms {
-            tools = t.transform_tools(tools).await?;
+        for (transform_index, t) in self.transforms.iter().enumerate() {
+            tools = t.transform_tools(tools).await.map_err(|error| {
+                self.transform_stage_error(transform_index, "list_tools", None, None, &error)
+            })?;
         }
         Ok(tools)
     }
@@ -102,17 +147,25 @@ impl Provider for TransformChain {
         let mut current_tool = tool.to_string();
         let mut current_args = args;
 
-        for t in &self.transforms {
-            match t.transform_invoke(&current_tool, current_args).await? {
+        for (transform_index, t) in self.transforms.iter().enumerate() {
+            match t
+                .transform_invoke(&current_tool, current_args)
+                .await
+                .map_err(|error| {
+                    self.transform_stage_error(
+                        transform_index,
+                        "invoke-pass",
+                        Some(tool),
+                        Some(&current_tool),
+                        &error,
+                    )
+                })? {
                 Some((next_tool, next_args)) => {
                     current_tool = next_tool;
                     current_args = next_args;
                 }
                 None => {
-                    return Err(Error::Config(format!(
-                        "Tool '{}' blocked by transform in provider '{}'",
-                        tool, self.name
-                    )));
+                    return Err(self.blocked_tool_error(transform_index, tool, &current_tool));
                 }
             }
         }
@@ -121,8 +174,17 @@ impl Provider for TransformChain {
 
         // Reverse pass: result transforms in reverse order (onion model).
         let mut result = result;
-        for t in self.transforms.iter().rev() {
-            result = t.transform_result(tool, result).await?;
+        for (reverse_index, t) in self.transforms.iter().rev().enumerate() {
+            let transform_index = self.transforms.len() - 1 - reverse_index;
+            result = t.transform_result(tool, result).await.map_err(|error| {
+                self.transform_stage_error(
+                    transform_index,
+                    "result-pass",
+                    Some(tool),
+                    Some(&current_tool),
+                    &error,
+                )
+            })?;
         }
         Ok(result)
     }
@@ -255,6 +317,73 @@ mod tests {
         }
     }
 
+    struct RenameInvokeTransform {
+        from: &'static str,
+        to: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl Transform for RenameInvokeTransform {
+        async fn transform_tools(&self, tools: Vec<Tool>) -> Result<Vec<Tool>> {
+            Ok(tools)
+        }
+
+        async fn transform_invoke(
+            &self,
+            tool: &str,
+            args: Value,
+        ) -> Result<Option<(String, Value)>> {
+            if tool == self.from {
+                Ok(Some((self.to.to_string(), args)))
+            } else {
+                Ok(Some((tool.to_string(), args)))
+            }
+        }
+
+        async fn transform_result(&self, _tool: &str, result: Value) -> Result<Value> {
+            Ok(result)
+        }
+    }
+
+    enum FailStage {
+        Tools,
+        Invoke,
+        Result,
+    }
+
+    struct FailTransform {
+        stage: FailStage,
+        message: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl Transform for FailTransform {
+        async fn transform_tools(&self, tools: Vec<Tool>) -> Result<Vec<Tool>> {
+            match self.stage {
+                FailStage::Tools => Err(Error::Config(self.message.to_string())),
+                _ => Ok(tools),
+            }
+        }
+
+        async fn transform_invoke(
+            &self,
+            tool: &str,
+            args: Value,
+        ) -> Result<Option<(String, Value)>> {
+            match self.stage {
+                FailStage::Invoke => Err(Error::Config(self.message.to_string())),
+                _ => Ok(Some((tool.to_string(), args))),
+            }
+        }
+
+        async fn transform_result(&self, _tool: &str, result: Value) -> Result<Value> {
+            match self.stage {
+                FailStage::Result => Err(Error::Config(self.message.to_string())),
+                _ => Ok(result),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn chain_no_transforms_passes_through() {
         // GIVEN: chain with no transforms
@@ -354,5 +483,98 @@ mod tests {
         // THEN: TOOL_B removed after uppercase, TOOL_A survives
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "TOOL_A");
+    }
+
+    #[tokio::test]
+    async fn chain_list_tools_error_includes_transform_index_and_stage() {
+        let inner = EchoProvider::new("echo", &["tool_a"]);
+        let chain = TransformChain::builder("chain_tools", inner)
+            .transform(Arc::new(UppercaseTransform))
+            .transform(Arc::new(FailTransform {
+                stage: FailStage::Tools,
+                message: "tool shaping failed",
+            }))
+            .build();
+
+        let error = chain.list_tools().await.unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Transform[1]"));
+        assert!(message.contains("list_tools"));
+        assert!(message.contains("chain_tools"));
+        assert!(message.contains("tool shaping failed"));
+    }
+
+    #[tokio::test]
+    async fn chain_invoke_error_includes_transform_index_and_stage() {
+        let inner = EchoProvider::new("echo", &["backend_tool"]);
+        let chain = TransformChain::builder("chain_invoke", inner)
+            .transform(Arc::new(RenameInvokeTransform {
+                from: "client_tool",
+                to: "backend_tool",
+            }))
+            .transform(Arc::new(FailTransform {
+                stage: FailStage::Invoke,
+                message: "invoke transform failed",
+            }))
+            .build();
+
+        let error = chain
+            .invoke("client_tool", json!({"x": 1}))
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Transform[1]"));
+        assert!(message.contains("invoke-pass"));
+        assert!(message.contains("tool 'client_tool'"));
+        assert!(message.contains("current 'backend_tool'"));
+        assert!(message.contains("invoke transform failed"));
+    }
+
+    #[tokio::test]
+    async fn chain_result_error_includes_transform_index_and_stage() {
+        let inner = EchoProvider::new("echo", &["backend_tool"]);
+        let chain = TransformChain::builder("chain_result", inner)
+            .transform(Arc::new(RenameInvokeTransform {
+                from: "client_tool",
+                to: "backend_tool",
+            }))
+            .transform(Arc::new(FailTransform {
+                stage: FailStage::Result,
+                message: "result transform failed",
+            }))
+            .build();
+
+        let error = chain
+            .invoke("client_tool", json!({"x": 1}))
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Transform[1]"));
+        assert!(message.contains("result-pass"));
+        assert!(message.contains("tool 'client_tool'"));
+        assert!(message.contains("current 'backend_tool'"));
+        assert!(message.contains("result transform failed"));
+    }
+
+    #[tokio::test]
+    async fn chain_block_error_includes_transform_index_and_stage() {
+        let inner = EchoProvider::new("echo", &["backend_tool"]);
+        let chain = TransformChain::builder("chain_block", inner)
+            .transform(Arc::new(RenameInvokeTransform {
+                from: "client_tool",
+                to: "backend_tool",
+            }))
+            .transform(Arc::new(BlockTransform {
+                blocked: "backend_tool".to_string(),
+            }))
+            .build();
+
+        let error = chain.invoke("client_tool", json!({})).await.unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Transform[1]"));
+        assert!(message.contains("invoke-pass"));
+        assert!(message.contains("client_tool"));
+        assert!(message.contains("current 'backend_tool'"));
+        assert!(message.contains("chain_block"));
     }
 }
