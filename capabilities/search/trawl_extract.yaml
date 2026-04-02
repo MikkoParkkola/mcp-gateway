@@ -1,0 +1,79 @@
+fulcrum: "1.0"
+name: trawl_extract
+description: Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign.
+
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+        description: URL of the page to extract data from
+      fields:
+        type: string
+        description: "Comma-separated field names to extract (e.g., 'name, price, rating, url')"
+      query:
+        type: string
+        description: "Optional: target a specific section of the page (e.g., 'Market Share' or 'Leaderboard')"
+      format:
+        type: string
+        description: Output format
+        default: json
+        enum: [json, jsonl, csv]
+      js:
+        type: boolean
+        description: "Enable headless browser for JS-rendered pages (React, Next.js, Vue, etc.)"
+        default: false
+      plan_only:
+        type: boolean
+        description: "Show extraction plan without actually extracting data"
+        default: false
+      no_cache:
+        type: boolean
+        description: "Bypass strategy cache and re-derive extraction strategy"
+        default: false
+      wait:
+        type: string
+        description: "Extra wait time after DOM stabilization (e.g., '5s')"
+    required:
+      - url
+      - fields
+
+handler:
+  type: command
+  command: "/Users/mikko/go/bin/trawl"
+  args_template: |
+    {{ url }}
+    --fields "{{ fields }}"
+    {% if query %}--query "{{ query }}"{% endif %}
+    --format {{ format | default: "json" }}
+    {% if js %}--js{% endif %}
+    {% if plan_only %}--plan{% endif %}
+    {% if no_cache %}--no-cache{% endif %}
+    {% if wait %}--wait {{ wait }}{% endif %}
+
+metadata:
+  cost_tier: 1
+  rate_limit: 60
+  timeout: 60s
+  tags:
+    - search
+    - extraction
+    - scraping
+    - structured-data
+  examples:
+    - description: "Extract product data from e-commerce page"
+      input:
+        url: "https://example.com/products"
+        fields: "name, price, rating"
+    - description: "Extract leaderboard from JS-rendered page"
+      input:
+        url: "https://openrouter.ai/rankings"
+        fields: "rank, model, tokens"
+        query: "LLM Leaderboard"
+        js: true
+    - description: "Preview extraction plan"
+      input:
+        url: "https://example.com/products"
+        fields: "name, price"
+        plan_only: true
