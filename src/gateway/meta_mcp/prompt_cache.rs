@@ -21,6 +21,8 @@ use std::fmt::Write;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::hashing::{canonical_json, sha256_hex_chunks};
+
 /// Derives and manages `prompt_cache_key` values.
 ///
 /// # Thread safety
@@ -181,18 +183,15 @@ pub fn tool_schema_fingerprint(tools: &[Value]) -> String {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let serialised = serde_json::to_string(tool).unwrap_or_default();
+        let serialised = canonical_json(tool);
         by_name.insert(name, serialised);
     }
 
-    let mut hasher = Sha256::new();
+    let mut chunks: Vec<&[u8]> = Vec::with_capacity(by_name.len() * 4);
     for (name, schema) in &by_name {
-        hasher.update(name.as_bytes());
-        hasher.update(b":");
-        hasher.update(schema.as_bytes());
-        hasher.update(b"\n");
+        chunks.extend([name.as_bytes(), &b":"[..], schema.as_bytes(), &b"\n"[..]]);
     }
-    format!("{:x}", hasher.finalize())
+    sha256_hex_chunks(chunks)
 }
 
 // ============================================================================

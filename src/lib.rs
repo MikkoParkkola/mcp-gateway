@@ -26,7 +26,6 @@
 pub mod autotag;
 pub mod backend;
 pub mod cache;
-pub mod cache_key;
 pub mod capability;
 pub mod chains;
 pub mod cli;
@@ -39,6 +38,7 @@ pub mod discovery;
 pub mod error;
 pub mod failsafe;
 pub mod gateway;
+mod hashing;
 pub mod idempotency;
 pub mod key_server;
 pub mod kill_switch;

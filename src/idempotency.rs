@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tracing::debug;
 
+use crate::hashing::{canonical_json, sha256_hex_chunks};
 use crate::{Error, Result};
 
 // ── Public constants ──────────────────────────────────────────────────────────
@@ -207,12 +207,8 @@ impl IdempotencyCache {
 /// always produce the same key regardless of JSON key ordering.
 #[must_use]
 pub fn derive_key(tool_name: &str, arguments: &Value) -> String {
-    let canonical = serde_json::to_string(arguments).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(tool_name.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(canonical.as_bytes());
-    format!("{:x}", hasher.finalize())
+    let canonical = canonical_json(arguments);
+    sha256_hex_chunks([tool_name.as_bytes(), &b"\0"[..], canonical.as_bytes()])
 }
 
 // ── Idempotency enforcement ───────────────────────────────────────────────────

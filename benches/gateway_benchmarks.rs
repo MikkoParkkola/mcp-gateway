@@ -15,7 +15,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 use serde_json::{Value, json};
 
 use mcp_gateway::{
-    cache_key::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint},
+    gateway::test_helpers::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint},
     protocol::Tool,
     session_sandbox::{SandboxEnforcer, SessionSandbox},
     simhash::{SimhashIndex, hamming_distance, simhash},

@@ -37,5 +37,6 @@ pub use webhooks::WebhookRegistry;
 #[doc(hidden)]
 pub mod test_helpers {
     pub use super::meta_mcp::MetaMcp;
+    pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
     pub use super::router::{AppState, create_router};
 }

@@ -50,6 +50,7 @@ use super::meta_mcp_helpers::{
 use super::webhooks::WebhookRegistry;
 
 mod invoke;
+mod prompt_cache;
 mod protocol;
 mod resources;
 mod search;
@@ -57,6 +58,8 @@ mod search;
 mod spec_preview;
 mod support;
 mod surfaced;
+
+pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
 
 // ============================================================================
 // Constants

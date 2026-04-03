@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+
+use crate::hashing::canonical_json_sha256;
 
 /// Thread-safe response cache with TTL expiry and max-size eviction
 pub struct ResponseCache {
@@ -206,12 +207,7 @@ impl ResponseCache {
 
     /// Compute SHA-256 hash of arguments in canonical JSON form
     fn hash_arguments(arguments: &Value) -> String {
-        // Serialize to canonical JSON (keys sorted)
-        let canonical = serde_json::to_string(arguments).unwrap_or_default();
-        let mut hasher = Sha256::new();
-        hasher.update(canonical.as_bytes());
-        let result = hasher.finalize();
-        format!("{result:x}")
+        canonical_json_sha256(arguments)
     }
 
     /// Clear all cached entries

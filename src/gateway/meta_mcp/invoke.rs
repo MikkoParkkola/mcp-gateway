@@ -12,7 +12,6 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::cache::ResponseCache;
-use crate::cache_key::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::idempotency::{GuardOutcome, enforce};
@@ -27,6 +26,7 @@ use super::super::meta_mcp_helpers::{
 };
 use super::super::trace;
 use super::MetaMcp;
+use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_trace, resolve_idempotency_key,
 };
