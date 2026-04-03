@@ -79,11 +79,12 @@ impl MetaMcp {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Ok(tools) = backend.get_tools().await {
+            if let Ok(tools) = backend.get_tools_shared().await {
                 let enriched: Vec<_> = tools
-                    .into_iter()
+                    .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
-                    .map(|mut t| {
+                    .map(|tool| {
+                        let mut t = tool.clone();
                         if let Some(ref desc) = t.description {
                             t.description = Some(autotag::enrich_description(desc));
                         }
@@ -327,16 +328,16 @@ impl MetaMcp {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Ok(tools) = backend.get_tools().await {
-                for tool in tools {
+            if let Ok(tools) = backend.get_tools_shared().await {
+                for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name) {
                         continue;
                     }
                     let desc =
                         autotag::enrich_description(tool.description.as_deref().unwrap_or(""));
                     let mut entry = json!({
-                        "server": backend.name,
-                        "name": tool.name,
+                        "server": &backend.name,
+                        "name": &tool.name,
                         "description": desc
                     });
                     if backend_killed {
@@ -416,14 +417,15 @@ impl MetaMcp {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Ok(tools) = backend.get_tools().await {
+            if let Ok(tools) = backend.get_tools_shared().await {
                 // Enrich each tool's description with auto-extracted keyword tags so
                 // that MCP backend tools participate in keyword matching just like
                 // capability tools that carry explicit [keywords: ...] tags.
                 let enriched: Vec<_> = tools
-                    .into_iter()
+                    .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
-                    .map(|mut t| {
+                    .map(|tool| {
+                        let mut t = tool.clone();
                         if let Some(ref desc) = t.description {
                             t.description = Some(autotag::enrich_description(desc));
                         }

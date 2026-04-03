@@ -28,7 +28,7 @@ struct CachedMetadata<T> {
 }
 
 struct CachedMetadataState<T> {
-    value: Option<T>,
+    value: Option<Arc<T>>,
     cached_at: Option<Instant>,
     in_flight: Option<watch::Sender<()>>,
 }
@@ -44,7 +44,7 @@ impl<T> Default for CachedMetadataState<T> {
 }
 
 enum CacheFetchState<'a, T> {
-    Cached(T),
+    Cached(Arc<T>),
     Wait(watch::Receiver<()>),
     Fetch(FetchPermit<'a, T>),
 }
@@ -68,7 +68,7 @@ impl<T> CachedMetadata<T> {
         }
     }
 
-    fn with_cached<R>(&self, map: impl FnOnce(Option<&T>) -> R) -> R {
+    fn with_cached<R>(&self, map: impl FnOnce(Option<&Arc<T>>) -> R) -> R {
         let state = self.state.read();
         map(state.value.as_ref())
     }
@@ -81,24 +81,17 @@ impl<T> CachedMetadata<T> {
         )
     }
 
-    fn snapshot(&self) -> Option<T>
-    where
-        T: Clone,
-    {
-        #[allow(clippy::redundant_closure_for_method_calls)]
+    fn snapshot_shared(&self) -> Option<Arc<T>> {
         self.with_cached(|value| value.cloned())
     }
 
-    fn store(&self, value: T) {
+    fn store_shared(&self, value: Arc<T>) {
         let mut state = self.state.write();
         state.value = Some(value);
         state.cached_at = Some(Instant::now());
     }
 
-    fn acquire(&self, ttl: Duration) -> CacheFetchState<'_, T>
-    where
-        T: Clone,
-    {
+    fn acquire(&self, ttl: Duration) -> CacheFetchState<'_, T> {
         {
             let state = self.state.read();
             if let Some(value) = Self::fresh_value(&state, ttl) {
@@ -125,9 +118,8 @@ impl<T> CachedMetadata<T> {
         })
     }
 
-    async fn get_or_fetch<F, Fut>(&self, ttl: Duration, fetch: F) -> Result<T>
+    async fn get_or_fetch_shared<F, Fut>(&self, ttl: Duration, fetch: F) -> Result<Arc<T>>
     where
-        T: Clone,
         F: Fn() -> Fut,
         Fut: Future<Output = Result<T>>,
     {
@@ -138,9 +130,9 @@ impl<T> CachedMetadata<T> {
                     let _ = receiver.changed().await;
                 }
                 CacheFetchState::Fetch(permit) => {
-                    let result = fetch().await;
+                    let result = fetch().await.map(Arc::new);
                     if let Ok(value) = &result {
-                        self.store(value.clone());
+                        self.store_shared(Arc::clone(value));
                     }
                     drop(permit);
                     return result;
@@ -149,14 +141,11 @@ impl<T> CachedMetadata<T> {
         }
     }
 
-    fn fresh_value(state: &CachedMetadataState<T>, ttl: Duration) -> Option<T>
-    where
-        T: Clone,
-    {
+    fn fresh_value(state: &CachedMetadataState<T>, ttl: Duration) -> Option<Arc<T>> {
         if let (Some(value), Some(cached_at)) = (&state.value, state.cached_at)
             && cached_at.elapsed() < ttl
         {
-            return Some(value.clone());
+            return Some(Arc::clone(value));
         }
 
         None
@@ -373,7 +362,7 @@ impl Backend {
     #[must_use]
     pub fn cached_tools_count(&self) -> usize {
         self.tools_cache
-            .with_cached(|tools| tools.map_or(0, std::vec::Vec::len))
+            .with_cached(|tools| tools.map_or(0, |tools| tools.len()))
     }
 
     /// Return the names of all cached tools (non-blocking, no network I/O).
@@ -403,27 +392,28 @@ impl Backend {
 
     /// Return a snapshot of all cached tools (non-blocking, no network I/O).
     ///
-    /// Returns an empty `Vec` when the cache is empty or has never been populated.
-    /// Used by the `spec-preview` filtered `tools/list` implementation to avoid
-    /// per-tool cache lock acquisition in the hot path.
+    /// Returns an empty shared vector when the cache is empty or has never been
+    /// populated. Used by the `spec-preview` filtered `tools/list`
+    /// implementation to avoid cloning the full tool list on every cache hit.
     #[must_use]
-    pub fn get_cached_tools_snapshot(&self) -> Vec<Tool> {
-        self.tools_cache.snapshot().unwrap_or_default()
+    pub fn get_cached_tools_snapshot(&self) -> Arc<Vec<Tool>> {
+        self.tools_cache
+            .snapshot_shared()
+            .unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
-    async fn get_cached_list<T, F>(
+    async fn get_cached_list_shared<T, F>(
         &self,
         cache: &CachedMetadata<Vec<T>>,
         method: &str,
         kind: &'static str,
         parse: F,
-    ) -> Result<Vec<T>>
+    ) -> Result<Arc<Vec<T>>>
     where
-        T: Clone,
         F: Fn(Value) -> Result<Vec<T>>,
     {
         cache
-            .get_or_fetch(self.cache_ttl, || async {
+            .get_or_fetch_shared(self.cache_ttl, || async {
                 self.ensure_started().await?;
 
                 let response = self.request_internal(method, None).await?;
@@ -443,10 +433,34 @@ impl Backend {
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
-    pub async fn get_tools(&self) -> Result<Vec<Tool>> {
-        self.get_cached_list(&self.tools_cache, "tools/list", "tools", |result| {
+    pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
+        self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
             Ok(serde_json::from_value::<ToolsListResult>(result)?.tools)
         })
+        .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the tools request fails.
+    pub async fn get_tools(&self) -> Result<Vec<Tool>> {
+        self.get_tools_shared()
+            .await
+            .map(|tools| tools.as_ref().clone())
+    }
+
+    /// Get cached resources (or fetch if needed) without cloning the cached list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the resources request fails.
+    pub async fn get_resources_shared(&self) -> Result<Arc<Vec<Resource>>> {
+        self.get_cached_list_shared(
+            &self.resources_cache,
+            "resources/list",
+            "resources",
+            |result| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
+        )
         .await
     }
 
@@ -456,22 +470,18 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the resources request fails.
     pub async fn get_resources(&self) -> Result<Vec<Resource>> {
-        self.get_cached_list(
-            &self.resources_cache,
-            "resources/list",
-            "resources",
-            |result| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
-        )
-        .await
+        self.get_resources_shared()
+            .await
+            .map(|resources| resources.as_ref().clone())
     }
 
-    /// Get cached resource templates (or fetch if needed)
+    /// Get cached resource templates (or fetch if needed) without cloning the cache.
     ///
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the templates request fails.
-    pub async fn get_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
-        self.get_cached_list(
+    pub async fn get_resource_templates_shared(&self) -> Result<Arc<Vec<ResourceTemplate>>> {
+        self.get_cached_list_shared(
             &self.resource_templates_cache,
             "resources/templates/list",
             "resource_templates",
@@ -485,16 +495,38 @@ impl Backend {
         .await
     }
 
+    /// Get cached resource templates (or fetch if needed)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the templates request fails.
+    pub async fn get_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
+        self.get_resource_templates_shared()
+            .await
+            .map(|templates| templates.as_ref().clone())
+    }
+
+    /// Get cached prompts (or fetch if needed) without cloning the cached list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or the prompts request fails.
+    pub async fn get_prompts_shared(&self) -> Result<Arc<Vec<Prompt>>> {
+        self.get_cached_list_shared(&self.prompts_cache, "prompts/list", "prompts", |result| {
+            Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts)
+        })
+        .await
+    }
+
     /// Get cached prompts (or fetch if needed)
     ///
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the prompts request fails.
     pub async fn get_prompts(&self) -> Result<Vec<Prompt>> {
-        self.get_cached_list(&self.prompts_cache, "prompts/list", "prompts", |result| {
-            Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts)
-        })
-        .await
+        self.get_prompts_shared()
+            .await
+            .map(|prompts| prompts.as_ref().clone())
     }
 
     /// Internal request without `ensure_started` (to avoid recursion)
@@ -811,11 +843,30 @@ mod tests {
         let cache = CachedMetadata::new();
         assert!(!cache.is_fresh(Duration::from_secs(60)));
 
-        cache.store(vec![1, 2, 3]);
+        cache.store_shared(Arc::new(vec![1, 2, 3]));
 
         assert!(cache.is_fresh(Duration::from_secs(60)));
-        assert_eq!(cache.snapshot(), Some(vec![1, 2, 3]));
-        assert_eq!(cache.snapshot().as_ref().map(std::vec::Vec::len), Some(3));
+        let snapshot = cache.snapshot_shared().unwrap();
+        assert_eq!(snapshot.as_ref(), &vec![1, 2, 3]);
+        assert_eq!(snapshot.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn cached_metadata_shared_reads_reuse_arc() {
+        let cache = CachedMetadata::new();
+
+        let first = cache
+            .get_or_fetch_shared(Duration::from_secs(60), || async { Ok(vec![1, 2, 3]) })
+            .await
+            .unwrap();
+        let second = cache
+            .get_or_fetch_shared(Duration::from_secs(60), || async {
+                panic!("fresh cache hit should not refetch")
+            })
+            .await
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[tokio::test]
@@ -824,7 +875,7 @@ mod tests {
         let attempts = AtomicUsize::new(0);
 
         let first = cache
-            .get_or_fetch(Duration::from_secs(60), || async {
+            .get_or_fetch_shared(Duration::from_secs(60), || async {
                 let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                 if attempt == 0 {
                     Err(Error::BackendUnavailable("boom".to_string()))
@@ -836,7 +887,7 @@ mod tests {
         assert!(first.is_err());
 
         let second = cache
-            .get_or_fetch(Duration::from_secs(60), || async {
+            .get_or_fetch_shared(Duration::from_secs(60), || async {
                 let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                 if attempt == 0 {
                     Err(Error::BackendUnavailable("boom".to_string()))
@@ -846,7 +897,7 @@ mod tests {
             })
             .await;
 
-        assert_eq!(second.unwrap(), vec![7]);
+        assert_eq!(second.unwrap().as_ref(), &vec![7]);
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 

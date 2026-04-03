@@ -86,7 +86,8 @@ impl MetaMcp {
                 continue;
             }
             let cache_guard = backend.get_cached_tools_snapshot();
-            for mut t in cache_guard {
+            for tool in cache_guard.iter() {
+                let mut t = tool.clone();
                 if !profile.tool_allowed(&t.name) {
                     continue;
                 }

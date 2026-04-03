@@ -223,9 +223,9 @@ impl MetaMcp {
         let mut all_resources: Vec<Resource> = guide_resources().into();
 
         for backend in self.backends.all() {
-            match backend.get_resources().await {
+            match backend.get_resources_shared().await {
                 Ok(resources) => {
-                    for resource in resources {
+                    for resource in resources.iter().cloned() {
                         if let Some(clean) = sanitize_resource(resource, &backend.name) {
                             all_resources.push(clean);
                         }
@@ -299,9 +299,9 @@ impl MetaMcp {
         let mut all_templates: Vec<ResourceTemplate> = Vec::new();
 
         for backend in self.backends.all() {
-            match backend.get_resource_templates().await {
+            match backend.get_resource_templates_shared().await {
                 Ok(templates) => {
-                    all_templates.extend(templates);
+                    all_templates.extend(templates.iter().cloned());
                 }
                 Err(e) => {
                     warn!(
@@ -392,7 +392,7 @@ impl MetaMcp {
         uri: &str,
     ) -> Option<Arc<crate::backend::Backend>> {
         for backend in self.backends.all() {
-            if let Ok(resources) = backend.get_resources().await
+            if let Ok(resources) = backend.get_resources_shared().await
                 && resources.iter().any(|r| r.uri == uri)
             {
                 return Some(backend);
