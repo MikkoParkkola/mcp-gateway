@@ -43,18 +43,20 @@ pub(super) fn spawn_warm_start_task(
             };
 
             match backend.start().await {
-                Ok(()) if matches!(mode, WarmStartMode::Http) => match backend.get_tools().await {
-                    Ok(tools) => info!(
-                        backend = %name,
-                        tools = tools.len(),
-                        "Warm-started + tools cached"
-                    ),
-                    Err(e) => warn!(
-                        backend = %name,
-                        error = %e,
-                        "Warm-started but tool prefetch failed"
-                    ),
-                },
+                Ok(()) if matches!(mode, WarmStartMode::Http) => {
+                    match backend.get_tools_shared().await {
+                        Ok(tools) => info!(
+                            backend = %name,
+                            tools = tools.len(),
+                            "Warm-started + tools cached"
+                        ),
+                        Err(e) => warn!(
+                            backend = %name,
+                            error = %e,
+                            "Warm-started but tool prefetch failed"
+                        ),
+                    }
+                }
                 Ok(()) => {}
                 Err(e) if matches!(mode, WarmStartMode::Stdio) => {
                     warn!(backend = %name, error = %e, "Warm-start failed (stdio)");

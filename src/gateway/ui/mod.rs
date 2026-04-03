@@ -556,8 +556,8 @@ async fn tools(
 
         // get_tools() returns from cache if populated (no network I/O).
         // If cache is empty, it will connect + fetch — acceptable for the tools tab.
-        if let Ok(tools) = backend.get_tools().await {
-            for tool in &tools {
+        if let Ok(tools) = backend.get_tools_shared().await {
+            for tool in tools.iter() {
                 // Search filter
                 if !query_lower.is_empty() {
                     let name_match = tool.name.to_lowercase().contains(&query_lower);

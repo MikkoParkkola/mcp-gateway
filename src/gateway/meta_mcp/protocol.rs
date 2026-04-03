@@ -148,9 +148,10 @@ impl MetaMcp {
         let mut all_prompts: Vec<Prompt> = gateway_prompts().into();
 
         for backend in self.backends.all() {
-            match backend.get_prompts().await {
+            match backend.get_prompts_shared().await {
                 Ok(prompts) => {
-                    for mut prompt in prompts {
+                    for prompt in prompts.iter() {
+                        let mut prompt = prompt.clone();
                         prompt.name = format!("{}/{}", backend.name, prompt.name);
                         all_prompts.push(prompt);
                     }
