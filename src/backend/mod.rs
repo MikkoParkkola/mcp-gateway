@@ -1,6 +1,7 @@
 //! Backend management
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -9,7 +10,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use reqwest::Client;
 use serde_json::Value;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 use tracing::{debug, info, warn};
 
 use crate::config::{BackendConfig, TransportConfig};
@@ -22,6 +23,146 @@ use crate::protocol::{
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
 
+struct CachedMetadata<T> {
+    state: RwLock<CachedMetadataState<T>>,
+}
+
+struct CachedMetadataState<T> {
+    value: Option<T>,
+    cached_at: Option<Instant>,
+    in_flight: Option<watch::Sender<()>>,
+}
+
+impl<T> Default for CachedMetadataState<T> {
+    fn default() -> Self {
+        Self {
+            value: None,
+            cached_at: None,
+            in_flight: None,
+        }
+    }
+}
+
+enum CacheFetchState<'a, T> {
+    Cached(T),
+    Wait(watch::Receiver<()>),
+    Fetch(FetchPermit<'a, T>),
+}
+
+struct FetchPermit<'a, T> {
+    cache: &'a CachedMetadata<T>,
+    sender: watch::Sender<()>,
+}
+
+impl<T> Drop for FetchPermit<'_, T> {
+    fn drop(&mut self) {
+        self.cache.state.write().in_flight = None;
+        let _ = self.sender.send(());
+    }
+}
+
+impl<T> CachedMetadata<T> {
+    fn new() -> Self {
+        Self {
+            state: RwLock::new(CachedMetadataState::default()),
+        }
+    }
+
+    fn with_cached<R>(&self, map: impl FnOnce(Option<&T>) -> R) -> R {
+        let state = self.state.read();
+        map(state.value.as_ref())
+    }
+
+    fn is_fresh(&self, ttl: Duration) -> bool {
+        let state = self.state.read();
+        matches!(
+            (&state.value, state.cached_at),
+            (Some(_), Some(cached_at)) if cached_at.elapsed() < ttl
+        )
+    }
+
+    fn snapshot(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        #[allow(clippy::redundant_closure_for_method_calls)]
+        self.with_cached(|value| value.cloned())
+    }
+
+    fn store(&self, value: T) {
+        let mut state = self.state.write();
+        state.value = Some(value);
+        state.cached_at = Some(Instant::now());
+    }
+
+    fn acquire(&self, ttl: Duration) -> CacheFetchState<'_, T>
+    where
+        T: Clone,
+    {
+        {
+            let state = self.state.read();
+            if let Some(value) = Self::fresh_value(&state, ttl) {
+                return CacheFetchState::Cached(value);
+            }
+            if let Some(sender) = state.in_flight.as_ref() {
+                return CacheFetchState::Wait(sender.subscribe());
+            }
+        }
+
+        let mut state = self.state.write();
+        if let Some(value) = Self::fresh_value(&state, ttl) {
+            return CacheFetchState::Cached(value);
+        }
+        if let Some(sender) = state.in_flight.as_ref() {
+            return CacheFetchState::Wait(sender.subscribe());
+        }
+
+        let (sender, _receiver) = watch::channel(());
+        state.in_flight = Some(sender.clone());
+        CacheFetchState::Fetch(FetchPermit {
+            cache: self,
+            sender,
+        })
+    }
+
+    async fn get_or_fetch<F, Fut>(&self, ttl: Duration, fetch: F) -> Result<T>
+    where
+        T: Clone,
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
+        loop {
+            match self.acquire(ttl) {
+                CacheFetchState::Cached(value) => return Ok(value),
+                CacheFetchState::Wait(mut receiver) => {
+                    let _ = receiver.changed().await;
+                }
+                CacheFetchState::Fetch(permit) => {
+                    let result = fetch().await;
+                    if let Ok(value) = &result {
+                        self.store(value.clone());
+                    }
+                    drop(permit);
+                    return result;
+                }
+            }
+        }
+    }
+
+    fn fresh_value(state: &CachedMetadataState<T>, ttl: Duration) -> Option<T>
+    where
+        T: Clone,
+    {
+        if let (Some(value), Some(cached_at)) = (&state.value, state.cached_at)
+            && cached_at.elapsed() < ttl
+        {
+            return Some(value.clone());
+        }
+
+        None
+    }
+}
+
 /// MCP Backend - manages connection to a single MCP server
 pub struct Backend {
     /// Backend name
@@ -33,21 +174,13 @@ pub struct Backend {
     /// Failsafe mechanisms
     failsafe: Failsafe,
     /// Cached tools
-    tools_cache: RwLock<Option<Vec<Tool>>>,
+    tools_cache: CachedMetadata<Vec<Tool>>,
     /// Cached resources
-    resources_cache: RwLock<Option<Vec<Resource>>>,
+    resources_cache: CachedMetadata<Vec<Resource>>,
     /// Cached resource templates
-    resource_templates_cache: RwLock<Option<Vec<ResourceTemplate>>>,
+    resource_templates_cache: CachedMetadata<Vec<ResourceTemplate>>,
     /// Cached prompts
-    prompts_cache: RwLock<Option<Vec<Prompt>>>,
-    /// Cache timestamp (tools)
-    cache_time: RwLock<Option<Instant>>,
-    /// Cache timestamp (resources)
-    resources_cache_time: RwLock<Option<Instant>>,
-    /// Cache timestamp (resource templates)
-    resource_templates_cache_time: RwLock<Option<Instant>>,
-    /// Cache timestamp (prompts)
-    prompts_cache_time: RwLock<Option<Instant>>,
+    prompts_cache: CachedMetadata<Vec<Prompt>>,
     /// Cache TTL
     cache_ttl: Duration,
     /// Last used timestamp
@@ -72,14 +205,10 @@ impl Backend {
             config,
             transport: RwLock::new(None),
             failsafe: Failsafe::new(name, failsafe_config),
-            tools_cache: RwLock::new(None),
-            resources_cache: RwLock::new(None),
-            resource_templates_cache: RwLock::new(None),
-            prompts_cache: RwLock::new(None),
-            cache_time: RwLock::new(None),
-            resources_cache_time: RwLock::new(None),
-            resource_templates_cache_time: RwLock::new(None),
-            prompts_cache_time: RwLock::new(None),
+            tools_cache: CachedMetadata::new(),
+            resources_cache: CachedMetadata::new(),
+            resource_templates_cache: CachedMetadata::new(),
+            prompts_cache: CachedMetadata::new(),
             cache_ttl,
             last_used: AtomicU64::new(0),
             semaphore: Semaphore::new(100), // Max concurrent requests
@@ -233,12 +362,7 @@ impl Backend {
     /// Used by `search_tools` to skip unstarted backends.
     #[must_use]
     pub fn has_cached_tools(&self) -> bool {
-        let cache = self.tools_cache.read();
-        let cache_time = self.cache_time.read();
-        matches!(
-            (cache.as_ref(), cache_time.as_ref()),
-            (Some(_), Some(time)) if time.elapsed() < self.cache_ttl
-        )
+        self.tools_cache.is_fresh(self.cache_ttl)
     }
 
     /// Return the number of tools in the cache (non-blocking, no network I/O).
@@ -249,9 +373,7 @@ impl Backend {
     #[must_use]
     pub fn cached_tools_count(&self) -> usize {
         self.tools_cache
-            .read()
-            .as_ref()
-            .map_or(0, std::vec::Vec::len)
+            .with_cached(|tools| tools.map_or(0, std::vec::Vec::len))
     }
 
     /// Return the names of all cached tools (non-blocking, no network I/O).
@@ -260,11 +382,11 @@ impl Backend {
     /// Intended for producing "did you mean?" suggestions on unknown tool names.
     #[must_use]
     pub fn get_cached_tool_names(&self) -> Vec<String> {
-        self.tools_cache
-            .read()
-            .as_ref()
-            .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
-            .unwrap_or_default()
+        self.tools_cache.with_cached(|tools| {
+            tools
+                .map(|tools| tools.iter().map(|t| t.name.clone()).collect())
+                .unwrap_or_default()
+        })
     }
 
     /// Return a single tool by exact name from the cache (non-blocking, no network I/O).
@@ -274,10 +396,9 @@ impl Backend {
     /// tool schemas at `tools/list` time.
     #[must_use]
     pub fn get_cached_tool(&self, name: &str) -> Option<Tool> {
-        self.tools_cache
-            .read()
-            .as_ref()
-            .and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
+        self.tools_cache.with_cached(|tools| {
+            tools.and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
+        })
     }
 
     /// Return a snapshot of all cached tools (non-blocking, no network I/O).
@@ -287,51 +408,46 @@ impl Backend {
     /// per-tool cache lock acquisition in the hot path.
     #[must_use]
     pub fn get_cached_tools_snapshot(&self) -> Vec<Tool> {
-        self.tools_cache
-            .read()
-            .as_ref()
-            .cloned()
-            .unwrap_or_default()
+        self.tools_cache.snapshot().unwrap_or_default()
+    }
+
+    async fn get_cached_list<T, F>(
+        &self,
+        cache: &CachedMetadata<Vec<T>>,
+        method: &str,
+        kind: &'static str,
+        parse: F,
+    ) -> Result<Vec<T>>
+    where
+        T: Clone,
+        F: Fn(Value) -> Result<Vec<T>>,
+    {
+        cache
+            .get_or_fetch(self.cache_ttl, || async {
+                self.ensure_started().await?;
+
+                let response = self.request_internal(method, None).await?;
+                let items = if let Some(result) = response.result {
+                    parse(result)?
+                } else {
+                    Vec::new()
+                };
+
+                debug!(backend = %self.name, kind, count = items.len(), "Backend metadata cached");
+
+                Ok(items)
+            })
+            .await
     }
 
     /// # Errors
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools(&self) -> Result<Vec<Tool>> {
-        // Check cache
-        {
-            let cache = self.tools_cache.read();
-            let cache_time = self.cache_time.read();
-
-            if let (Some(tools), Some(time)) = (cache.as_ref(), cache_time.as_ref())
-                && time.elapsed() < self.cache_ttl
-            {
-                return Ok(tools.clone());
-            }
-        }
-
-        // Ensure backend is started before fetching tools
-        // Note: start() also calls get_tools() at the end, but by then
-        // the transport is set so ensure_started() returns immediately
-        self.ensure_started().await?;
-
-        // Fetch tools - use request_internal to avoid recursion
-        let response = self.request_internal("tools/list", None).await?;
-
-        if let Some(result) = response.result {
-            let tools_result: ToolsListResult = serde_json::from_value(result)?;
-            let tools = tools_result.tools;
-
-            // Update cache
-            *self.tools_cache.write() = Some(tools.clone());
-            *self.cache_time.write() = Some(Instant::now());
-
-            debug!(backend = %self.name, count = tools.len(), "Tools cached");
-
-            return Ok(tools);
-        }
-
-        Ok(vec![])
+        self.get_cached_list(&self.tools_cache, "tools/list", "tools", |result| {
+            Ok(serde_json::from_value::<ToolsListResult>(result)?.tools)
+        })
+        .await
     }
 
     /// Get cached resources (or fetch if needed)
@@ -340,34 +456,13 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the resources request fails.
     pub async fn get_resources(&self) -> Result<Vec<Resource>> {
-        {
-            let cache = self.resources_cache.read();
-            let cache_time = self.resources_cache_time.read();
-
-            if let (Some(resources), Some(time)) = (cache.as_ref(), cache_time.as_ref())
-                && time.elapsed() < self.cache_ttl
-            {
-                return Ok(resources.clone());
-            }
-        }
-
-        self.ensure_started().await?;
-
-        let response = self.request_internal("resources/list", None).await?;
-
-        if let Some(result) = response.result {
-            let list_result: ResourcesListResult = serde_json::from_value(result)?;
-            let resources = list_result.resources;
-
-            *self.resources_cache.write() = Some(resources.clone());
-            *self.resources_cache_time.write() = Some(Instant::now());
-
-            debug!(backend = %self.name, count = resources.len(), "Resources cached");
-
-            return Ok(resources);
-        }
-
-        Ok(vec![])
+        self.get_cached_list(
+            &self.resources_cache,
+            "resources/list",
+            "resources",
+            |result| Ok(serde_json::from_value::<ResourcesListResult>(result)?.resources),
+        )
+        .await
     }
 
     /// Get cached resource templates (or fetch if needed)
@@ -376,36 +471,18 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the templates request fails.
     pub async fn get_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
-        {
-            let cache = self.resource_templates_cache.read();
-            let cache_time = self.resource_templates_cache_time.read();
-
-            if let (Some(templates), Some(time)) = (cache.as_ref(), cache_time.as_ref())
-                && time.elapsed() < self.cache_ttl
-            {
-                return Ok(templates.clone());
-            }
-        }
-
-        self.ensure_started().await?;
-
-        let response = self
-            .request_internal("resources/templates/list", None)
-            .await?;
-
-        if let Some(result) = response.result {
-            let list_result: ResourcesTemplatesListResult = serde_json::from_value(result)?;
-            let templates = list_result.resource_templates;
-
-            *self.resource_templates_cache.write() = Some(templates.clone());
-            *self.resource_templates_cache_time.write() = Some(Instant::now());
-
-            debug!(backend = %self.name, count = templates.len(), "Resource templates cached");
-
-            return Ok(templates);
-        }
-
-        Ok(vec![])
+        self.get_cached_list(
+            &self.resource_templates_cache,
+            "resources/templates/list",
+            "resource_templates",
+            |result| {
+                Ok(
+                    serde_json::from_value::<ResourcesTemplatesListResult>(result)?
+                        .resource_templates,
+                )
+            },
+        )
+        .await
     }
 
     /// Get cached prompts (or fetch if needed)
@@ -414,34 +491,10 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the prompts request fails.
     pub async fn get_prompts(&self) -> Result<Vec<Prompt>> {
-        {
-            let cache = self.prompts_cache.read();
-            let cache_time = self.prompts_cache_time.read();
-
-            if let (Some(prompts), Some(time)) = (cache.as_ref(), cache_time.as_ref())
-                && time.elapsed() < self.cache_ttl
-            {
-                return Ok(prompts.clone());
-            }
-        }
-
-        self.ensure_started().await?;
-
-        let response = self.request_internal("prompts/list", None).await?;
-
-        if let Some(result) = response.result {
-            let list_result: PromptsListResult = serde_json::from_value(result)?;
-            let prompts = list_result.prompts;
-
-            *self.prompts_cache.write() = Some(prompts.clone());
-            *self.prompts_cache_time.write() = Some(Instant::now());
-
-            debug!(backend = %self.name, count = prompts.len(), "Prompts cached");
-
-            return Ok(prompts);
-        }
-
-        Ok(vec![])
+        self.get_cached_list(&self.prompts_cache, "prompts/list", "prompts", |result| {
+            Ok(serde_json::from_value::<PromptsListResult>(result)?.prompts)
+        })
+        .await
     }
 
     /// Internal request without `ensure_started` (to avoid recursion)
@@ -590,11 +643,7 @@ impl Backend {
             name: self.name.clone(),
             running: self.is_running(),
             transport: self.config.transport.transport_type().to_string(),
-            tools_cached: self
-                .tools_cache
-                .read()
-                .as_ref()
-                .map_or(0, std::vec::Vec::len),
+            tools_cached: self.cached_tools_count(),
             circuit_state: self.failsafe.circuit_breaker.state().as_str().to_string(),
             request_count: self.request_count.load(Ordering::Relaxed),
         }
@@ -690,5 +739,161 @@ impl BackendRegistry {
 impl Default for BackendRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use serde_json::json;
+    use tokio::sync::Barrier;
+    use tokio::time::sleep;
+
+    use super::*;
+    use crate::protocol::{RequestId, ToolsListResult};
+
+    struct MockTransport {
+        response: JsonRpcResponse,
+        delay: Duration,
+        connected: AtomicBool,
+        requests: AtomicUsize,
+    }
+
+    impl MockTransport {
+        fn new(response: JsonRpcResponse, delay: Duration) -> Self {
+            Self {
+                response,
+                delay,
+                connected: AtomicBool::new(true),
+                requests: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Transport for MockTransport {
+        async fn request(&self, method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+            assert_eq!(method, "tools/list");
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            sleep(self.delay).await;
+            Ok(self.response.clone())
+        }
+
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::Relaxed)
+        }
+
+        async fn close(&self) -> Result<()> {
+            self.connected.store(false, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn sample_tool(name: &str) -> Tool {
+        Tool {
+            name: name.to_string(),
+            title: None,
+            description: Some(format!("{name} tool")),
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            annotations: None,
+        }
+    }
+
+    #[test]
+    fn cached_metadata_tracks_freshness() {
+        let cache = CachedMetadata::new();
+        assert!(!cache.is_fresh(Duration::from_secs(60)));
+
+        cache.store(vec![1, 2, 3]);
+
+        assert!(cache.is_fresh(Duration::from_secs(60)));
+        assert_eq!(cache.snapshot(), Some(vec![1, 2, 3]));
+        assert_eq!(cache.snapshot().as_ref().map(std::vec::Vec::len), Some(3));
+    }
+
+    #[tokio::test]
+    async fn cached_metadata_retries_after_fetch_error() {
+        let cache = CachedMetadata::new();
+        let attempts = AtomicUsize::new(0);
+
+        let first = cache
+            .get_or_fetch(Duration::from_secs(60), || async {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    Err(Error::BackendUnavailable("boom".to_string()))
+                } else {
+                    Ok(vec![7])
+                }
+            })
+            .await;
+        assert!(first.is_err());
+
+        let second = cache
+            .get_or_fetch(Duration::from_secs(60), || async {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    Err(Error::BackendUnavailable("boom".to_string()))
+                } else {
+                    Ok(vec![7])
+                }
+            })
+            .await;
+
+        assert_eq!(second.unwrap(), vec![7]);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn get_tools_singleflight_coalesces_concurrent_requests() {
+        let backend = Arc::new(Backend::new(
+            "test",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        let response = JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            ToolsListResult {
+                tools: vec![sample_tool("echo")],
+                next_cursor: None,
+            },
+        );
+        let transport = Arc::new(MockTransport::new(response, Duration::from_millis(25)));
+        let transport_dyn: Arc<dyn Transport> = transport.clone();
+        *backend.transport.write() = Some(transport_dyn);
+
+        let barrier = Arc::new(Barrier::new(6));
+        let mut tasks = Vec::new();
+        for _ in 0..5 {
+            let backend = Arc::clone(&backend);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                backend.get_tools().await.unwrap()
+            }));
+        }
+
+        barrier.wait().await;
+
+        for task in tasks {
+            let tools = task.await.unwrap();
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0].name, "echo");
+        }
+
+        assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+        assert!(backend.has_cached_tools());
+        assert_eq!(backend.cached_tools_count(), 1);
+        assert_eq!(
+            backend.get_cached_tool("echo").map(|tool| tool.name),
+            Some("echo".to_string())
+        );
     }
 }
