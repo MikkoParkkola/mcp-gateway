@@ -9,6 +9,15 @@
 //!    cached prefix.
 //! 3. Exposes helpers for wiring the key into backend request metadata.
 //!
+//! # Architectural boundary
+//!
+//! `mcp-gateway` is not a general chat-completions proxy. This module lives under
+//! `gateway/meta_mcp` because `gateway_invoke` sometimes needs to preserve
+//! `prompt_cache_key` behavior when forwarding a tool call into an OpenAI-compatible
+//! backend or capability. If prompt-cache handling ever grows beyond Meta-MCP
+//! invocation, the long-term home is a backend-adapter layer rather than the core
+//! gateway router.
+//!
 //! # Rate-limit awareness
 //!
 //! Anthropic enforces ~15 RPM per (prefix, key) pair. To spread load the deriver

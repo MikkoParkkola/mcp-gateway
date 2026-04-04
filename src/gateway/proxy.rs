@@ -10,10 +10,11 @@
 //! - **Roots** (`roots/list`): Backend requests the set of filesystem roots
 //!   exposed by the client.
 //!
-//! For the initial implementation (v1), these are forwarded as fire-and-forget
-//! notifications over the existing SSE stream. Full bidirectional
-//! request-response proxying (where the gateway matches client responses back
-//! to the originating backend) can be added later.
+//! These requests are forwarded over the existing SSE stream to connected
+//! clients. For bidirectional methods such as `sampling/createMessage` and
+//! `elicitation/create`, the gateway also tracks in-flight request IDs so the
+//! client's POST-back response can be matched to the originating backend call.
+//! Fire-and-forget helpers still exist for one-way notification-style flows.
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -26,6 +26,17 @@ The gateway sits between LLM clients (Claude Code, Cursor, etc.) and multiple MC
 
 The gateway exposes a single HTTP endpoint (`/mcp`) that speaks MCP JSON-RPC. Clients discover backends via `gateway_search_tools`, then invoke them via `gateway_invoke`. The gateway handles routing, caching, failsafes, and lifecycle management internally.
 
+## Routing Boundary
+
+`mcp-gateway` has two MCP-facing responsibilities:
+
+1. **Client -> server tool and capability routing** -- `gateway_invoke` and the other meta-tools route MCP traffic to backend MCP servers plus capability-backed REST APIs.
+2. **Server -> client capability proxying** -- when a backend emits MCP methods such as `sampling/createMessage`, `elicitation/create`, or `roots/list`, the gateway forwards that JSON-RPC request back to connected clients and relays the response.
+
+The gateway does **not** expose a general OpenAI/Anthropic chat-completions or embeddings API of its own. If a backend or capability happens to call an LLM provider internally, that is still a backend implementation detail, not the gateway's primary routing surface.
+
+This is why `src/gateway/meta_mcp/prompt_cache.rs` exists even though the project is not an LLM gateway: `gateway_invoke` sometimes needs to derive or preserve `_meta.prompt_cache_key` for OpenAI-compatible backends/capabilities so their own prefix-cache behavior survives the Meta-MCP hop. If that concern grows beyond Meta-MCP invocation, the long-term home is a backend-adapter layer rather than the core gateway router.
+
 ## Meta-Tools
 
 The gateway advertises up to 9 meta-tools to connecting clients. The base set of 4 is always present; the rest are conditional on configuration.
@@ -204,6 +215,16 @@ sequenceDiagram
 
 Each SSE connection gets a `Mcp-Session-Id` header. The `session_id` is forwarded to `invoke_tool` for per-session transition tracking.
 
+### Server-to-client capability proxying
+
+Backends can initiate MCP requests that must be satisfied by the connected client, not by the gateway itself. Today that flow covers:
+
+- `sampling/createMessage` for client-side LLM completions
+- `elicitation/create` for structured user-input prompts
+- `roots/list` and `notifications/roots/list_changed` for client root exposure
+
+`gateway/proxy.rs` manages that bridge. It forwards the JSON-RPC request over the active SSE session(s), tracks in-flight request IDs for the bidirectional methods, and relays the eventual client response back to the waiting backend call. The gateway coordinates the transport, but the connected client remains the executor for these capabilities.
+
 ### Idempotency (`idempotency.rs`)
 
 Three-state machine: `InFlight(Instant)` -> `Completed(Value, Instant)`, or removed on failure. Key derivation: `SHA-256(server:tool || \0 || canonical_json(arguments))`. TTLs: in-flight 5 minutes, completed 24 hours. Background cleanup task evicts stale entries.
@@ -250,6 +271,8 @@ On dispatch failure, the idempotency entry is removed (`idem_cache.remove(key)`)
 | `error` | `src/error.rs` | Unified error types with JSON-RPC error code mapping |
 | `failsafe` | `src/failsafe/` | Circuit breaker, rate limiter, retry policy, health tracker per backend |
 | `gateway` | `src/gateway/` | HTTP server, router, Meta-MCP handler, streaming, webhooks, auth, differential |
+| `gateway/meta_mcp/prompt_cache` | `src/gateway/meta_mcp/prompt_cache.rs` | OpenAI-compatible prompt-cache key derivation and stable tool ordering for compatible backends/capabilities invoked through Meta-MCP |
+| `gateway/proxy` | `src/gateway/proxy.rs` | Proxies server-to-client MCP capabilities (`sampling/createMessage`, `elicitation/create`, `roots/list`) back to connected clients |
 | `idempotency` | `src/idempotency.rs` | Prevents duplicate side effects on LLM retries via SHA-256 keyed state machine |
 | `kill_switch` | `src/kill_switch.rs` | Operator kill switch + per-backend sliding-window error budget with auto-kill |
 | `oauth` | `src/oauth/` | OAuth 2.0 Authorization Code + PKCE flow for backend authentication |

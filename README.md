@@ -19,6 +19,12 @@ MCP Gateway sits between your AI client and your tools. Instead of loading hundr
 
 Public benchmark-backed claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
 
+## What MCP Gateway is / is not
+
+MCP Gateway is a **tool and capability gateway**. It routes MCP tool/resource/prompt traffic to backend MCP servers and capability-backed REST APIs, and it can proxy MCP server-to-client requests like `sampling/createMessage`, `elicitation/create`, and `roots/list` back to the connected client over the existing gateway session.
+
+MCP Gateway is **not** a general OpenAI/Anthropic chat completions or embeddings gateway. When a backend asks for `sampling/createMessage`, the connected client still performs the model call. The OpenAI-compatible prompt-cache helpers in the gateway exist only so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends or capabilities that happen to call LLM APIs internally.
+
 ## Why
 
 **The context window is the bottleneck.** Every MCP tool you connect costs ~150 tokens of context overhead. Connect 20 servers with 100+ tools and you've burned 15,000 tokens before the conversation starts -- on tool definitions the AI probably won't use this turn.
