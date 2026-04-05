@@ -135,7 +135,7 @@ pub(super) async fn mcp_delete_handler(
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
 pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
     build_http_response(
-        JsonRpcResponse::error_with_data(
+        &JsonRpcResponse::error_with_data(
             None,
             -32600,
             "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",

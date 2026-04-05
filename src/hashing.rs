@@ -22,7 +22,7 @@ pub(crate) fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) 
     for chunk in chunks {
         hasher.update(chunk);
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Hash a JSON value after canonical serialization.

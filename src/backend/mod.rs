@@ -82,7 +82,8 @@ impl<T> CachedMetadata<T> {
     }
 
     fn snapshot_shared(&self) -> Option<Arc<T>> {
-        self.with_cached(|value| value.cloned())
+        let state = self.state.read();
+        state.value.clone()
     }
 
     fn store_shared(&self, value: Arc<T>) {

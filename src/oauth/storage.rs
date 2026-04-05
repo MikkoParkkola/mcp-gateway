@@ -152,7 +152,7 @@ impl TokenStorage {
         hasher.update(b":");
         hasher.update(resource_url.as_bytes());
         let hash = hasher.finalize();
-        format!("{hash:x}")[..16].to_string()
+        hex::encode(&hash[..8])
     }
 
     /// Get the file path for a backend's tokens

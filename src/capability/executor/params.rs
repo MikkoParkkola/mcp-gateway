@@ -197,7 +197,7 @@ impl CapabilityExecutor {
             let json = serde_json::to_string(params).unwrap_or_default();
             let digest = Sha256::digest(json.as_bytes());
             // Use first 16 bytes (128 bits) — sufficient for a cache key.
-            format!("{digest:.16x}")
+            hex::encode(&digest[..16])
         };
         format!("{}:{}", capability.name, params_hash)
     }

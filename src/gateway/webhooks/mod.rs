@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
-use hmac::Mac as _;
+use hmac::{KeyInit, Mac as _};
 use sha2::Sha256;
 
 use self::errors::{invalid_json, invalid_signature, transformation_failed, webhook_success};

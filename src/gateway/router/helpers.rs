@@ -76,7 +76,7 @@ pub(super) fn build_error_response(
 
 /// Build a JSON-RPC HTTP response body without attaching a session header.
 pub(super) fn build_http_response(
-    rpc: JsonRpcResponse,
+    rpc: &JsonRpcResponse,
     status: StatusCode,
 ) -> (StatusCode, Json<Value>) {
     let body = rpc.to_value_lossy();
@@ -90,7 +90,7 @@ pub(super) fn build_http_error_response(
     message: impl Into<String>,
     status: StatusCode,
 ) -> (StatusCode, Json<Value>) {
-    build_http_response(JsonRpcResponse::error(id, code, message.into()), status)
+    build_http_response(&JsonRpcResponse::error(id, code, message.into()), status)
 }
 
 /// Build a `202 Accepted` response with an empty JSON body and session header.

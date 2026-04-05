@@ -132,7 +132,7 @@ pub(super) async fn backend_handler(
     let (id, method, params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
-            return build_http_response(response, StatusCode::BAD_REQUEST);
+            return build_http_response(&response, StatusCode::BAD_REQUEST);
         }
     };
 
@@ -156,12 +156,12 @@ pub(super) async fn backend_handler(
             Some(Ok(sanitized_params)) => {
                 // Forward the sanitized params to the backend
                 return match backend.request(&method, Some(sanitized_params)).await {
-                    Ok(response) => build_http_response(response, StatusCode::OK),
+                    Ok(response) => build_http_response(&response, StatusCode::OK),
                     Err(e) => {
                         error!(backend = %name, error = %e, "Backend request failed");
                         let response =
                             JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-                        build_http_response(response, StatusCode::INTERNAL_SERVER_ERROR)
+                        build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 };
             }
@@ -172,11 +172,11 @@ pub(super) async fn backend_handler(
 
     // Forward to backend
     match backend.request(&method, params).await {
-        Ok(response) => build_http_response(response, StatusCode::OK),
+        Ok(response) => build_http_response(&response, StatusCode::OK),
         Err(e) => {
             error!(backend = %name, error = %e, "Backend request failed");
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-            build_http_response(response, StatusCode::INTERNAL_SERVER_ERROR)
+            build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
