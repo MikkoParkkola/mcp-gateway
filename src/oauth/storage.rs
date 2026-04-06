@@ -338,13 +338,8 @@ mod tests {
             .as_secs();
         // Token that "expires" in 30 seconds - within 60s buffer, so treated as expired
         let token = TokenInfo {
-            access_token: "tok".to_string(),
-            token_type: "Bearer".to_string(),
-            refresh_token: None,
             expires_at: Some(now + 30),
-            scope: None,
-            token_endpoint: None,
-            client_id: None,
+            ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
         };
         assert!(token.is_expired());
     }
@@ -357,13 +352,8 @@ mod tests {
             .as_secs();
         // Token expires in 120 seconds - well beyond 60s buffer
         let token = TokenInfo {
-            access_token: "tok".to_string(),
-            token_type: "Bearer".to_string(),
-            refresh_token: None,
             expires_at: Some(now + 120),
-            scope: None,
-            token_endpoint: None,
-            client_id: None,
+            ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
         };
         assert!(!token.is_expired());
     }
@@ -379,13 +369,8 @@ mod tests {
             .unwrap()
             .as_secs();
         let token = TokenInfo {
-            access_token: "tok".to_string(),
-            token_type: "Bearer".to_string(),
-            refresh_token: None,
             expires_at: Some(now + 3600),
-            scope: None,
-            token_endpoint: None,
-            client_id: None,
+            ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
         };
         let ttl = token.time_until_expiry().unwrap();
         assert!(ttl.as_secs() >= 3598 && ttl.as_secs() <= 3601);
@@ -394,13 +379,8 @@ mod tests {
     #[test]
     fn time_until_expiry_expired_token() {
         let token = TokenInfo {
-            access_token: "tok".to_string(),
-            token_type: "Bearer".to_string(),
-            refresh_token: None,
             expires_at: Some(0), // long expired
-            scope: None,
-            token_endpoint: None,
-            client_id: None,
+            ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
         };
         assert!(token.time_until_expiry().is_none());
     }
@@ -408,13 +388,8 @@ mod tests {
     #[test]
     fn time_until_expiry_no_expiry() {
         let token = TokenInfo {
-            access_token: "tok".to_string(),
-            token_type: "Bearer".to_string(),
-            refresh_token: None,
             expires_at: None,
-            scope: None,
-            token_endpoint: None,
-            client_id: None,
+            ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
         };
         assert!(token.time_until_expiry().is_none());
     }

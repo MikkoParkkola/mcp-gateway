@@ -251,13 +251,8 @@ fn needs_proactive_refresh_true_when_within_buffer() {
         .unwrap()
         .as_secs();
     let token = TokenInfo {
-        access_token: "tok".to_string(),
-        token_type: "Bearer".to_string(),
-        refresh_token: None,
         expires_at: Some(now + 200), // only 200s left, buffer is 300s
-        scope: None,
-        token_endpoint: None,
-        client_id: None,
+        ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
     };
     *client.current_token.write() = Some(token);
 

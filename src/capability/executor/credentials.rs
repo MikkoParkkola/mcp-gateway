@@ -389,25 +389,15 @@ mod tests {
 
     fn valid_tok(name: &str) -> TokenInfo {
         TokenInfo {
-            access_token: name.to_string(),
-            token_type: "Bearer".to_string(),
-            refresh_token: None,
             expires_at: Some(now_secs() + 3600),
-            scope: None,
-            token_endpoint: None,
-            client_id: None,
+            ..TokenInfo::from_response(name.to_string(), None, None, None, None)
         }
     }
 
     fn expired_tok(name: &str) -> TokenInfo {
         TokenInfo {
-            access_token: name.to_string(),
-            token_type: "Bearer".to_string(),
-            refresh_token: None,
             expires_at: Some(0),
-            scope: None,
-            token_endpoint: None,
-            client_id: None,
+            ..TokenInfo::from_response(name.to_string(), None, None, None, None)
         }
     }
 
