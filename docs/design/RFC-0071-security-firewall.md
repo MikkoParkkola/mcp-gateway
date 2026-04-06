@@ -1295,25 +1295,6 @@ middleware provides:
 4. Structured audit trail with argument hashing (privacy-preserving)
 5. Three-tier action model (block/warn/log) to minimize false positives
 
-### 8.2 Competitive moat analysis
-
-| Moat Type | Applicability | Defensibility |
-|-----------|---------------|---------------|
-| Proprietary Tech | Pattern databases, anomaly algorithms | Medium -- patterns can be copied |
-| Data Network Effect | Transition data improves anomaly detection over time | HIGH -- more users = better detection |
-| Integration Depth | Deep composition with existing security modules | Medium -- hard to replicate without similar infrastructure |
-| First Mover | Category-defining: "MCP Security Firewall" | HIGH -- 12-18 month head start |
-
-### 8.3 Industry positioning
-
-This positions mcp-gateway for:
-- **SOC 2 compliance stories**: "All MCP tool calls audited through firewall"
-- **Enterprise adoption**: Security team can review audit logs
-- **Insurance/GRC**: Structured evidence of AI tool call governance
-- **CVE response**: Centralized blocking of known-vulnerable tools
-
----
-
 ## 9. Risk Register
 
 | # | Risk | Probability | Impact | Mitigation |

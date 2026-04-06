@@ -28,11 +28,10 @@ allow/deny filters -- but these are **auth scopes** managed by operators, not
 | Composability | Flat (one profile) | Hierarchical (`extends`) |
 | Auto-detection | None | Inferred from recent tool usage |
 
-### Why This Matters Competitively
+### Why This Matters
 
-GPT-5.4's native function calling likely scopes tools by conversation context
-internally. Without explicit profiles, mcp-gateway dumps all 180+ tools into
-every search, wasting LLM context tokens and degrading result quality.
+Without explicit profiles, mcp-gateway dumps all 180+ tools into every search,
+wasting LLM context tokens and degrading result quality.
 
 ### Concrete Failure Cases
 

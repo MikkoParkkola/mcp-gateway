@@ -1311,24 +1311,6 @@ Related RFCs:
 
 ---
 
-## 13. Competitive Analysis
-
-No other MCP gateway implements filtered tool discovery or deferred schema
-loading. By implementing SEP-1821 and SEP-1862 proactively, mcp-gateway becomes
-the reference implementation. When these SEPs merge into the spec and clients
-add support, the gateway is already compatible.
-
-Current landscape:
-- **Claude Code / Cursor**: Direct MCP connections only. No gateway awareness.
-- **Other MCP proxies** (if any): None implement Meta-MCP or tool annotations.
-- **GPT-5.4**: Reportedly has native embedding-based tool search, but this is
-  within-provider, not across MCP servers.
-
-The gateway's competitive moat is Meta-MCP + surfaced tools + spec-preview
-features.
-
----
-
 ## 14. References
 
 - [MCP Specification 2025-11-25](https://spec.modelcontextprotocol.io) -- Tool

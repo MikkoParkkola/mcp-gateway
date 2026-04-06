@@ -25,8 +25,8 @@ works well for exact-keyword queries ("gmail", "brave_search") but fails on
 
 At 180+ tools today and 500+ target, the synonym table approach does not scale.
 Each new tool domain requires manual synonym entries. GPT-5.4 reportedly has
-native embedding-based tool search. Our keyword search is the competitive weakness
-most likely to cause churn.
+native embedding-based tool search. Our keyword search is the clearest limitation
+at this scale.
 
 ### Why Keyword Search Degrades at Scale
 
@@ -808,8 +808,8 @@ searches "schedule meeting" and invokes `calendar_insert`, the gateway learns
 that association. Over time, `calendar_insert` rises in results for "schedule
 meeting" even if the embedding model does not capture that relationship.
 
-This is a **compounding moat**: the longer an installation runs, the better its
-search gets. Competitors starting from scratch have no such data.
+The longer an installation runs, the better its search gets because it
+accumulates real query/invocation feedback.
 
 ### 6.3 Zero-Dependency Runtime
 
