@@ -183,6 +183,10 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
         "benchmark docs should describe the public claims file accurately"
     );
     assert!(
+        !benchmarks.contains("Last updated:"),
+        "benchmark docs should avoid hard-coded update timestamps that drift independently of the claims file"
+    );
+    assert!(
         benchmarks.contains("Built-in capability YAMLs"),
         "benchmark docs should describe the canonical capability inventory claim"
     );

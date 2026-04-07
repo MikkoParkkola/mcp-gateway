@@ -1,7 +1,5 @@
 # MCP Gateway Benchmarks
 
-Last updated: 2026-04-07
-
 Public quantitative claims are tracked in [benchmarks/public_claims.json](../benchmarks/public_claims.json) and validated in CI by `tests/public_claims_validation.rs`.
 
 ## Build Information
