@@ -787,12 +787,11 @@ security but not the tool profile.
 
 ---
 
-## 5. What Makes This Beyond Industry Standard
+## 5. Design Characteristics
 
 ### 5.1 Composable Profiles via `extends`
 
-No existing MCP gateway or tool router supports profile inheritance. The
-`extends` keyword allows operators to define atomic domain profiles
+The `extends` keyword allows operators to define atomic domain profiles
 (research, coding, finance) and compose them into role profiles
 (full_stack_dev = coding + research + devops) without duplicating pattern lists.
 

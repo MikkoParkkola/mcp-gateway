@@ -1282,12 +1282,11 @@ async fn firewall_audit_log_written() {
 
 ---
 
-## 8. Beyond Industry Standard
+## 8. Design Characteristics
 
 ### 8.1 What this creates
 
-**The first MCP security firewall.** No existing MCP proxy, gateway, or
-middleware provides:
+This design combines several firewall behaviors in one MCP layer:
 
 1. Bidirectional scanning (request args AND response content)
 2. Credential redaction in tool outputs before LLM ingestion

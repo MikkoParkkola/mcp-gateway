@@ -538,7 +538,7 @@ async fn config_export_merge_idempotent() {
 
 ---
 
-## 8. Beyond Industry Standard
+## 8. Design Characteristics
 
 ### 8.1 What exists today
 

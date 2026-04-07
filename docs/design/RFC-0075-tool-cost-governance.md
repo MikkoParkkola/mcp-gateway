@@ -1218,17 +1218,17 @@ Cost Governance:
 
 24. `enforcer_check_under_100_microseconds` -- benchmark: 10,000 checks < 1 second (< 0.1ms each)
 
-## What Makes This BEYOND Industry Standard
+## Design Characteristics
 
-1. **No other MCP gateway tracks tool-call costs.** Portkey and LiteLLM track LLM token costs. None track the cost of the tools themselves. This is the missing half of AI agent cost visibility.
+1. **Track tool-call costs alongside LLM token costs.** This closes the visibility gap between model usage and tool execution when operators budget end-to-end agent workflows.
 
-2. **Three-tier alerting with response injection.** At 50% = silent log. At 80% = warning injected into the tool response so the LLM agent can see it and adapt behavior. At 100% = hard block. The "notify" tier is novel -- it gives the agent cost awareness without breaking its flow.
+2. **Three-tier alerting with response injection.** At 50% = silent log. At 80% = warning injected into the tool response so the LLM agent can see it and adapt behavior. At 100% = hard block. The "notify" tier gives the agent cost awareness without breaking its flow.
 
-3. **Cost-optimization suggestions.** When an agent calls `tavily_search` ($0.01), the response includes "brave_search provides similar results for $0.005." No other tool routing system does this.
+3. **Cost-optimization suggestions.** When an agent calls `tavily_search` ($0.01), the response can include "brave_search provides similar results for $0.005."
 
 4. **Sub-100-microsecond hot path (<0.1ms).** The budget check is a single DashMap lookup + atomic compare. No locks, no allocations. The gateway's p99 invoke latency does not change measurably.
 
-5. **Atomic day-boundary reset.** Daily accumulators auto-reset when the day changes, using compare_exchange to prevent TOCTOU races. No background timer, no locks. Cleaner than the typical cron-based reset.
+5. **Atomic day-boundary reset.** Daily accumulators auto-reset when the day changes, using compare_exchange to prevent TOCTOU races. No background timer, no locks.
 
 6. **Cost data persists across restarts.** `costs.json` is saved every 5 minutes and on graceful shutdown, loaded on startup. Consistent with the existing `usage.json` and `transitions.json` patterns.
 
