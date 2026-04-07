@@ -1,10 +1,12 @@
 use std::{fs, path::PathBuf};
 
 use serde::Deserialize;
+use walkdir::WalkDir;
 
 #[derive(Debug, Deserialize)]
 struct PublicClaims {
     meta_tools: u64,
+    capability_count: usize,
     startup_benchmark: StartupBenchmark,
     readme_token_savings: TokenSavingsClaim,
 }
@@ -38,6 +40,25 @@ fn load_claims() -> PublicClaims {
         .expect("benchmarks/public_claims.json should be valid JSON")
 }
 
+fn capability_floor(count: usize) -> usize {
+    (count / 10) * 10
+}
+
+fn count_capability_yaml_files() -> usize {
+    WalkDir::new(repo_file("capabilities"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml"))
+        .filter(|entry| {
+            !entry
+                .path()
+                .components()
+                .any(|component| component.as_os_str() == "examples")
+        })
+        .count()
+}
+
 #[test]
 fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
@@ -61,6 +82,27 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         "README should advertise the canonical meta-tool count"
     );
     assert!(
+        readme.contains(&format!(
+            "capabilities-{}%2B-",
+            capability_floor(claims.capability_count)
+        )),
+        "README capability badge should advertise the canonical capability floor"
+    );
+    assert!(
+        readme.contains(&format!(
+            "**{}+ starter capabilities**",
+            capability_floor(claims.capability_count)
+        )),
+        "README should advertise the canonical starter capability floor"
+    );
+    assert!(
+        readme.contains(&format!(
+            "[{}+ built-in](capabilities/)",
+            capability_floor(claims.capability_count)
+        )),
+        "README capability table should advertise the canonical built-in capability floor"
+    );
+    assert!(
         readme.contains(&format!("~{gateway_tokens} tokens")),
         "README should contain the canonical gateway token claim"
     );
@@ -82,6 +124,26 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains("benchmarks/public_claims.json"),
         "benchmark docs should point readers to the canonical machine-readable claims file"
+    );
+    assert!(
+        benchmarks.contains("Public quantitative claims are tracked"),
+        "benchmark docs should describe the public claims file accurately"
+    );
+    assert!(
+        benchmarks.contains("Starter capability YAMLs"),
+        "benchmark docs should describe the canonical capability inventory claim"
+    );
+    assert!(
+        benchmarks.contains(&format!(
+            "{} total (marketed as {}+)",
+            claims.capability_count,
+            capability_floor(claims.capability_count)
+        )),
+        "benchmark docs should include the canonical capability count and marketed floor"
+    );
+    assert!(
+        benchmarks.contains("find capabilities -name '*.yaml' -not -path '*/examples/*' \\| wc -l"),
+        "benchmark docs should include the canonical capability inventory command"
     );
     assert!(
         benchmarks.contains(&claims.startup_benchmark.command),
@@ -115,5 +177,20 @@ fn token_savings_benchmark_tracks_four_gateway_meta_tools() {
     assert!(
         !script.contains("always 3"),
         "token benchmark should not hard-code the obsolete 3-tool assumption"
+    );
+}
+
+#[test]
+fn capability_inventory_claim_matches_current_repo_catalog() {
+    let claims = load_claims();
+    let actual_count = count_capability_yaml_files();
+
+    assert_eq!(
+        actual_count, claims.capability_count,
+        "public claims file should track the exact capability YAML inventory"
+    );
+    assert!(
+        actual_count >= capability_floor(claims.capability_count),
+        "actual capability count should satisfy the marketed README floor"
     );
 }

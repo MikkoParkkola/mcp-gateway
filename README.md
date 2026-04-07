@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Capabilities](https://img.shields.io/badge/REST%20capabilities-70%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
+[![Capabilities](https://img.shields.io/badge/REST%20capabilities-90%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 
@@ -17,7 +17,7 @@
 
 MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets 4 meta-tools and discovers the right one on demand -- like searching an app store instead of installing every app.
 
-Public benchmark-backed claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
+Public quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
 
 ## What MCP Gateway is / is not
 
@@ -160,7 +160,7 @@ Turn any REST API into a tool by dropping a YAML file (~30 seconds) or importing
 mcp-gateway cap import stripe-openapi.yaml --output capabilities/ --prefix stripe
 ```
 
-The gateway ships with **70+ starter capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload in ~500ms, no restart needed.
+The gateway ships with **90+ starter capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload in ~500ms, no restart needed.
 
 ### 3. Change Your MCP Stack Without Losing Your AI Session
 
@@ -215,7 +215,7 @@ Embedded web UI at `/ui` -- live status, searchable tools, server health, config
 
 | Feature | Description |
 |---------|-------------|
-| **Capability System** | REST API to MCP tool via YAML. Hot-reloaded. [70+ built-in](capabilities/). OpenAPI import supported. |
+| **Capability System** | REST API to MCP tool via YAML. Hot-reloaded. [90+ built-in](capabilities/). OpenAPI import supported. |
 | **Transform Chains** | Namespace, filter, rename, and response transforms. [Example](examples/transform-example.yaml). |
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-Discovery** | Discover MCP servers from existing client configs and running processes. |
