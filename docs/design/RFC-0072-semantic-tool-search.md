@@ -972,7 +972,7 @@ Implement a hybrid search system that:
 **Positive**:
 - Zero new runtime dependencies (pure f32 math).
 - Graceful degradation (works without embeddings, just keyword).
-- Compounding moat via feedback learning.
+- Ranking quality can improve over time via feedback learning.
 - <2ms p95 latency (within budget).
 - Schema-augmented embeddings are uncommon in open-source MCP gateways.
 
