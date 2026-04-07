@@ -786,12 +786,12 @@ mod bench {
 
 ---
 
-## 6. What Makes This Beyond Industry Standard
+## 6. Design Characteristics
 
 ### 6.1 Schema-Augmented Embeddings
 
 Schema-augmented embeddings include parameter names and enum values alongside
-tool descriptions -- uncommon in open-source MCP gateways and tool routers.
+tool descriptions, so schema-specific vocabulary participates in retrieval.
 When `sec_edgar_filings` has parameters `ticker`, `filing_type`, `10-K`,
 `10-Q` -- those are embedded too. A query for "annual report" matches via
 the `10-K` parameter even if the description never says "annual report".
@@ -974,7 +974,7 @@ Implement a hybrid search system that:
 - Graceful degradation (works without embeddings, just keyword).
 - Ranking quality can improve over time via feedback learning.
 - <2ms p95 latency (within budget).
-- Schema-augmented embeddings are uncommon in open-source MCP gateways.
+- Schema-augmented embeddings can capture schema vocabulary that description-only embeddings miss.
 
 **Negative**:
 - Requires an initial embedding generation step (CLI command or external).
