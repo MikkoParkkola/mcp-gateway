@@ -122,10 +122,10 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
     );
     assert!(
         readme.contains(&format!(
-            "**{}+ starter capabilities**",
+            "**{}+ built-in capabilities**",
             capability_floor(claims.capability_count)
         )),
-        "README should advertise the canonical starter capability floor"
+        "README should advertise the canonical built-in capability floor"
     );
     assert!(
         readme.contains(&format!(
@@ -172,7 +172,7 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
         "benchmark docs should describe the public claims file accurately"
     );
     assert!(
-        benchmarks.contains("Starter capability YAMLs"),
+        benchmarks.contains("Built-in capability YAMLs"),
         "benchmark docs should describe the canonical capability inventory claim"
     );
     assert!(

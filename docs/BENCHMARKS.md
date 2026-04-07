@@ -17,7 +17,7 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 | Claim | Value | Source |
 |------|-------|--------|
 | Meta-tools exposed to the AI | 4 | `benchmarks/public_claims.json` |
-| Starter capability YAMLs | 93 total (marketed as 90+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
+| Built-in capability YAMLs | 93 total (marketed as 90+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
 | README token-savings scenario | 100 tools → ~400 gateway tokens → **97% savings** | `python benchmarks/token_savings.py --scenario readme` |
 
