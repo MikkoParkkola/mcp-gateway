@@ -1,111 +1,57 @@
-# MCP Gateway Starter Capabilities
+# MCP Gateway Built-in Capabilities
 
-52+ curated capabilities for AI enthusiasts and home users. Mix of zero-config (30+) and free-tier APIs (20+).
+mcp-gateway currently ships **93 built-in capabilities** (marketed publicly as **90+**), derived from the tracked YAML inventory under `capabilities/` excluding `examples/`.
 
 ## Categories
 
-| Category | Count | Auth Required |
-|----------|-------|---------------|
-| **knowledge/** | 17 | None |
-| **search/** | 11 | API key (Brave: 2K/mo free) |
-| **finance/** | 8 | API key (free tiers) |
-| **geo/** | 1 | API key (50K/mo free) |
-| **entertainment/** | 7 | None / API key / OAuth2 |
-| **utility/** | 8 | None / API key |
-| **communication/** | 2 | OAuth2 |
-| **food/** | 1 | None |
+| Category | Count |
+|----------|-------|
+| **automation/** | 1 |
+| **communication/** | 2 |
+| **entertainment/** | 4 |
+| **finance/** | 6 |
+| **food/** | 1 |
+| **google/** | 21 |
+| **infrastructure/** | 1 |
+| **knowledge/** | 7 |
+| **linear/** | 13 |
+| **media/** | 4 |
+| **productivity/** | 25 |
+| **search/** | 1 |
+| **security/** | 2 |
+| **utility/** | 3 |
+| **verification/** | 2 |
 
-## Zero-Config (Works Instantly)
+## Discovering the Catalog
 
-These 30+ capabilities need no API keys:
-
-```
-knowledge/weather.yaml          # Open-Meteo
-knowledge/weather_current.yaml  # Current weather
-knowledge/wikipedia_*.yaml      # Wikipedia (2)
-knowledge/nominatim_*.yaml      # OpenStreetMap (2)
-knowledge/timezone_convert.yaml # Local
-knowledge/open_library_book.yaml
-knowledge/npm_package.yaml
-knowledge/pypi_package.yaml
-knowledge/hackernews_*.yaml     # (2)
-knowledge/country_info.yaml     # RestCountries
-knowledge/public_holidays.yaml  # Nager.Date
-knowledge/number_facts.yaml     # Numbers API
-knowledge/semantic_scholar.yaml # Academic papers
-
-search/reddit_search.yaml
-search/github_search.yaml       # 60/hr unauthenticated
-
-finance/sec_edgar_filings.yaml  # SEC EDGAR (free gov data)
-
-entertainment/random_joke.yaml   # JokeAPI
-entertainment/trivia_question.yaml # Open Trivia DB
-entertainment/random_quote.yaml  # Quotable
-entertainment/musicbrainz_search.yaml # Music database
-
-utility/air_quality.yaml        # OpenAQ
-utility/qr_generate.yaml        # GoQR
-utility/random_user.yaml        # Random User Generator
-utility/uuid_generate.yaml      # UUID Tools
-utility/recipe_search.yaml      # Recipe API
-utility/github_create_issue.yaml # GitHub (no auth)
-
-food/openfoodfacts_product.yaml # Product nutrition data
-```
-
-## Free Tier (2-min Signup)
-
-| Capability | Service | Free Tier | Signup |
-|------------|---------|-----------|--------|
-| `brave_*` (8) | Brave Search | 2,000/mo | brave.com/search/api |
-| `stock_quote` | Alpha Vantage | 25/day | alphavantage.co |
-| `yahoo_stock_quote` | Yahoo Finance | Unlimited | No key needed |
-| `finnhub_quote` | Finnhub | 60/min | finnhub.io |
-| `ecb_exchange_rates` | ECB | Unlimited | ecb.europa.eu |
-| `exchangerate_convert` | ExchangeRate | 1,500/mo | exchangerate-api.com |
-| `stripe_list_charges` | Stripe | API access | stripe.com |
-| `prh_company` | PRH Finland | Unlimited | avoindata.prh.fi |
-| `ipinfo_lookup` | IPinfo | 50,000/mo | ipinfo.io |
-| `tmdb_*` (2) | TMDB | Unlimited | themoviedb.org |
-| `spotify_search` | Spotify | Unlimited | developer.spotify.com |
-| `package_track` | 17track | 100/day | api.17track.net |
-| `gmail_send_email` | Gmail | OAuth2 | Google API Console |
-| `slack_post_message` | Slack | OAuth2 | api.slack.com |
-
-## Configuration
-
-Set environment variables for API keys:
+Use the live registry commands instead of relying on a hard-coded starter subset:
 
 ```bash
-# Search
-export BRAVE_API_KEY="your-key"
+# List everything shipped with the gateway
+mcp-gateway cap registry-list
 
-# Finance
-export ALPHA_VANTAGE_API_KEY="your-key"
-export FINNHUB_API_KEY="your-key"
-export EXCHANGERATE_API_KEY="your-key"
-export STRIPE_API_KEY="your-key"
-
-# Geo
-export IPINFO_TOKEN="your-key"
-
-# Entertainment
-export TMDB_API_KEY="your-key"
-export SPOTIFY_CLIENT_ID="your-id"
-export SPOTIFY_CLIENT_SECRET="your-secret"
-
-# Utility
-export 17TRACK_API_KEY="your-key"
-
-# Communication (OAuth2)
-export GMAIL_CLIENT_ID="your-id"
-export GMAIL_CLIENT_SECRET="your-secret"
-export SLACK_BOT_TOKEN="your-token"
-
-# Optional (increases rate limit)
-export GITHUB_TOKEN="your-token"
+# Search the built-in catalog
+mcp-gateway cap search weather
+mcp-gateway cap search finance
+mcp-gateway cap search github
 ```
+
+For the exact current inventory on disk:
+
+```bash
+find capabilities -name '*.yaml' -not -path '*/examples/*' | wc -l
+```
+
+## Auth and Configuration
+
+Authentication requirements are declared per capability in each YAML file's `auth` block. Some capabilities work instantly with no credentials; others require API keys or OAuth tokens.
+
+Use the capability YAML itself as the source of truth for:
+
+- whether auth is required
+- which environment variable name is expected
+- where to sign up for credentials (`auth.description`)
+- cache and timeout behavior
 
 ## Usage with MCP Gateway
 

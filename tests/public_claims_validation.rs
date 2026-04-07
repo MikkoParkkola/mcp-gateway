@@ -59,6 +59,38 @@ fn count_capability_yaml_files() -> usize {
         .count()
 }
 
+fn count_capability_yaml_files_by_category() -> Vec<(String, usize)> {
+    let mut counts = std::collections::BTreeMap::new();
+
+    for entry in WalkDir::new(repo_file("capabilities"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml"))
+        .filter(|entry| {
+            !entry
+                .path()
+                .components()
+                .any(|component| component.as_os_str() == "examples")
+        })
+    {
+        let relative = entry
+            .path()
+            .strip_prefix(repo_file("capabilities"))
+            .expect("capability path should strip repo prefix");
+        let category = relative
+            .components()
+            .next()
+            .expect("capability YAML should live under a category directory")
+            .as_os_str()
+            .to_string_lossy()
+            .into_owned();
+        *counts.entry(category).or_insert(0usize) += 1;
+    }
+
+    counts.into_iter().collect()
+}
+
 #[test]
 fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
@@ -202,5 +234,68 @@ fn capability_inventory_claim_matches_current_repo_catalog() {
     assert!(
         actual_count >= capability_floor(claims.capability_count),
         "actual capability count should satisfy the marketed README floor"
+    );
+}
+
+#[test]
+fn capability_catalog_docs_match_current_inventory() {
+    let claims = load_claims();
+    let marketed_floor = capability_floor(claims.capability_count);
+    let capabilities_readme = read_repo_file("capabilities/README.md");
+    let community_registry = read_repo_file("docs/COMMUNITY_REGISTRY.md");
+
+    assert!(
+        capabilities_readme.contains(&format!(
+            "**{} built-in capabilities**",
+            claims.capability_count
+        )),
+        "capabilities README should advertise the canonical exact capability inventory"
+    );
+    assert!(
+        capabilities_readme.contains(&format!("marketed publicly as **{}+**", marketed_floor)),
+        "capabilities README should mention the canonical marketed capability floor"
+    );
+    assert!(
+        capabilities_readme
+            .contains("find capabilities -name '*.yaml' -not -path '*/examples/*' | wc -l"),
+        "capabilities README should document how to derive the exact YAML inventory"
+    );
+    assert!(
+        !capabilities_readme.contains("52+ curated capabilities"),
+        "capabilities README should not advertise the obsolete starter-capability count"
+    );
+    assert!(
+        !capabilities_readme.contains("These 30+ capabilities need no API keys"),
+        "capabilities README should not keep the stale zero-config subset claim"
+    );
+
+    for (category, count) in count_capability_yaml_files_by_category() {
+        assert!(
+            capabilities_readme.contains(&format!("| **{category}/** | {count} |")),
+            "capabilities README should include the live {category}/ count"
+        );
+    }
+
+    assert!(
+        community_registry.contains(&format!(
+            "All {}+ built-in capabilities ship with mcp-gateway.",
+            marketed_floor
+        )),
+        "community registry docs should advertise the canonical marketed capability floor"
+    );
+    assert!(
+        community_registry.contains(&format!(
+            "exact tracked inventory is currently {} YAMLs",
+            claims.capability_count
+        )),
+        "community registry docs should mention the canonical exact YAML inventory"
+    );
+    assert!(
+        !community_registry.contains("All 52+ capabilities ship with mcp-gateway"),
+        "community registry docs should not advertise the obsolete capability count"
+    );
+    assert!(
+        !community_registry.contains("standard category subdirectories (`finance/`, `knowledge/`, `search/`, `utility/`, `entertainment/`, `communication/`, `food/`, `geo/`)"),
+        "community registry docs should not hard-code the obsolete category list"
     );
 }
