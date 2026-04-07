@@ -160,7 +160,7 @@ Turn any REST API into a tool by dropping a YAML file (~30 seconds) or importing
 mcp-gateway cap import stripe-openapi.yaml --output capabilities/ --prefix stripe
 ```
 
-The gateway ships with **90+ starter capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload in ~500ms, no restart needed.
+The gateway ships with **90+ starter capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
 
 ### 3. Change Your MCP Stack Without Losing Your AI Session
 

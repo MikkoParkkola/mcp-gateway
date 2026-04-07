@@ -114,6 +114,16 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         readme.contains(&format!("**${} saved per 1K**", savings_usd.round() as u64)),
         "README should contain the canonical rounded cost savings claim"
     );
+    assert!(
+        readme.contains(
+            "Capability YAMLs hot-reload automatically after file changes, no restart needed."
+        ),
+        "README should describe hot-reload qualitatively instead of with an unsupported timing claim"
+    );
+    assert!(
+        !readme.contains("hot-reload in ~500ms"),
+        "README should not advertise an unsupported hot-reload timing claim"
+    );
 }
 
 #[test]
