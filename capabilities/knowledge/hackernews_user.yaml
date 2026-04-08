@@ -1,0 +1,60 @@
+fulcrum: "1.0"
+name: hackernews_user
+description: |
+  Fetch a Hacker News user profile by username. Returns the user's karma,
+  join date, about text, and list of submitted item IDs.
+
+  Pair with `hackernews_get_item` to fetch the actual submissions.
+
+schema:
+  input:
+    type: object
+    properties:
+      username:
+        type: string
+        description: HN username (case-sensitive)
+        examples: ["dhouston", "pg", "patio11"]
+    required:
+      - username
+  output:
+    type: object
+    properties:
+      id: { type: string }
+      created: { type: integer, description: "Unix epoch" }
+      karma: { type: integer }
+      about: { type: string }
+      submitted:
+        type: array
+        items: { type: integer }
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://hacker-news.firebaseio.com
+      path: /v0/user/{username}.json
+      method: GET
+      headers:
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [hackernews, user, profile, ycombinator, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [hn_username]
+  produces: [hn_user_profile]
+  chains_with: [hackernews_get_item, hackernews_top]
+  docs: "https://github.com/HackerNews/API"
+  license: "MIT"

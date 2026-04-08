@@ -19,7 +19,7 @@ tokio = { version = "1.44", features = ["full", "tracing"] }
 
 # HTTP server/client
 axum = { version = "0.8", features = ["tracing", "http2"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "form", "query"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "form", "query", "gzip", "deflate", "brotli"] }
 tower = { version = "0.5", features = ["timeout", "limit", "load-shed", "retry"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "compression-gzip", "request-id", "catch-panic"] }
 

@@ -1,0 +1,57 @@
+fulcrum: "1.0"
+name: github_get_release
+description: |
+  Get the latest release of a GitHub repository. Returns tag name, release
+  name, body (markdown changelog), assets with download URLs, publication
+  date, and author.
+
+  For specific releases use `/releases/tags/{tag}` path instead.
+
+schema:
+  input:
+    type: object
+    properties:
+      owner:
+        type: string
+        examples: ["anthropics", "microsoft"]
+      repo:
+        type: string
+        examples: ["claude-code", "vscode"]
+    required: [owner, repo]
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.github.com
+      path: /repos/{owner}/{repo}/releases/latest
+      method: GET
+      headers:
+        Accept: "application/vnd.github+json"
+        X-GitHub-Api-Version: "2022-11-28"
+        User-Agent: "mcp-gateway-knowledge/1.0"
+
+cache:
+  strategy: exact
+  ttl: 600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [github, releases, changelog, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [github_owner, github_repo]
+  produces: [release_tag, release_body]
+  chains_with: [github_get_repo]
+  docs: "https://docs.github.com/en/rest/releases/releases#get-the-latest-release"
+  license: "MIT"
+  rate_limit: "60 req/h unauthenticated"

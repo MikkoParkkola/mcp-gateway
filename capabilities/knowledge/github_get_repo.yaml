@@ -1,0 +1,63 @@
+fulcrum: "1.0"
+name: github_get_repo
+description: |
+  Get GitHub repository metadata by owner/repo. Returns full repository
+  metadata: name, description, stars, forks, issues, primary language,
+  license, topics, default branch, size, created/updated timestamps, and
+  organization info.
+
+  This is the unauthenticated GitHub REST API v3 endpoint. Rate limited to
+  60 req/hour per IP without auth. Set `GITHUB_TOKEN` env var in gateway
+  config for 5000 req/hour.
+
+schema:
+  input:
+    type: object
+    properties:
+      owner:
+        type: string
+        description: Repository owner (user or organization)
+        examples: ["modelcontextprotocol", "anthropics", "microsoft"]
+      repo:
+        type: string
+        description: Repository name
+        examples: ["servers", "claude-code", "vscode"]
+    required:
+      - owner
+      - repo
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.github.com
+      path: /repos/{owner}/{repo}
+      method: GET
+      headers:
+        Accept: "application/vnd.github+json"
+        X-GitHub-Api-Version: "2022-11-28"
+        User-Agent: "mcp-gateway-knowledge/1.0"
+
+cache:
+  strategy: exact
+  ttl: 1800  # 30 min — stars/issues update frequently
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [github, repository, source-code, metadata, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [github_owner, github_repo]
+  produces: [repo_metadata, stargazers_count]
+  docs: "https://docs.github.com/en/rest/repos/repos#get-a-repository"
+  license: "MIT (GitHub API docs)"
+  rate_limit: "60 req/h unauthenticated, 5000 req/h with GITHUB_TOKEN"
