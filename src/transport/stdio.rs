@@ -373,11 +373,14 @@ impl Transport for StdioTransport {
             params,
         };
 
+        let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
 
-        let message = serde_json::to_string(&request)?;
-        self.write_message(&message).await?;
+        if let Err(e) = self.write_message(&message).await {
+            self.pending.remove(&id.to_string());
+            return Err(e);
+        }
 
         // Wait for response with timeout
         match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
@@ -567,5 +570,15 @@ mod tests {
         assert!(t.is_connected());
         t.connected.store(false, Ordering::Relaxed);
         assert!(!t.is_connected());
+    }
+
+    #[tokio::test]
+    async fn request_cleans_pending_entry_when_write_fails() {
+        let t = make_transport("echo");
+
+        let result = t.request("tools/list", None).await;
+
+        assert!(matches!(result, Err(Error::Transport(message)) if message == "Not connected"));
+        assert!(t.pending.is_empty());
     }
 }
