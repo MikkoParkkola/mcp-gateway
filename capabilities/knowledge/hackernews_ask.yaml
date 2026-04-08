@@ -1,0 +1,44 @@
+fulcrum: "1.0"
+name: hackernews_ask
+description: |
+  Get the IDs of current Ask HN stories. Returns a JSON array of up to
+  200 item IDs. Use `hackernews_get_item` to fetch each story's content.
+
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: array
+    items: { type: integer }
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://hacker-news.firebaseio.com
+      path: /v0/askstories.json
+      method: GET
+      headers:
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [hackernews, ask-hn, community, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  produces: [hn_item_id]
+  chains_with: [hackernews_get_item]
+  docs: "https://github.com/HackerNews/API"
+  license: "MIT"

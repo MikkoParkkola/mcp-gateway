@@ -1,0 +1,70 @@
+fulcrum: "1.0"
+name: hackernews_get_item
+description: |
+  Fetch a single Hacker News item (story, comment, job, poll, or pollopt)
+  by its ID. Returns metadata: title, url, score, by (author), time,
+  text (HTML), kids (comment IDs), descendants count, type.
+
+  Pair with `hackernews_top` to get the IDs first.
+
+schema:
+  input:
+    type: object
+    properties:
+      id:
+        type: integer
+        description: HN item ID (positive integer)
+        examples: [8863, 47648828]
+    required:
+      - id
+  output:
+    type: object
+    properties:
+      id: { type: integer }
+      type:
+        type: string
+        enum: [story, comment, job, poll, pollopt]
+      by: { type: string, description: "Author username" }
+      time: { type: integer, description: "Unix epoch creation time" }
+      title: { type: string }
+      url: { type: string }
+      text: { type: string, description: "HTML body for comments/asks" }
+      score: { type: integer }
+      kids:
+        type: array
+        items: { type: integer }
+        description: Direct child comment IDs
+      descendants: { type: integer, description: "Total comments in subtree" }
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://hacker-news.firebaseio.com
+      path: /v0/item/{id}.json
+      method: GET
+      headers:
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 300  # 5 min — kids list updates as comments arrive
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [hackernews, news, tech, ycombinator, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [hn_item_id]
+  produces: [hn_story, hn_comment]
+  chains_with: [hackernews_top]
+  docs: "https://github.com/HackerNews/API"
+  license: "MIT (HN API)"
+  rate_limit: "No documented limit"
