@@ -15,34 +15,46 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
+    /// Informational — logged but never blocks.
     Low,
+    /// Suspicious pattern — logged prominently.
     Medium,
+    /// Likely malicious — blocks in action mode.
     High,
+    /// Confirmed threat pattern — always blocks in action mode.
     Critical,
 }
 
 /// A single inspection finding.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
+    /// Pattern category (e.g., `"secret"`, `"injection"`, `"exfil_url"`).
     pub category: &'static str,
+    /// How severe the finding is.
     pub severity: Severity,
+    /// Human-readable description of what was detected.
     pub description: &'static str,
+    /// Index into the compiled pattern set (for debugging).
     pub matched_pattern_index: usize,
 }
 
 /// Result of inspecting a response.
 #[derive(Debug, Clone, Serialize)]
 pub struct InspectionResult {
+    /// All patterns that matched in the response.
     pub findings: Vec<Finding>,
+    /// `true` when action mode is enabled and HIGH/CRITICAL findings exist.
     pub should_block: bool,
 }
 
 impl InspectionResult {
+    /// No findings — clean response.
     #[must_use]
     pub fn clean() -> Self {
         Self { findings: Vec::new(), should_block: false }
     }
 
+    /// Whether any finding was detected.
     #[must_use]
     pub fn has_findings(&self) -> bool {
         !self.findings.is_empty()
@@ -91,7 +103,7 @@ pub fn inspect_response(text: &str, action_mode: bool) -> InspectionResult {
     let mut findings = Vec::new();
     let mut should_block = false;
 
-    for idx in matches.iter() {
+    for idx in &matches {
         let (_, category, severity, description) = PATTERNS[idx];
         if action_mode && matches!(severity, Severity::High | Severity::Critical) {
             should_block = true;
@@ -118,16 +130,12 @@ pub fn extract_text_from_result(value: &serde_json::Value) -> String {
         }
     }
 
-    if text.is_empty() {
-        if let Some(t) = value.get("text").and_then(|t| t.as_str()) {
-            text.push_str(t);
-        }
+    if text.is_empty() && let Some(t) = value.get("text").and_then(|t| t.as_str()) {
+        text.push_str(t);
     }
 
-    if text.is_empty() {
-        if let Some(r) = value.get("result") {
-            text = r.to_string();
-        }
+    if text.is_empty() && let Some(r) = value.get("result") {
+        text = r.to_string();
     }
 
     text
