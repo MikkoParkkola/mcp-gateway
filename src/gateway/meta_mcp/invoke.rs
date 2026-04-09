@@ -283,6 +283,38 @@ impl MetaMcp {
             }
         };
 
+        // === POST-INVOKE: Response content inspection ===
+        //
+        // Scan the backend response for secrets, exfiltration URLs, and
+        // suspicious encoding patterns.  Observe mode (default) logs
+        // findings; action mode blocks HIGH/CRITICAL matches.
+        {
+            let text = crate::security::response_inspect::extract_text_from_result(&result);
+            if !text.is_empty() {
+                let inspection = crate::security::response_inspect::inspect_response(&text, false);
+                if inspection.has_findings() {
+                    for finding in &inspection.findings {
+                        warn!(
+                            server,
+                            tool,
+                            trace_id,
+                            category = finding.category,
+                            severity = ?finding.severity,
+                            description = finding.description,
+                            "Response inspection finding"
+                        );
+                    }
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert(
+                            "_security_findings".to_string(),
+                            serde_json::to_value(&inspection.findings)
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
+            }
+        }
+
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
         // `_cost_warnings` — active at ≥80% budget consumption (Notify tier).

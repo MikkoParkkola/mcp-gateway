@@ -16,6 +16,7 @@ pub mod data_flow;
 #[cfg(feature = "firewall")]
 pub mod firewall;
 pub mod policy;
+pub mod response_inspect;
 pub mod response_scanner;
 pub mod sanitize;
 pub mod scope_collision;
