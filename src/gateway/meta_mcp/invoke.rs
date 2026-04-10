@@ -307,8 +307,7 @@ impl MetaMcp {
                     if let Some(obj) = result.as_object_mut() {
                         obj.insert(
                             "_security_findings".to_string(),
-                            serde_json::to_value(&inspection.findings)
-                                .unwrap_or_default(),
+                            serde_json::to_value(&inspection.findings).unwrap_or_default(),
                         );
                     }
                 }

@@ -7,9 +7,9 @@
 //!
 //! All patterns pre-compiled via [`regex::RegexSet`] for single-pass <1ms.
 
-use std::sync::LazyLock;
 use regex::RegexSet;
 use serde::Serialize;
+use std::sync::LazyLock;
 
 /// Severity level for an inspection finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -51,7 +51,10 @@ impl InspectionResult {
     /// No findings — clean response.
     #[must_use]
     pub fn clean() -> Self {
-        Self { findings: Vec::new(), should_block: false }
+        Self {
+            findings: Vec::new(),
+            should_block: false,
+        }
     }
 
     /// Whether any finding was detected.
@@ -64,21 +67,81 @@ impl InspectionResult {
 // (regex, category, severity, description)
 const PATTERNS: &[(&str, &str, Severity, &str)] = &[
     // Secrets
-    (r"(?i)(sk-ant-|sk-proj-)[a-zA-Z0-9\-]{20,}", "secret", Severity::Critical, "Anthropic API key"),
-    (r"AKIA[0-9A-Z]{16}", "secret", Severity::Critical, "AWS access key ID"),
-    (r"(?i)ghp_[a-zA-Z0-9]{36}", "secret", Severity::Critical, "GitHub PAT"),
-    (r"(?i)xox[bpors]-[a-zA-Z0-9\-]{10,}", "secret", Severity::High, "Slack token"),
-    (r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----", "secret", Severity::Critical, "Private key"),
-    (r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]{20,}", "secret", Severity::High, "Bearer token"),
+    (
+        r"(?i)(sk-ant-|sk-proj-)[a-zA-Z0-9\-]{20,}",
+        "secret",
+        Severity::Critical,
+        "Anthropic API key",
+    ),
+    (
+        r"AKIA[0-9A-Z]{16}",
+        "secret",
+        Severity::Critical,
+        "AWS access key ID",
+    ),
+    (
+        r"(?i)ghp_[a-zA-Z0-9]{36}",
+        "secret",
+        Severity::Critical,
+        "GitHub PAT",
+    ),
+    (
+        r"(?i)xox[bpors]-[a-zA-Z0-9\-]{10,}",
+        "secret",
+        Severity::High,
+        "Slack token",
+    ),
+    (
+        r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----",
+        "secret",
+        Severity::Critical,
+        "Private key",
+    ),
+    (
+        r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]{20,}",
+        "secret",
+        Severity::High,
+        "Bearer token",
+    ),
     // Injection
-    (r"(?i)ignore\s+(all\s+)?previous\s+instructions", "injection", Severity::Critical, "Ignore previous instructions"),
-    (r"(?i)you\s+are\s+now\s+(?:a|an)\s+", "injection", Severity::High, "Role override attempt"),
-    (r"(?i)IMPORTANT:\s*disregard", "injection", Severity::High, "Disregard directive"),
+    (
+        r"(?i)ignore\s+(all\s+)?previous\s+instructions",
+        "injection",
+        Severity::Critical,
+        "Ignore previous instructions",
+    ),
+    (
+        r"(?i)you\s+are\s+now\s+(?:a|an)\s+",
+        "injection",
+        Severity::High,
+        "Role override attempt",
+    ),
+    (
+        r"(?i)IMPORTANT:\s*disregard",
+        "injection",
+        Severity::High,
+        "Disregard directive",
+    ),
     // Exfil / C2
-    (r"(?i)https?://[a-z0-9\-]+\.(ngrok|serveo|localtunnel|lhr\.life)\.\w+", "exfil_url", Severity::High, "Tunnel service URL"),
-    (r"169\.254\.169\.254|metadata\.google\.internal", "c2", Severity::Critical, "Cloud metadata SSRF"),
+    (
+        r"(?i)https?://[a-z0-9\-]+\.(ngrok|serveo|localtunnel|lhr\.life)\.\w+",
+        "exfil_url",
+        Severity::High,
+        "Tunnel service URL",
+    ),
+    (
+        r"169\.254\.169\.254|metadata\.google\.internal",
+        "c2",
+        Severity::Critical,
+        "Cloud metadata SSRF",
+    ),
     // Encoding
-    (r"(?i)base64\s*[=:]\s*[A-Za-z0-9+/]{100,}", "encoding", Severity::Medium, "Large base64 blob"),
+    (
+        r"(?i)base64\s*[=:]\s*[A-Za-z0-9+/]{100,}",
+        "encoding",
+        Severity::Medium,
+        "Large base64 blob",
+    ),
 ];
 
 static PATTERN_SET: LazyLock<RegexSet> = LazyLock::new(|| {
@@ -109,12 +172,17 @@ pub fn inspect_response(text: &str, action_mode: bool) -> InspectionResult {
             should_block = true;
         }
         findings.push(Finding {
-            category, severity, description,
+            category,
+            severity,
+            description,
             matched_pattern_index: idx,
         });
     }
 
-    InspectionResult { findings, should_block }
+    InspectionResult {
+        findings,
+        should_block,
+    }
 }
 
 /// Extract text content from an MCP tool result JSON value.
@@ -130,11 +198,15 @@ pub fn extract_text_from_result(value: &serde_json::Value) -> String {
         }
     }
 
-    if text.is_empty() && let Some(t) = value.get("text").and_then(|t| t.as_str()) {
+    if text.is_empty()
+        && let Some(t) = value.get("text").and_then(|t| t.as_str())
+    {
         text.push_str(t);
     }
 
-    if text.is_empty() && let Some(r) = value.get("result") {
+    if text.is_empty()
+        && let Some(r) = value.get("result")
+    {
         text = r.to_string();
     }
 
