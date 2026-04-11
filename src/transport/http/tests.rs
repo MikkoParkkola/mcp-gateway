@@ -195,8 +195,8 @@ fn connected_state_toggles() {
 // build_mcp_headers — regression tests for the header builder
 //
 // These tests verify the behavioral asymmetries across SSE, send_request,
-// and notify modes are preserved by the shared helper. No network calls are
-// made; HeaderMode is exercised directly.
+// notify, and close modes are preserved by the shared helper. No network
+// calls are made unless the test explicitly exercises close() end to end.
 // =========================================================================
 
 /// SSE mode: no Content-Type, SSE-only Accept, no session header even when
@@ -336,6 +336,97 @@ async fn build_headers_notify_no_session_when_unset() {
     let map = t.build_mcp_headers(HeaderMode::Notify).await.unwrap();
 
     assert!(!map.contains_key("mcp-session-id"));
+}
+
+/// close mode: session + protocol + custom headers, but no trace header and no
+/// JSON body content type.
+#[tokio::test]
+async fn build_headers_close_includes_session_and_custom_headers() {
+    use crate::gateway::trace;
+
+    let mut custom = HashMap::new();
+    custom.insert("X-Close-Auth".to_string(), "close-token".to_string());
+    let t = make_transport_with_headers("http://localhost", custom);
+    *t.session_id.write() = Some("close-sess".to_string());
+
+    let map = trace::with_trace_id("gw-close-trace".to_string(), async {
+        t.build_mcp_headers(HeaderMode::Close).await.unwrap()
+    })
+    .await;
+
+    assert!(
+        !map.contains_key(header::CONTENT_TYPE),
+        "close must not set Content-Type without a body"
+    );
+    assert_eq!(map[header::ACCEPT], "application/json, text/event-stream");
+    assert_eq!(map["mcp-session-id"], "close-sess");
+    assert_eq!(map["x-close-auth"], "close-token");
+    assert_eq!(map["mcp-protocol-version"], PROTOCOL_VERSION);
+    assert!(
+        !map.contains_key("x-trace-id"),
+        "close must not include trace header"
+    );
+}
+
+/// close() should send the same close-mode headers on the DELETE wire path.
+#[tokio::test]
+async fn close_sends_shared_close_headers() {
+    use axum::{
+        Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        routing::delete,
+    };
+    use tokio::sync::{Mutex, oneshot};
+
+    async fn capture_close_headers(
+        State(sender): State<Arc<Mutex<Option<oneshot::Sender<HeaderMap>>>>>,
+        headers: HeaderMap,
+    ) -> StatusCode {
+        if let Some(sender) = sender.lock().await.take() {
+            let _ = sender.send(headers);
+        }
+        StatusCode::NO_CONTENT
+    }
+
+    let (tx, rx) = oneshot::channel();
+    let state = Arc::new(Mutex::new(Some(tx)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/messages", delete(capture_close_headers))
+        .with_state(state);
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let mut custom = HashMap::new();
+    custom.insert("X-Close-Auth".to_string(), "close-token".to_string());
+    let transport = make_transport_with_headers(&format!("http://{addr}/mcp"), custom);
+    *transport.message_url.write() = Some(format!("http://{addr}/messages"));
+    *transport.session_id.write() = Some("close-session".to_string());
+
+    transport.close().await.unwrap();
+
+    let headers = tokio::time::timeout(Duration::from_secs(1), rx)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(headers["mcp-session-id"], "close-session");
+    assert_eq!(headers["mcp-protocol-version"], PROTOCOL_VERSION);
+    assert_eq!(headers["x-close-auth"], "close-token");
+    assert_eq!(
+        headers[header::ACCEPT],
+        "application/json, text/event-stream"
+    );
+    assert!(
+        !headers.contains_key(header::CONTENT_TYPE),
+        "close must not send a JSON content type without a body"
+    );
+    assert!(!headers.contains_key("x-trace-id"));
+
+    server.abort();
 }
 
 /// Protocol version override is honoured by the helper.

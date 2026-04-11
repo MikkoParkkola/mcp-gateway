@@ -60,12 +60,13 @@ pub struct HttpTransport {
     protocol_version: RwLock<Option<String>>,
 }
 
-/// Outgoing header modes for the three HTTP transport call-sites.
+/// Outgoing header modes for the HTTP transport call-sites.
 #[derive(Clone, Copy)]
 enum HeaderMode<'a> {
     Sse,
     Request { method: &'a str },
     Notify,
+    Close,
 }
 
 impl HttpTransport {
@@ -261,7 +262,7 @@ impl HttpTransport {
     /// Build an [`header::HeaderMap`] according to `mode`.
     ///
     /// This is the single source of truth for all outgoing request headers in
-    /// this transport. The three behavioral variants are captured in
+    /// this transport. The four behavioral variants are captured in
     /// [`HeaderMode`] so the asymmetries stay explicit.
     async fn build_mcp_headers(&self, mode: HeaderMode<'_>) -> Result<header::HeaderMap> {
         let version = self
@@ -272,7 +273,7 @@ impl HttpTransport {
 
         let mut headers = header::HeaderMap::new();
 
-        if !matches!(mode, HeaderMode::Sse) {
+        if matches!(mode, HeaderMode::Request { .. } | HeaderMode::Notify) {
             headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
         }
 
@@ -309,13 +310,16 @@ impl HttpTransport {
                 HeaderMode::Notify => {
                     headers.insert("MCP-Session-Id", session_id.parse().unwrap());
                 }
+                HeaderMode::Close => {
+                    headers.insert("MCP-Session-Id", session_id.parse().unwrap());
+                }
                 HeaderMode::Sse => {}
             }
         } else if let HeaderMode::Request { method } = mode {
             debug!(method = %method, "Sending request without session ID");
         }
 
-        // User-supplied custom headers (SSE + send_request only; not notify).
+        // User-supplied custom headers (SSE, send_request, and close; not notify).
         if !matches!(mode, HeaderMode::Notify) {
             for (key, value) in &self.headers {
                 if let (Ok(k), Ok(v)) = (
@@ -620,12 +624,21 @@ impl Transport for HttpTransport {
         let message_url = self.get_message_url();
 
         if let Some(ref id) = session_id {
-            let _ = self
-                .client
-                .delete(&message_url)
-                .header("MCP-Session-Id", id)
-                .send()
-                .await;
+            let request = match self.build_mcp_headers(HeaderMode::Close).await {
+                Ok(headers) => self.client.delete(&message_url).headers(headers),
+                Err(error) => {
+                    warn!(
+                        error = %error,
+                        url = %message_url,
+                        "Failed to build full close headers; falling back to session header only"
+                    );
+                    self.client
+                        .delete(&message_url)
+                        .header("MCP-Session-Id", id)
+                }
+            };
+
+            let _ = request.send().await;
         }
 
         Ok(())
