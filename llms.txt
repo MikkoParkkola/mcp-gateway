@@ -1,0 +1,75 @@
+# mcp-gateway
+
+> Universal MCP gateway. Unlimited tools, 4 meta-tools in context, 97% token savings.
+
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets 4 meta-tools and discovers the right one on demand. Connect 500 tools and pay the token cost of 4.
+
+## Install
+
+brew install MikkoParkkola/tap/mcp-gateway
+
+## Configure
+
+Create gateway.yaml:
+
+server:
+  port: 39400
+meta_mcp:
+  enabled: true
+failsafe:
+  circuit_breaker:
+    enabled: true
+backends:
+  tavily:
+    command: "npx -y @anthropic/mcp-server-tavily"
+    description: "Web search"
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+
+## Run
+
+mcp-gateway --config gateway.yaml
+
+## Connect AI Client
+
+Add to MCP config:
+
+{"mcpServers":{"gateway":{"type":"http","url":"http://localhost:39400/mcp"}}}
+
+## Meta-Tools (4)
+
+- gateway_search_tools(query) -- Semantic search across all backend tools by keyword
+- gateway_invoke(server, tool, arguments) -- Execute a tool on any backend
+- gateway_list_servers() -- List all backends with status
+- gateway_list_tools(server) -- List tools from a specific backend
+
+## Usage Pattern
+
+1. gateway_search_tools(query="your keyword") -- find tools matching your need
+2. gateway_invoke(server="X", tool="Y", arguments={...}) -- call the tool
+
+## Key Features
+
+- Token savings: 4 meta-tools (~400 tokens) vs loading all tool definitions (~15K tokens for 100 tools)
+- REST API to MCP: drop a YAML capability file or import OpenAPI spec, no code needed
+- 100+ built-in capabilities: weather, Wikipedia, GitHub, stock quotes, package tracking
+- Hot reload: change config without losing AI session
+- Circuit breakers, retry, rate limiting, health checks
+- Web dashboard at /ui, operator dashboard at /dashboard
+- Security: bearer tokens, API keys, per-client tool scopes, credential redaction, prompt injection detection
+- Transports: stdio, Streamable HTTP, SSE, WebSocket
+- MCP version: 2025-11-25
+
+## Backend Types
+
+- stdio: @anthropic/mcp-server-tavily, @modelcontextprotocol/server-filesystem, etc.
+- HTTP: any Streamable HTTP MCP server
+- SSE: Pieces, LangChain, etc.
+- Capability YAML: any REST API without building an MCP server
+
+## Detailed docs
+
+- Full README: https://github.com/MikkoParkkola/mcp-gateway/blob/main/README.md
+- Agent setup: https://github.com/MikkoParkkola/mcp-gateway/blob/main/AGENTS.md
+- Quick start: https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/QUICKSTART.md
+- Deployment: https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/DEPLOYMENT.md
