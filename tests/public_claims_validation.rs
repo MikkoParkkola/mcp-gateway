@@ -1,14 +1,29 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
+use mcp_gateway::{
+    backend::BackendRegistry,
+    config::{Config, FailsafeConfig, WebhookConfig},
+    config_reload::{LiveConfig, ReloadContext},
+    gateway::{WebhookRegistry, test_helpers::MetaMcp},
+    protocol::{JsonRpcResponse, RequestId, ToolsListResult},
+    stats::UsageStats,
+};
 use serde::Deserialize;
 use walkdir::WalkDir;
 
 #[derive(Debug, Deserialize)]
 struct PublicClaims {
-    meta_tools: u64,
+    meta_tools: MetaToolClaims,
     capability_count: usize,
     startup_benchmark: StartupBenchmark,
     readme_token_savings: TokenSavingsClaim,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct MetaToolClaims {
+    minimum: usize,
+    readme_benchmark: usize,
+    with_webhook_status: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,9 +55,104 @@ fn load_claims() -> PublicClaims {
         .expect("benchmarks/public_claims.json should be valid JSON")
 }
 
+fn decode_tools_list(response: JsonRpcResponse) -> ToolsListResult {
+    serde_json::from_value(response.result.expect("tools/list should return a result"))
+        .expect("tools/list result should deserialize")
+}
+
+fn meta_tool_count(meta_mcp: &MetaMcp) -> usize {
+    decode_tools_list(meta_mcp.handle_tools_list(RequestId::Number(1)))
+        .tools
+        .len()
+}
+
+fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
+    Arc::new(ReloadContext::new(
+        repo_file("examples/gateway-full.yaml"),
+        Arc::new(LiveConfig::new(Config::default())),
+        backends,
+        FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ))
+}
+
+fn operational_meta_mcp(with_webhooks: bool) -> MetaMcp {
+    let backends = Arc::new(BackendRegistry::new());
+    let meta_mcp = MetaMcp::with_features(
+        Arc::clone(&backends),
+        None,
+        Some(Arc::new(UsageStats::new())),
+        None,
+        Duration::from_secs(60),
+    );
+    meta_mcp.set_reload_context(make_reload_context(Arc::clone(&backends)));
+    if with_webhooks {
+        meta_mcp.set_webhook_registry(Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
+            WebhookConfig::default(),
+        ))));
+    }
+    meta_mcp
+}
+
+fn live_meta_tool_counts() -> MetaToolClaims {
+    MetaToolClaims {
+        minimum: meta_tool_count(&MetaMcp::new(Arc::new(BackendRegistry::new()))),
+        readme_benchmark: meta_tool_count(&operational_meta_mcp(false)),
+        with_webhook_status: meta_tool_count(&operational_meta_mcp(true)),
+    }
+}
+
 fn capability_floor(count: usize) -> usize {
     (count / 10) * 10
 }
+
+fn readme_savings_metrics(claims: &PublicClaims) -> (u64, u64, f64, f64) {
+    let direct_tokens = claims.readme_token_savings.direct_tools
+        * claims.readme_token_savings.direct_tokens_per_tool;
+    let gateway_tokens = claims.readme_token_savings.gateway_tools
+        * claims.readme_token_savings.gateway_tokens_per_tool;
+    let savings_percent = (1.0 - (gateway_tokens as f64 / direct_tokens as f64)) * 100.0;
+    let direct_cost = (direct_tokens as f64 * claims.readme_token_savings.requests as f64
+        / 1_000_000.0)
+        * claims.readme_token_savings.input_cost_per_million_usd;
+    let gateway_cost = (gateway_tokens as f64 * claims.readme_token_savings.requests as f64
+        / 1_000_000.0)
+        * claims.readme_token_savings.input_cost_per_million_usd;
+    (
+        direct_tokens,
+        gateway_tokens,
+        savings_percent,
+        direct_cost - gateway_cost,
+    )
+}
+
+const PUBLIC_CLAIM_SURFACES: &[&str] = &[
+    "README.md",
+    "docs/BENCHMARKS.md",
+    "docs/QUICKSTART.md",
+    "docs/ARCHITECTURE.md",
+    "examples/gateway-full.yaml",
+    "llms.txt",
+    "demo.tape",
+    "src/lib.rs",
+    "src/main.rs",
+    "src/cli/mod.rs",
+    "src/commands/mod.rs",
+    "src/gateway/meta_mcp_helpers.rs",
+    "src/gateway/server/support.rs",
+];
+
+const BANNED_PUBLIC_PHRASES: &[&str] = &[
+    "4 gateway meta-tools",
+    "4 meta-tools",
+    "~400 gateway tokens",
+    "97% savings",
+    "$219 saved per 1K",
+    "pay the token cost of 4",
+    "Meta-Tools (4)",
+    "~95%",
+    "~500ms",
+];
 
 fn count_capability_yaml_files() -> usize {
     WalkDir::new(repo_file("capabilities"))
@@ -97,27 +207,41 @@ fn count_capability_yaml_files_by_category() -> Vec<(String, usize)> {
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
+fn canonical_meta_tool_counts_match_live_runtime() {
+    let claims = load_claims();
+    let actual = live_meta_tool_counts();
+
+    assert_eq!(
+        actual, claims.meta_tools,
+        "public claims file should track the live Meta-MCP tool count matrix"
+    );
+    assert_eq!(
+        claims.readme_token_savings.gateway_tools as usize, claims.meta_tools.readme_benchmark,
+        "README token-savings scenario should use the benchmark Meta-MCP tool count"
+    );
+}
+
+#[test]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
     let readme = read_repo_file("README.md");
     let rounded_startup_ms = claims.startup_benchmark.mean_ms.round() as u64;
-
-    let direct_tokens = claims.readme_token_savings.direct_tools
-        * claims.readme_token_savings.direct_tokens_per_tool;
-    let gateway_tokens = claims.readme_token_savings.gateway_tools
-        * claims.readme_token_savings.gateway_tokens_per_tool;
-    let savings_percent = (1.0 - (gateway_tokens as f64 / direct_tokens as f64)) * 100.0;
-    let direct_cost = (direct_tokens as f64 * claims.readme_token_savings.requests as f64
-        / 1_000_000.0)
-        * claims.readme_token_savings.input_cost_per_million_usd;
-    let gateway_cost = (gateway_tokens as f64 * claims.readme_token_savings.requests as f64
-        / 1_000_000.0)
-        * claims.readme_token_savings.input_cost_per_million_usd;
-    let savings_usd = direct_cost - gateway_cost;
+    let (_direct_tokens, gateway_tokens, savings_percent, savings_usd) =
+        readme_savings_metrics(&claims);
 
     assert!(
-        readme.contains(&format!("{} meta-tools", claims.meta_tools)),
-        "README should advertise the canonical meta-tool count"
+        readme.contains(&format!(
+            "{} tools minimum, {} in the README benchmark scenario, {} when webhook status is surfaced",
+            claims.meta_tools.minimum,
+            claims.meta_tools.readme_benchmark,
+            claims.meta_tools.with_webhook_status
+        )),
+        "README should advertise the canonical Meta-MCP tool-count range"
     );
     assert!(
         readme.contains(&format!(
@@ -179,6 +303,8 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
 fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     let claims = load_claims();
     let benchmarks = read_repo_file("docs/BENCHMARKS.md");
+    let (_direct_tokens, gateway_tokens, savings_percent, savings_usd) =
+        readme_savings_metrics(&claims);
 
     assert!(
         benchmarks.contains("benchmarks/public_claims.json"),
@@ -195,6 +321,15 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains("Built-in capability YAMLs"),
         "benchmark docs should describe the canonical capability inventory claim"
+    );
+    assert!(
+        benchmarks.contains(&format!(
+            "{} minimum / {} README benchmark / {} with webhook status",
+            claims.meta_tools.minimum,
+            claims.meta_tools.readme_benchmark,
+            claims.meta_tools.with_webhook_status
+        )),
+        "benchmark docs should describe the canonical Meta-MCP tool-count matrix"
     );
     assert!(
         benchmarks.contains(&format!(
@@ -217,6 +352,18 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
         "benchmark docs should describe how to reproduce the README token-savings scenario"
     );
     assert!(
+        benchmarks.contains(&format!("~{gateway_tokens} gateway tokens")),
+        "benchmark docs should include the canonical rounded gateway token claim"
+    );
+    assert!(
+        benchmarks.contains(&format!("**{}% savings**", savings_percent.round() as u64)),
+        "benchmark docs should include the canonical rounded savings percentage"
+    );
+    assert!(
+        benchmarks.contains(&format!("**${} saved per 1K", savings_usd.round() as u64)),
+        "benchmark docs should include the canonical rounded savings value"
+    );
+    assert!(
         benchmarks.contains(&format!(
             "~{}ms",
             claims.startup_benchmark.mean_ms.round() as u64
@@ -226,21 +373,50 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
 }
 
 #[test]
-fn token_savings_benchmark_tracks_four_gateway_meta_tools() {
+fn token_savings_benchmark_tracks_readme_meta_tool_surface() {
     let script = read_repo_file("benchmarks/token_savings.py");
 
     assert!(
+        script.contains("public_claims.json"),
+        "token benchmark should load the canonical public claims file"
+    );
+    assert!(
         script.contains("\"gateway_list_tools\""),
         "token benchmark must include gateway_list_tools so the published meta-tool count stays accurate"
+    );
+    assert!(
+        script.contains("\"gateway_reload_config\""),
+        "token benchmark should model the README benchmark's operational tool surface"
     );
     assert!(
         script.contains("len(GATEWAY_TOOLS)"),
         "token benchmark should derive the gateway tool count from the canonical tool list"
     );
     assert!(
+        !script.contains("Only 4 gateway tools are registered"),
+        "token benchmark should not describe the obsolete 4-tool deployment"
+    );
+    assert!(
+        !script.contains("~95%+"),
+        "token benchmark should not hard-code stale savings percentages"
+    );
+    assert!(
         !script.contains("always 3"),
         "token benchmark should not hard-code the obsolete 3-tool assumption"
     );
+}
+
+#[test]
+fn public_surfaces_do_not_retain_obsolete_meta_mcp_claims() {
+    for path in PUBLIC_CLAIM_SURFACES {
+        let contents = read_repo_file(path);
+        for phrase in BANNED_PUBLIC_PHRASES {
+            assert!(
+                !contents.contains(phrase),
+                "{path} should not retain the obsolete public claim phrase {phrase:?}"
+            );
+        }
+    }
 }
 
 #[test]

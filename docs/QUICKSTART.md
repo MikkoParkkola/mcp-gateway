@@ -134,7 +134,7 @@ You should see:
 
 ```
 INFO  mcp_gateway: Starting MCP Gateway on 127.0.0.1:39400
-INFO  mcp_gateway: Meta-MCP enabled (4 meta-tools)
+INFO  mcp_gateway: Meta-MCP enabled (compact gateway tool surface)
 INFO  mcp_gateway: Loaded 2 capabilities
 ```
 
@@ -191,7 +191,7 @@ Add this to your Claude Desktop config (`~/Library/Application Support/Claude/cl
 }
 ```
 
-Restart Claude Desktop. You now have access to all gateway tools via the 4 meta-tools.
+Restart Claude Desktop. You now have access to the gateway's compact Meta-MCP surface (12 tools minimum; this config-file path usually exposes 15 because webhook status is enabled by default; the README benchmark models 14 without webhook status).
 
 See [examples/claude-desktop.json](../examples/claude-desktop.json) for a full example config.
 

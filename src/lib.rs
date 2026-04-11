@@ -1,10 +1,10 @@
 //! MCP Gateway Library
 //!
-//! Universal Model Context Protocol (MCP) Gateway with Meta-MCP for ~95% token savings.
+//! Universal Model Context Protocol (MCP) Gateway with a compact Meta-MCP tool surface.
 //!
 //! # Features
 //!
-//! - **Meta-MCP Mode**: 4 meta-tools for dynamic tool discovery
+//! - **Meta-MCP Mode**: 12 tools minimum, 14 in the README benchmark scenario, 15 when webhook status is surfaced
 //! - **Streaming**: Real-time notifications via SSE (MCP 2025-03-26 Streamable HTTP)
 //! - **Notification Multiplexer**: Routes backend notifications to connected clients
 //! - **Multi-Transport**: stdio, Streamable HTTP, SSE support

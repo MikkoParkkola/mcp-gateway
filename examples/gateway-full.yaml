@@ -44,7 +44,7 @@ auth:
 # --- Meta-MCP ---
 
 meta_mcp:
-  enabled: true                   # Enable Meta-MCP mode (4 meta-tools)
+  enabled: true                   # Enable Meta-MCP mode (12 tools minimum / 15 with webhook status; README benchmark uses 14 without it)
   cache_tools: true               # Cache tool lists from backends
   cache_ttl: 5m                   # Tool cache TTL
   # Backends to pre-connect and cache on startup.
@@ -53,8 +53,8 @@ meta_mcp:
   #   - tavily
 
   # Pin high-value tools directly in tools/list for one-hop invocation.
-  # These tools appear with full schemas alongside the 4 meta-tools,
-  # while preserving ~95% context savings for everything else.
+  # These tools appear with full schemas alongside the Meta-MCP surface,
+  # while preserving a small prompt footprint for everything else.
   # Backends hosting surfaced tools are auto-added to warm_start.
   surfaced_tools: []
   # surfaced_tools:
