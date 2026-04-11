@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn mcp_provider_is_send_sync() {
         // Compile-time check: McpProvider can be stored in Arc<dyn Provider>.
-        fn _assert_send_sync<T: Send + Sync>() {}
-        _assert_send_sync::<McpProvider>();
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<McpProvider>();
     }
 }

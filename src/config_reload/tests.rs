@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::config::{BackendConfig, Config, ServerConfig, TransportConfig};
+use notify::event::EventAttributes;
 
 // -------------------------------------------------------------------------
 // Helpers
@@ -406,7 +407,7 @@ fn is_config_event_matches_modify_on_exact_path() {
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
         paths: vec![config_path.clone()],
-        attrs: Default::default(),
+        attrs: EventAttributes::default(),
     };
     // WHEN / THEN
     assert!(super::is_config_event(&event, &config_path));
@@ -422,7 +423,7 @@ fn is_config_event_does_not_match_different_path() {
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
         paths: vec![other_path],
-        attrs: Default::default(),
+        attrs: EventAttributes::default(),
     };
     // WHEN / THEN
     assert!(!super::is_config_event(&event, &config_path));
@@ -437,7 +438,7 @@ fn is_config_event_does_not_match_remove_event() {
     let event = notify::Event {
         kind: EventKind::Remove(RemoveKind::File),
         paths: vec![config_path.clone()],
-        attrs: Default::default(),
+        attrs: EventAttributes::default(),
     };
     // WHEN / THEN: Remove is not a trigger (only Create/Modify are)
     assert!(!super::is_config_event(&event, &config_path));
@@ -456,10 +457,10 @@ fn matching_env_file_returns_path_when_event_matches_watched_env_file() {
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
         paths: vec![env_path.clone()],
-        attrs: Default::default(),
+        attrs: EventAttributes::default(),
     };
     // WHEN
-    let result = super::matching_env_file(&event, &[env_path.clone()]);
+    let result = super::matching_env_file(&event, std::slice::from_ref(&env_path));
     // THEN
     assert_eq!(result, Some(env_path));
 }
@@ -474,7 +475,7 @@ fn matching_env_file_returns_none_when_path_not_in_watch_list() {
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
         paths: vec![other],
-        attrs: Default::default(),
+        attrs: EventAttributes::default(),
     };
     // WHEN / THEN
     assert!(super::matching_env_file(&event, &[watched]).is_none());
@@ -489,7 +490,7 @@ fn matching_env_file_returns_none_for_remove_event() {
     let event = notify::Event {
         kind: EventKind::Remove(RemoveKind::File),
         paths: vec![env_path.clone()],
-        attrs: Default::default(),
+        attrs: EventAttributes::default(),
     };
     // WHEN / THEN: Remove does not trigger an env-file reload
     assert!(super::matching_env_file(&event, &[env_path]).is_none());
@@ -505,7 +506,7 @@ fn matching_env_file_returns_first_matching_path_among_multiple() {
     let event = notify::Event {
         kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
         paths: vec![path_b.clone()],
-        attrs: Default::default(),
+        attrs: EventAttributes::default(),
     };
     // WHEN
     let result = super::matching_env_file(&event, &[path_a, path_b.clone()]);
@@ -564,8 +565,10 @@ fn diff_detects_routing_profiles_change() {
 fn diff_detects_default_routing_profile_change() {
     // GIVEN: default_routing_profile differs
     let old = Config::default();
-    let mut new = Config::default();
-    new.default_routing_profile = "custom".to_string();
+    let new = Config {
+        default_routing_profile: "custom".to_string(),
+        ..Config::default()
+    };
     // WHEN
     let patch = compute_diff(&old, &new);
     // THEN

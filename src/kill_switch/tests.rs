@@ -709,7 +709,7 @@ fn capability_error_rate_computed_correctly() {
 fn backend_level_budget_still_kills_when_all_capabilities_fail() {
     // GIVEN: many different capabilities all failing — backend threshold exceeded
     let ks = KillSwitch::new();
-    let (backend_ws, backend_wd, thresh, min) = (20, Duration::from_secs(300), 0.8, 1_usize);
+    let (window_size, window_dur, thresh, min) = (20, Duration::from_secs(300), 0.8, 1_usize);
     let cap_cfg_val = cap_cfg_no_min(20, Duration::from_secs(300), 0.8, Duration::from_secs(300));
 
     // Flood the backend budget with failures (each represents a different
@@ -717,7 +717,7 @@ fn backend_level_budget_still_kills_when_all_capabilities_fail() {
     for i in 0..20u32 {
         let cap = format!("tool_{i}");
         // Record on backend budget
-        ks.record_failure("fulcrum", backend_ws, backend_wd, thresh, min);
+        ks.record_failure("fulcrum", window_size, window_dur, thresh, min);
         // Also record on per-capability budget
         ks.record_capability_failure("fulcrum", &cap, &cap_cfg_val);
     }

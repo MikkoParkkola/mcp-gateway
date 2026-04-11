@@ -657,10 +657,15 @@ mod tests {
         // The primary enforcement is compile-time: the Cargo.toml does NOT include
         // the "tls12" feature for rustls.  This test documents that invariant.
         let _ = tls_cfg; // config produced with TLS 1.3 builder
-        assert!(
-            !cfg!(feature = "rustls/tls12"),
-            "tls12 feature must NOT be enabled — TLS 1.2 is explicitly excluded"
-        );
+        // Compile-time invariant: the "tls12" feature for rustls is never enabled.
+        // Primary enforcement is Cargo.toml — this documents intent.
+        #[allow(unexpected_cfgs, clippy::assertions_on_constants)]
+        {
+            assert!(
+                !cfg!(feature = "rustls/tls12"),
+                "tls12 feature must NOT be enabled — TLS 1.2 is explicitly excluded"
+            );
+        }
     }
 
     #[test]

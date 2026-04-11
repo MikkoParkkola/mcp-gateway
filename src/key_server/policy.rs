@@ -222,7 +222,10 @@ mod tests {
             subject: "sub123".to_string(),
             email: email.to_string(),
             name: None,
-            groups: groups.iter().map(|s| s.to_string()).collect(),
+            groups: groups
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             issuer: issuer.to_string(),
         }
     }

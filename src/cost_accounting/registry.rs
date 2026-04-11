@@ -80,8 +80,10 @@ mod tests {
     use crate::cost_accounting::config::CostGovernanceConfig;
 
     fn cfg_with_costs(costs: &[(&str, f64)], default: f64) -> CostGovernanceConfig {
-        let mut cfg = CostGovernanceConfig::default();
-        cfg.default_cost = default;
+        let mut cfg = CostGovernanceConfig {
+            default_cost: default,
+            ..CostGovernanceConfig::default()
+        };
         for &(name, cost) in costs {
             cfg.tool_costs.insert(name.to_string(), cost);
         }

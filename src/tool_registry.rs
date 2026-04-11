@@ -549,6 +549,7 @@ mod tests {
     // ── metrics: hit rate ─────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn metrics_hit_rate_zero_when_no_lookups() {
         let reg = ToolRegistry::default();
         assert_eq!(reg.metrics.hit_rate(), 0.0);
@@ -594,6 +595,7 @@ mod tests {
     // ── metrics: latency ──────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn metrics_avg_latency_zero_when_no_samples() {
         let reg = ToolRegistry::default();
         assert_eq!(reg.metrics.avg_latency_ns(), 0.0);
@@ -737,6 +739,7 @@ mod tests {
     // ── prefetch accuracy ────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn prefetch_accuracy_zero_when_no_prefetch_requests() {
         let reg = ToolRegistry::default();
         assert_eq!(reg.metrics.prefetch_accuracy(), 0.0);

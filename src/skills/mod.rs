@@ -83,8 +83,10 @@ mod tests {
     use super::*;
     use crate::capability::{
         AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProviderConfig,
-        ProvidersConfig, SchemaDefinition,
+        ProvidersConfig, RestConfig, SchemaDefinition,
     };
+    use crate::transform::TransformConfig;
+    use std::collections::HashMap;
     use tempfile::TempDir;
 
     fn make_cap(name: &str, category: &str) -> CapabilityDefinition {
@@ -95,7 +97,7 @@ mod tests {
                 service: "rest".to_owned(),
                 cost_per_call: 0.0,
                 timeout: 30,
-                config: Default::default(),
+                config: RestConfig::default(),
             },
         );
         CapabilityDefinition {
@@ -113,8 +115,8 @@ mod tests {
                 category: category.to_owned(),
                 ..Default::default()
             },
-            transform: Default::default(),
-            webhooks: Default::default(),
+            transform: TransformConfig::default(),
+            webhooks: HashMap::default(),
         }
     }
 

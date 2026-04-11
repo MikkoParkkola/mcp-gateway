@@ -531,7 +531,7 @@ fn build_code_mode_tools_both_have_descriptions() {
     // THEN: both have non-empty descriptions
     for tool in build_code_mode_tools() {
         assert!(
-            tool.description.as_deref().map_or(false, |d| !d.is_empty()),
+            tool.description.as_deref().is_some_and(|d| !d.is_empty()),
             "Tool {} missing description",
             tool.name
         );

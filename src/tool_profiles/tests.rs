@@ -1,4 +1,4 @@
-//! Unit tests for tool_profiles (RFC-0073).
+//! Unit tests for `tool_profiles` (RFC-0073).
 
 use super::*;
 

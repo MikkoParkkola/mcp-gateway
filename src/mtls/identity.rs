@@ -152,12 +152,12 @@ mod tests {
         cert.der().to_vec()
     }
 
-    /// Build a DNS SAN using the Ia5String type required by rcgen 0.13.
+    /// Build a DNS SAN using the `Ia5String` type required by rcgen 0.13.
     fn dns_san(s: &str) -> SanType {
         SanType::DnsName(Ia5String::try_from(s).unwrap())
     }
 
-    /// Build a URI SAN using the Ia5String type required by rcgen 0.13.
+    /// Build a URI SAN using the `Ia5String` type required by rcgen 0.13.
     fn uri_san(s: &str) -> SanType {
         SanType::URI(Ia5String::try_from(s).unwrap())
     }

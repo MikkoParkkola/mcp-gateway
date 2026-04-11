@@ -104,6 +104,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn default_config_is_disabled() {
         let cfg = CostGovernanceConfig::default();
         assert!(!cfg.enabled);
@@ -135,10 +136,15 @@ mod tests {
 
     #[test]
     fn serde_roundtrip() {
-        let mut cfg = CostGovernanceConfig::default();
-        cfg.enabled = true;
+        let mut cfg = CostGovernanceConfig {
+            enabled: true,
+            budgets: BudgetLimits {
+                daily: Some(10.0),
+                ..BudgetLimits::default()
+            },
+            ..CostGovernanceConfig::default()
+        };
         cfg.tool_costs.insert("brave_search".to_string(), 0.005);
-        cfg.budgets.daily = Some(10.0);
 
         let json = serde_json::to_string(&cfg).unwrap();
         let back: CostGovernanceConfig = serde_json::from_str(&json).unwrap();

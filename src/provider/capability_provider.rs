@@ -133,8 +133,8 @@ mod tests {
 
     #[test]
     fn capability_provider_is_send_sync() {
-        fn _assert_send_sync<T: Send + Sync>() {}
-        _assert_send_sync::<CapabilityProvider>();
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CapabilityProvider>();
     }
 
     #[test]

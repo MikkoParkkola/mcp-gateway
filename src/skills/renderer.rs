@@ -288,8 +288,9 @@ mod tests {
     use super::*;
     use crate::capability::{
         AuthConfig, CacheConfig, CapabilityDefinition, CapabilityMetadata, ProviderConfig,
-        ProvidersConfig, SchemaDefinition,
+        ProvidersConfig, RestConfig, SchemaDefinition,
     };
+    use crate::transform::TransformConfig;
     use serde_json::json;
 
     fn make_cap(
@@ -321,7 +322,7 @@ mod tests {
                         service: "rest".to_owned(),
                         cost_per_call: 0.0,
                         timeout: 30,
-                        config: Default::default(),
+                        config: RestConfig::default(),
                     },
                 );
                 ProvidersConfig {
@@ -349,8 +350,8 @@ mod tests {
                 read_only,
                 ..Default::default()
             },
-            transform: Default::default(),
-            webhooks: Default::default(),
+            transform: TransformConfig::default(),
+            webhooks: HashMap::default(),
         }
     }
 

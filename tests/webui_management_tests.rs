@@ -16,7 +16,7 @@
 //!   POST   /ui/api/capabilities        — create new
 //!   DELETE /ui/api/capabilities/:name  — delete
 //!
-//! OpenAPI import:
+//! `OpenAPI` import:
 //!   POST /ui/api/import/openapi/preview — preview tools from inline spec
 //!   POST /ui/api/import/openapi         — import tools from inline spec
 
@@ -92,6 +92,7 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
     })
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn make_app_state_with_reload(
     config: Config,
     cap_dir: Option<&str>,
@@ -874,7 +875,7 @@ async fn test_capability_not_found_returns_404() {
 
 // ── OpenAPI import tests ──────────────────────────────────────────────────────
 
-/// Minimal inline OpenAPI 3.0 spec with two operations.
+/// Minimal inline `OpenAPI` 3.0 spec with two operations.
 const MINIMAL_OPENAPI_SPEC: &str = r#"
 openapi: "3.0.0"
 info:
@@ -974,13 +975,12 @@ async fn test_import_inline_spec_creates_yaml_files() {
     // AND: YAML files exist in the output directory
     let files: Vec<_> = std::fs::read_dir(&cap_dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.path()
                 .extension()
                 .and_then(|x| x.to_str())
-                .map(|x| x == "yaml")
-                .unwrap_or(false)
+                .is_some_and(|x| x == "yaml")
         })
         .collect();
     assert!(!files.is_empty(), "Import should create YAML files on disk");

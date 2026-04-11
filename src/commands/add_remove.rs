@@ -334,7 +334,7 @@ mod tests {
             TransportConfig::Http { http_url, .. } => {
                 assert_eq!(http_url, "https://mcp.context7.com/mcp");
             }
-            _ => panic!("expected Http transport"),
+            TransportConfig::Stdio { .. } => panic!("expected Http transport"),
         }
     }
 

@@ -522,10 +522,12 @@ mod tests {
     async fn spawn_reaper_on_reaps_sessions_automatically() {
         // GIVEN
         let backends = Arc::new(BackendRegistry::new());
-        let mut config = StreamingConfig::default();
-        // Very short TTL and interval for the test
-        config.session_ttl = Duration::from_millis(50);
-        config.session_reaper_interval = Duration::from_millis(20);
+        let config = StreamingConfig {
+            // Very short TTL and interval for the test
+            session_ttl: Duration::from_millis(50),
+            session_reaper_interval: Duration::from_millis(20),
+            ..StreamingConfig::default()
+        };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
         multiplexer.spawn_reaper_on();
@@ -554,8 +556,10 @@ mod tests {
     async fn spawn_reaper_on_exits_when_multiplexer_is_dropped() {
         // GIVEN
         let backends = Arc::new(BackendRegistry::new());
-        let mut config = StreamingConfig::default();
-        config.session_reaper_interval = Duration::from_millis(10);
+        let config = StreamingConfig {
+            session_reaper_interval: Duration::from_millis(10),
+            ..StreamingConfig::default()
+        };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
         multiplexer.spawn_reaper_on();

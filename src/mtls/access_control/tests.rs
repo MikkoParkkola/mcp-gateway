@@ -18,6 +18,7 @@ fn identity(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rule(
     cn: Option<&str>,
     ou: Option<&str>,

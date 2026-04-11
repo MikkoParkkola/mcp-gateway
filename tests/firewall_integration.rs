@@ -20,8 +20,10 @@ fn default_fw() -> Firewall {
 }
 
 fn fw_with_audit(path: &std::path::Path) -> Firewall {
-    let mut cfg = FirewallConfig::default();
-    cfg.audit_log = Some(path.to_path_buf());
+    let cfg = FirewallConfig {
+        audit_log: Some(path.to_path_buf()),
+        ..FirewallConfig::default()
+    };
     Firewall::from_config(cfg, None)
 }
 
@@ -159,8 +161,10 @@ fn firewall_warns_on_sql_injection() {
 
 #[test]
 fn disabled_firewall_passes_shell_injection() {
-    let mut cfg = FirewallConfig::default();
-    cfg.enabled = false;
+    let cfg = FirewallConfig {
+        enabled: false,
+        ..FirewallConfig::default()
+    };
     let fw = Firewall::from_config(cfg, None);
 
     let args = json!({ "cmd": "; rm -rf / " });
@@ -174,13 +178,15 @@ fn disabled_firewall_passes_shell_injection() {
 
 #[test]
 fn exec_rule_elevates_sql_injection_to_block() {
-    let mut cfg = FirewallConfig::default();
-    cfg.rules = vec![FirewallRule {
-        tool_match: "exec_*".to_string(),
-        action: FirewallAction::Block,
-        reason: Some("All exec tools blocked".to_string()),
-        scan: vec![],
-    }];
+    let cfg = FirewallConfig {
+        rules: vec![FirewallRule {
+            tool_match: "exec_*".to_string(),
+            action: FirewallAction::Block,
+            reason: Some("All exec tools blocked".to_string()),
+            scan: vec![],
+        }],
+        ..FirewallConfig::default()
+    };
     let fw = Firewall::from_config(cfg, None);
 
     // SQL injection alone is MEDIUM (→ warn), but the exec_* rule → block.
@@ -194,8 +200,10 @@ fn exec_rule_elevates_sql_injection_to_block() {
 
 #[test]
 fn response_scan_disabled_skips_credential_detection() {
-    let mut cfg = FirewallConfig::default();
-    cfg.scan_responses = false;
+    let cfg = FirewallConfig {
+        scan_responses: false,
+        ..FirewallConfig::default()
+    };
     let fw = Firewall::from_config(cfg, None);
 
     let mut response = json!({ "key": "AKIAIOSFODNN7EXAMPLE12345" });

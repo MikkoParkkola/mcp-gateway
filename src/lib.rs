@@ -22,6 +22,9 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+// Macro-generated arrays (e.g. include_bytes!) may exceed the 16 KiB stack
+// threshold.  Clippy cannot show a source location for these — allow crate-wide.
+#![allow(clippy::large_stack_arrays)]
 
 pub mod autotag;
 pub mod backend;

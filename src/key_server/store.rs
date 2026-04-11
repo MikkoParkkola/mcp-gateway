@@ -266,6 +266,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
+        #[allow(clippy::cast_sign_loss)]
         let exp = if exp_offset_secs >= 0 {
             now + exp_offset_secs as u64
         } else {

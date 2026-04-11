@@ -716,8 +716,10 @@ async fn sse_handler_rejects_non_sse_accept_with_jsonrpc_error_shape() {
 
 #[tokio::test]
 async fn sse_handler_streaming_disabled_returns_jsonrpc_internal_shape() {
-    let mut streaming_config = StreamingConfig::default();
-    streaming_config.enabled = false;
+    let streaming_config = StreamingConfig {
+        enabled: false,
+        ..StreamingConfig::default()
+    };
 
     let router = create_router(test_router_app_state_with_streaming(streaming_config));
     let request = axum::http::Request::builder()

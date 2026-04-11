@@ -425,7 +425,7 @@ fn action_config_invoke_tool_converts() {
             assert_eq!(tool, "my-tool");
             assert_eq!(arguments["key"], serde_json::json!("value"));
         }
-        _ => panic!("expected InvokeTool"),
+        ScheduleAction::RunPlaybook(_) => panic!("expected InvokeTool"),
     }
 }
 

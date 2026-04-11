@@ -258,7 +258,7 @@ mod tests {
         // WHEN/THEN: all serialize without error
         for event in events {
             let result = serde_json::to_string(&event);
-            assert!(result.is_ok(), "Serialization failed: {:?}", result);
+            assert!(result.is_ok(), "Serialization failed: {result:?}");
         }
     }
 

@@ -216,10 +216,10 @@ mod tests {
     }
 
     impl EchoProvider {
-        fn new(name: &str, tools: &[&str]) -> Arc<dyn Provider> {
+        fn create(name: &str, tools: &[&str]) -> Arc<dyn Provider> {
             Arc::new(Self {
                 name: name.to_string(),
-                tool_names: tools.iter().map(|s| s.to_string()).collect(),
+                tool_names: tools.iter().map(std::string::ToString::to_string).collect(),
             })
         }
     }
@@ -387,7 +387,7 @@ mod tests {
     #[tokio::test]
     async fn chain_no_transforms_passes_through() {
         // GIVEN: chain with no transforms
-        let inner = EchoProvider::new("echo", &["tool_a"]);
+        let inner = EchoProvider::create("echo", &["tool_a"]);
         let chain = TransformChain::builder("c", inner).build();
 
         // WHEN: listing and invoking
@@ -403,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn chain_applies_transform_to_tool_list() {
         // GIVEN: uppercase transform
-        let inner = EchoProvider::new("echo", &["my_tool"]);
+        let inner = EchoProvider::create("echo", &["my_tool"]);
         let chain = TransformChain::builder("c", inner)
             .transform(Arc::new(UppercaseTransform))
             .build();
@@ -418,7 +418,7 @@ mod tests {
     #[tokio::test]
     async fn chain_blocked_tool_returns_error() {
         // GIVEN: block transform on "danger"
-        let inner = EchoProvider::new("echo", &["safe", "danger"]);
+        let inner = EchoProvider::create("echo", &["safe", "danger"]);
         let chain = TransformChain::builder("c", inner)
             .transform(Arc::new(BlockTransform {
                 blocked: "danger".to_string(),
@@ -437,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn chain_allowed_tool_passes_through_block_transform() {
         // GIVEN: block transform that only blocks "danger"
-        let inner = EchoProvider::new("echo", &["safe", "danger"]);
+        let inner = EchoProvider::create("echo", &["safe", "danger"]);
         let chain = TransformChain::builder("c", inner)
             .transform(Arc::new(BlockTransform {
                 blocked: "danger".to_string(),
@@ -453,7 +453,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_health_delegates_to_inner() {
-        let inner = EchoProvider::new("echo", &[]);
+        let inner = EchoProvider::create("echo", &[]);
         let chain = TransformChain::builder("c", inner).build();
         let health = chain.health().await;
         assert_eq!(health, ProviderHealth::Healthy);
@@ -461,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_name_uses_given_name() {
-        let inner = EchoProvider::new("inner_name", &[]);
+        let inner = EchoProvider::create("inner_name", &[]);
         let chain = TransformChain::builder("my_chain", inner).build();
         assert_eq!(chain.name(), "my_chain");
     }
@@ -469,7 +469,7 @@ mod tests {
     #[tokio::test]
     async fn chain_multiple_transforms_applied_in_order() {
         // GIVEN: uppercase + block transform (uppercase fires first)
-        let inner = EchoProvider::new("echo", &["tool_a", "tool_b"]);
+        let inner = EchoProvider::create("echo", &["tool_a", "tool_b"]);
         let chain = TransformChain::builder("c", inner)
             .transform(Arc::new(UppercaseTransform))
             .transform(Arc::new(BlockTransform {
@@ -487,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_list_tools_error_includes_transform_index_and_stage() {
-        let inner = EchoProvider::new("echo", &["tool_a"]);
+        let inner = EchoProvider::create("echo", &["tool_a"]);
         let chain = TransformChain::builder("chain_tools", inner)
             .transform(Arc::new(UppercaseTransform))
             .transform(Arc::new(FailTransform {
@@ -506,7 +506,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_invoke_error_includes_transform_index_and_stage() {
-        let inner = EchoProvider::new("echo", &["backend_tool"]);
+        let inner = EchoProvider::create("echo", &["backend_tool"]);
         let chain = TransformChain::builder("chain_invoke", inner)
             .transform(Arc::new(RenameInvokeTransform {
                 from: "client_tool",
@@ -532,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_result_error_includes_transform_index_and_stage() {
-        let inner = EchoProvider::new("echo", &["backend_tool"]);
+        let inner = EchoProvider::create("echo", &["backend_tool"]);
         let chain = TransformChain::builder("chain_result", inner)
             .transform(Arc::new(RenameInvokeTransform {
                 from: "client_tool",
@@ -558,7 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_block_error_includes_transform_index_and_stage() {
-        let inner = EchoProvider::new("echo", &["backend_tool"]);
+        let inner = EchoProvider::create("echo", &["backend_tool"]);
         let chain = TransformChain::builder("chain_block", inner)
             .transform(Arc::new(RenameInvokeTransform {
                 from: "client_tool",

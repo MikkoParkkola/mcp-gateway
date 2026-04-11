@@ -660,7 +660,7 @@ providers:
         // parse_capability may warn but should not error on this minimal input
         // (validate_capability requires providers.primary which is present)
         let result = validate_yaml_body(yaml);
-        assert!(result.is_none(), "Expected no error, got: {:?}", result);
+        assert!(result.is_none(), "Expected no error, got: {result:?}");
     }
 
     #[test]
@@ -681,25 +681,25 @@ providers:
 
     #[test]
     fn count_tools_returns_one_for_single_provider() {
-        let yaml = r#"
+        let yaml = r"
 name: t
 providers:
   primary:
     service: rest
-"#;
+";
         assert_eq!(count_tools(yaml), 1);
     }
 
     #[test]
     fn count_tools_counts_named_providers() {
-        let yaml = r#"
+        let yaml = r"
 name: t
 providers:
   primary:
     service: rest
   secondary:
     service: rest
-"#;
+";
         assert_eq!(count_tools(yaml), 2);
     }
 

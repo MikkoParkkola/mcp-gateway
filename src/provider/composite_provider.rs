@@ -148,7 +148,7 @@ mod tests {
     }
 
     impl StaticProvider {
-        fn new(name: &str, tool_names: &[&str]) -> Arc<dyn Provider> {
+        fn create(name: &str, tool_names: &[&str]) -> Arc<dyn Provider> {
             Arc::new(Self {
                 name: name.to_string(),
                 tools: tool_names
@@ -198,8 +198,8 @@ mod tests {
     #[tokio::test]
     async fn composite_lists_all_tools_from_all_sources() {
         // GIVEN: two sources with distinct tool sets
-        let a = StaticProvider::new("a", &["tool_a1", "tool_a2"]);
-        let b = StaticProvider::new("b", &["tool_b1"]);
+        let a = StaticProvider::create("a", &["tool_a1", "tool_a2"]);
+        let b = StaticProvider::create("b", &["tool_b1"]);
         let composite = CompositeProvider::new("combined", vec![a, b]);
 
         // WHEN: listing tools
@@ -216,8 +216,8 @@ mod tests {
     #[tokio::test]
     async fn composite_routes_invoke_to_correct_source() {
         // GIVEN: two sources with distinct tools
-        let a = StaticProvider::new("source_a", &["tool_a"]);
-        let b = StaticProvider::new("source_b", &["tool_b"]);
+        let a = StaticProvider::create("source_a", &["tool_a"]);
+        let b = StaticProvider::create("source_b", &["tool_b"]);
         let composite = CompositeProvider::new("c", vec![a, b]);
 
         // WHEN: invoking tool from second source
@@ -230,7 +230,7 @@ mod tests {
     #[tokio::test]
     async fn composite_returns_error_for_unknown_tool() {
         // GIVEN: composite with tools that don't include "ghost"
-        let a = StaticProvider::new("a", &["tool_a"]);
+        let a = StaticProvider::create("a", &["tool_a"]);
         let composite = CompositeProvider::new("c", vec![a]);
 
         // WHEN: invoking unknown tool
@@ -243,8 +243,8 @@ mod tests {
 
     #[tokio::test]
     async fn composite_health_healthy_when_all_sources_healthy() {
-        let a = StaticProvider::new("a", &["x"]);
-        let b = StaticProvider::new("b", &["y"]);
+        let a = StaticProvider::create("a", &["x"]);
+        let b = StaticProvider::create("b", &["y"]);
         let composite = CompositeProvider::new("c", vec![a, b]);
 
         let health = composite.health().await;
@@ -261,8 +261,8 @@ mod tests {
     #[tokio::test]
     async fn composite_first_source_wins_on_name_collision() {
         // GIVEN: both sources expose "shared_tool"
-        let a = StaticProvider::new("first", &["shared_tool"]);
-        let b = StaticProvider::new("second", &["shared_tool"]);
+        let a = StaticProvider::create("first", &["shared_tool"]);
+        let b = StaticProvider::create("second", &["shared_tool"]);
         let composite = CompositeProvider::new("c", vec![a, b]);
 
         // WHEN: invoking the shared tool

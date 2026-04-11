@@ -246,7 +246,7 @@ mod tests {
         let agent_root = tmp.path().join(".claude").join("skills");
         let bundle = make_bundle("finance", &["get_quote"]);
         // WHEN
-        let result = install_bundle(&bundle, tmp.path(), &[agent_root.clone()])
+        let result = install_bundle(&bundle, tmp.path(), std::slice::from_ref(&agent_root))
             .await
             .unwrap();
         // THEN: link exists at agent path

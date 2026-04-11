@@ -246,6 +246,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn tool_adoption_rate_unknown_tool_returns_zero() {
         // GIVEN: "nonexistent" never called
         let registry = populated_registry();
@@ -256,6 +257,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn tool_adoption_rate_empty_registry_returns_zero() {
         // GIVEN: empty registry
         let registry = ProfileRegistry::new();

@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn resolve_args_empty_produces_empty_object() {
         let result = resolve_args(None, &[], false).unwrap();
-        assert!(result.as_object().map_or(false, |m| m.is_empty()));
+        assert!(result.as_object().is_some_and(serde_json::Map::is_empty));
     }
 
     // ── try_parse_scalar ─────────────────────────────────────────────────────

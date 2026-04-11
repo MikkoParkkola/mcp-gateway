@@ -92,6 +92,11 @@ fn count_capability_yaml_files_by_category() -> Vec<(String, usize)> {
 }
 
 #[test]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
     let readme = read_repo_file("README.md");
@@ -170,6 +175,7 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
 }
 
 #[test]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     let claims = load_claims();
     let benchmarks = read_repo_file("docs/BENCHMARKS.md");
@@ -267,7 +273,7 @@ fn capability_catalog_docs_match_current_inventory() {
         "capabilities README should advertise the canonical exact capability inventory"
     );
     assert!(
-        capabilities_readme.contains(&format!("marketed publicly as **{}+**", marketed_floor)),
+        capabilities_readme.contains(&format!("marketed publicly as **{marketed_floor}+**")),
         "capabilities README should mention the canonical marketed capability floor"
     );
     assert!(
@@ -293,8 +299,7 @@ fn capability_catalog_docs_match_current_inventory() {
 
     assert!(
         community_registry.contains(&format!(
-            "All {}+ built-in capabilities ship with mcp-gateway.",
-            marketed_floor
+            "All {marketed_floor}+ built-in capabilities ship with mcp-gateway."
         )),
         "community registry docs should advertise the canonical marketed capability floor"
     );

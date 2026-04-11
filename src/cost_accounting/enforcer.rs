@@ -412,12 +412,14 @@ mod tests {
         per_key: &[(&str, f64)],
         tool_costs: &[(&str, f64)],
     ) -> BudgetEnforcer {
-        let mut cfg = CostGovernanceConfig::default();
-        cfg.enabled = enabled;
-        cfg.budgets = BudgetLimits {
-            daily,
-            per_tool: per_tool.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
-            per_key: per_key.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+        let mut cfg = CostGovernanceConfig {
+            enabled,
+            budgets: BudgetLimits {
+                daily,
+                per_tool: per_tool.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+                per_key: per_key.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+            },
+            ..CostGovernanceConfig::default()
         };
         for (name, cost) in tool_costs {
             cfg.tool_costs.insert(name.to_string(), *cost);
@@ -427,6 +429,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn enforcer_disabled_allows_all() {
         let e = enforcer_with(false, Some(0.001), &[], &[], &[("paid_tool", 0.01)]);
         let result = e.check("paid_tool", None);
@@ -436,6 +439,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn enforcer_free_tool_skips_checks() {
         let e = enforcer_with(true, Some(0.001), &[], &[], &[("free_tool", 0.0)]);
         let result = e.check("free_tool", None);

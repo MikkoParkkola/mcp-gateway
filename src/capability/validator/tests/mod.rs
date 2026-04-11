@@ -108,8 +108,7 @@ fn name_valid_passes() {
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&issues, "CAP-001"),
-        "unexpected CAP-001: {:?}",
-        issues
+        "unexpected CAP-001: {issues:?}"
     );
 }
 
@@ -338,8 +337,7 @@ fn placeholder_with_schema_property_passes() {
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
-        "unexpected CAP-006: {:?}",
-        issues
+        "unexpected CAP-006: {issues:?}"
     );
 }
 
@@ -557,14 +555,14 @@ fn duplicate_capability_names_are_warned() {
         ),
     ];
     let results = validate_capabilities(&caps);
+    let empty: Vec<Issue> = vec![];
     let second_issues = results
         .get("capabilities/b/tool.yaml")
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .unwrap_or(&empty)
+        .as_slice();
     assert!(
         has_code(second_issues, "CAP-009"),
-        "expected CAP-009 warning: {:?}",
-        second_issues
+        "expected CAP-009 warning: {second_issues:?}"
     );
 }
 

@@ -448,7 +448,7 @@ mod tests {
         let (transport, _) = resolve_transport("any", Some("node server.js"), None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "node server.js"),
-            _ => panic!("expected Stdio"),
+            TransportConfig::Http { .. } => panic!("expected Stdio"),
         }
     }
 
@@ -460,7 +460,7 @@ mod tests {
             TransportConfig::Http { http_url, .. } => {
                 assert_eq!(http_url, "http://localhost:9000");
             }
-            _ => panic!("expected Http"),
+            TransportConfig::Stdio { .. } => panic!("expected Http"),
         }
     }
 
@@ -471,7 +471,7 @@ mod tests {
             TransportConfig::Stdio { command, .. } => {
                 assert!(command.contains("tavily"), "command should mention tavily");
             }
-            _ => panic!("expected Stdio for tavily"),
+            TransportConfig::Http { .. } => panic!("expected Stdio for tavily"),
         }
         assert!(!desc.is_empty(), "description should not be empty");
     }

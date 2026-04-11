@@ -213,9 +213,12 @@ pub async fn jwks_handler(State(key_pair): State<Arc<GatewayKeyPair>>) -> impl I
 mod tests {
     use super::*;
 
-    fn make_agent_identity(scopes: Vec<&str>) -> AgentIdentity {
+    fn make_agent_identity(scopes: &[&str]) -> AgentIdentity {
         let parsed: Vec<Scope> = scopes.iter().filter_map(|s| Scope::parse(s)).collect();
-        let raw: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
+        let raw: Vec<String> = scopes
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         AgentIdentity {
             client_id: "test-agent".to_string(),
             agent_name: "Test Agent".to_string(),
@@ -228,21 +231,21 @@ mod tests {
 
     #[test]
     fn allows_matching_scope() {
-        let identity = make_agent_identity(vec!["tools:surreal:*"]);
+        let identity = make_agent_identity(&["tools:surreal:*"]);
         let result = check_agent_scope_and_audit(&identity, "surreal", "query", &Action::Read);
         assert!(result.is_ok());
     }
 
     #[test]
     fn denies_non_matching_scope() {
-        let identity = make_agent_identity(vec!["tools:surreal:query:read"]);
+        let identity = make_agent_identity(&["tools:surreal:query:read"]);
         let result = check_agent_scope_and_audit(&identity, "brave", "search", &Action::Execute);
         assert!(result.is_err());
     }
 
     #[test]
     fn full_wildcard_allows_anything() {
-        let identity = make_agent_identity(vec!["tools:*"]);
+        let identity = make_agent_identity(&["tools:*"]);
         assert!(
             check_agent_scope_and_audit(&identity, "any-backend", "any-tool", &Action::Execute)
                 .is_ok()
@@ -251,7 +254,7 @@ mod tests {
 
     #[test]
     fn empty_scopes_denies_everything() {
-        let identity = make_agent_identity(vec![]);
+        let identity = make_agent_identity(&[]);
         let result = check_agent_scope_and_audit(&identity, "surreal", "query", &Action::Read);
         assert!(result.is_err());
     }
@@ -267,7 +270,7 @@ mod tests {
 
     #[test]
     fn agent_identity_preserves_raw_scopes() {
-        let identity = make_agent_identity(vec!["tools:surreal:query:read"]);
+        let identity = make_agent_identity(&["tools:surreal:query:read"]);
         assert_eq!(identity.raw_scopes, vec!["tools:surreal:query:read"]);
     }
 }

@@ -4,12 +4,12 @@
 //! - Tool registry: O(1) hash lookup, bulk insert, miss path
 //! - Simhash: fingerprint computation, Hamming distance, index query
 //! - Cache key: SHA-256 derivation, stable tool ordering, schema fingerprint
-//! - McpFrame: JSON parsing for request / response / notification frames
-//! - SandboxEnforcer: per-invocation policy checks (allowed, denied, expired)
-//! - InputScanner: injection pattern scanning on clean and malicious args     [firewall]
+//! - `McpFrame`: JSON parsing for request / response / notification frames
+//! - `SandboxEnforcer`: per-invocation policy checks (allowed, denied, expired)
+//! - `InputScanner`: injection pattern scanning on clean and malicious args     [firewall]
 //! - Redactor: credential detection and in-place redaction of response JSON   [firewall]
-//! - BudgetEnforcer: pre-invoke cost check (DashMap + atomics, target <0.1ms) [cost-governance]
-//! - SemanticIndex: TF-IDF query over 500-tool corpus (target <2ms)           [semantic-search]
+//! - `BudgetEnforcer`: pre-invoke cost check (`DashMap` + atomics, target <0.1ms) [cost-governance]
+//! - `SemanticIndex`: TF-IDF query over 500-tool corpus (target <2ms)           [semantic-search]
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::{Value, json};
@@ -467,12 +467,14 @@ fn bench_budget_enforcer(c: &mut Criterion) {
     // ── helper: build an enforcer from inline parameters ──────────────────────
 
     let make_enforcer = |daily: Option<f64>, tool_cost: f64| -> BudgetEnforcer {
-        let mut cfg = CostGovernanceConfig::default();
-        cfg.enabled = true;
-        cfg.budgets = BudgetLimits {
-            daily,
-            per_tool: std::collections::HashMap::new(),
-            per_key: std::collections::HashMap::new(),
+        let mut cfg = CostGovernanceConfig {
+            enabled: true,
+            budgets: BudgetLimits {
+                daily,
+                per_tool: std::collections::HashMap::new(),
+                per_key: std::collections::HashMap::new(),
+            },
+            ..CostGovernanceConfig::default()
         };
         cfg.tool_costs.insert("bench_tool".to_string(), tool_cost);
         let registry = Arc::new(CostRegistry::new(&cfg));
@@ -483,8 +485,10 @@ fn bench_budget_enforcer(c: &mut Criterion) {
 
     // Fast path: governance disabled — returns immediately, zero atomics.
     {
-        let mut cfg = CostGovernanceConfig::default();
-        cfg.enabled = false;
+        let cfg = CostGovernanceConfig {
+            enabled: false,
+            ..CostGovernanceConfig::default()
+        };
         let registry = Arc::new(CostRegistry::new(&cfg));
         let enforcer = BudgetEnforcer::new(cfg, registry);
         group.bench_function("check_disabled", |b| {
@@ -588,7 +592,7 @@ fn bench_semantic_search(c: &mut Criterion) {
     for size in [50_usize, 200, 500] {
         let idx = build_index(size);
         group.bench_with_input(BenchmarkId::new("query_top10", size), &size, |b, _| {
-            b.iter(|| idx.search("send email message", 10))
+            b.iter(|| idx.search("send email message", 10));
         });
     }
 

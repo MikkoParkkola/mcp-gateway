@@ -1,7 +1,7 @@
 //! YAML round-trip tests — parse a YAML string and validate the result.
 //!
-//! These tests exercise the full serde_yaml → CapabilityDefinition →
-//! validate_capability_definition pipeline, matching real-world capability files.
+//! These tests exercise the full `serde_yaml` → `CapabilityDefinition` →
+//! `validate_capability_definition` pipeline, matching real-world capability files.
 
 use super::*;
 
@@ -36,7 +36,7 @@ providers:
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     let errors: Vec<_> = errors_of(&issues);
-    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn non_rest_service_without_url_passes() {
     // GIVEN: provider with service=cli and no base_url/endpoint
     // WHEN: validating
     // THEN: no CAP-005 error (cli services don't need URLs)
-    let yaml = r#"
+    let yaml = r"
 name: metacognition_verify
 description: Verify text using CLI tool.
 schema:
@@ -58,13 +58,12 @@ providers:
     service: cli
     config:
       command: /usr/local/bin/verify
-"#;
+";
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-005"),
-        "unexpected CAP-005: {:?}",
-        issues
+        "unexpected CAP-005: {issues:?}"
     );
 }
 
@@ -73,7 +72,7 @@ fn local_ml_service_without_url_passes() {
     // GIVEN: provider with service=local_ml and no base_url/endpoint
     // WHEN: validating
     // THEN: no CAP-005 error
-    let yaml = r#"
+    let yaml = r"
 name: face_detect
 description: Detect faces locally.
 schema:
@@ -87,13 +86,12 @@ providers:
     service: local_ml
     config:
       model: face_recognition
-"#;
+";
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-005"),
-        "unexpected CAP-005: {:?}",
-        issues
+        "unexpected CAP-005: {issues:?}"
     );
 }
 
@@ -126,8 +124,7 @@ providers:
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
-        "unexpected CAP-006: {:?}",
-        issues
+        "unexpected CAP-006: {issues:?}"
     );
 }
 
@@ -165,8 +162,7 @@ providers:
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
-        "unexpected CAP-006: {:?}",
-        issues
+        "unexpected CAP-006: {issues:?}"
     );
 }
 
@@ -201,8 +197,7 @@ providers:
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
-        "unexpected CAP-006: {:?}",
-        issues
+        "unexpected CAP-006: {issues:?}"
     );
 }
 
@@ -235,8 +230,7 @@ providers:
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
-        "unexpected CAP-006: {:?}",
-        issues
+        "unexpected CAP-006: {issues:?}"
     );
 }
 
@@ -269,8 +263,7 @@ providers:
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
-        "unexpected CAP-006: {:?}",
-        issues
+        "unexpected CAP-006: {issues:?}"
     );
 }
 
@@ -295,8 +288,7 @@ providers:
     let issues = validate_capability_definition(&cap, None);
     assert!(
         has_code(&errors_of(&issues), "CAP-005"),
-        "expected CAP-005: {:?}",
-        issues
+        "expected CAP-005: {issues:?}"
     );
 }
 
@@ -305,7 +297,7 @@ fn missing_schema_placeholder_in_path_is_detected() {
     // GIVEN: path uses {missing_param} but schema has no such property
     // WHEN: validating
     // THEN: CAP-006 error
-    let yaml = r#"
+    let yaml = r"
 name: get_item
 description: Get an item by ID.
 schema:
@@ -321,13 +313,12 @@ providers:
     config:
       base_url: https://api.example.com
       path: /v1/items/{item_id}
-"#;
+";
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         has_code(&errors_of(&issues), "CAP-006"),
-        "expected CAP-006: {:?}",
-        issues
+        "expected CAP-006: {issues:?}"
     );
 }
 
@@ -336,7 +327,7 @@ fn rest_service_without_url_still_errors() {
     // GIVEN: provider with service=rest and no base_url/endpoint
     // WHEN: validating
     // THEN: CAP-005 error
-    let yaml = r#"
+    let yaml = r"
 name: broken_rest
 description: REST without URL.
 providers:
@@ -344,12 +335,11 @@ providers:
     service: rest
     config:
       path: /v1/items
-"#;
+";
     let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         has_code(&errors_of(&issues), "CAP-005"),
-        "expected CAP-005: {:?}",
-        issues
+        "expected CAP-005: {issues:?}"
     );
 }

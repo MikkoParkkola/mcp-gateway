@@ -307,10 +307,7 @@ impl HttpTransport {
                     debug!(session_id = %session_id, method = %method, "Sending request with session ID");
                     headers.insert("MCP-Session-Id", session_id.parse().unwrap());
                 }
-                HeaderMode::Notify => {
-                    headers.insert("MCP-Session-Id", session_id.parse().unwrap());
-                }
-                HeaderMode::Close => {
+                HeaderMode::Notify | HeaderMode::Close => {
                     headers.insert("MCP-Session-Id", session_id.parse().unwrap());
                 }
                 HeaderMode::Sse => {}

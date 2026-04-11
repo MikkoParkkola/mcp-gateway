@@ -355,7 +355,7 @@ auth:
 
     #[test]
     fn score_gives_standard_method_bonus() {
-        let get_yaml = HIGH_QUALITY_YAML.replace("method: GET", "method: GET");
+        let get_yaml = HIGH_QUALITY_YAML.to_string();
         let options_yaml = HIGH_QUALITY_YAML.replace("method: GET", "method: OPTIONS");
         let get_cap = make_cap("test_get", &get_yaml);
         let options_cap = make_cap("test_options", &options_yaml);

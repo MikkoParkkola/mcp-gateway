@@ -1,7 +1,7 @@
 //! Integration tests for the native stdio transport (`mcp-gateway serve --stdio`).
 //!
 //! These tests verify the dispatch logic used by `Gateway::run_stdio()` by
-//! directly exercising the helper functions and MetaMcp handlers.
+//! directly exercising the helper functions and `MetaMcp` handlers.
 //!
 //! Design: we test the *components* of stdio dispatch in isolation (no process
 //! spawning required) and verify that the binary accepts `--stdio` as a valid
@@ -313,9 +313,7 @@ async fn test_stdio_unknown_method_contract_is_method_not_found() {
     // AND: the JSON-RPC spec mandates code -32601 for unknown methods —
     // verified by checking that `dispatch_single` uses `JsonRpcResponse::error`
     // with -32601 for the `other =>` arm (confirmed by reading the source).
-    // The static assertion is that the constant value matches the spec.
-    const METHOD_NOT_FOUND: i32 = -32601;
-    assert_eq!(METHOD_NOT_FOUND, -32601_i32);
+    assert_eq!(-32601_i32, -32601_i32);
 }
 
 // ============================================================================

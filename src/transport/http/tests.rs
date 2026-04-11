@@ -238,7 +238,7 @@ async fn build_headers_sse_mode_baseline() {
     );
 }
 
-/// send_request mode: Content-Type + combined Accept, session forwarded when
+/// `send_request` mode: Content-Type + combined Accept, session forwarded when
 /// present, custom headers included, x-trace-id from ambient trace context.
 #[tokio::test]
 async fn build_headers_send_request_with_session_and_trace() {
@@ -274,7 +274,7 @@ async fn build_headers_send_request_with_session_and_trace() {
     );
 }
 
-/// send_request mode without a session: no mcp-session-id header at all.
+/// `send_request` mode without a session: no mcp-session-id header at all.
 #[tokio::test]
 async fn build_headers_send_request_no_session() {
     let t = make_transport("http://localhost");
@@ -368,7 +368,7 @@ async fn build_headers_close_includes_session_and_custom_headers() {
     );
 }
 
-/// close() should send the same close-mode headers on the DELETE wire path.
+/// `close()` should send the same close-mode headers on the DELETE wire path.
 #[tokio::test]
 async fn close_sends_shared_close_headers() {
     use axum::{

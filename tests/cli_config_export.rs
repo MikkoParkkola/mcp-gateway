@@ -158,10 +158,10 @@ fn invoke_merge(
         servers.insert(entry_name.to_string(), entry.clone());
     }
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).unwrap();
     }
 
     let json_str = serde_json::to_string_pretty(&doc).unwrap();

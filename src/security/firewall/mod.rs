@@ -460,8 +460,10 @@ mod tests {
 
     #[test]
     fn disabled_firewall_allows_everything() {
-        let mut cfg = FirewallConfig::default();
-        cfg.enabled = false;
+        let cfg = FirewallConfig {
+            enabled: false,
+            ..FirewallConfig::default()
+        };
         let fw = Firewall::from_config(cfg, None);
         let args = json!({ "cmd": "; rm -rf /" });
         let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
@@ -472,8 +474,10 @@ mod tests {
 
     #[test]
     fn scan_requests_disabled_allows_injection() {
-        let mut cfg = FirewallConfig::default();
-        cfg.scan_requests = false;
+        let cfg = FirewallConfig {
+            scan_requests: false,
+            ..FirewallConfig::default()
+        };
         let fw = Firewall::from_config(cfg, None);
         let args = json!({ "cmd": "; rm -rf /" });
         let verdict = fw.check_request("s1", "srv", "tool", &args, "caller");
@@ -482,8 +486,10 @@ mod tests {
 
     #[test]
     fn scan_responses_disabled_skips_response_scan() {
-        let mut cfg = FirewallConfig::default();
-        cfg.scan_responses = false;
+        let cfg = FirewallConfig {
+            scan_responses: false,
+            ..FirewallConfig::default()
+        };
         let fw = Firewall::from_config(cfg, None);
         let mut response = json!({ "text": "AKIAIOSFODNN7EXAMPLE12345" });
         let verdict = fw.check_response("s1", "srv", "tool", &mut response, "caller");
@@ -527,13 +533,15 @@ mod tests {
 
     #[test]
     fn rule_overrides_default_action_to_block() {
-        let mut cfg = FirewallConfig::default();
-        cfg.rules = vec![FirewallRule {
-            tool_match: "exec_*".to_string(),
-            action: FirewallAction::Block,
-            reason: Some("Shell execution blocked".to_string()),
-            scan: vec![],
-        }];
+        let cfg = FirewallConfig {
+            rules: vec![FirewallRule {
+                tool_match: "exec_*".to_string(),
+                action: FirewallAction::Block,
+                reason: Some("Shell execution blocked".to_string()),
+                scan: vec![],
+            }],
+            ..FirewallConfig::default()
+        };
         let fw = Firewall::from_config(cfg, None);
         // SQL injection is normally MEDIUM (warn), but exec_* rule blocks it
         let args = json!({ "q": "' OR 1=1" });
@@ -544,13 +552,15 @@ mod tests {
 
     #[test]
     fn rule_overrides_default_action_to_warn() {
-        let mut cfg = FirewallConfig::default();
-        cfg.rules = vec![FirewallRule {
-            tool_match: "safe_shell".to_string(),
-            action: FirewallAction::Warn,
-            reason: None,
-            scan: vec![],
-        }];
+        let cfg = FirewallConfig {
+            rules: vec![FirewallRule {
+                tool_match: "safe_shell".to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: vec![],
+            }],
+            ..FirewallConfig::default()
+        };
         let fw = Firewall::from_config(cfg, None);
         // Shell injection is normally HIGH (block), but safe_shell rule warns only
         let args = json!({ "cmd": "; rm -rf / " });
@@ -561,13 +571,15 @@ mod tests {
 
     #[test]
     fn glob_rule_matches_prefix() {
-        let mut cfg = FirewallConfig::default();
-        cfg.rules = vec![FirewallRule {
-            tool_match: "exec_*".to_string(),
-            action: FirewallAction::Block,
-            reason: None,
-            scan: vec![],
-        }];
+        let cfg = FirewallConfig {
+            rules: vec![FirewallRule {
+                tool_match: "exec_*".to_string(),
+                action: FirewallAction::Block,
+                reason: None,
+                scan: vec![],
+            }],
+            ..FirewallConfig::default()
+        };
         let fw = Firewall::from_config(cfg, None);
         assert!(rule_matches(&fw.rules[0], "exec_command"));
         assert!(rule_matches(&fw.rules[0], "exec_shell"));
@@ -576,13 +588,15 @@ mod tests {
 
     #[test]
     fn wildcard_rule_matches_all_tools() {
-        let mut cfg = FirewallConfig::default();
-        cfg.rules = vec![FirewallRule {
-            tool_match: "*".to_string(),
-            action: FirewallAction::Allow,
-            reason: None,
-            scan: vec![],
-        }];
+        let cfg = FirewallConfig {
+            rules: vec![FirewallRule {
+                tool_match: "*".to_string(),
+                action: FirewallAction::Allow,
+                reason: None,
+                scan: vec![],
+            }],
+            ..FirewallConfig::default()
+        };
         let fw = Firewall::from_config(cfg, None);
         // Shell injection would normally block, but * rule overrides to Allow
         let args = json!({ "cmd": "; rm -rf / " });

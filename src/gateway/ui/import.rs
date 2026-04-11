@@ -492,7 +492,7 @@ paths:
         };
         // We cannot easily construct AppState in unit tests, so we test the
         // validation branch via the public helper directly.
-        assert!(body.spec.as_deref().map(str::trim).unwrap_or("").is_empty());
+        assert!(body.spec.as_deref().map_or("", str::trim).is_empty());
     }
 
     // Simple internal helper to test the inline branch without full AppState.
@@ -505,16 +505,16 @@ paths:
     #[test]
     fn selected_tools_filters_skipped() {
         let caps = parse_spec(PETSTORE_SPEC).expect("should parse");
-        let selected = vec!["listpets".to_string()];
+        let selected = ["listpets".to_string()];
 
         let mut imported = Vec::new();
         let mut skipped = Vec::new();
 
         for cap in &caps {
-            if !selected.iter().any(|s| s == &cap.name) {
-                skipped.push(cap.name.clone());
-            } else {
+            if selected.iter().any(|s| s == &cap.name) {
                 imported.push(cap.name.clone());
+            } else {
+                skipped.push(cap.name.clone());
             }
         }
 

@@ -347,7 +347,7 @@ mod tests {
         assert!(b.enabled);
         match &b.transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "node server.js"),
-            _ => panic!("expected Stdio"),
+            TransportConfig::Http { .. } => panic!("expected Stdio"),
         }
     }
 
@@ -500,7 +500,7 @@ mod tests {
             TransportConfig::Http { http_url, .. } => {
                 assert_eq!(http_url, "http://localhost:9000");
             }
-            _ => panic!("expected Http after update"),
+            TransportConfig::Stdio { .. } => panic!("expected Http after update"),
         }
     }
 
@@ -607,7 +607,7 @@ mod tests {
         let (transport, _) = resolve_transport("tavily", Some("my-cmd"), None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "my-cmd"),
-            _ => panic!("expected Stdio"),
+            TransportConfig::Http { .. } => panic!("expected Stdio"),
         }
     }
 
@@ -617,7 +617,7 @@ mod tests {
             resolve_transport("custom", None, Some("http://localhost:9000"), None).unwrap();
         match transport {
             TransportConfig::Http { http_url, .. } => assert_eq!(http_url, "http://localhost:9000"),
-            _ => panic!("expected Http"),
+            TransportConfig::Stdio { .. } => panic!("expected Http"),
         }
     }
 
@@ -628,7 +628,7 @@ mod tests {
             TransportConfig::Stdio { command, .. } => {
                 assert!(command.contains("tavily"));
             }
-            _ => panic!("expected Stdio for tavily"),
+            TransportConfig::Http { .. } => panic!("expected Stdio for tavily"),
         }
         assert!(!description.is_empty());
     }

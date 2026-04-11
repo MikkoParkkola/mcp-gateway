@@ -95,14 +95,14 @@ server:
 #[test]
 fn surfaced_tool_config_deserializes_from_yaml() {
     // GIVEN: a YAML snippet with surfaced_tools entries
-    let yaml = r#"
+    let yaml = r"
 meta_mcp:
   surfaced_tools:
     - server: my_backend
       tool: my_tool
     - server: other_backend
       tool: another_tool
-"#;
+";
     // WHEN: parsing as Config
     let config: Config = serde_yaml::from_str(yaml).unwrap();
     // THEN: both entries are present with correct fields
@@ -126,11 +126,11 @@ fn surfaced_tools_defaults_to_empty_vec() {
 #[test]
 fn surfaced_tools_omitted_in_yaml_parses_to_empty() {
     // GIVEN: a YAML with meta_mcp but no surfaced_tools key
-    let yaml = r#"
+    let yaml = r"
 meta_mcp:
   warm_start:
     - my_backend
-"#;
+";
     // WHEN: parsing
     let config: Config = serde_yaml::from_str(yaml).unwrap();
     // THEN: surfaced_tools is empty (default applied)
