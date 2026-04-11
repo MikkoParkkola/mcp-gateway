@@ -30,6 +30,8 @@ pub mod cache_key;
 pub mod capability;
 pub mod chains;
 pub mod cli;
+#[doc(hidden)]
+pub mod command_line;
 pub mod config;
 pub mod config_reload;
 pub mod context_compression;

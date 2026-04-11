@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use mcp_gateway::{
+    command_line::{command_exists, program_and_args},
     config::{Config, TransportConfig},
     discovery::AutoDiscovery,
 };
@@ -238,26 +239,38 @@ fn check_stdio_backend(name: &str, transport: &TransportConfig) -> Option<CheckR
         return None;
     };
 
-    // Extract the binary / script name for `which`-style check.
-    let bin = command.split_whitespace().next()?;
     let label = format!("{name}: command");
+    let (bin, _) = match program_and_args(command) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            return Some(
+                CheckResult::fail(label, format!("invalid command: {err}"))
+                    .with_hint("Fix the stdio command quoting in gateway.yaml"),
+            );
+        }
+    };
 
     // We only verify the command exists, not actually launch it
     // (launching would block and side-effects are unpredictable).
-    let found = which_command(bin);
+    let found = which_command(&bin);
     if found {
         Some(CheckResult::pass(label, format!("'{bin}' found")))
     } else {
-        Some(
-            CheckResult::fail(label, format!("'{bin}' not found in PATH")).with_hint(format!(
-                "Install the command: {}",
-                if bin == "npx" {
-                    "install Node.js from https://nodejs.org"
-                } else {
-                    "check your PATH"
-                }
-            )),
-        )
+        let bin_path = Path::new(&bin);
+        let is_explicit_path = bin_path.is_absolute() || bin_path.components().count() > 1;
+        let detail = if is_explicit_path {
+            format!("'{bin}' not found")
+        } else {
+            format!("'{bin}' not found in PATH")
+        };
+        let hint = if is_explicit_path {
+            "Check that the configured executable path exists"
+        } else if bin == "npx" {
+            "Install Node.js from https://nodejs.org"
+        } else {
+            "Check your PATH"
+        };
+        Some(CheckResult::fail(label, detail).with_hint(hint))
     }
 }
 
@@ -360,16 +373,9 @@ fn resolve_config_path(explicit: Option<&Path>) -> Option<PathBuf> {
     None
 }
 
-/// Check whether `bin` is reachable on `PATH` by trying to spawn it with `--version`.
+/// Check whether `bin` exists either as a configured path or on `PATH`.
 fn which_command(bin: &str) -> bool {
-    // Use `command -v` equivalent: just try to locate in PATH.
-    std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .any(|dir| {
-            let full = PathBuf::from(dir).join(bin);
-            full.exists()
-        })
+    command_exists(bin)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -490,6 +496,45 @@ mod tests {
     #[test]
     fn which_command_returns_false_for_nonexistent() {
         assert!(!which_command("definitely-not-a-real-binary-xyz-12345"));
+    }
+
+    #[test]
+    fn which_command_supports_absolute_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("my command");
+        std::fs::write(&binary, "#!/bin/sh\n").unwrap();
+
+        assert!(which_command(binary.to_str().unwrap()));
+    }
+
+    #[test]
+    fn check_stdio_backend_supports_quoted_paths_with_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("my backend");
+        std::fs::write(&binary, "#!/bin/sh\n").unwrap();
+
+        let transport = TransportConfig::Stdio {
+            command: format!(r#""{}" --flag"#, binary.display()),
+            cwd: None,
+            protocol_version: None,
+        };
+
+        let result = check_stdio_backend("test-backend", &transport).unwrap();
+        assert_eq!(result.status, CheckStatus::Pass);
+        assert!(result.detail.contains(binary.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn check_stdio_backend_rejects_invalid_quoted_command() {
+        let transport = TransportConfig::Stdio {
+            command: r#""/tmp/my backend --flag"#.to_string(),
+            cwd: None,
+            protocol_version: None,
+        };
+
+        let result = check_stdio_backend("test-backend", &transport).unwrap();
+        assert_eq!(result.status, CheckStatus::Fail);
+        assert!(result.detail.contains("invalid command"));
     }
 
     // ── check_backend_env ─────────────────────────────────────────────────────

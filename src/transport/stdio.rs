@@ -24,7 +24,7 @@ use crate::protocol::{
     JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, is_version_mismatch_error,
     negotiate_best_version, parse_supported_versions_from_error,
 };
-use crate::{Error, Result};
+use crate::{Error, Result, command_line::program_and_args};
 
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
@@ -80,13 +80,7 @@ impl StdioTransport {
     ///
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
-        let parts: Vec<&str> = self.command.split_whitespace().collect();
-        if parts.is_empty() {
-            return Err(Error::Config("Empty command".to_string()));
-        }
-
-        let program = parts[0];
-        let args = &parts[1..];
+        let (program, args) = self.parsed_command()?;
 
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -167,6 +161,10 @@ impl StdioTransport {
                 "version": env!("CARGO_PKG_VERSION")
             }
         })
+    }
+
+    fn parsed_command(&self) -> Result<(String, Vec<String>)> {
+        program_and_args(&self.command)
     }
 
     /// Initialize the MCP connection with automatic version negotiation.
@@ -548,6 +546,23 @@ mod tests {
         let params = StdioTransport::build_init_params("2025-06-18");
         assert_eq!(params["protocolVersion"], "2025-06-18");
         assert_eq!(params["clientInfo"]["name"], "mcp-gateway");
+    }
+
+    #[test]
+    fn parsed_command_preserves_quoted_program_path() {
+        let transport = make_transport(r#""/tmp/My App/bin/server" --flag "two words""#);
+        let (program, args) = transport.parsed_command().unwrap();
+
+        assert_eq!(program, "/tmp/My App/bin/server");
+        assert_eq!(args, vec!["--flag".to_string(), "two words".to_string()]);
+    }
+
+    #[test]
+    fn parsed_command_rejects_invalid_quoting() {
+        let transport = make_transport(r#""/tmp/My App/bin/server --flag"#);
+        let error = transport.parsed_command().unwrap_err();
+
+        assert!(error.to_string().contains("Invalid command quoting"));
     }
 
     // =========================================================================
