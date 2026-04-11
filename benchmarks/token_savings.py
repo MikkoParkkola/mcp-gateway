@@ -2,16 +2,19 @@
 """
 MCP Gateway Token Savings Benchmark
 
-Demonstrates the ~95%+ context token reduction achieved by the meta-MCP
-gateway pattern compared to direct tool registration.
+Demonstrates the context token reduction achieved by the meta-MCP gateway
+pattern compared to direct tool registration.
 
 Direct approach: Every backend's tools are individually registered in the
 LLM's system prompt, consuming context tokens proportional to the total
 number of tools across all backends.
 
-Meta-MCP approach: Only 4 gateway tools are registered (gateway_list_servers,
-gateway_list_tools, gateway_search_tools, gateway_invoke), regardless of how
-many backends or tools exist behind the gateway.
+Meta-MCP approach: The discovery quartet stays fixed
+(`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`,
+`gateway_invoke`). The canonical README benchmark adds stats, cost reporting,
+playbooks, profiles, kill/revive, disabled-capability visibility, and reload
+for a 14-tool surface. Surfacing webhook status raises that operational
+surface to 15 (the minimum stripped surface is 12).
 
 Usage:
     python benchmarks/token_savings.py
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Token estimation
@@ -83,91 +87,189 @@ def generate_backend_tools(backend: str, n_tools: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Meta-MCP gateway tool definitions (fixed — always 4)
+# Canonical public claims + README benchmark tool surface
 # ---------------------------------------------------------------------------
 
+PUBLIC_CLAIMS_PATH = Path(__file__).with_name("public_claims.json")
+
+
+def load_public_claims() -> dict:
+    """Load the canonical machine-readable public claims file."""
+    with PUBLIC_CLAIMS_PATH.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+PUBLIC_CLAIMS = load_public_claims()
+README_SCENARIO = PUBLIC_CLAIMS["readme_token_savings"]
+META_TOOL_COUNTS = PUBLIC_CLAIMS["meta_tools"]
+
+
+def make_gateway_tool_definition(
+    name: str,
+    description: str,
+    properties: dict | None = None,
+    required: list[str] | None = None,
+) -> dict:
+    """Generate a realistic gateway tool definition."""
+    return {
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": properties or {},
+            "required": required or [],
+        },
+    }
+
+
 GATEWAY_TOOLS = [
-    {
-        "name": "gateway_list_servers",
-        "description": (
-            "List all registered MCP backend servers with their names, "
-            "descriptions, and tool counts. Use this first to discover "
-            "available capabilities."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
+    make_gateway_tool_definition(
+        "gateway_list_servers",
+        "List all registered MCP backend servers with their names, descriptions, tool counts, and status.",
+    ),
+    make_gateway_tool_definition(
+        "gateway_list_tools",
+        "List tools available through the gateway. Supports optional filtering by server to inspect a backend catalog.",
+        properties={
+            "server": {
+                "type": "string",
+                "description": "Optional backend MCP server name to filter by.",
+            }
         },
-    },
-    {
-        "name": "gateway_list_tools",
-        "description": (
-            "List tools available through the gateway. "
-            "Supports optional filtering by server to inspect a backend's tool catalog."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "server": {
-                    "type": "string",
-                    "description": "Optional backend MCP server name to filter by.",
-                },
+    ),
+    make_gateway_tool_definition(
+        "gateway_search_tools",
+        "Search for tools across all registered backends by keyword and return ranked matches with full schemas.",
+        properties={
+            "query": {
+                "type": "string",
+                "description": "Search query to match against tool names and descriptions.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of results to return (default 10).",
             },
         },
-    },
-    {
-        "name": "gateway_search_tools",
-        "description": (
-            "Search for tools across all registered backends by keyword. "
-            "Returns matching tool names, descriptions, and which backend "
-            "they belong to. Use this to find the right tool before invoking."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query to match against tool names and descriptions.",
-                },
+        required=["query"],
+    ),
+    make_gateway_tool_definition(
+        "gateway_invoke",
+        "Invoke a specific tool on a specific backend server and return the routed result.",
+        properties={
+            "server": {
+                "type": "string",
+                "description": "Name of the backend MCP server.",
             },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "gateway_invoke",
-        "description": (
-            "Invoke a specific tool on a specific backend server. "
-            "Pass the server name, tool name, and arguments. "
-            "The gateway routes the request and returns the result."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "server": {
-                    "type": "string",
-                    "description": "Name of the backend MCP server.",
-                },
-                "tool": {
-                    "type": "string",
-                    "description": "Name of the tool to invoke.",
-                },
-                "arguments": {
-                    "type": "object",
-                    "description": "Arguments to pass to the tool.",
-                },
+            "tool": {
+                "type": "string",
+                "description": "Name of the tool to invoke.",
             },
-            "required": ["server", "tool"],
+            "arguments": {
+                "type": "object",
+                "description": "Arguments to pass to the tool.",
+            },
         },
-    },
+        required=["server", "tool"],
+    ),
+    make_gateway_tool_definition(
+        "gateway_get_stats",
+        "Get usage statistics including invocations, cache hits, token savings, and top tools.",
+        properties={
+            "price_per_million": {
+                "type": "number",
+                "description": "Token price per million for cost calculations.",
+            }
+        },
+    ),
+    make_gateway_tool_definition(
+        "gateway_cost_report",
+        "Return current session and API-key spend with totals and per-tool breakdowns.",
+        properties={
+            "session_id": {
+                "type": "string",
+                "description": "Specific session ID to report on.",
+            },
+            "include_all_sessions": {
+                "type": "boolean",
+                "description": "Return all active sessions (admin view).",
+            },
+            "include_all_keys": {
+                "type": "boolean",
+                "description": "Return all API key accumulators (admin view).",
+            },
+        },
+    ),
+    make_gateway_tool_definition(
+        "gateway_run_playbook",
+        "Execute a multi-step playbook and collapse multiple tool calls into one invocation.",
+        properties={
+            "name": {
+                "type": "string",
+                "description": "Playbook name to execute.",
+            },
+            "arguments": {
+                "type": "object",
+                "description": "Playbook input arguments.",
+            },
+        },
+        required=["name"],
+    ),
+    make_gateway_tool_definition(
+        "gateway_kill_server",
+        "Immediately disable routing to a backend server while leaving its tools visible in search/list.",
+        properties={
+            "server": {
+                "type": "string",
+                "description": "Name of the backend server to disable.",
+            }
+        },
+        required=["server"],
+    ),
+    make_gateway_tool_definition(
+        "gateway_revive_server",
+        "Re-enable routing to a previously disabled backend server and reset its error budget.",
+        properties={
+            "server": {
+                "type": "string",
+                "description": "Name of the backend server to re-enable.",
+            }
+        },
+        required=["server"],
+    ),
+    make_gateway_tool_definition(
+        "gateway_set_profile",
+        "Switch the active routing profile for this session.",
+        properties={
+            "profile": {
+                "type": "string",
+                "description": "Name of the routing profile to activate.",
+            }
+        },
+        required=["profile"],
+    ),
+    make_gateway_tool_definition(
+        "gateway_get_profile",
+        "Show the active routing profile for this session and what it allows or denies.",
+    ),
+    make_gateway_tool_definition(
+        "gateway_list_disabled_capabilities",
+        "List capabilities automatically disabled due to high error rate and when they recover.",
+    ),
+    make_gateway_tool_definition(
+        "gateway_list_profiles",
+        "List all available routing profiles with their descriptions.",
+    ),
+    make_gateway_tool_definition(
+        "gateway_reload_config",
+        "Trigger an immediate config reload and report any fields that still require restart.",
+    ),
 ]
 
-README_SCENARIO = {
-    "direct_tools": 100,
-    "direct_tokens_per_tool": 150,
-    "gateway_tokens_per_tool": 100,
-    "requests": 1_000,
-    "input_cost_per_million_usd": 15,
-}
+if README_SCENARIO["gateway_tools"] != len(GATEWAY_TOOLS):
+    raise RuntimeError(
+        "benchmarks/public_claims.json readme_token_savings.gateway_tools must match "
+        "the canonical README-benchmark GATEWAY_TOOLS list"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +399,7 @@ def readme_results() -> dict:
         "scenario": "readme",
         "direct_tools": README_SCENARIO["direct_tools"],
         "gateway_tools": len(GATEWAY_TOOLS),
+        "meta_tool_counts": META_TOOL_COUNTS,
         "direct_tokens": direct_tokens,
         "gateway_tokens": gateway_tokens,
         "requests": README_SCENARIO["requests"],

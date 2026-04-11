@@ -16,7 +16,7 @@
 
 ![demo](demo.gif)
 
-MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets 4 meta-tools and discovers the right one on demand -- like searching an app store instead of installing every app.
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface -- 12 tools minimum, 14 in the README benchmark scenario, 15 when webhook status is surfaced -- and discovers the right backend tool on demand.
 
 Public quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
 
@@ -36,23 +36,25 @@ MCP Gateway removes that tradeoff entirely.
 
 | | Without Gateway | With Gateway |
 |---|----------------|--------------|
-| **Tools in context** | Every definition, every request | 4 meta-tools (~400 tokens) |
-| **Token overhead** | ~15,000 tokens (100 tools) | ~400 tokens -- **97% savings** |
-| **Cost at scale** | ~$0.22/request (Opus input) | ~$0.006/request -- **$219 saved per 1K** |
+| **Tools in context** | Every definition, every request | 14 Meta-MCP tools in the README benchmark (~1400 tokens) |
+| **Token overhead** | ~15,000 tokens (100 tools) | ~1400 tokens -- **91% savings** |
+| **Cost at scale** | ~$0.22/request (Opus input) | ~$0.021/request -- **$204 saved per 1K** |
 | **Practical tool limit** | 20-50 tools (context pressure) | **Unlimited** -- discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
+The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The README benchmark scenario also surfaces stats, cost report, playbooks, profile controls, disabled-capability visibility, and reload for a 14-tool surface. Surfacing webhook status adds the 15th tool.
+
 ### Why not...
 
 | Alternative | What it does | Why MCP Gateway is different |
 |---|---|---|
-| **Direct MCP connections** | Each server connected individually | Every tool definition loaded every request. 100 tools = 15K tokens burned. Gateway: 4 tools, always. |
+| **Direct MCP connections** | Each server connected individually | Every tool definition loaded every request. 100 tools = 15K tokens burned. Gateway: a small fixed 12-15 tool surface instead of every backend tool. |
 | **Claude's ToolSearch** | Built-in deferred tool loading | Only works with tools already configured. Gateway adds unlimited backends + REST APIs without MCP servers. |
 | **Archestra** | Cloud-hosted MCP registry | Requires cloud account, sends data to third party. Gateway is local-only, zero external dependencies. |
 | **Kong / Portkey** | General API gateways | Not MCP-aware. No meta-tool discovery, no tool search, no capability YAML system. |
-| **Building fewer MCP servers** | Reduce tool count manually | You lose capabilities. Gateway lets you keep everything and pay the token cost of 4. |
+| **Building fewer MCP servers** | Reduce tool count manually | You lose capabilities. Gateway lets you keep everything and pay the token cost of the compact Meta-MCP surface. |
 
 ## Quick Start
 
@@ -141,17 +143,17 @@ Point your MCP client (Claude Code, Cursor, Windsurf, etc.) at the gateway:
 }
 ```
 
-That's it. Your AI now has access to all backends through 4 meta-tools. It searches for tools with `gateway_search_tools` and invokes them with `gateway_invoke`.
+That's it. Your AI now has access to all backends through the gateway's Meta-MCP surface. Start with `gateway_search_tools` to find the right tool, then invoke it with `gateway_invoke`.
 
 ## Key Benefits
 
 ### 1. Unlimited Tools, Minimal Tokens
 
-The gateway exposes 4 meta-tools. Your AI searches for what it needs, then invokes it. Tool definitions load on demand, not upfront. Connect 500 tools and pay the token cost of 4.
+The gateway exposes 12 Meta-MCP tools minimum, 14 in the README benchmark scenario, and 15 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
 
 **Token math** (Claude Opus @ $15/M input tokens, reproducible via `python benchmarks/token_savings.py --scenario readme`):
 - **Without**: 100 tools x 150 tokens x 1,000 requests = 15M tokens = **$225**
-- **With**: 4 meta-tools x 100 tokens x 1,000 requests = 0.4M tokens = **$6**
+- **With (README benchmark)**: 14 Meta-MCP tools x 100 tokens x 1,000 requests = 1.4M tokens = **$21**
 
 ### 2. Any REST API to MCP Tool -- No Code
 
@@ -177,7 +179,7 @@ Circuit breakers, retry with backoff, rate limiting, health checks, graceful shu
 ┌───────────────────────────────────────────────────────────────┐
 │                    MCP Gateway (:39400)                        │
 │  ┌─────────────────────────────────────────────────────────┐  │
-│  │  Meta-MCP: 4 Meta-Tools + Surfaced Tools                │  │
+│  │  Meta-MCP: 12-15 Tools + Surfaced Tools                 │  │
 │  │  • gateway_list_servers    • gateway_search_tools       │  │
 │  │  • gateway_list_tools      • gateway_invoke             │  │
 │  └─────────────────────────────────────────────────────────┘  │
@@ -304,7 +306,7 @@ mcp-gateway is part of a suite of MCP tools:
 
 | Tool | Description |
 |------|-------------|
-| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway — 4 meta-tools replace 100+ registrations** |
+| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway — compact 12-15 tool surface replaces 100+ registrations** |
 | [trvl](https://github.com/MikkoParkkola/trvl) | AI travel agent — 34 MCP tools for flights, hotels, ground transport |
 | [nab](https://github.com/MikkoParkkola/nab) | Web content extraction — fetch any URL with cookies + anti-bot bypass |
 | [axterminator](https://github.com/MikkoParkkola/axterminator) | macOS GUI automation — 34 MCP tools via Accessibility API |

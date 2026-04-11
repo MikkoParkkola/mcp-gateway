@@ -1,8 +1,8 @@
 # mcp-gateway
 
-> Universal MCP gateway. Unlimited tools, 4 meta-tools in context, 97% token savings.
+> Universal MCP gateway. README benchmark keeps 14 Meta-MCP tools in context (~1400 tokens, 91% token savings).
 
-MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets 4 meta-tools and discovers the right one on demand. Connect 500 tools and pay the token cost of 4.
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (12 tools minimum, 14 in the README benchmark scenario, 15 when webhook status is surfaced) and discovers the right backend tool on demand.
 
 ## Install
 
@@ -36,7 +36,9 @@ Add to MCP config:
 
 {"mcpServers":{"gateway":{"type":"http","url":"http://localhost:39400/mcp"}}}
 
-## Meta-Tools (4)
+## Base Discovery Tools (4)
+
+These four discovery tools are always present. The README benchmark scenario adds operator helpers for stats, cost reporting, playbooks, profile controls, disabled-capability listing, and reload to reach 14 tools. Surfacing webhook status brings the total to 15.
 
 - gateway_search_tools(query) -- Semantic search across all backend tools by keyword
 - gateway_invoke(server, tool, arguments) -- Execute a tool on any backend
@@ -50,7 +52,7 @@ Add to MCP config:
 
 ## Key Features
 
-- Token savings: 4 meta-tools (~400 tokens) vs loading all tool definitions (~15K tokens for 100 tools)
+- Token savings: README benchmark keeps 14 Meta-MCP tools (~1400 tokens) vs loading all tool definitions (~15K tokens for 100 tools)
 - REST API to MCP: drop a YAML capability file or import OpenAPI spec, no code needed
 - 100+ built-in capabilities: weather, Wikipedia, GitHub, stock quotes, package tracking
 - Hot reload: change config without losing AI session

@@ -1,6 +1,10 @@
 {
-  "last_verified": "2026-03-14",
-  "meta_tools": 4,
+  "last_verified": "2026-04-11",
+  "meta_tools": {
+    "minimum": 12,
+    "readme_benchmark": 14,
+    "with_webhook_status": 15
+  },
   "capability_count": 101,
   "startup_benchmark": {
     "command": "hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'",
@@ -12,7 +16,7 @@
   "readme_token_savings": {
     "direct_tools": 100,
     "direct_tokens_per_tool": 150,
-    "gateway_tools": 4,
+    "gateway_tools": 14,
     "gateway_tokens_per_tool": 100,
     "requests": 1000,
     "model": "Claude Opus",
