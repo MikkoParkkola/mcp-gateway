@@ -1,7 +1,5 @@
 # MCP Gateway Benchmarks
 
-Last updated: 2026-03-14
-
 ## Build Information
 
 | Metric | Value |
@@ -11,6 +9,7 @@ Last updated: 2026-03-14
 | Source Files | 246 Rust files |
 | Lines of Code | ~92,000 |
 | Test Count | 2,554 (unit + integration + doc) |
+| Built-in Capability YAMLs | 72 |
 
 ## Startup Performance
 

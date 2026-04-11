@@ -6,7 +6,7 @@ Share, discover, and install capability definitions from the community.
 
 ### From the Built-in Registry
 
-All 52+ capabilities ship with mcp-gateway. Browse what is available:
+All 72 built-in capabilities ship with mcp-gateway. Browse what is available:
 
 ```bash
 # List everything
@@ -35,7 +35,7 @@ mcp-gateway cap install my_tool --from-github --repo owner/repo --branch develop
 mcp-gateway cap install my_tool --from-github --output ./my-capabilities
 ```
 
-The installer looks for the capability YAML in standard category subdirectories (`finance/`, `knowledge/`, `search/`, `utility/`, `entertainment/`, `communication/`, `food/`, `geo/`) within the repository's `capabilities/` directory.
+The installer looks for capability YAMLs under the repository's `capabilities/` directory using the same category layout as the built-in registry.
 
 ## Creating a Capability
 
