@@ -1,0 +1,55 @@
+# MCP Gateway
+
+> Universal MCP gateway -- single port for all your MCP servers, ~95% context token savings. Rust.
+
+MCP Gateway sits between your AI client and your MCP servers. Instead of loading hundreds of tool definitions into every request (burning ~150 tokens each), the AI gets 4 meta-tools and discovers the right one on demand. Like an app store for tools.
+
+## Install
+
+```bash
+brew install MikkoParkkola/tap/mcp-gateway
+```
+
+Or: `cargo install mcp-gateway`
+
+## Quick Start
+
+1. Create `gateway.yaml`:
+
+```yaml
+server:
+  port: 39400
+meta_mcp:
+  enabled: true
+backends:
+  - name: my-server
+    transport: stdio
+    command: ["my-mcp-server"]
+```
+
+2. Run: `mcp-gateway --config gateway.yaml`
+3. Point your AI client at `http://localhost:39400/sse`
+
+## How It Works
+
+Your AI gets 4 meta-tools instead of hundreds:
+- `gateway_search` -- find tools by keyword
+- `gateway_invoke` -- call any discovered tool
+- `gateway_list_tools` -- list tools from a specific backend
+- `gateway_list_servers` -- list all configured backends
+
+## Key Features
+
+- Single-port multiplexing for unlimited MCP backends
+- REST API integration via YAML capability files (no MCP server needed)
+- Circuit breakers and retry policies per backend
+- OpenAPI spec import (`mcp-gateway import openapi spec.yaml`)
+- Session sandboxing and idempotency
+- Semantic tool search (TF-IDF + SimHash dedup)
+- 2500+ tests
+
+## Links
+
+- Repository: https://github.com/MikkoParkkola/mcp-gateway
+- Homebrew: `brew install MikkoParkkola/tap/mcp-gateway`
+- Crates.io: https://crates.io/crates/mcp-gateway
