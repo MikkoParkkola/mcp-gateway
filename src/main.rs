@@ -1,6 +1,6 @@
 //! MCP Gateway - Universal Model Context Protocol Gateway
 //!
-//! Single-port multiplexing with Meta-MCP for ~95% context token savings.
+//! Single-port multiplexing with a compact Meta-MCP surface and on-demand tool discovery.
 
 mod commands;
 

@@ -38,7 +38,7 @@ Add to MCP config:
 
 ## Base Discovery Tools (4)
 
-These four discovery tools are always present. The README benchmark scenario adds operator helpers for stats, cost reporting, playbooks, profile controls, disabled-capability listing, and reload to reach 14 tools. Surfacing webhook status brings the total to 15.
+These four discovery tools are always present. Cost reporting, playbooks, kill/revive controls, profile set/get/list, and disabled-capability listing bring the always-on surface to 12 tools. The README benchmark scenario adds stats and reload to reach 14 tools. Surfacing webhook status brings the total to 15.
 
 - gateway_search_tools(query) -- Semantic search across all backend tools by keyword
 - gateway_invoke(server, tool, arguments) -- Execute a tool on any backend

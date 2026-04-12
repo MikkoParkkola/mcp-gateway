@@ -84,8 +84,8 @@ pub enum ExportTarget {
 /// Universal MCP Gateway - single-port multiplexing for MCP servers and REST APIs
 ///
 /// Aggregates multiple MCP backends and REST capability definitions behind one
-/// endpoint.  Meta-MCP mode (default) exposes four dynamic discovery tools so AI
-/// clients only load the tools they actually need, saving ~95% of context tokens.
+/// endpoint. Meta-MCP mode (default) exposes the gateway's compact public tool
+/// surface so AI clients only load the tools they actually need.
 ///
 /// Run without a subcommand to start the gateway server.
 #[derive(Parser, Debug)]

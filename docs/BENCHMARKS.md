@@ -45,7 +45,7 @@ Reference scenario assumptions:
 - 1,000 requests
 - Claude Opus input pricing at $15 / million tokens
 
-The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 15th tool.
+The base discovery quartet stays constant, and the always-on operator surface also includes cost report, playbooks, kill/revive controls, profile set/get/list, and disabled-capability listing for a 12-tool minimum. The README benchmark scenario adds stats and reload. Surfacing webhook status adds the 15th tool.
 
 This yields the README headline numbers: **~1400 gateway tokens**, **91% savings**, and **$204 saved per 1K requests**.
 

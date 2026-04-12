@@ -119,8 +119,8 @@ server:
   host: "127.0.0.1"
   port: 3000
 
-# Meta-MCP mode - exposes 4 meta-tools for dynamic tool discovery
-# Reduces context tokens by ~95% compared to loading all tools upfront
+# Meta-MCP mode - exposes the compact 12-15 tool public surface for on-demand discovery
+# Reduces context pressure compared to loading every backend tool upfront
 meta_mcp:
   enabled: true
   cache_tools: true

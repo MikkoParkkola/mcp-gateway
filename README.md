@@ -44,7 +44,7 @@ MCP Gateway removes that tradeoff entirely.
 | **Changing MCP config** | Restart AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The README benchmark scenario also surfaces stats, cost report, playbooks, profile controls, disabled-capability visibility, and reload for a 14-tool surface. Surfacing webhook status adds the 15th tool.
+The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The always-on operator surface also includes cost report, playbooks, kill/revive controls, profile set/get/list, and disabled-capability visibility for a 12-tool minimum. The README benchmark scenario adds stats and reload for a 14-tool surface. Surfacing webhook status adds the 15th tool.
 
 ### Why not...
 
@@ -149,7 +149,7 @@ That's it. Your AI now has access to all backends through the gateway's Meta-MCP
 
 ### 1. Unlimited Tools, Minimal Tokens
 
-The gateway exposes 12 Meta-MCP tools minimum, 14 in the README benchmark scenario, and 15 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
+The gateway exposes 12 Meta-MCP tools minimum, 14 in the README benchmark scenario, and 15 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for cost, playbooks, kill/revive controls, profile set/get/list, disabled-capability visibility, stats, reload, and webhook status.
 
 **Token math** (Claude Opus @ $15/M input tokens, reproducible via `python benchmarks/token_savings.py --scenario readme`):
 - **Without**: 100 tools x 150 tokens x 1,000 requests = 15M tokens = **$225**
