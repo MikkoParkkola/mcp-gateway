@@ -4,7 +4,7 @@
 //! the emerging Agent Skills standard from agentskills.io and the Claude Code
 //! skill convention:
 //!
-//! ```markdown
+//! ```text
 //! ---
 //! name: my-skill
 //! description: What the skill does
@@ -19,9 +19,7 @@
 //! Body markdown describing how the skill works, with optional fenced
 //! code blocks that represent executable steps:
 //!
-//! ```bash
-//! echo "hello"
-//! ```
+//!     echo "hello"
 //! ```
 //!
 //! This parser is **read-only**: it extracts structured metadata and the body
