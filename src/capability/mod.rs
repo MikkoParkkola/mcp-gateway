@@ -45,10 +45,12 @@ pub mod validator;
 mod watcher;
 
 pub use backend::{CapabilityBackend, CapabilityBackendStatus, RugPullRecord};
+pub use definition::ProtocolConfig;
 pub use definition::*;
 #[cfg(feature = "discovery")]
 pub use discovery::{DiscoveryEngine, DiscoveryOptions, DiscoveryResult};
 pub use executor::CapabilityExecutor;
+pub use executor::rest::{ExecutionContext, ProtocolExecutor};
 pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};

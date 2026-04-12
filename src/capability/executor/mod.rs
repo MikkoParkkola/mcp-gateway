@@ -17,6 +17,7 @@
 
 mod credentials;
 mod params;
+pub mod rest;
 mod xml;
 
 use std::sync::Arc;
@@ -110,6 +111,12 @@ impl CapabilityExecutor {
 
     /// Execute a capability with the given parameters.
     ///
+    /// Routes through the [`ProtocolExecutor`](rest::ProtocolExecutor) trait:
+    /// the provider's `service` field selects the protocol adapter, and the
+    /// adapter handles the actual network call. Phase 1 supports REST only;
+    /// future protocols are added by implementing the trait and registering
+    /// the executor.
+    ///
     /// # Errors
     ///
     /// Returns an error if the request fails, the response is invalid, or
@@ -137,7 +144,11 @@ impl CapabilityExecutor {
             }
         }
 
-        let response = self.execute_provider(capability, provider, &params).await?;
+        // Route through the protocol executor trait.
+        let protocol_config = provider.protocol_config();
+        let response = self
+            .dispatch_protocol(capability, provider, &protocol_config, &params)
+            .await?;
 
         // Apply response transform pipeline if configured
         let response = {
@@ -154,6 +165,7 @@ impl CapabilityExecutor {
         tracing::info!(
             latency_ms = latency.as_millis(),
             provider = %provider.service,
+            protocol = %protocol_config.protocol_name(),
             "Capability executed successfully"
         );
 
@@ -165,7 +177,42 @@ impl CapabilityExecutor {
         Ok(response)
     }
 
+    /// Dispatch to the appropriate protocol executor based on
+    /// [`ProtocolConfig::protocol_name()`].
+    ///
+    /// Phase 1: only REST is supported. Future protocols will be looked up
+    /// from a `HashMap<&'static str, Arc<dyn ProtocolExecutor>>` registered
+    /// at construction time.
+    async fn dispatch_protocol(
+        &self,
+        capability: &CapabilityDefinition,
+        provider: &ProviderConfig,
+        protocol_config: &super::definition::ProtocolConfig,
+        params: &Value,
+    ) -> Result<Value> {
+        use rest::{ExecutionContext, ProtocolExecutor as _};
+
+        match protocol_config.protocol_name() {
+            "rest" => {
+                let executor = rest::RestExecutor { executor: self };
+                let ctx = ExecutionContext {
+                    capability,
+                    timeout_secs: provider.timeout,
+                };
+                executor
+                    .execute(protocol_config, params.clone(), &ctx)
+                    .await
+            }
+            other => Err(Error::Config(format!(
+                "Unsupported protocol '{other}'. Available: rest"
+            ))),
+        }
+    }
+
     /// Execute a request using a provider configuration.
+    ///
+    /// This is the core REST execution method. It is `pub(crate)` so the
+    /// [`RestExecutor`](rest::RestExecutor) adapter can delegate to it.
     #[tracing::instrument(
         skip(self, params),
         fields(
@@ -173,7 +220,7 @@ impl CapabilityExecutor {
             provider = %provider.service
         )
     )]
-    async fn execute_provider(
+    pub(crate) async fn execute_provider(
         &self,
         capability: &CapabilityDefinition,
         provider: &ProviderConfig,

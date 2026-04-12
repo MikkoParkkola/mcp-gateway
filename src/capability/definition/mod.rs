@@ -189,6 +189,36 @@ pub struct ProviderConfig {
     pub config: RestConfig,
 }
 
+impl ProviderConfig {
+    /// Derive the protocol-specific configuration from the `service` field.
+    ///
+    /// This is the bridge between the flat YAML structure (which uses a
+    /// `service` string + a `config` object) and the typed `ProtocolConfig`
+    /// enum used by protocol executors at runtime.
+    ///
+    /// Unknown or missing service names fall back to `Rest` for backward
+    /// compatibility — every existing capability YAML uses `service: rest`
+    /// (or omits the field, which defaults to `"rest"`).
+    #[must_use]
+    pub fn protocol_config(&self) -> ProtocolConfig {
+        // Phase 1: everything maps to REST. Future phases will match on
+        // self.service and construct the appropriate variant.
+        match self.service.as_str() {
+            "rest" | "" => ProtocolConfig::Rest(self.config.clone()),
+            // Unknown service → fall back to REST with a tracing warning.
+            // This preserves backward compat if someone has a typo or
+            // uses a service name that isn't implemented yet.
+            _other => {
+                tracing::warn!(
+                    service = %self.service,
+                    "Unknown service type, falling back to REST protocol"
+                );
+                ProtocolConfig::Rest(self.config.clone())
+            }
+        }
+    }
+}
+
 fn default_service() -> String {
     "rest".to_string()
 }
@@ -333,6 +363,46 @@ impl RestConfig {
 
 fn default_method() -> String {
     "GET".to_string()
+}
+
+/// Protocol-specific configuration, derived from `ProviderConfig.service` + `config`.
+///
+/// This enum is the extension point for future protocol adapters. Phase 1
+/// supports only `Rest`; adding a new variant (e.g. `Graphql`, `Grpc`) is a
+/// one-line enum addition plus a new `ProtocolExecutor` implementation.
+///
+/// `ProtocolConfig` is NOT deserialized from YAML directly — it is produced
+/// by [`ProviderConfig::protocol_config()`] to preserve backward
+/// compatibility with existing capability definitions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "protocol", rename_all = "snake_case")]
+pub enum ProtocolConfig {
+    /// REST/HTTP protocol (the original and default).
+    Rest(RestConfig),
+    // Future variants (NOT in this PR):
+    // Graphql(GraphqlConfig),
+    // Grpc(GrpcConfig),
+    // Jsonrpc(JsonRpcConfig),
+    // Cli(CliConfig),
+    // Wasm(WasmConfig),
+}
+
+impl ProtocolConfig {
+    /// Returns the protocol name for logging and dispatch.
+    #[must_use]
+    pub fn protocol_name(&self) -> &'static str {
+        match self {
+            ProtocolConfig::Rest(_) => "rest",
+        }
+    }
+
+    /// Extract the inner `RestConfig`, if this is a REST protocol.
+    #[must_use]
+    pub fn as_rest(&self) -> Option<&RestConfig> {
+        match self {
+            ProtocolConfig::Rest(c) => Some(c),
+        }
+    }
 }
 
 /// Authentication configuration

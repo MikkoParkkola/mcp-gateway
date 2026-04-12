@@ -331,3 +331,174 @@ fn capability_metadata_serializes_composition_fields() {
     assert_eq!(json["consumes"][0], "userId");
     assert_eq!(json["chains_with"][0], "next_tool");
 }
+
+// ── ProtocolConfig tests ─────────────────────────────────────────────
+
+#[test]
+fn protocol_config_rest_round_trips_through_serde_json() {
+    // GIVEN: a ProtocolConfig::Rest with populated fields
+    // WHEN: serialized to JSON and back
+    // THEN: all fields preserved
+    let config = ProtocolConfig::Rest(RestConfig {
+        base_url: "https://api.example.com".to_string(),
+        path: "/v1/users".to_string(),
+        method: "POST".to_string(),
+        ..Default::default()
+    });
+
+    let json = serde_json::to_string(&config).unwrap();
+    let restored: ProtocolConfig = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.protocol_name(), "rest");
+    let rest = restored.as_rest().unwrap();
+    assert_eq!(rest.base_url, "https://api.example.com");
+    assert_eq!(rest.path, "/v1/users");
+    assert_eq!(rest.method, "POST");
+}
+
+#[test]
+fn protocol_config_rest_round_trips_through_serde_yaml() {
+    // GIVEN: a ProtocolConfig::Rest
+    // WHEN: serialized to YAML and back
+    // THEN: all fields preserved
+    let config = ProtocolConfig::Rest(RestConfig {
+        base_url: "https://api.weather.com".to_string(),
+        path: "/forecast".to_string(),
+        method: "GET".to_string(),
+        ..Default::default()
+    });
+
+    let yaml = serde_yaml::to_string(&config).unwrap();
+    let restored: ProtocolConfig = serde_yaml::from_str(&yaml).unwrap();
+
+    assert_eq!(restored.protocol_name(), "rest");
+    let rest = restored.as_rest().unwrap();
+    assert_eq!(rest.base_url, "https://api.weather.com");
+}
+
+#[test]
+fn protocol_config_protocol_name_returns_rest() {
+    let config = ProtocolConfig::Rest(RestConfig::default());
+    assert_eq!(config.protocol_name(), "rest");
+}
+
+#[test]
+fn protocol_config_as_rest_returns_some_for_rest_variant() {
+    let inner = RestConfig {
+        base_url: "https://example.com".to_string(),
+        ..Default::default()
+    };
+    let config = ProtocolConfig::Rest(inner.clone());
+    let extracted = config.as_rest().unwrap();
+    assert_eq!(extracted.base_url, inner.base_url);
+}
+
+// ── ProviderConfig::protocol_config() bridge tests ──────────────────
+
+#[test]
+fn provider_config_protocol_config_maps_rest_service() {
+    // GIVEN: ProviderConfig with service = "rest"
+    // WHEN: calling protocol_config()
+    // THEN: returns ProtocolConfig::Rest with the same RestConfig
+    let provider = ProviderConfig {
+        service: "rest".to_string(),
+        cost_per_call: 0.0,
+        timeout: 30,
+        config: RestConfig {
+            base_url: "https://api.example.com".to_string(),
+            path: "/users".to_string(),
+            ..Default::default()
+        },
+    };
+
+    let proto = provider.protocol_config();
+    assert_eq!(proto.protocol_name(), "rest");
+    let rest = proto.as_rest().unwrap();
+    assert_eq!(rest.base_url, "https://api.example.com");
+    assert_eq!(rest.path, "/users");
+}
+
+#[test]
+fn provider_config_protocol_config_defaults_empty_service_to_rest() {
+    // GIVEN: ProviderConfig with empty service string
+    // WHEN: calling protocol_config()
+    // THEN: falls back to REST
+    let provider = ProviderConfig {
+        service: String::new(),
+        cost_per_call: 0.0,
+        timeout: 30,
+        config: RestConfig {
+            base_url: "https://fallback.example.com".to_string(),
+            ..Default::default()
+        },
+    };
+
+    let proto = provider.protocol_config();
+    assert_eq!(proto.protocol_name(), "rest");
+    assert_eq!(
+        proto.as_rest().unwrap().base_url,
+        "https://fallback.example.com"
+    );
+}
+
+#[test]
+fn provider_config_protocol_config_unknown_service_falls_back_to_rest() {
+    // GIVEN: ProviderConfig with unknown service = "graphql"
+    // WHEN: calling protocol_config()
+    // THEN: falls back to REST (backward compat)
+    let provider = ProviderConfig {
+        service: "graphql".to_string(),
+        cost_per_call: 0.0,
+        timeout: 30,
+        config: RestConfig {
+            base_url: "https://graphql.example.com".to_string(),
+            ..Default::default()
+        },
+    };
+
+    let proto = provider.protocol_config();
+    assert_eq!(proto.protocol_name(), "rest");
+    assert_eq!(
+        proto.as_rest().unwrap().base_url,
+        "https://graphql.example.com"
+    );
+}
+
+#[test]
+fn provider_config_deserialized_from_yaml_maps_to_protocol_config() {
+    // GIVEN: YAML matching the existing capability format
+    // WHEN: deserialized to ProviderConfig and mapped
+    // THEN: protocol_config() produces correct REST config
+    let yaml = r"
+service: rest
+timeout: 15
+config:
+  base_url: https://api.open-meteo.com
+  path: /v1/forecast
+  method: GET
+";
+    let provider: ProviderConfig = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(provider.service, "rest");
+    assert_eq!(provider.timeout, 15);
+
+    let proto = provider.protocol_config();
+    assert_eq!(proto.protocol_name(), "rest");
+    let rest = proto.as_rest().unwrap();
+    assert_eq!(rest.base_url, "https://api.open-meteo.com");
+    assert_eq!(rest.path, "/v1/forecast");
+    assert_eq!(rest.method, "GET");
+}
+
+#[test]
+fn provider_config_default_service_is_rest() {
+    // GIVEN: YAML without explicit service field
+    // WHEN: deserialized
+    // THEN: service defaults to "rest"
+    let yaml = r"
+config:
+  base_url: https://api.example.com
+";
+    let provider: ProviderConfig = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(provider.service, "rest");
+    assert_eq!(provider.protocol_config().protocol_name(), "rest");
+}
