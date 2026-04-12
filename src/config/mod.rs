@@ -529,6 +529,9 @@ pub struct OAuthConfig {
     /// Client ID (optional — uses dynamic registration or generates one if not set).
     #[serde(default)]
     pub client_id: Option<String>,
+    /// Client secret (optional — required by some providers for token exchange).
+    #[serde(default)]
+    pub client_secret: Option<String>,
     /// Seconds before expiry to proactively refresh the token (default: 300).
     #[serde(default = "default_token_refresh_buffer")]
     pub token_refresh_buffer_secs: u64,

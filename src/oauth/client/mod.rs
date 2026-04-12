@@ -53,6 +53,9 @@ pub struct OAuthClient {
     /// Client ID (registered or generated)
     client_id: RwLock<Option<String>>,
 
+    /// Client secret (optional — needed by some providers for token exchange)
+    client_secret: RwLock<Option<String>>,
+
     /// Seconds before expiry at which the background task proactively refreshes.
     ///
     /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
@@ -87,6 +90,8 @@ impl OAuthClient {
         scopes: Vec<String>,
         storage: Arc<TokenStorage>,
         token_refresh_buffer_secs: u64,
+        client_id: Option<String>,
+        client_secret: Option<String>,
     ) -> Self {
         Self {
             http_client,
@@ -98,7 +103,8 @@ impl OAuthClient {
             storage,
             current_token: RwLock::new(None),
             scopes,
-            client_id: RwLock::new(None),
+            client_id: RwLock::new(client_id),
+            client_secret: RwLock::new(client_secret),
             token_refresh_buffer_secs,
         }
     }
@@ -471,12 +477,17 @@ impl OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
 
+        let client_secret_val = self.client_secret.read().clone();
+
         let mut params = HashMap::new();
         params.insert("grant_type", "authorization_code");
         params.insert("code", code);
         params.insert("redirect_uri", redirect_uri);
         params.insert("client_id", &client_id);
         params.insert("code_verifier", code_verifier);
+        if let Some(ref secret) = client_secret_val {
+            params.insert("client_secret", secret.as_str());
+        }
 
         let response = self
             .http_client
@@ -625,6 +636,10 @@ impl OAuthClient {
             .json()
             .await
             .map_err(|e| Error::OAuth(format!("Failed to parse registration response: {e}")))?;
+
+        if let Some(ref secret) = reg_response.client_secret {
+            *self.client_secret.write() = Some(secret.clone());
+        }
 
         info!(client_id = %reg_response.client_id, "Registered OAuth client");
         Ok(reg_response.client_id)

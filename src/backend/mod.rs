@@ -318,7 +318,7 @@ impl Backend {
                 .map_err(|e| Error::OAuth(format!("Failed to create token storage: {e}")))?,
         );
 
-        // Create OAuth client
+        // Create OAuth client, passing through any pre-configured client_id and client_secret
         let oauth = OAuthClient::new(
             http_client,
             self.name.clone(),
@@ -326,6 +326,8 @@ impl Backend {
             oauth_config.scopes.clone(),
             storage,
             oauth_config.token_refresh_buffer_secs,
+            oauth_config.client_id.clone(),
+            oauth_config.client_secret.clone(),
         );
 
         Ok(Some(oauth))

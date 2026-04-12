@@ -117,6 +117,8 @@ fn new_client_has_no_valid_token() {
         vec!["read".to_string()],
         storage,
         300,
+        None,
+        None,
     );
     assert!(!client.has_valid_token());
 }
@@ -132,6 +134,8 @@ fn client_with_valid_token_returns_true() {
         vec![],
         storage,
         300,
+        None,
+        None,
     );
 
     // Inject a non-expired token
@@ -158,6 +162,8 @@ fn client_with_expired_token_returns_false() {
         vec![],
         storage,
         300,
+        None,
+        None,
     );
 
     // Inject an expired token
@@ -184,6 +190,8 @@ fn backend_name_returns_configured_name() {
         vec![],
         storage,
         300,
+        None,
+        None,
     );
     assert_eq!(client.backend_name(), "my-service");
 }
@@ -205,6 +213,8 @@ fn needs_proactive_refresh_false_when_no_token() {
         vec![],
         storage,
         300,
+        None,
+        None,
     );
 
     // WHEN / THEN: no token means no proactive refresh needed
@@ -224,6 +234,8 @@ fn needs_proactive_refresh_false_when_token_no_expiry() {
         vec![],
         storage,
         300,
+        None,
+        None,
     );
     let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
     *client.current_token.write() = Some(token);
@@ -245,6 +257,8 @@ fn needs_proactive_refresh_true_when_within_buffer() {
         vec![],
         storage,
         300, // 300s buffer
+        None,
+        None,
     );
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -273,6 +287,8 @@ fn needs_proactive_refresh_false_when_outside_buffer() {
         vec![],
         storage,
         300,
+        None,
+        None,
     );
     let token = TokenInfo::from_response("tok".to_string(), None, None, Some(3600), None);
     *client.current_token.write() = Some(token);
