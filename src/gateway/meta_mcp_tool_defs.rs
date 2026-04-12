@@ -394,6 +394,39 @@ pub(crate) fn build_list_profiles_tool() -> Tool {
     }
 }
 
+/// Build the `gateway_set_state` meta-tool definition.
+///
+/// Transitions the session's FSM workflow state.  Tools whose
+/// `visible_in_states` list is non-empty are only shown when the session is
+/// in a matching state.  Tools with an empty `visible_in_states` are always
+/// visible regardless of state.
+pub(crate) fn build_set_state_tool() -> Tool {
+    Tool {
+        name: "gateway_set_state".to_string(),
+        title: Some("Set Workflow State".to_string()),
+        description: Some(
+            "Transition the session to a new workflow state. \
+             Capabilities with a non-empty `visible_in_states` list will only appear in \
+             tools/list when the session is in a matching state. \
+             Tools without `visible_in_states` are always visible. \
+             Returns the previous state, new state, and visible tool count."
+                .to_string(),
+        ),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "description": "Target workflow state name (e.g. \"checkout\", \"payment\", \"default\")"
+                }
+            },
+            "required": ["state"]
+        }),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
 /// Build the `gateway_reload_config` meta-tool definition.
 pub(crate) fn build_reload_config_tool() -> Tool {
     Tool {
@@ -481,6 +514,7 @@ pub(crate) fn build_meta_tools(
     tools.push(build_get_profile_tool());
     tools.push(build_list_disabled_capabilities_tool());
     tools.push(build_list_profiles_tool());
+    tools.push(build_set_state_tool());
     if reload_enabled {
         tools.push(build_reload_config_tool());
     }

@@ -47,6 +47,7 @@ impl MetaMcp {
             "gateway_set_profile",
             "gateway_get_profile",
             "gateway_list_profiles",
+            "gateway_set_state",
             "gateway_reload_config",
         ];
 

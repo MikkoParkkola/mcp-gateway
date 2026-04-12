@@ -58,6 +58,7 @@ async fn test_webhook_registry_registration() {
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
         response_transform: TransformConfig::default(),
+        visible_in_states: vec![],
         webhooks,
         sha256: None,
     };
@@ -104,6 +105,7 @@ async fn test_webhook_routes_creation() {
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
         response_transform: TransformConfig::default(),
+        visible_in_states: vec![],
         webhooks,
         sha256: None,
     };

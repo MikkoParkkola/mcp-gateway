@@ -44,12 +44,25 @@ impl MetaMcp {
         let mut matches: Vec<Value> = Vec::new();
         let mut all_tags: Vec<String> = Vec::new();
 
-        // Search capability backend
+        // Search capability backend — filtered by FSM state
         if let Some(cap) = self.get_capabilities()
             && profile.backend_allowed(&cap.name)
         {
+            let current_state = session_id.map_or_else(
+                || crate::gateway::state::DEFAULT_STATE.to_string(),
+                |sid| self.session_state.get_state(sid),
+            );
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for capability in cap.list_capabilities() {
+                // FSM state filter
+                if !capability.visible_in_states.is_empty()
+                    && !capability
+                        .visible_in_states
+                        .iter()
+                        .any(|s| s == &current_state)
+                {
+                    continue;
+                }
                 let tool = capability.to_mcp_tool();
                 if !profile.tool_allowed(&tool.name) {
                     continue;
@@ -263,8 +276,12 @@ impl MetaMcp {
             if let Some(cap) = self.get_capabilities()
                 && server == cap.name
             {
+                let current_state = session_id.map_or_else(
+                    || crate::gateway::state::DEFAULT_STATE.to_string(),
+                    |sid| self.session_state.get_state(sid),
+                );
                 let tools: Vec<_> = cap
-                    .get_tools()
+                    .get_tools_for_state(&current_state)
                     .into_iter()
                     .filter(|t| profile.tool_allowed(&t.name))
                     .collect();
@@ -298,12 +315,16 @@ impl MetaMcp {
         // No server specified: aggregate ALL tools (fast — tools are prefetched at startup)
         let mut all_tools: Vec<Value> = Vec::new();
 
-        // Capability tools (instant, in memory)
+        // Capability tools (instant, in memory) — filtered by FSM state
         if let Some(cap) = self.get_capabilities()
             && profile.backend_allowed(&cap.name)
         {
+            let current_state = session_id.map_or_else(
+                || crate::gateway::state::DEFAULT_STATE.to_string(),
+                |sid| self.session_state.get_state(sid),
+            );
             let cap_killed = self.kill_switch.is_killed(&cap.name);
-            for tool in cap.get_tools() {
+            for tool in cap.get_tools_for_state(&current_state) {
                 if !profile.tool_allowed(&tool.name) {
                     continue;
                 }
@@ -381,11 +402,27 @@ impl MetaMcp {
 
         // Search capability backend exhaustively (fast, no network, all in memory).
         // Iterates over full CapabilityDefinition to include composition metadata.
+        // Capabilities with a non-empty `visible_in_states` are only included when
+        // the session's current FSM state appears in the list.
         if let Some(cap) = self.get_capabilities()
             && profile.backend_allowed(&cap.name)
         {
+            let current_state = session_id.map_or_else(
+                || crate::gateway::state::DEFAULT_STATE.to_string(),
+                |sid| self.session_state.get_state(sid),
+            );
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for capability in cap.list_capabilities() {
+                // FSM state filter: skip if visible_in_states is non-empty and current state
+                // is not in the list.
+                if !capability.visible_in_states.is_empty()
+                    && !capability
+                        .visible_in_states
+                        .iter()
+                        .any(|s| s == &current_state)
+                {
+                    continue;
+                }
                 let tool = capability.to_mcp_tool();
                 if !profile.tool_allowed(&tool.name) {
                     continue;

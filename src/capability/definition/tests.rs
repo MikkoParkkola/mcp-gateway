@@ -24,6 +24,7 @@ fn make_capability(name: &str, description: &str, tags: Vec<&str>) -> Capability
         response_transform: TransformConfig::default(),
         webhooks: HashMap::new(),
         sha256: None,
+        visible_in_states: vec![],
     }
 }
 
@@ -188,6 +189,7 @@ fn make_capability_with_schema(
         response_transform: crate::transform::TransformConfig::default(),
         webhooks: HashMap::new(),
         sha256: None,
+        visible_in_states: vec![],
     }
 }
 

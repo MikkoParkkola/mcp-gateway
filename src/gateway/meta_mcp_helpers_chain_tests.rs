@@ -242,6 +242,7 @@ fn build_routing_instructions_includes_chain_section_when_chains_present() {
         },
         transform: TransformConfig::default(),
         response_transform: TransformConfig::default(),
+        visible_in_states: vec![],
         webhooks: HashMap::new(),
         sha256: None,
     };
@@ -285,6 +286,7 @@ fn build_routing_instructions_omits_chain_section_when_no_chains() {
         },
         transform: TransformConfig::default(),
         response_transform: TransformConfig::default(),
+        visible_in_states: vec![],
         webhooks: HashMap::new(),
         sha256: None,
     };

@@ -124,6 +124,7 @@ mod tests {
             },
             transform: TransformConfig::default(),
             response_transform: TransformConfig::default(),
+            visible_in_states: vec![],
             webhooks: HashMap::default(),
             sha256: None,
         }

@@ -29,6 +29,7 @@ use crate::cost_accounting::CostTracker;
 use crate::cost_accounting::enforcer::BudgetEnforcer;
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::registry::CostRegistry;
+use crate::gateway::state::SessionStateStore;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
@@ -133,6 +134,13 @@ pub struct MetaMcp {
     /// `DashMap` allocation is completely absent in production builds.
     #[cfg(feature = "spec-preview")]
     pub(super) session_promoted: Arc<DashMap<String, Vec<String>>>,
+
+    /// Per-session FSM workflow state store (issue #113).
+    ///
+    /// Controls which capability tools are visible in `tools/list` based on
+    /// the `visible_in_states` field of each `CapabilityDefinition`.
+    /// Transitions via the `gateway_set_state` meta-tool.
+    pub(super) session_state: SessionStateStore,
 }
 
 // ============================================================================
@@ -177,6 +185,7 @@ impl MetaMcp {
             surfaced_tools_map: HashMap::new(),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
+            session_state: SessionStateStore::new(),
         }
     }
 
@@ -634,6 +643,7 @@ impl MetaMcp {
             "gateway_set_profile" => self.set_profile(&arguments, session_id),
             "gateway_get_profile" => self.get_profile(session_id),
             "gateway_list_profiles" => self.list_profiles(),
+            "gateway_set_state" => self.set_state(&arguments, session_id),
             "gateway_reload_config" => self.reload_config().await,
             _ => {
                 const META_TOOLS: &[&str] = &[
@@ -653,6 +663,7 @@ impl MetaMcp {
                     "gateway_set_profile",
                     "gateway_get_profile",
                     "gateway_list_profiles",
+                    "gateway_set_state",
                     "gateway_reload_config",
                 ];
                 let suggestion = did_you_mean(tool_name, META_TOOLS, 3, 3);
@@ -668,6 +679,47 @@ impl MetaMcp {
             Ok(content) => wrap_tool_success(id, &content),
             Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
         }
+    }
+}
+
+// ============================================================================
+// FSM workflow state meta-tool
+// ============================================================================
+
+impl MetaMcp {
+    /// Handle `gateway_set_state` — transition the session's FSM workflow state.
+    ///
+    /// Returns the previous state, the new state, and the number of capability
+    /// tools visible in the new state (across all capability backends).
+    fn set_state(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
+        let Some(sid) = session_id else {
+            return Err(Error::Protocol(
+                "gateway_set_state requires a session (send Mcp-Session-Id header)".to_string(),
+            ));
+        };
+
+        let new_state = extract_required_str(args, "state")?;
+        let previous = self.session_state.set_state(sid, new_state);
+
+        // Count visible capability tools in the new state for the response payload.
+        let visible_tools = self
+            .get_capabilities()
+            .map_or(0, |cap| cap.get_tools_for_state(new_state).len());
+
+        debug!(
+            session_id = sid,
+            previous = %previous,
+            current = new_state,
+            visible_tools = visible_tools,
+            "Session FSM state transition"
+        );
+
+        Ok(json!({
+            "previous": previous,
+            "current": new_state,
+            "visible_tools": visible_tools,
+            "session_id": sid,
+        }))
     }
 }
 

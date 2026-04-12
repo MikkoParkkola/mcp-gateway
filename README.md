@@ -18,7 +18,7 @@
 
 ![demo](demo.gif)
 
-MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface -- 12 tools minimum, 14 in the README benchmark scenario, 15 when webhook status is surfaced -- and discovers the right backend tool on demand.
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface -- 13 tools minimum, 15 in the README benchmark scenario, 16 when webhook status is surfaced -- and discovers the right backend tool on demand.
 
 Public quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
 
@@ -38,7 +38,7 @@ MCP Gateway removes that tradeoff entirely.
 
 | | Without Gateway | With Gateway |
 |---|----------------|--------------|
-| **Tools in context** | Every definition, every request | 14 Meta-MCP tools in the README benchmark (~1400 tokens) |
+| **Tools in context** | Every definition, every request | 15 Meta-MCP tools in the README benchmark (~1500 tokens) |
 | **Token overhead** | ~15,000 tokens (100 tools) | ~1400 tokens -- **91% savings** |
 | **Cost at scale** | ~$0.22/request (Opus input) | ~$0.021/request -- **$204 saved per 1K** |
 | **Practical tool limit** | 20-50 tools (context pressure) | **Unlimited** -- discovered on demand |
@@ -52,7 +52,7 @@ The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gatew
 
 | Alternative | What it does | Why MCP Gateway is different |
 |---|---|---|
-| **Direct MCP connections** | Each server connected individually | Every tool definition loaded every request. 100 tools = 15K tokens burned. Gateway: a small fixed 12-15 tool surface instead of every backend tool. |
+| **Direct MCP connections** | Each server connected individually | Every tool definition loaded every request. 100 tools = 15K tokens burned. Gateway: a small fixed 13-16 tool surface instead of every backend tool. |
 | **Claude's ToolSearch** | Built-in deferred tool loading | Only works with tools already configured. Gateway adds unlimited backends + REST APIs without MCP servers. |
 | **Archestra** | Cloud-hosted MCP registry | Requires cloud account, sends data to third party. Gateway is local-only, zero external dependencies. |
 | **Kong / Portkey** | General API gateways | Not MCP-aware. No meta-tool discovery, no tool search, no capability YAML system. |
@@ -67,7 +67,7 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 - **Tool-poisoning validator (AX-010).** Every backend tool description is scanned before it reaches the agent's context window. HIGH patterns fail-closed: `<IMPORTANT>` blocks, `~/.ssh`/`~/.aws`/`id_rsa`/`.env`/`/etc/passwd`, `sidenote` exfiltration language, `curl .* https?://`, `base64` in exfil context. MEDIUM patterns warn: 40+ consecutive spaces, zero-width / bidi-override Unicode, oversized descriptions. Implementation: [`src/validator/rules/tool_poisoning.rs`](src/validator/rules/tool_poisoning.rs) (19 tests).
 - **SHA-256 capability hash-pinning.** `mcp-gateway cap pin <file>` writes a `sha256:` line over the file's canonical hash (`grep -v '^sha256:' capability.yaml | sha256sum` is reproducible from any shell). The loader refuses any mismatched file on load and on every watcher event.
 - **Rug-pull detection.** When a pinned capability's on-disk content changes after approval, the watcher unloads it and logs `RUG-PULL DETECTED`. The capability stays quarantined until an operator re-pins. Implementation: [`src/capability/hash.rs`](src/capability/hash.rs) and `detect_rug_pulls` in [`src/capability/backend.rs`](src/capability/backend.rs).
-- **Centralized audit surface.** Capability YAMLs are plain text, diffable, grep-able, PR-reviewable. The agent only ever sees the compact Meta-MCP surface (12-15 tools). No N-server tool-list pollution means no N-server attack surface.
+- **Centralized audit surface.** Capability YAMLs are plain text, diffable, grep-able, PR-reviewable. The agent only ever sees the compact Meta-MCP surface (13-16 tools). No N-server tool-list pollution means no N-server attack surface.
 
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
@@ -90,7 +90,7 @@ mcp-gateway serve                            # 3. run
 mcp-gateway doctor                           # 4. verify everything is healthy
 ```
 
-That's it. Your AI clients now talk to the gateway and the gateway routes to every backend you already had configured — at a flat `~14 tools` instead of `~150`. Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
+That's it. Your AI clients now talk to the gateway and the gateway routes to every backend you already had configured — at a flat `~15 tools` instead of `~150`. Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
 
 > **Nothing to import yet?** `mcp-gateway init --with-examples` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
 

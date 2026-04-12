@@ -278,6 +278,26 @@ impl CapabilityBackend {
         self.capabilities.read().tools.clone()
     }
 
+    /// Get tools visible in `current_state`.
+    ///
+    /// A capability is included when its `visible_in_states` list is **empty**
+    /// (always visible — backward compat) or when it contains `current_state`.
+    ///
+    /// O(n) over entries + tool cache; no extra allocations beyond the returned
+    /// `Vec`.
+    pub fn get_tools_for_state(&self, current_state: &str) -> Vec<Tool> {
+        let caps = self.capabilities.read();
+        caps.entries
+            .iter()
+            .zip(caps.tools.iter())
+            .filter(|(entry, _tool)| {
+                entry.visible_in_states.is_empty()
+                    || entry.visible_in_states.iter().any(|s| s == current_state)
+            })
+            .map(|(_entry, tool)| tool.clone())
+            .collect()
+    }
+
     /// Get a specific capability by name — O(1) via the name index.
     pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
         self.capabilities.read().get(name).cloned()

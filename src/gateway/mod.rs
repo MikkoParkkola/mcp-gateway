@@ -12,6 +12,7 @@ pub mod proxy;
 pub mod recovery;
 mod router;
 mod server;
+pub mod state;
 pub mod streaming;
 pub mod trace;
 #[cfg(feature = "webui")]

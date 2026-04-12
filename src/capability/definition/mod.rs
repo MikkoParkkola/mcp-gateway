@@ -79,6 +79,24 @@ pub struct CapabilityDefinition {
     /// See `crate::capability::hash` for the canonical computation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+
+    /// FSM workflow states in which this capability is visible.
+    ///
+    /// When empty (the default) the capability is **always visible** — this
+    /// preserves full backward compatibility with existing capability files.
+    ///
+    /// When non-empty, the capability is only included in `tools/list` when
+    /// the session's current FSM state appears in this list.
+    ///
+    /// # Example (YAML)
+    ///
+    /// ```yaml
+    /// visible_in_states:
+    ///   - checkout
+    ///   - payment
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_in_states: Vec<String>,
 }
 
 /// Provider configurations supporting both named and fallback arrays

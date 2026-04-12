@@ -8,9 +8,9 @@ use super::*;
 fn build_meta_tools_base_count_without_optional_features() {
     // GIVEN: no stats, webhooks, reload, or cost_report; 42 tools, 3 servers
     // WHEN: building meta tools
-    // THEN: 4 base + 1 playbook + 2 kill/revive + 2 set/get profile + 1 disabled-caps + 1 list-profiles = 11
+    // THEN: 4 base + 1 playbook + 2 kill/revive + 2 set/get profile + 1 disabled-caps + 1 list-profiles + 1 set-state = 12
     let tools = build_meta_tools(false, false, false, false, 42, 3);
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 12);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_list_servers"));
     assert!(names.contains(&"gateway_invoke"));
@@ -55,9 +55,9 @@ fn build_meta_tools_with_cost_report_adds_cost_report_tool() {
 #[test]
 fn build_meta_tools_all_enabled_has_15_tools() {
     // 4 base + 1 stats + 1 cost_report + 1 webhooks + 1 playbook + 2 kill/revive
-    // + 2 set/get profile + 1 disabled-caps + 1 list-profiles + 1 reload = 15
+    // + 2 set/get profile + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state = 16
     let tools = build_meta_tools(true, true, true, true, 0, 0);
-    assert_eq!(tools.len(), 15);
+    assert_eq!(tools.len(), 16);
 }
 
 #[test]

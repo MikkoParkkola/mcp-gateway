@@ -1,9 +1,9 @@
 {
   "last_verified": "2026-04-11",
   "meta_tools": {
-    "minimum": 12,
-    "readme_benchmark": 14,
-    "with_webhook_status": 15
+    "minimum": 13,
+    "readme_benchmark": 15,
+    "with_webhook_status": 16
   },
   "capability_count": 101,
   "startup_benchmark": {
