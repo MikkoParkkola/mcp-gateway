@@ -16,8 +16,8 @@ use crate::cache::ResponseCache;
 use crate::cost_accounting::suggestions;
 use crate::idempotency::{GuardOutcome, enforce};
 use crate::playbook::PlaybookEngine;
-use crate::provider::transforms::ResponseTransform;
 use crate::provider::Transform as _;
+use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
@@ -807,8 +807,7 @@ mod response_transform_tests {
         assert_eq!(result.get("id"), Some(&json!("abc")));
         assert_eq!(result.get("name"), Some(&json!("Alice")));
         assert!(
-            result.get("internal_token").is_none()
-                || result["internal_token"].is_null(),
+            result.get("internal_token").is_none() || result["internal_token"].is_null(),
             "internal_token should be stripped"
         );
         assert!(
@@ -834,7 +833,10 @@ mod response_transform_tests {
         });
 
         // WHEN: transforming
-        let result = transform.transform_result("tool", raw.clone()).await.unwrap();
+        let result = transform
+            .transform_result("tool", raw.clone())
+            .await
+            .unwrap();
 
         // THEN: result is identical to input
         assert_eq!(result, raw);
@@ -863,7 +865,10 @@ mod response_transform_tests {
         });
 
         // WHEN: transforming
-        let result = transform.transform_result("billing_tool", raw).await.unwrap();
+        let result = transform
+            .transform_result("billing_tool", raw)
+            .await
+            .unwrap();
 
         // THEN: the card number is redacted everywhere
         let card_val = result["payment"]["card"].as_str().unwrap();
@@ -879,27 +884,33 @@ mod response_transform_tests {
         assert!(TransformConfig::default().is_empty());
 
         // project non-empty
-        assert!(!TransformConfig {
-            project: vec!["x".to_string()],
-            ..Default::default()
-        }
-        .is_empty());
+        assert!(
+            !TransformConfig {
+                project: vec!["x".to_string()],
+                ..Default::default()
+            }
+            .is_empty()
+        );
 
         // rename non-empty
-        assert!(!TransformConfig {
-            rename: [("a".to_string(), "b".to_string())].into(),
-            ..Default::default()
-        }
-        .is_empty());
+        assert!(
+            !TransformConfig {
+                rename: [("a".to_string(), "b".to_string())].into(),
+                ..Default::default()
+            }
+            .is_empty()
+        );
 
         // redact non-empty
-        assert!(!TransformConfig {
-            redact: vec![RedactRule {
-                pattern: "x".to_string(),
-                replacement: "y".to_string(),
-            }],
-            ..Default::default()
-        }
-        .is_empty());
+        assert!(
+            !TransformConfig {
+                redact: vec![RedactRule {
+                    pattern: "x".to_string(),
+                    replacement: "y".to_string(),
+                }],
+                ..Default::default()
+            }
+            .is_empty()
+        );
     }
 }
