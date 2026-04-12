@@ -64,8 +64,9 @@ mcp-gateway sits between the agent and the backends:
 ┌──────────────────────────────────────┐
 │          MCP Gateway :39400          │
 │                                      │
-│  a compact Meta-MCP surface (12-15 tools): list_servers,         │
-│  list_tools, search_tools, invoke    │
+│  Meta-MCP surface (13-17 tools):     │
+│  list_servers, list_tools,           │
+│  search_tools, invoke, ...           │
 │                                      │
 │  Validator: AX-010 tool poisoning,   │
 │  capability YAML rules                │
@@ -79,12 +80,12 @@ mcp-gateway sits between the agent and the backends:
   server    server    server
 ```
 
-The agent only ever sees the a compact Meta-MCP surface (12-15 tools) (plus a small fixed set of operator helpers in the README benchmark, 14 total). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
+The agent only ever sees the compact Meta-MCP surface (13 tools minimum, 16 in the README benchmark, 17 with webhook status). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
 
 The immediate wins:
 
 - **One audit surface.** Every description the agent will ever see passes through one Rust module. I can add a rule once and it covers every backend.
-- **No context-window tax.** 1a compact Meta-MCP surface (12-15 tools) cost ~1400 input tokens instead of ~15000. That is not just a cost win, it is what makes the structural fix possible at all.
+- **No context-window tax.** The compact Meta-MCP surface costs ~1400 input tokens instead of ~15000. That is not just a cost win, it is what makes the structural fix possible at all.
 - **Capability YAMLs.** A REST API becomes a small YAML file checked into the repo. Diff-able, grep-able, PR-reviewable, hash-pinnable. The audit surface is text a human can read, not a live stdio pipe.
 
 ## 4. What AX-010 actually catches
