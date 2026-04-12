@@ -860,7 +860,7 @@ mod response_transform_tests {
     use crate::provider::transforms::ResponseTransform;
     use crate::transform::{RedactRule, TransformConfig};
 
-    /// Prove the component used by dispatch_to_backend: given a non-empty
+    /// Prove the component used by `dispatch_to_backend`: given a non-empty
     /// `response_transform` in a capability definition, `ResponseTransform`
     /// strips all fields not listed in `project`.
     #[tokio::test]
@@ -957,7 +957,7 @@ mod response_transform_tests {
         assert_eq!(result["user"], json!("Alice"));
     }
 
-    /// Verify TransformConfig::is_empty returns expected values.
+    /// Verify `TransformConfig::is_empty` returns expected values.
     #[test]
     fn transform_config_is_empty_tracks_all_fields() {
         // Default is empty
