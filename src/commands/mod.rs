@@ -25,7 +25,10 @@ pub use config_export::run_config_export;
 pub use doctor::run_doctor_command;
 pub use plugin::{run_plugin_install, run_plugin_list, run_plugin_search, run_plugin_uninstall};
 pub use setup::run_setup_command;
-pub use skills::run_skills_generate;
+pub use skills::{
+    run_skills_generate, run_skills_import, run_skills_list, run_skills_remove, run_skills_search,
+    run_skills_show,
+};
 pub use stats::run_stats_command;
 
 use std::process::ExitCode;

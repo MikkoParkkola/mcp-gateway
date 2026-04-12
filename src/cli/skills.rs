@@ -74,4 +74,69 @@ pub enum SkillsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Import a SKILL.md file or directory into the local skill registry
+    ///
+    /// Accepts a path to a `SKILL.md` file, a skill directory (containing
+    /// `SKILL.md`), or an `http(s)://` URL.  The parsed skill is added to
+    /// the registry (default: `~/.mcp-gateway/skills.json`) so agents can
+    /// discover it via `skills search` and inspect it via `skills show`.
+    ///
+    /// **Security**: imported skills are stored read-only.  No code in the
+    /// SKILL.md body is executed — the gateway only surfaces the content
+    /// for human/agent inspection.
+    #[command(about = "Import a SKILL.md file into the registry")]
+    Import {
+        /// Path or URL to a SKILL.md file or a directory containing one
+        #[arg(required = true)]
+        source: String,
+
+        /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
+        #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
+        registry: Option<PathBuf>,
+    },
+
+    /// List all skills in the local registry
+    #[command(about = "List imported skills")]
+    List {
+        /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
+        #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
+        registry: Option<PathBuf>,
+    },
+
+    /// Search imported skills by name, description, keywords, or triggers
+    #[command(about = "Search the imported skill registry")]
+    Search {
+        /// Free-text query (case-insensitive substring match)
+        #[arg(required = true)]
+        query: String,
+
+        /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
+        #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
+        registry: Option<PathBuf>,
+    },
+
+    /// Show the full content of an imported skill
+    #[command(about = "Show a single imported skill by name")]
+    Show {
+        /// Skill name (as reported by `skills list`)
+        #[arg(required = true)]
+        name: String,
+
+        /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
+        #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
+        registry: Option<PathBuf>,
+    },
+
+    /// Remove a skill from the registry
+    #[command(about = "Remove a skill from the registry")]
+    Remove {
+        /// Skill name to remove
+        #[arg(required = true)]
+        name: String,
+
+        /// Registry file path (defaults to ~/.mcp-gateway/skills.json)
+        #[arg(long, env = "MCP_GATEWAY_SKILLS_REGISTRY")]
+        registry: Option<PathBuf>,
+    },
 }

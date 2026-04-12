@@ -297,6 +297,61 @@ step-by-step walkthrough.
 | **Hot-path microbenchmarks** | Included | Criterion suite covers registry, parsing, cache-key, firewall, and semantic search hot paths |
 | **End-to-end latency** | Backend-dependent | Measure with your real MCP servers and REST APIs rather than relying on a synthetic single number |
 
+## SKILL.md / agentskills.io compatibility
+
+MCP Gateway can ingest [Agent Skills](https://agentskills.io) / Claude Code
+`SKILL.md` files and expose them as discoverable skills alongside capability
+YAML. This lets the gateway consume any SKILL.md — whether authored locally,
+shipped from `agentskills.io`, or pulled from a GitHub release — and surface
+it through the same meta-tool surface used for capabilities.
+
+```bash
+# Import a local skill directory (auto-discovers SKILL.md + resources/)
+mcp-gateway skills import ~/.claude/skills/gws-gmail-send
+
+# Import a single SKILL.md file
+mcp-gateway skills import ./path/to/SKILL.md
+
+# Import from an agentskills.io URL
+mcp-gateway skills import https://agentskills.io/skills/my-skill/SKILL.md
+
+# List imported skills
+mcp-gateway skills list
+
+# Search by name, description, trigger, or keyword
+mcp-gateway skills search "gmail"
+
+# Show the full body (including any embedded code blocks)
+mcp-gateway skills show gws-gmail-send
+
+# Remove a skill
+mcp-gateway skills remove gws-gmail-send
+```
+
+**What gets parsed**
+
+- YAML frontmatter (`name`, `description`, `version`, `effort`,
+  `allowed-tools`, `triggers`, `keywords`)
+- Markdown body, with fenced `bash`/`python`/`json` code blocks extracted as
+  structured `SkillCodeBlock` entries
+- Progressive-disclosure resources: `SKILL.advanced.md`, `reference.md`,
+  `README.md`, and any `resources/*.md` files in the skill directory
+
+**Security model (read-only)**
+
+Imported skills are stored as data, not executed. Embedded `bash` or
+`python` blocks are parsed and surfaced to users/agents via `skills show`,
+but MCP Gateway will never run them automatically. A future release may
+add opt-in execution gated on per-skill user consent. If you need to run
+a skill's commands today, copy them from `skills show` and run them in
+your own shell.
+
+Registry location: `~/.mcp-gateway/skills.json` (override with
+`MCP_GATEWAY_SKILLS_REGISTRY` or `--registry`).
+
+Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code/skills) ·
+[agentskills.io](https://agentskills.io)
+
 ## Documentation
 
 | Document | Contents |

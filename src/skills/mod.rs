@@ -31,10 +31,17 @@
 //! YAML file changes, regenerating only the affected category bundle.
 
 pub mod installer;
+pub mod parser;
+pub mod registry;
 pub mod renderer;
 pub mod watcher;
 
 pub use installer::{InstallResult, default_agent_paths, install_bundle, install_bundles};
+pub use parser::{
+    ImportedSkill, SkillCodeBlock, parse_skill_dir, parse_skill_file, parse_skill_md,
+    read_auxiliary_file,
+};
+pub use registry::SkillRegistry;
 pub use renderer::{SkillBundle, render_bundle, render_bundles, render_command_doc};
 pub use watcher::SkillsWatcher;
 

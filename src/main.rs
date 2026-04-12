@@ -71,6 +71,21 @@ async fn main() -> ExitCode {
             commands::run_skills_generate(capabilities, server, category, out_dir, install, dry_run)
                 .await
         }
+        Some(Command::Skills(SkillsCommand::Import { source, registry })) => {
+            commands::run_skills_import(source, registry).await
+        }
+        Some(Command::Skills(SkillsCommand::List { registry })) => {
+            commands::run_skills_list(registry)
+        }
+        Some(Command::Skills(SkillsCommand::Search { query, registry })) => {
+            commands::run_skills_search(&query, registry)
+        }
+        Some(Command::Skills(SkillsCommand::Show { name, registry })) => {
+            commands::run_skills_show(&name, registry)
+        }
+        Some(Command::Skills(SkillsCommand::Remove { name, registry })) => {
+            commands::run_skills_remove(&name, registry)
+        }
         Some(Command::Plugin(plugin_cmd)) => {
             run_plugin_command(plugin_cmd, config_path.as_deref()).await
         }
