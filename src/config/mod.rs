@@ -246,6 +246,14 @@ impl Config {
             for value in backend.env.values_mut() {
                 *value = Self::expand_string(&re, value);
             }
+            if let Some(ref mut oauth) = backend.oauth {
+                if let Some(ref mut id) = oauth.client_id {
+                    *id = Self::expand_string(&re, id);
+                }
+                if let Some(ref mut secret) = oauth.client_secret {
+                    *secret = Self::expand_string(&re, secret);
+                }
+            }
         }
 
         for dir in &mut self.capabilities.directories {
