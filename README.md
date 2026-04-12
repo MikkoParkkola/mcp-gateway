@@ -39,14 +39,14 @@ MCP Gateway removes that tradeoff entirely.
 | | Without Gateway | With Gateway |
 |---|----------------|--------------|
 | **Tools in context** | Every definition, every request | 15 Meta-MCP tools in the README benchmark (~1500 tokens) |
-| **Token overhead** | ~15,000 tokens (100 tools) | ~1400 tokens -- **91% savings** |
-| **Cost at scale** | ~$0.22/request (Opus input) | ~$0.021/request -- **$204 saved per 1K** |
+| **Token overhead** | ~15,000 tokens (100 tools) | ~1500 tokens -- **90% savings** |
+| **Cost at scale** | ~$0.22/request (Opus input) | ~$0.022/request -- **$203 saved per 1K** |
 | **Practical tool limit** | 20-50 tools (context pressure) | **Unlimited** -- discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The README benchmark scenario also surfaces stats, cost report, playbooks, profile controls, disabled-capability visibility, and reload for a 14-tool surface. Surfacing webhook status adds the 15th tool.
+The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The README benchmark scenario also surfaces stats, cost report, playbooks, profile controls, disabled-capability visibility, and reload for a 15-tool surface. Surfacing webhook status adds the 16th tool.
 
 ### Why not...
 
@@ -222,7 +222,7 @@ The gateway exposes 12 Meta-MCP tools minimum, 14 in the README benchmark scenar
 
 **Token math** (Claude Opus @ $15/M input tokens, reproducible via `python benchmarks/token_savings.py --scenario readme`):
 - **Without**: 100 tools x 150 tokens x 1,000 requests = 15M tokens = **$225**
-- **With (README benchmark)**: 14 Meta-MCP tools x 100 tokens x 1,000 requests = 1.4M tokens = **$21**
+- **With (README benchmark)**: 15 Meta-MCP tools x 100 tokens x 1,000 requests = 1.5M tokens = **$22.50**
 
 ### 2. Any REST API to MCP Tool -- No Code
 

@@ -16,7 +16,7 @@
   "readme_token_savings": {
     "direct_tools": 100,
     "direct_tokens_per_tool": 150,
-    "gateway_tools": 14,
+    "gateway_tools": 15,
     "gateway_tokens_per_tool": 100,
     "requests": 1000,
     "model": "Claude Opus",
