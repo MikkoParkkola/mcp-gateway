@@ -434,7 +434,7 @@ mcp-gateway is part of a suite of MCP tools:
 | Tool | Description |
 |------|-------------|
 | **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway — compact 12-15 tool surface replaces 100+ registrations** |
-| [trvl](https://github.com/MikkoParkkola/trvl) | AI travel agent — 34 MCP tools for flights, hotels, ground transport |
+| [trvl](https://github.com/MikkoParkkola/trvl) | AI travel agent — 35 MCP tools for flights, hotels, ground transport |
 | [nab](https://github.com/MikkoParkkola/nab) | Web content extraction — fetch any URL with cookies + anti-bot bypass |
 | [axterminator](https://github.com/MikkoParkkola/axterminator) | macOS GUI automation — 34 MCP tools via Accessibility API |
 
