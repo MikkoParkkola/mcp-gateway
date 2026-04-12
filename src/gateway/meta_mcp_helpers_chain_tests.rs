@@ -242,6 +242,7 @@ fn build_routing_instructions_includes_chain_section_when_chains_present() {
         },
         transform: TransformConfig::default(),
         webhooks: HashMap::new(),
+        sha256: None,
     };
 
     let caps = vec![
@@ -283,6 +284,7 @@ fn build_routing_instructions_omits_chain_section_when_no_chains() {
         },
         transform: TransformConfig::default(),
         webhooks: HashMap::new(),
+        sha256: None,
     };
 
     let instructions = build_routing_instructions(&[cap], "cap");

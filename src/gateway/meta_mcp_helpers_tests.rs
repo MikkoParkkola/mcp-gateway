@@ -378,6 +378,7 @@ fn make_capability_def(
         },
         transform: TransformConfig::default(),
         webhooks: std::collections::HashMap::new(),
+        sha256: None,
     }
 }
 

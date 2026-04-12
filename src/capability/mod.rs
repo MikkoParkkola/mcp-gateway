@@ -35,6 +35,7 @@ mod definition;
 #[cfg(feature = "discovery")]
 pub mod discovery;
 mod executor;
+pub mod hash;
 mod loader;
 mod openapi;
 mod parser;
@@ -43,11 +44,12 @@ mod schema_validator;
 pub mod validator;
 mod watcher;
 
-pub use backend::{CapabilityBackend, CapabilityBackendStatus};
+pub use backend::{CapabilityBackend, CapabilityBackendStatus, RugPullRecord};
 pub use definition::*;
 #[cfg(feature = "discovery")]
 pub use discovery::{DiscoveryEngine, DiscoveryOptions, DiscoveryResult};
 pub use executor::CapabilityExecutor;
+pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};

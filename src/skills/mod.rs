@@ -117,6 +117,7 @@ mod tests {
             },
             transform: TransformConfig::default(),
             webhooks: HashMap::default(),
+            sha256: None,
         }
     }
 

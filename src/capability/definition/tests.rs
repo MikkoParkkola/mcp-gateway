@@ -22,6 +22,7 @@ fn make_capability(name: &str, description: &str, tags: Vec<&str>) -> Capability
         },
         transform: TransformConfig::default(),
         webhooks: HashMap::new(),
+        sha256: None,
     }
 }
 
@@ -184,6 +185,7 @@ fn make_capability_with_schema(
         },
         transform: crate::transform::TransformConfig::default(),
         webhooks: HashMap::new(),
+        sha256: None,
     }
 }
 

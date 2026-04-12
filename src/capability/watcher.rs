@@ -138,6 +138,21 @@ impl CapabilityWatcher {
                                     pending_reload = false;
                                     last_event = None;
 
+                                    // ── Rug-pull scan (Invariant Labs tool-poisoning guard) ──
+                                    // Before any reload, verify every pinned
+                                    // capability YAML still matches its
+                                    // embedded sha256. Mismatches are
+                                    // quarantined LOUDLY and unloaded so the
+                                    // reload cannot silently restore them.
+                                    let rug_pulls = backend.detect_rug_pulls().await;
+                                    if !rug_pulls.is_empty() {
+                                        warn!(
+                                            backend = %backend.name,
+                                            count = rug_pulls.len(),
+                                            "Rug-pull events detected; affected capabilities quarantined",
+                                        );
+                                    }
+
                                     info!(backend = %backend.name, "Hot-reloading capabilities...");
                                     match backend.reload().await {
                                         Ok(count) => {

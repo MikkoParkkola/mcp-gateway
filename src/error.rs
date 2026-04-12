@@ -28,6 +28,23 @@ pub enum Error {
     #[error("Config watcher error: {0}")]
     ConfigWatcher(String),
 
+    /// Capability file SHA-256 pin mismatch — potential rug-pull attack.
+    ///
+    /// Raised by the capability loader when a YAML's embedded `sha256:` pin
+    /// does not match the on-disk file content. The capability is refused
+    /// load. See `crate::capability::hash` for the hashing strategy.
+    #[error(
+        "Capability hash mismatch (rug-pull protection) in {file}: expected {expected}, actual {actual}"
+    )]
+    CapabilityHashMismatch {
+        /// The hash embedded in the YAML `sha256:` field (trusted baseline).
+        expected: String,
+        /// The hash computed from the current file content.
+        actual: String,
+        /// The file path that failed verification.
+        file: String,
+    },
+
     /// Backend not found
     #[error("Backend not found: {0}")]
     BackendNotFound(String),

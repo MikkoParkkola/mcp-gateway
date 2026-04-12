@@ -40,7 +40,7 @@ pub(super) fn log_startup_banner(config: &Config, backends: &BackendRegistry) {
     }
 
     if config.meta_mcp.enabled {
-        info!("META-MCP (saves ~95% context tokens):");
+        info!("META-MCP (compact tool surface, on-demand discovery):");
         info!(
             "  POST http://{}:{}/mcp  (requests)",
             config.server.host, config.server.port

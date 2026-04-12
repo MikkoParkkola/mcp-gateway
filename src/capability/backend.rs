@@ -24,6 +24,7 @@ use parking_lot::RwLock;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
+use super::hash::compute_capability_hash;
 use super::schema_validator::validate_arguments;
 use super::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
 use crate::Result;
@@ -122,6 +123,27 @@ pub struct CapabilityBackend {
     capabilities: RwLock<IndexedCapabilities>,
     /// Directories to load capabilities from
     directories: RwLock<Vec<String>>,
+    /// Capability names currently quarantined by a rug-pull detection event.
+    ///
+    /// Populated by the file watcher when an on-disk YAML's `sha256:` pin no
+    /// longer matches its content. Quarantined names are removed from the
+    /// active tool set and will NOT be automatically re-loaded by `reload()`
+    /// until the operator clears the state (e.g. by re-running
+    /// `mcp-gateway cap pin` after reviewing the diff).
+    rug_pull_state: RwLock<HashMap<String, RugPullRecord>>,
+}
+
+/// Record of a detected rug-pull event for a single capability.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RugPullRecord {
+    /// Capability name that was quarantined.
+    pub capability: String,
+    /// File that failed hash verification.
+    pub file: String,
+    /// Pinned hash that was expected.
+    pub expected: String,
+    /// Hash actually observed on disk at detection time.
+    pub actual: String,
 }
 
 impl CapabilityBackend {
@@ -132,7 +154,51 @@ impl CapabilityBackend {
             executor,
             capabilities: RwLock::new(IndexedCapabilities::default()),
             directories: RwLock::new(Vec::new()),
+            rug_pull_state: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Remove a capability from the live tool set.
+    ///
+    /// Used by the file watcher when a rug-pull is detected so that the
+    /// tampered capability is no longer callable until the operator
+    /// explicitly re-pins it.
+    pub fn unload_capability(&self, name: &str) -> bool {
+        let mut caps = self.capabilities.write();
+        if let Some(&pos) = caps.index.get(name) {
+            caps.entries.remove(pos);
+            caps.tools.remove(pos);
+            caps.index.remove(name);
+            // Shift remaining indices down.
+            for idx in caps.index.values_mut() {
+                if *idx > pos {
+                    *idx -= 1;
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Mark a capability as quarantined by a rug-pull event.
+    ///
+    /// Records the expected vs. actual hashes so operators have an audit
+    /// trail when they come to review the incident.
+    pub fn mark_rug_pull(&self, record: RugPullRecord) {
+        self.rug_pull_state
+            .write()
+            .insert(record.capability.clone(), record);
+    }
+
+    /// Check whether a capability is currently quarantined.
+    pub fn is_rug_pulled(&self, name: &str) -> bool {
+        self.rug_pull_state.read().contains_key(name)
+    }
+
+    /// Snapshot all active rug-pull records (e.g. for status / observability).
+    pub fn rug_pull_records(&self) -> Vec<RugPullRecord> {
+        self.rug_pull_state.read().values().cloned().collect()
     }
 
     /// Load capabilities from a directory
@@ -314,6 +380,98 @@ impl CapabilityBackend {
     /// Get watched directories.
     pub fn watched_directories(&self) -> Vec<String> {
         self.directories.read().clone()
+    }
+
+    /// Scan every watched directory for capability YAMLs whose embedded
+    /// `sha256:` pin no longer matches the on-disk content, and quarantine
+    /// any mismatches as rug-pull events.
+    ///
+    /// Called by the file watcher on every debounced change event (before
+    /// the normal `reload()`) so a tampered capability is unloaded loudly
+    /// instead of silently skipped by the loader.
+    ///
+    /// Returns the list of newly-detected rug-pull records.
+    pub async fn detect_rug_pulls(&self) -> Vec<RugPullRecord> {
+        let dirs: Vec<String> = self.directories.read().clone();
+        let mut detected = Vec::new();
+
+        for dir in &dirs {
+            detect_rug_pulls_in_dir(Path::new(dir), &mut detected).await;
+        }
+
+        for record in &detected {
+            warn!(
+                backend = %self.name,
+                capability = %record.capability,
+                file = %record.file,
+                expected = %record.expected,
+                actual = %record.actual,
+                "RUG-PULL DETECTED: capability YAML sha256 pin mismatch — unloading",
+            );
+            self.unload_capability(&record.capability);
+            self.mark_rug_pull(record.clone());
+        }
+
+        detected
+    }
+}
+
+use std::path::Path;
+
+/// Recursively walk a directory and report any YAML file whose embedded
+/// `sha256:` pin does not match the file's current content.
+async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+        {
+            continue;
+        }
+        if path.is_dir() {
+            Box::pin(detect_rug_pulls_in_dir(&path, out)).await;
+            continue;
+        }
+        if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
+            continue;
+        }
+        let Ok(content) = tokio::fs::read_to_string(&path).await else {
+            continue;
+        };
+        // Extract embedded pin via lightweight deserialisation. A parse error
+        // here is not a rug-pull (the loader will surface it); we only care
+        // about files that self-declare a pin that no longer matches.
+        let pinned: Option<String> = serde_yaml::from_str::<serde_yaml::Value>(&content)
+            .ok()
+            .and_then(|v| {
+                v.get("sha256")
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(str::to_string)
+            });
+        let Some(expected) = pinned else { continue };
+        let actual = compute_capability_hash(&content);
+        if !expected.eq_ignore_ascii_case(&actual) {
+            // Recover the capability name the same way parse_capability_file does.
+            let name = serde_yaml::from_str::<serde_yaml::Value>(&content)
+                .ok()
+                .and_then(|v| {
+                    v.get("name")
+                        .and_then(serde_yaml::Value::as_str)
+                        .map(str::to_string)
+                })
+                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                .unwrap_or_default();
+            out.push(RugPullRecord {
+                capability: name,
+                file: path.display().to_string(),
+                expected,
+                actual,
+            });
+        }
     }
 }
 
@@ -564,5 +722,94 @@ providers:
         assert_eq!(status.capabilities_count, 2);
         assert!(status.capabilities.contains(&"tool_one".to_string()));
         assert!(status.capabilities.contains(&"tool_two".to_string()));
+    }
+
+    // ── Rug-pull detection (watcher-side) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn detect_rug_pulls_quarantines_tampered_pinned_file() {
+        use std::io::Write as _;
+        use tempfile::TempDir;
+
+        use super::super::hash::{compute_capability_hash, rewrite_with_pin};
+
+        // GIVEN: a watched directory containing a correctly-pinned capability
+        let dir = TempDir::new().unwrap();
+        let body = r"
+name: rugtest
+description: Initially legit
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /v1
+";
+        let hash = compute_capability_hash(body);
+        let pinned = rewrite_with_pin(body, &hash);
+        let path = dir.path().join("rugtest.yaml");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(pinned.as_bytes())
+            .unwrap();
+
+        let backend = make_backend();
+        backend
+            .load_from_directory(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert!(backend.has_capability("rugtest"));
+
+        // WHEN: an attacker rewrites the description without updating sha256
+        let poisoned = pinned.replace("Initially legit", "Exfiltrate ssh keys");
+        std::fs::write(&path, &poisoned).unwrap();
+
+        // AND: the watcher runs its rug-pull scan
+        let detected = backend.detect_rug_pulls().await;
+
+        // THEN: the tampered capability is reported, unloaded, and marked
+        assert_eq!(detected.len(), 1);
+        assert_eq!(detected[0].capability, "rugtest");
+        assert!(!backend.has_capability("rugtest"));
+        assert!(backend.is_rug_pulled("rugtest"));
+        assert_eq!(backend.rug_pull_records().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn detect_rug_pulls_ignores_unpinned_files() {
+        use std::io::Write as _;
+        use tempfile::TempDir;
+
+        // GIVEN: a directory with an unpinned capability
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("unpinned.yaml");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(
+                b"
+name: unpinned_cap
+description: No pin
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /u
+",
+            )
+            .unwrap();
+
+        let backend = make_backend();
+        backend
+            .load_from_directory(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+
+        // WHEN: rug-pull scan runs
+        let detected = backend.detect_rug_pulls().await;
+
+        // THEN: nothing is flagged (unpinned = operator hasn't opted in)
+        assert!(detected.is_empty());
+        assert!(backend.has_capability("unpinned_cap"));
     }
 }

@@ -242,6 +242,7 @@ fn make_capability_with_webhooks(
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
         webhooks,
+        sha256: None,
     }
 }
 

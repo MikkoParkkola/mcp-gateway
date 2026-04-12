@@ -6,7 +6,7 @@ use std::sync::Arc;
 use mcp_gateway::{
     capability::{
         AuthTemplate, CapabilityExecutor, CapabilityLoader, OpenApiConverter,
-        parse_capability_file, validate_capability,
+        compute_capability_hash, parse_capability_file, rewrite_with_pin, validate_capability,
     },
     cli::CapCommand,
     discovery::AutoDiscovery,
@@ -18,6 +18,7 @@ use mcp_gateway::{
 pub async fn run_cap_command(cmd: CapCommand) -> ExitCode {
     match cmd {
         CapCommand::Validate { file } => cap_validate(file).await,
+        CapCommand::Pin { file } => cap_pin(file).await,
         CapCommand::List { directory } => cap_list(directory).await,
         CapCommand::Import {
             spec,
@@ -100,6 +101,40 @@ async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
     }
 }
 
+/// Compute the SHA-256 of a capability YAML (excluding its own `sha256:`
+/// line) and rewrite the file in place with the pin prepended.
+///
+/// This is the operator-facing half of the rug-pull guard: once a
+/// capability is pinned, the loader will refuse to start or hot-reload it
+/// if the file changes without the pin being re-issued.
+async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
+    let content = match tokio::fs::read_to_string(&file).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("❌ Failed to read {}: {e}", file.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Sanity-check: the file must parse as a capability before we pin it.
+    if let Err(e) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
+        eprintln!("❌ Not a valid YAML file ({}): {e}", file.display());
+        return ExitCode::FAILURE;
+    }
+
+    let hash = compute_capability_hash(&content);
+    let pinned = rewrite_with_pin(&content, &hash);
+
+    if let Err(e) = tokio::fs::write(&file, &pinned).await {
+        eprintln!("❌ Failed to write pinned file {}: {e}", file.display());
+        return ExitCode::FAILURE;
+    }
+
+    println!("✅ Pinned {}", file.display());
+    println!("   sha256: {hash}");
+    ExitCode::SUCCESS
+}
+
 async fn cap_list(directory: std::path::PathBuf) -> ExitCode {
     let path = directory.to_string_lossy();
     match CapabilityLoader::load_directory(&path).await {
@@ -126,7 +161,6 @@ async fn cap_list(directory: std::path::PathBuf) -> ExitCode {
     }
 }
 
-#[allow(clippy::unused_async)]
 async fn cap_import(
     spec: std::path::PathBuf,
     output: std::path::PathBuf,
@@ -144,11 +178,21 @@ async fn cap_import(
             description: "API authentication".to_string(),
         });
     }
-    let spec_path = spec.to_string_lossy();
-    match converter.convert_file(&spec_path) {
+    let spec_ref = spec.to_string_lossy().to_string();
+    let is_url = spec_ref.starts_with("http://") || spec_ref.starts_with("https://");
+    let result = if is_url {
+        converter.convert_url(&spec_ref).await
+    } else {
+        converter.convert_file(&spec_ref)
+    };
+
+    match result {
         Ok(caps) => {
             let out_path = output.to_string_lossy();
-            println!("Generated {} capabilities from {}\n", caps.len(), spec_path);
+            let count = caps.len();
+            println!(
+                "Imported {count} tools from {spec_ref}. Review {out_path}/ before loading.\n"
+            );
             for cap in caps {
                 if let Err(e) = cap.write_to_file(&out_path) {
                     eprintln!("❌ Failed to write {}: {e}", cap.name);
@@ -374,5 +418,58 @@ async fn cap_registry_list(capabilities: std::path::PathBuf) -> ExitCode {
             eprintln!("❌ Failed to build registry index: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cap_pin;
+    use mcp_gateway::capability::{compute_capability_hash, parse_capability_file};
+    use std::io::Write;
+    use std::process::ExitCode;
+    use tempfile::TempDir;
+
+    const PINNABLE_YAML: &str = "\
+name: pin_cli_cap
+description: CLI pin test
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /cli
+";
+
+    /// Extract the exit-code discriminant for comparison in tests.
+    fn is_success(code: ExitCode) -> bool {
+        // ExitCode doesn't expose its raw value publicly; compare via Debug.
+        format!("{code:?}") == format!("{:?}", ExitCode::SUCCESS)
+    }
+
+    #[tokio::test]
+    async fn cap_pin_writes_valid_hash_and_roundtrips_through_loader() {
+        // GIVEN: a fresh, unpinned capability YAML on disk
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("pin_me.yaml");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(PINNABLE_YAML.as_bytes()).unwrap();
+        }
+        let expected_hash = compute_capability_hash(PINNABLE_YAML);
+
+        // WHEN: running `mcp-gateway cap pin <file>`
+        let code = cap_pin(path.clone()).await;
+
+        // THEN: command succeeds
+        assert!(is_success(code), "cap_pin should exit successfully");
+
+        // AND: the file now begins with a sha256 line carrying the right hash
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.starts_with(&format!("sha256: {expected_hash}\n")));
+
+        // AND: the loader accepts the rewritten file (pin verification passes)
+        let cap = parse_capability_file(&path).await.unwrap();
+        assert_eq!(cap.name, "pin_cli_cap");
+        assert_eq!(cap.sha256.as_deref(), Some(expected_hash.as_str()));
     }
 }

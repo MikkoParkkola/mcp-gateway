@@ -19,7 +19,9 @@ use crate::Result;
 use crate::protocol::Tool;
 
 pub use report::{Severity, ValidationReport, ValidationResult};
-pub use rules::{ConflictDetectionRule, NamingConsistencyRule, Rule, ValidationRules};
+pub use rules::{
+    ConflictDetectionRule, NamingConsistencyRule, Rule, ToolPoisoningRule, ValidationRules,
+};
 
 /// Output format for validation reports
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]

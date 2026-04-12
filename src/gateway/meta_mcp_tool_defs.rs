@@ -94,8 +94,8 @@ fn build_search_tools_tool(tool_count: usize, server_count: usize) -> Tool {
         title: Some("Search Tools".to_string()),
         description: Some(format!(
             "Search {tool_count} tools across {server_count} servers by keyword. Returns ranked \
-             matches with full schemas, saving ~95% context tokens vs loading all tool \
-             definitions. Supports multi-word queries and synonym expansion."
+             matches with full schemas while avoiding the prompt bloat of loading every tool \
+             definition upfront. Supports multi-word queries and synonym expansion."
         )),
         input_schema: json!({
             "type": "object",

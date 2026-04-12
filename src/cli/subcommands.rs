@@ -18,6 +18,19 @@ pub enum CapCommand {
         file: PathBuf,
     },
 
+    /// Pin a capability YAML by computing and writing its SHA-256 hash.
+    ///
+    /// Rewrites the file in place, adding (or replacing) a top-level
+    /// `sha256:` line. The loader will reject any future modification to
+    /// the file that does not update the pin, defeating rug-pull attacks
+    /// described in Invariant Labs' "Tool Poisoning Attacks" writeup.
+    #[command(about = "Pin a capability YAML with its SHA-256 hash")]
+    Pin {
+        /// Path to the capability YAML file to pin
+        #[arg(required = true)]
+        file: PathBuf,
+    },
+
     /// Show all capability definitions found in a directory tree
     #[command(about = "List capabilities in a directory")]
     List {

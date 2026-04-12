@@ -106,6 +106,11 @@ fn capability_floor(count: usize) -> usize {
     (count / 10) * 10
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "Token counts and request rates are validation inputs well below \
+              2^53 — precision loss is impossible at the scales used in claims."
+)]
 fn readme_savings_metrics(claims: &PublicClaims) -> (u64, u64, f64, f64) {
     let direct_tokens = claims.readme_token_savings.direct_tools
         * claims.readme_token_savings.direct_tokens_per_tool;

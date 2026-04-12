@@ -24,6 +24,7 @@ pub(super) fn minimal_cap(name: &str) -> CapabilityDefinition {
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
         webhooks: HashMap::new(),
+        sha256: None,
     }
 }
 
@@ -331,6 +332,7 @@ fn placeholder_with_schema_property_passes() {
             metadata: CapabilityMetadata::default(),
             transform: TransformConfig::default(),
             webhooks: HashMap::new(),
+            sha256: None,
         },
         json!({"type": "object", "properties": {"id": {"type": "string"}}}),
     );
@@ -358,6 +360,7 @@ fn placeholder_without_schema_property_is_error() {
             metadata: CapabilityMetadata::default(),
             transform: TransformConfig::default(),
             webhooks: HashMap::new(),
+            sha256: None,
         },
         json!({"type": "object", "properties": {"id": {"type": "string"}}}),
     );
@@ -385,6 +388,7 @@ fn env_placeholder_in_url_is_ignored() {
             metadata: CapabilityMetadata::default(),
             transform: TransformConfig::default(),
             webhooks: HashMap::new(),
+            sha256: None,
         },
         json!({"type": "object", "properties": {}}),
     );
@@ -527,6 +531,7 @@ fn path_without_leading_slash_is_warning() {
             metadata: CapabilityMetadata::default(),
             transform: TransformConfig::default(),
             webhooks: HashMap::new(),
+            sha256: None,
         },
         json!({"type": "object"}),
     );

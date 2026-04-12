@@ -49,6 +49,18 @@ pub struct CapabilityDefinition {
     /// Webhook endpoint definitions for inbound events
     #[serde(default)]
     pub webhooks: HashMap<String, WebhookDefinition>,
+
+    /// Optional SHA-256 pin of the capability file contents.
+    ///
+    /// When present, the loader verifies that the on-disk file still matches
+    /// this hash. A mismatch is rejected as a rug-pull and the capability is
+    /// NOT loaded. The hash is computed over the file contents with the
+    /// `sha256:` line stripped out, so pinning does not depend on the hash
+    /// of the hash itself.
+    ///
+    /// See `crate::capability::hash` for the canonical computation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 /// Provider configurations supporting both named and fallback arrays

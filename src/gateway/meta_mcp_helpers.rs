@@ -176,8 +176,8 @@ pub(crate) fn build_initialize_result(
 /// Build the dynamic discovery preamble shared by all initialize responses.
 ///
 /// Includes the live tool and server counts so the agent understands the
-/// scope of what is available without listing all schemas (which would cost
-/// ~95% more tokens).
+/// scope of what is available without listing all schemas and bloating the
+/// prompt with every backend tool definition.
 ///
 /// # Arguments
 ///
@@ -196,7 +196,7 @@ pub(crate) fn build_discovery_preamble(tool_count: usize, server_count: usize) -
     format!(
         "This server manages {tool_count} tools across {server_count} backends.\n\
          Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n\
-         Tool schemas are not listed directly to save context (~95% token reduction).\n\
+         Tool schemas are not listed directly so the prompt stays compact.\n\
          \n\
          Discovery pattern:\n\
          1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n\

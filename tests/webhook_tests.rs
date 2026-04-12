@@ -58,6 +58,7 @@ async fn test_webhook_registry_registration() {
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
         webhooks,
+        sha256: None,
     };
 
     registry.register_capability(&capability);
@@ -102,6 +103,7 @@ async fn test_webhook_routes_creation() {
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
         webhooks,
+        sha256: None,
     };
 
     registry.register_capability(&capability);

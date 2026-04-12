@@ -15,6 +15,9 @@ use crate::protocol::Tool;
 use regex::Regex;
 use std::sync::OnceLock;
 
+pub mod tool_poisoning;
+pub use tool_poisoning::ToolPoisoningRule;
+
 /// Validation rule trait
 #[allow(clippy::unnecessary_literal_bound)]
 pub trait Rule: Send + Sync {
@@ -65,6 +68,7 @@ impl ValidationRules {
             Box::new(SchemaCompletenessRule),
             Box::new(ConflictDetectionRule),
             Box::new(NamingConsistencyRule),
+            Box::new(ToolPoisoningRule),
         ];
 
         Self { rules }
