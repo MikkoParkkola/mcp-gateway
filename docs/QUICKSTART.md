@@ -1,27 +1,46 @@
-# MCP Gateway in 5 Minutes
+# MCP Gateway in 2 Minutes
 
 Get from zero to a working gateway with tools your AI can use.
 
-## Prerequisites
-
-- **Rust toolchain** (1.88+): [rustup.rs](https://rustup.rs)
-
-## 1. Install
+## The fast way (recommended)
 
 ```bash
+brew install MikkoParkkola/tap/mcp-gateway   # 1. install
+mcp-gateway setup wizard --configure-client  # 2. import existing servers + wire up clients
+mcp-gateway serve                            # 3. run
+mcp-gateway doctor                           # 4. verify
+```
+
+The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.dev, and Codex for existing MCP servers, imports them into `gateway.yaml`, and writes the gateway entry back into each client. Done.
+
+> **Nothing to import yet?** `mcp-gateway init --with-examples` writes a starter `gateway.yaml` with free capabilities (weather, Wikipedia) so you can confirm the gateway works.
+
+## The manual way (learn what's happening)
+
+<details>
+<summary>Step-by-step setup with explanation</summary>
+
+### Prerequisites
+
+- **Rust toolchain** (1.88+): [rustup.rs](https://rustup.rs), or use Homebrew
+
+### 1. Install
+
+```bash
+# Homebrew (macOS/Linux, recommended)
+brew install MikkoParkkola/tap/mcp-gateway
+
+# Or from crates.io
 cargo install mcp-gateway
 ```
 
-Or via Homebrew (macOS/Linux):
+### 2. Create a Config
 
 ```bash
-brew tap MikkoParkkola/tap
-brew install mcp-gateway
+mcp-gateway init --with-examples
 ```
 
-## 2. Create a Config
-
-Save this as `gateway.yaml`:
+This writes `gateway.yaml` with sensible defaults and two free capabilities. Or create it manually:
 
 ```yaml
 server:
@@ -38,9 +57,9 @@ capabilities:
 backends: {}
 ```
 
-## 3. Add Capabilities
+### 3. Add Capabilities
 
-Create a `capabilities/` directory and add two free capabilities (no API keys needed):
+The `init --with-examples` command creates these automatically. If you're writing config by hand, create a `capabilities/` directory and add capability YAML files (no API keys needed):
 
 **capabilities/weather.yaml**
 ```yaml
@@ -176,9 +195,15 @@ curl -s http://localhost:39400/mcp \
   }' | python3 -m json.tool
 ```
 
-## 6. Connect to Claude Desktop
+### 6. Connect to your AI client
 
-Add this to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+```bash
+mcp-gateway setup export --target all          # auto-write to all detected clients
+mcp-gateway setup export --target claude-code  # or a specific client
+mcp-gateway setup export --target all --dry-run  # preview first
+```
+
+Or manually — add to your client config:
 
 ```json
 {
@@ -191,15 +216,20 @@ Add this to your Claude Desktop config (`~/Library/Application Support/Claude/cl
 }
 ```
 
-Restart Claude Desktop. You now have access to the gateway's compact Meta-MCP surface (12 tools minimum; this config-file path usually exposes 15 because webhook status is enabled by default; the README benchmark models 14 without webhook status).
+Restart your client. The gateway's compact Meta-MCP surface (12-15 tools) replaces every backend tool definition.
 
 See [examples/claude-desktop.json](../examples/claude-desktop.json) for a full example config.
 
+</details>
+
 ## Next Steps
 
-- **Add more capabilities**: Copy any YAML from the `capabilities/` directory that ships with the gateway. 25+ work with zero config.
-- **Add MCP server backends**: Point `backends:` at existing MCP servers (stdio, HTTP, or SSE). For a zero-auth remote backend you can try in seconds, see [Adding remote MCP backends](REMOTE_BACKENDS.md) — it walks through wiring [GitMCP](https://gitmcp.io) as a universal GitHub docs + code search tool.
+- **Add more backends**: `mcp-gateway add tavily` (48 servers in the built-in registry). Or `mcp-gateway add my-server -- npx -y @some/mcp-server`.
+- **Add more capabilities**: Copy any YAML from the `capabilities/` directory that ships with the gateway. 100+ work with zero config.
+- **Import OpenAPI specs**: `mcp-gateway cap import stripe-openapi.yaml --output capabilities/`
+- **Add remote backends**: For a zero-auth remote backend you can try in seconds, see [Adding remote MCP backends](REMOTE_BACKENDS.md).
 - **Enable caching**: Add `cache: { enabled: true, default_ttl: 60s }` to your config.
 - **Enable auth**: Add `auth: { enabled: true, bearer_token: "auto" }` for token-based access control.
 - **Install from registry**: Run `mcp-gateway cap search finance` and `mcp-gateway cap install stock_quote`.
-- **Full config reference**: See the [README](../README.md#configuration-reference) or [examples/gateway-full.yaml](../examples/gateway-full.yaml).
+- **Check health**: `mcp-gateway doctor` diagnoses config, port, env vars, and backend status. `mcp-gateway doctor --fix` auto-fixes where possible.
+- **Full config reference**: See the [README](../README.md) or [examples/gateway-full.yaml](../examples/gateway-full.yaml).
