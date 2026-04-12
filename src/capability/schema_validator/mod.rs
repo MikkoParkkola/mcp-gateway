@@ -83,6 +83,27 @@ impl SchemaValidationResult {
             }
         }
 
+        let mut recovery_hints = build_recovery_hints(&self.violations);
+        if !valid_params.is_empty() {
+            let generic_hint = "Use only the valid parameters listed above.".to_string();
+            if !recovery_hints.contains(&generic_hint) {
+                recovery_hints.push(generic_hint);
+            }
+        }
+
+        if !self.violations.is_empty() {
+            out.push_str("\n<recovery>\n");
+            let _ = writeln!(
+                out,
+                "  <action>{}</action>",
+                escape_recovery_xml("Fix the tool arguments and retry the same tool call.")
+            );
+            for hint in recovery_hints {
+                let _ = writeln!(out, "  <hint>{}</hint>", escape_recovery_xml(&hint));
+            }
+            out.push_str("</recovery>\n");
+        }
+
         out
     }
 }
@@ -408,6 +429,75 @@ fn value_to_display_string(v: &Value) -> String {
         Value::String(s) => format!("\"{s}\""),
         _ => v.to_string(),
     }
+}
+
+fn build_recovery_hints(violations: &[ValidationViolation]) -> Vec<String> {
+    let mut hints = Vec::new();
+    for violation in violations {
+        if let Some(hint) = recovery_hint_for_violation(violation)
+            && !hints.contains(&hint)
+        {
+            hints.push(hint);
+        }
+    }
+
+    hints
+}
+
+fn recovery_hint_for_violation(violation: &ValidationViolation) -> Option<String> {
+    let normalized_message = violation.message.trim_end_matches('.');
+
+    if violation.message.contains("required parameter is missing") {
+        return Some(format!("Provide required parameter '{}'.", violation.param));
+    }
+
+    if violation
+        .message
+        .contains("required parameter must not be null")
+    {
+        return Some(format!(
+            "Provide a non-null value for parameter '{}'.",
+            violation.param
+        ));
+    }
+
+    if violation.message.contains("unknown parameter") {
+        return Some(format!("Remove unknown parameter '{}'.", violation.param));
+    }
+
+    if violation.message.contains("must be one of") {
+        return Some(format!(
+            "Use an allowed value for parameter '{}'.",
+            violation.param
+        ));
+    }
+
+    if !violation.param.is_empty() {
+        return Some(format!(
+            "Fix parameter '{}': {}.",
+            violation.param, normalized_message
+        ));
+    }
+
+    if !normalized_message.is_empty() {
+        return Some(format!("Fix the tool arguments: {normalized_message}."));
+    }
+
+    None
+}
+
+fn escape_recovery_xml(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 /// Collect valid parameter names with type/description info from a JSON Schema.

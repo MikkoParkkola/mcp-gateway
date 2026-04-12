@@ -335,6 +335,7 @@ pub struct CapabilityBackendStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn make_backend() -> CapabilityBackend {
         let executor = Arc::new(CapabilityExecutor::new());
@@ -353,6 +354,31 @@ providers:
       base_url: https://example.com
       path: /test
 "
+        );
+        crate::capability::parse_capability(&yaml).unwrap()
+    }
+
+    fn make_cap_with_required_query(name: &str) -> CapabilityDefinition {
+        let yaml = format!(
+            r#"
+name: {name}
+description: Test capability
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query
+    required:
+      - query
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /test
+"#
         );
         crate::capability::parse_capability(&yaml).unwrap()
     }
@@ -564,5 +590,28 @@ providers:
         assert_eq!(status.capabilities_count, 2);
         assert!(status.capabilities.contains(&"tool_one".to_string()));
         assert!(status.capabilities.contains(&"tool_two".to_string()));
+    }
+
+    #[tokio::test]
+    async fn capability_backend_call_tool_returns_structured_recovery_for_validation_errors() {
+        let backend = make_backend();
+        {
+            let mut caps = backend.capabilities.write();
+            caps.upsert(make_cap_with_required_query("search"));
+        }
+
+        let result = backend.call_tool("search", json!({})).await.unwrap();
+        assert!(result.is_error);
+
+        let text = match &result.content[0] {
+            Content::Text { text, .. } => text,
+            other => panic!("expected text tool error, got {other:?}"),
+        };
+
+        assert!(text.contains("<recovery>"), "text: {text}");
+        assert!(
+            text.contains("Provide required parameter 'query'."),
+            "text: {text}"
+        );
     }
 }

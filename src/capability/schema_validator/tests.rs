@@ -289,6 +289,15 @@ fn format_error_includes_violation_messages() {
     assert!(error.contains("Tool call validation failed"));
     assert!(error.contains("query"));
     assert!(error.contains("missing"));
+    assert!(error.contains("<recovery>"), "error: {error}");
+    assert!(
+        error.contains("<action>Fix the tool arguments and retry the same tool call.</action>"),
+        "error: {error}"
+    );
+    assert!(
+        error.contains("<hint>Provide required parameter 'query'.</hint>"),
+        "error: {error}"
+    );
 }
 
 #[test]
@@ -307,6 +316,26 @@ fn format_error_lists_valid_parameters() {
     assert!(error.contains("Valid parameters"), "error: {error}");
     assert!(error.contains("query"), "error: {error}");
     assert!(error.contains("count"), "error: {error}");
+    assert!(
+        error.contains("<hint>Remove unknown parameter 'unknown'.</hint>"),
+        "error: {error}"
+    );
+    assert!(
+        error.contains("<hint>Use only the valid parameters listed above.</hint>"),
+        "error: {error}"
+    );
+}
+
+#[test]
+fn format_error_escapes_recovery_xml_special_chars() {
+    let schema = schema_with_props(json!({ "query": { "type": "string" } }), &[]);
+    let result = validate_arguments(&json!({ "<bad&key>": "x" }), &schema);
+
+    let error = result.format_error(&schema);
+    assert!(
+        error.contains("&lt;bad&amp;key&gt;"),
+        "error did not escape xml-sensitive characters: {error}"
+    );
 }
 
 // ── Edge cases ──────────────────────────────────────────────────────────
