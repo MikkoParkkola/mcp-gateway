@@ -31,6 +31,35 @@ impl CircuitState {
     }
 }
 
+#[must_use]
+pub(crate) fn next_state_after_failure(
+    state: CircuitState,
+    failures_after_event: u32,
+    failure_threshold: u32,
+) -> CircuitState {
+    match state {
+        CircuitState::Closed if failures_after_event >= failure_threshold => CircuitState::Open,
+        CircuitState::Closed => CircuitState::Closed,
+        CircuitState::HalfOpen | CircuitState::Open => CircuitState::Open,
+    }
+}
+
+#[must_use]
+pub(crate) fn next_state_after_success(
+    state: CircuitState,
+    successes_after_event: u32,
+    success_threshold: u32,
+) -> CircuitState {
+    match state {
+        CircuitState::HalfOpen if successes_after_event >= success_threshold => {
+            CircuitState::Closed
+        }
+        CircuitState::HalfOpen => CircuitState::HalfOpen,
+        CircuitState::Closed => CircuitState::Closed,
+        CircuitState::Open => CircuitState::Open,
+    }
+}
+
 /// Snapshot of circuit-breaker observability data, cheap to clone.
 #[derive(Debug, Clone)]
 pub struct CircuitBreakerStats {
@@ -155,8 +184,9 @@ impl CircuitBreaker {
                     threshold = self.success_threshold,
                     "Success in half-open state"
                 );
-                if successes >= self.success_threshold {
-                    self.transition_to(CircuitState::Closed);
+                let next_state = next_state_after_success(state, successes, self.success_threshold);
+                if next_state != state {
+                    self.transition_to(next_state);
                 }
             }
             CircuitState::Open => {
@@ -182,14 +212,18 @@ impl CircuitBreaker {
                     threshold = self.failure_threshold,
                     "Failure in closed state"
                 );
-                if failures >= self.failure_threshold {
-                    self.transition_to(CircuitState::Open);
+                let next_state = next_state_after_failure(state, failures, self.failure_threshold);
+                if next_state != state {
+                    self.transition_to(next_state);
                 }
             }
             CircuitState::HalfOpen => {
                 // Any failure in half-open goes back to open
                 tracing::warn!("Failure in half-open state, reopening circuit");
-                self.transition_to(CircuitState::Open);
+                let next_state = next_state_after_failure(state, 1, self.failure_threshold);
+                if next_state != state {
+                    self.transition_to(next_state);
+                }
             }
             CircuitState::Open => {
                 tracing::trace!("Failure recorded in open state (ignored)");
@@ -265,6 +299,62 @@ impl CircuitBreaker {
                 self.successes.store(0, Ordering::Relaxed);
                 debug!(backend = %self.name, "Circuit breaker half-open");
             }
+        }
+    }
+}
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    fn any_circuit_state() -> CircuitState {
+        match kani::any::<u8>() % 3 {
+            0 => CircuitState::Closed,
+            1 => CircuitState::Open,
+            _ => CircuitState::HalfOpen,
+        }
+    }
+
+    #[kani::proof]
+    fn circuit_failure_transition_contract() {
+        let state = any_circuit_state();
+        let failures_after_event: u32 = kani::any();
+        let failure_threshold: u32 = kani::any();
+
+        let next = next_state_after_failure(state, failures_after_event, failure_threshold);
+
+        match state {
+            CircuitState::Closed => {
+                if failures_after_event >= failure_threshold {
+                    assert_eq!(next, CircuitState::Open);
+                } else {
+                    assert_eq!(next, CircuitState::Closed);
+                }
+            }
+            CircuitState::HalfOpen | CircuitState::Open => {
+                assert_eq!(next, CircuitState::Open);
+            }
+        }
+    }
+
+    #[kani::proof]
+    fn circuit_success_transition_contract() {
+        let state = any_circuit_state();
+        let successes_after_event: u32 = kani::any();
+        let success_threshold: u32 = kani::any();
+
+        let next = next_state_after_success(state, successes_after_event, success_threshold);
+
+        match state {
+            CircuitState::HalfOpen => {
+                if successes_after_event >= success_threshold {
+                    assert_eq!(next, CircuitState::Closed);
+                } else {
+                    assert_eq!(next, CircuitState::HalfOpen);
+                }
+            }
+            CircuitState::Closed => assert_eq!(next, CircuitState::Closed),
+            CircuitState::Open => assert_eq!(next, CircuitState::Open),
         }
     }
 }

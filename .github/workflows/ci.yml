@@ -42,6 +42,16 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  kani:
+    name: Kani
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run Kani proofs
+        uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f # v1.1
+        with:
+          args: --output-format=terse
+
   public-claims:
     name: Public claims
     runs-on: ubuntu-latest

@@ -103,6 +103,34 @@ pub enum CheckOutcome {
     Completed(Value),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheEntryStatus {
+    Missing,
+    LiveInFlight,
+    StaleInFlight,
+    LiveCompleted,
+    ExpiredCompleted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckPlan {
+    Proceed,
+    InFlight,
+    Completed,
+}
+
+#[must_use]
+pub(crate) fn decide_check_plan(status: CacheEntryStatus) -> (CheckPlan, bool) {
+    match status {
+        CacheEntryStatus::Missing => (CheckPlan::Proceed, false),
+        CacheEntryStatus::LiveInFlight => (CheckPlan::InFlight, false),
+        CacheEntryStatus::StaleInFlight | CacheEntryStatus::ExpiredCompleted => {
+            (CheckPlan::Proceed, true)
+        }
+        CacheEntryStatus::LiveCompleted => (CheckPlan::Completed, false),
+    }
+}
+
 impl IdempotencyCache {
     /// Create a new, empty cache.
     #[must_use]
@@ -118,29 +146,42 @@ impl IdempotencyCache {
     /// treated as `Proceed` so a fresh execution can start.
     pub fn check(&self, key: &str) -> CheckOutcome {
         let Some(entry) = self.entries.get(key) else {
-            return CheckOutcome::Proceed;
+            let (plan, evict) = decide_check_plan(CacheEntryStatus::Missing);
+            debug_assert!(!evict);
+            return match plan {
+                CheckPlan::Proceed => CheckOutcome::Proceed,
+                CheckPlan::InFlight => CheckOutcome::InFlight,
+                CheckPlan::Completed => unreachable!("missing entries cannot be completed"),
+            };
         };
 
-        match entry.value() {
+        let status = match entry.value() {
             IdempotencyState::InFlight(started) if started.elapsed() <= IN_FLIGHT_TIMEOUT => {
-                CheckOutcome::InFlight
+                CacheEntryStatus::LiveInFlight
             }
-            IdempotencyState::InFlight(_) => {
-                // Stale in-flight — drop the guard before mutating
-                drop(entry);
-                self.entries.remove(key);
-                debug!(key, "Evicted stale in-flight idempotency entry");
-                CheckOutcome::Proceed
+            IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
+            IdempotencyState::Completed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+                CacheEntryStatus::LiveCompleted
             }
-            IdempotencyState::Completed(value, stored) if stored.elapsed() <= COMPLETED_TTL => {
+            IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
+        };
+
+        let (decision, evict) = decide_check_plan(status);
+        if evict {
+            drop(entry);
+            self.entries.remove(key);
+            debug!(key, "Evicted stale idempotency entry");
+            return CheckOutcome::Proceed;
+        }
+
+        match decision {
+            CheckPlan::Proceed => CheckOutcome::Proceed,
+            CheckPlan::InFlight => CheckOutcome::InFlight,
+            CheckPlan::Completed => {
+                let IdempotencyState::Completed(value, _) = entry.value() else {
+                    unreachable!("live completed status must hold a completed value");
+                };
                 CheckOutcome::Completed(value.clone())
-            }
-            IdempotencyState::Completed(_, _) => {
-                // Expired completed entry
-                drop(entry);
-                self.entries.remove(key);
-                debug!(key, "Evicted expired completed idempotency entry");
-                CheckOutcome::Proceed
             }
         }
     }
@@ -191,6 +232,50 @@ impl IdempotencyCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    fn any_entry_status() -> CacheEntryStatus {
+        match kani::any::<u8>() % 5 {
+            0 => CacheEntryStatus::Missing,
+            1 => CacheEntryStatus::LiveInFlight,
+            2 => CacheEntryStatus::StaleInFlight,
+            3 => CacheEntryStatus::LiveCompleted,
+            _ => CacheEntryStatus::ExpiredCompleted,
+        }
+    }
+
+    #[kani::proof]
+    fn idempotency_decision_contract() {
+        let status = any_entry_status();
+        let (plan, evict) = decide_check_plan(status);
+
+        match status {
+            CacheEntryStatus::Missing => {
+                assert_eq!(plan, CheckPlan::Proceed);
+                assert!(!evict);
+            }
+            CacheEntryStatus::LiveInFlight => {
+                assert_eq!(plan, CheckPlan::InFlight);
+                assert!(!evict);
+            }
+            CacheEntryStatus::StaleInFlight => {
+                assert_eq!(plan, CheckPlan::Proceed);
+                assert!(evict);
+            }
+            CacheEntryStatus::LiveCompleted => {
+                assert_eq!(plan, CheckPlan::Completed);
+                assert!(!evict);
+            }
+            CacheEntryStatus::ExpiredCompleted => {
+                assert_eq!(plan, CheckPlan::Proceed);
+                assert!(evict);
+            }
+        }
     }
 }
 

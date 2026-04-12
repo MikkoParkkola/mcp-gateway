@@ -27,6 +27,16 @@ cargo test --all-features && \
 python3 benchmarks/token_savings.py --scenario readme --json
 ```
 
+### Formal Verification (Kani)
+
+`mcp-gateway` also has targeted Kani proofs for small state-machine logic.
+
+```bash
+cargo install --locked kani-verifier
+cargo kani setup
+cargo kani --output-format=terse
+```
+
 ## Code Organization
 
 Source in `src/`, each module kept to **800 lines or fewer**. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full diagram.
