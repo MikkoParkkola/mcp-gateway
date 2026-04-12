@@ -42,9 +42,27 @@ pub struct CapabilityDefinition {
     #[serde(default)]
     pub metadata: CapabilityMetadata,
 
-    /// Response transform pipeline configuration
+    /// Response transform pipeline configuration (applied by the executor).
     #[serde(default)]
     pub transform: TransformConfig,
+
+    /// Response transform applied by `gateway_invoke` after the backend
+    /// returns its result.
+    ///
+    /// Supports `project`, `rename`, `redact`, and `format` operations.
+    /// When empty (the default) the response passes through unchanged.
+    ///
+    /// # Example (YAML)
+    ///
+    /// ```yaml
+    /// response_transform:
+    ///   project: [id, name]
+    ///   redact:
+    ///     - pattern: '\b\d{4}-\d{4}-\d{4}-\d{4}\b'
+    ///       replacement: "[REDACTED]"
+    /// ```
+    #[serde(default, skip_serializing_if = "TransformConfig::is_empty")]
+    pub response_transform: TransformConfig,
 
     /// Webhook endpoint definitions for inbound events
     #[serde(default)]

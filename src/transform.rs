@@ -47,6 +47,20 @@ pub struct TransformConfig {
     pub format: Option<FormatConfig>,
 }
 
+impl TransformConfig {
+    /// Returns `true` when the config contains no transform operations.
+    ///
+    /// Used as a `skip_serializing_if` predicate so empty transform sections
+    /// are omitted from serialised capability YAML.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.project.is_empty()
+            && self.rename.is_empty()
+            && self.redact.is_empty()
+            && self.format.is_none()
+    }
+}
+
 /// A single redaction rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedactRule {

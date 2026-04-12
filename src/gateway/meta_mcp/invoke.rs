@@ -16,6 +16,8 @@ use crate::cache::ResponseCache;
 use crate::cost_accounting::suggestions;
 use crate::idempotency::{GuardOutcome, enforce};
 use crate::playbook::PlaybookEngine;
+use crate::provider::transforms::ResponseTransform;
+use crate::provider::Transform as _;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
@@ -466,7 +468,17 @@ impl MetaMcp {
             && cap.has_capability(tool)
         {
             let result = cap.call_tool(tool, arguments).await?;
-            return Ok(serde_json::to_value(result)?);
+            let mut response = serde_json::to_value(result)?;
+
+            // Apply per-capability response_transform when configured.
+            if let Some(cap_def) = cap.get(tool)
+                && !cap_def.response_transform.is_empty()
+            {
+                let t = ResponseTransform::new(&cap_def.response_transform);
+                response = t.transform_result(tool, response).await?;
+            }
+
+            return Ok(response);
         }
 
         let backend = self
@@ -753,5 +765,141 @@ impl MetaMcp {
         let result = temp_engine.execute(name, arguments, &invoker).await?;
 
         Ok(serde_json::to_value(&result).unwrap_or(json!(null)))
+    }
+}
+
+// ============================================================================
+// Tests — response_transform wiring
+// ============================================================================
+
+#[cfg(test)]
+mod response_transform_tests {
+    use serde_json::json;
+
+    use crate::provider::Transform as _;
+    use crate::provider::transforms::ResponseTransform;
+    use crate::transform::{RedactRule, TransformConfig};
+
+    /// Prove the component used by dispatch_to_backend: given a non-empty
+    /// `response_transform` in a capability definition, `ResponseTransform`
+    /// strips all fields not listed in `project`.
+    #[tokio::test]
+    async fn response_transform_project_strips_unlisted_fields() {
+        // GIVEN: a response_transform that keeps only "id" and "name"
+        let config = TransformConfig {
+            project: vec!["id".to_string(), "name".to_string()],
+            ..Default::default()
+        };
+        let transform = ResponseTransform::new(&config);
+
+        // AND: a raw tool response value with extra fields
+        let raw = json!({
+            "id": "abc",
+            "name": "Alice",
+            "internal_token": "secret",
+            "noise": 42
+        });
+
+        // WHEN: applying the transform (as dispatch_to_backend would)
+        let result = transform.transform_result("my_tool", raw).await.unwrap();
+
+        // THEN: only projected fields remain
+        assert_eq!(result.get("id"), Some(&json!("abc")));
+        assert_eq!(result.get("name"), Some(&json!("Alice")));
+        assert!(
+            result.get("internal_token").is_none()
+                || result["internal_token"].is_null(),
+            "internal_token should be stripped"
+        );
+        assert!(
+            result.get("noise").is_none() || result["noise"].is_null(),
+            "noise should be stripped"
+        );
+    }
+
+    /// Prove that an empty `response_transform` is a no-op: the raw response
+    /// passes through completely unchanged.
+    #[tokio::test]
+    async fn response_transform_noop_when_config_is_empty() {
+        // GIVEN: empty (default) transform config
+        let config = TransformConfig::default();
+        assert!(config.is_empty(), "default config must be empty");
+        let transform = ResponseTransform::new(&config);
+
+        // AND: a response with various fields
+        let raw = json!({
+            "content": [{"type": "text", "text": "hello"}],
+            "is_error": false,
+            "extra": "field"
+        });
+
+        // WHEN: transforming
+        let result = transform.transform_result("tool", raw.clone()).await.unwrap();
+
+        // THEN: result is identical to input
+        assert_eq!(result, raw);
+    }
+
+    /// Prove redact patterns fire on all string values recursively.
+    #[tokio::test]
+    async fn response_transform_redact_replaces_sensitive_patterns() {
+        // GIVEN: redact rule for credit card numbers
+        let config = TransformConfig {
+            redact: vec![RedactRule {
+                pattern: r"\b\d{4}-\d{4}-\d{4}-\d{4}\b".to_string(),
+                replacement: "[CC_REDACTED]".to_string(),
+            }],
+            ..Default::default()
+        };
+        let transform = ResponseTransform::new(&config);
+
+        // AND: a response containing a card number in a nested field
+        let raw = json!({
+            "user": "Alice",
+            "payment": {
+                "card": "1234-5678-9012-3456",
+                "valid": true
+            }
+        });
+
+        // WHEN: transforming
+        let result = transform.transform_result("billing_tool", raw).await.unwrap();
+
+        // THEN: the card number is redacted everywhere
+        let card_val = result["payment"]["card"].as_str().unwrap();
+        assert_eq!(card_val, "[CC_REDACTED]");
+        // Non-sensitive fields are untouched
+        assert_eq!(result["user"], json!("Alice"));
+    }
+
+    /// Verify TransformConfig::is_empty returns expected values.
+    #[test]
+    fn transform_config_is_empty_tracks_all_fields() {
+        // Default is empty
+        assert!(TransformConfig::default().is_empty());
+
+        // project non-empty
+        assert!(!TransformConfig {
+            project: vec!["x".to_string()],
+            ..Default::default()
+        }
+        .is_empty());
+
+        // rename non-empty
+        assert!(!TransformConfig {
+            rename: [("a".to_string(), "b".to_string())].into(),
+            ..Default::default()
+        }
+        .is_empty());
+
+        // redact non-empty
+        assert!(!TransformConfig {
+            redact: vec![RedactRule {
+                pattern: "x".to_string(),
+                replacement: "y".to_string(),
+            }],
+            ..Default::default()
+        }
+        .is_empty());
     }
 }

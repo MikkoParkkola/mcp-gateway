@@ -241,6 +241,7 @@ fn build_routing_instructions_includes_chain_section_when_chains_present() {
             ..Default::default()
         },
         transform: TransformConfig::default(),
+        response_transform: TransformConfig::default(),
         webhooks: HashMap::new(),
         sha256: None,
     };
@@ -283,6 +284,7 @@ fn build_routing_instructions_omits_chain_section_when_no_chains() {
             ..Default::default()
         },
         transform: TransformConfig::default(),
+        response_transform: TransformConfig::default(),
         webhooks: HashMap::new(),
         sha256: None,
     };

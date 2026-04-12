@@ -57,6 +57,7 @@ async fn test_webhook_registry_registration() {
         cache: CacheConfig::default(),
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
+        response_transform: TransformConfig::default(),
         webhooks,
         sha256: None,
     };
@@ -102,6 +103,7 @@ async fn test_webhook_routes_creation() {
         cache: CacheConfig::default(),
         metadata: CapabilityMetadata::default(),
         transform: TransformConfig::default(),
+        response_transform: TransformConfig::default(),
         webhooks,
         sha256: None,
     };

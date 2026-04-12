@@ -123,6 +123,7 @@ mod tests {
                 ..Default::default()
             },
             transform: TransformConfig::default(),
+            response_transform: TransformConfig::default(),
             webhooks: HashMap::default(),
             sha256: None,
         }
