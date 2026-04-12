@@ -36,9 +36,9 @@ Sleep 4s
 Ctrl+L
 Sleep 200ms
 
-# ─── Scene 2: The Solution — 4 Meta-Tools ───────────────────────────────
+# ─── Scene 2: The Solution — Small Fixed Meta-Tool Surface ──────────────
 
-Type "# The Solution: connect to ONE gateway, get 4 meta-tools"
+Type "# The Solution: connect to ONE gateway, keep a small fixed tool surface"
 Enter
 Sleep 2s
 
@@ -48,7 +48,7 @@ Sleep 4s
 
 Type ""
 Enter
-Type "# That is your entire MCP config. 4 meta-tools replace everything:"
+Type "# That is your entire MCP config. The gateway keeps a compact Meta-MCP surface:"
 Enter
 Sleep 1500ms
 
@@ -96,7 +96,7 @@ Sleep 7s
 
 Type ""
 Enter
-Type "# Hot-reloaded in ~500ms. No server to build. 42 ship out of the box:"
+Type "# Hot-reloaded automatically after file changes. No server to build. 100+ ship out of the box:"
 Enter
 Sleep 1500ms
 

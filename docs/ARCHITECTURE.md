@@ -10,7 +10,7 @@
                          │                                                 │
   AI Client              │  ┌──────────────┐    ┌───────────────────┐      │
   (Claude, Cursor, etc.) │  │  HTTP Router  │───>│    Meta-MCP       │      │
-          |              │  │  (axum)       │    │  4 meta-tools:    │      │
+          |              │  │  (axum)       │    │  12-15 meta-tools:│      │
           |              │  │               │    │  - list_servers   │      │
    POST /mcp             │  │  /mcp    ─────┼───>│  - list_tools    │      │
    ──────────────────────>  │  /mcp/{id}───┼──┐ │  - search_tools  │      │
@@ -125,7 +125,7 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 | HTTP framework | axum | Tokio-native, tower middleware, streaming support |
 | Config format | YAML + figment | Human-readable, env override, dotenv loading |
 | Default port | 39400 | Above ephemeral range, unlikely to conflict |
-| Meta-MCP default | ON | Core value prop: 97% token savings |
+| Meta-MCP default | ON | Core value prop: compact tool surface with on-demand discovery |
 | Capability format | Custom YAML ("fulcrum") | Simpler than OpenAPI for single-endpoint definitions |
 | Cache | In-memory HashMap | Local proxy -- no need for Redis; bounded by max_entries |
 | Search ranking | Usage frequency | Simple, effective, persisted, no ML overhead |
