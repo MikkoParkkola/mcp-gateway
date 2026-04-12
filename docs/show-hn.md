@@ -35,7 +35,7 @@ The MCP ecosystem treats "connect N servers" as a feature. It's also the entire 
 - Hash-pins capability YAMLs by SHA-256 and fail-closes on any post-load mutation (`RUG-PULL DETECTED`).
 - Imports a full OpenAPI spec into validated capability YAMLs with one command (Petstore: 19 operations end-to-end).
 
-2765 tests passing, `#![deny(unsafe_code)]`, zero clippy warnings, ~8 ms startup. MIT. This is the most mature of the four repos and is what I planned to Show HN'd a week ago. Then I kept building.
+2888 tests passing, `#![deny(unsafe_code)]`, zero clippy warnings, ~8 ms startup. MIT. This is the most mature of the four repos and is what I planned to Show HN'd a week ago. Then I kept building.
 
 ### Repo 2 — `botnaut-client` (the agent)
 
@@ -81,7 +81,7 @@ Because the stack needs to run locally to mean anything, `botnaut-engine` now ha
 
 Honesty matters more than a punchy title:
 
-- **Shipped and runs**: mcp-gateway (2765 tests, MIT), botnaut-client (1155+ tests, public), formal proofs (Z3 PROVED × 5, TLA+ spec reviewable).
+- **Shipped and runs**: mcp-gateway (2888 tests, MIT), botnaut-client (1155+ tests, public), formal proofs (Z3 PROVED × 5, TLA+ spec reviewable).
 - **Scaffolded, frozen schema, not trained**: MetaThinker.
 - **Partially integrated**: HIGGS Phase 2 kernel (compiles, not yet swapped into the hot path), Mojo gradient firewall (Phase 1 skeleton + Rust FFI wrapper, 11 tests).
 - **Not published**: patent filings (drafted), demo video.

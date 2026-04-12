@@ -38,7 +38,7 @@
   - [ ] `botnaut-client`: `cargo install --path .`; `botnaut chat` launches; hebb + metacognition extensions spawn; constitutional hook blocks a test `rm -rf ~` payload
   - [ ] `botnaut/formal/`: `python formal/enforcement_proof.py` on a fresh venv — all 5 proved, exit 0
 - [ ] **Reproducibility block** — for each headline number, a commit-hash + command readers can rerun:
-  - [ ] 2765 tests: `cd mcp-gateway && cargo test --quiet 2>&1 | tail -5`
+  - [ ] 2888 tests: `cd mcp-gateway && cargo test --quiet 2>&1 | tail -5`
   - [ ] 1155+ tests: `cd botnaut-client && cargo test --quiet 2>&1 | tail -5`
   - [ ] 91% token savings: `cd mcp-gateway && python benchmarks/token_savings.py`
   - [ ] 8 ms startup: `hyperfine 'mcp-gateway --config gateway.yaml --dry-run'`

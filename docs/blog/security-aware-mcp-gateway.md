@@ -6,7 +6,7 @@ Status: Draft for launch
 
 ## TL;DR
 
-I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface (12-15 tools), pins capability YAMLs by SHA-256, and runs every tool description through a validator that catches the Invariant Labs tool-poisoning patterns. It is a Rust single binary, MIT licensed, with 2765 passing tests at the time of this post.
+I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface (12-15 tools), pins capability YAMLs by SHA-256, and runs every tool description through a validator that catches the Invariant Labs tool-poisoning patterns. It is a Rust single binary, MIT licensed, with 2888 passing tests at the time of this post.
 
 This post walks through why that architecture exists, what attacks it defeats today, and what it still does not solve.
 
@@ -64,7 +64,7 @@ mcp-gateway sits between the agent and the backends:
 ┌──────────────────────────────────────┐
 │          MCP Gateway :39400          │
 │                                      │
-│  Meta-MCP surface (13-17 tools):     │
+│  Meta-MCP surface (12-15 tools):     │
 │  list_servers, list_tools,           │
 │  search_tools, invoke, ...           │
 │                                      │
@@ -80,7 +80,7 @@ mcp-gateway sits between the agent and the backends:
   server    server    server
 ```
 
-The agent only ever sees the compact Meta-MCP surface (13 tools minimum, 16 in the README benchmark, 17 with webhook status). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
+The agent only ever sees the compact Meta-MCP surface (12 tools minimum, 14 in the README benchmark, 15 with webhook status). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
 
 The immediate wins:
 
