@@ -9,6 +9,7 @@ mod meta_mcp_tool_defs;
 mod middleware;
 pub mod oauth;
 pub mod proxy;
+pub mod recovery;
 mod router;
 mod server;
 pub mod streaming;

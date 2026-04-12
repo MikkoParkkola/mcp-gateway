@@ -26,6 +26,7 @@ use super::super::meta_mcp_helpers::{
     did_you_mean, extract_bool_or, extract_optional_str, extract_price_per_million,
     extract_required_str, parse_tool_arguments,
 };
+use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
@@ -276,12 +277,66 @@ impl MetaMcp {
         }
 
         let mut result = match dispatch_result {
-            Ok(value) => value,
+            Ok(value) => {
+                // When the capability backend returns a tool-level error
+                // (schema validation, executor failure) it sets `isError: true`
+                // in the JSON value without propagating a Rust `Err`.  Attach a
+                // recovery hint so the LLM has structured guidance to fix the
+                // call — but only when the `recovery` field is not already set.
+                if value
+                    .get("isError")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                    && value.get("recovery").is_none()
+                {
+                    let detail = value
+                        .get("content")
+                        .and_then(|c| c.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|item| item.get("text"))
+                        .and_then(serde_json::Value::as_str);
+                    let hint = recovery_for(
+                        ErrorCategory::Validation,
+                        RecoveryContext {
+                            tool: Some(tool),
+                            backend: Some(server),
+                            detail,
+                            ..Default::default()
+                        },
+                    );
+                    attach_recovery(value, hint)
+                } else {
+                    value
+                }
+            }
             Err(e) => {
                 if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
                     idem_cache.remove(key);
                 }
-                return Err(e);
+                // Classify the error and convert to a structured tool-level
+                // error response.  This keeps `isError + content + recovery`
+                // in the tool result body rather than promoting to a JSON-RPC
+                // protocol error, which gives the LLM actionable recovery
+                // guidance without breaking the MCP framing.
+                let (category, detail) = classify_dispatch_error(&e);
+                let hint = recovery_for(
+                    category,
+                    RecoveryContext {
+                        tool: Some(tool),
+                        backend: Some(server),
+                        detail: Some(&detail),
+                        ..Default::default()
+                    },
+                );
+                // Still record the error budget failure (already done above via
+                // `record_error_budget`).  Idempotency key was cleaned up above.
+                attach_recovery(
+                    json!({
+                        "isError": true,
+                        "content": [{"type": "text", "text": e.to_string()}],
+                    }),
+                    hint,
+                )
             }
         };
 
@@ -765,6 +820,31 @@ impl MetaMcp {
         let result = temp_engine.execute(name, arguments, &invoker).await?;
 
         Ok(serde_json::to_value(&result).unwrap_or(json!(null)))
+    }
+}
+
+// ============================================================================
+// Recovery classification helpers
+// ============================================================================
+
+/// Map a dispatch [`Error`] to an [`ErrorCategory`] and a human-readable detail
+/// string suitable for embedding in a [`RecoveryHint`].
+fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
+    match error {
+        Error::CircuitOpen(backend) => (
+            ErrorCategory::CircuitBreakerTrip,
+            format!("Circuit breaker is open for backend '{backend}'"),
+        ),
+        Error::BackendNotFound(name) | Error::ToolNotFound(name) => {
+            (ErrorCategory::NotFound, format!("Not found: '{name}'"))
+        }
+        Error::BackendTimeout(msg) => (ErrorCategory::Timeout, msg.clone()),
+        Error::BackendUnavailable(msg) | Error::Transport(msg) => {
+            (ErrorCategory::BackendError, msg.clone())
+        }
+        Error::Protocol(msg) => (ErrorCategory::Validation, msg.clone()),
+        Error::JsonRpc { message, .. } => (ErrorCategory::BackendError, message.clone()),
+        _ => (ErrorCategory::BackendError, error.to_string()),
     }
 }
 
