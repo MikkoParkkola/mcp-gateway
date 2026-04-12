@@ -56,6 +56,15 @@ pub struct OAuthClient {
     /// Client secret (optional — needed by some providers for token exchange)
     client_secret: RwLock<Option<String>>,
 
+    /// Fixed port for the OAuth callback server (optional)
+    callback_port: Option<u16>,
+
+    /// Callback path for the OAuth redirect (default: "/oauth/callback")
+    callback_path: Option<String>,
+
+    /// Callback host for the OAuth redirect URI (default: "127.0.0.1")
+    callback_host: Option<String>,
+
     /// Seconds before expiry at which the background task proactively refreshes.
     ///
     /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
@@ -92,6 +101,9 @@ impl OAuthClient {
         token_refresh_buffer_secs: u64,
         client_id: Option<String>,
         client_secret: Option<String>,
+        callback_port: Option<u16>,
+        callback_path: Option<String>,
+        callback_host: Option<String>,
     ) -> Self {
         Self {
             http_client,
@@ -105,6 +117,9 @@ impl OAuthClient {
             scopes,
             client_id: RwLock::new(client_id),
             client_secret: RwLock::new(client_secret),
+            callback_port,
+            callback_path,
+            callback_host,
             token_refresh_buffer_secs,
         }
     }
@@ -408,7 +423,12 @@ impl OAuthClient {
 
         // Start callback server FIRST to get the actual callback URL
         // This must happen BEFORE client registration so we know the port
-        let callback_server = callback::start_callback_server(state.clone(), None).await?;
+        let callback_server = callback::start_callback_server(
+            state.clone(),
+            self.callback_port,
+            self.callback_path.as_deref(),
+            self.callback_host.as_deref(),
+        ).await?;
         let callback_url = callback_server.callback_url.clone();
 
         // Now ensure we have a client ID, passing the actual callback URL for registration

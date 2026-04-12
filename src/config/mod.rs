@@ -540,6 +540,18 @@ pub struct OAuthConfig {
     /// Client secret (optional — required by some providers for token exchange).
     #[serde(default)]
     pub client_secret: Option<String>,
+    /// Fixed port for the OAuth callback server (optional — uses a random port if not set).
+    /// Some providers (e.g., Slack) require the callback on a specific port.
+    #[serde(default)]
+    pub callback_port: Option<u16>,
+    /// Callback path for the OAuth redirect (default: "/oauth/callback").
+    /// Some providers register a specific path (e.g., "/callback").
+    #[serde(default)]
+    pub callback_path: Option<String>,
+    /// Callback host for the OAuth redirect URI (default: "127.0.0.1").
+    /// Some providers register "localhost" instead of "127.0.0.1".
+    #[serde(default)]
+    pub callback_host: Option<String>,
     /// Seconds before expiry to proactively refresh the token (default: 300).
     #[serde(default = "default_token_refresh_buffer")]
     pub token_refresh_buffer_secs: u64,

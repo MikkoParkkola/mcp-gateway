@@ -328,6 +328,9 @@ impl Backend {
             oauth_config.token_refresh_buffer_secs,
             oauth_config.client_id.clone(),
             oauth_config.client_secret.clone(),
+            oauth_config.callback_port,
+            oauth_config.callback_path.clone(),
+            oauth_config.callback_host.clone(),
         );
 
         Ok(Some(oauth))

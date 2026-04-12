@@ -119,6 +119,9 @@ fn new_client_has_no_valid_token() {
         300,
         None,
         None,
+        None,
+        None,
+        None,
     );
     assert!(!client.has_valid_token());
 }
@@ -134,6 +137,9 @@ fn client_with_valid_token_returns_true() {
         vec![],
         storage,
         300,
+        None,
+        None,
+        None,
         None,
         None,
     );
@@ -164,6 +170,9 @@ fn client_with_expired_token_returns_false() {
         300,
         None,
         None,
+        None,
+        None,
+        None,
     );
 
     // Inject an expired token
@@ -192,6 +201,9 @@ fn backend_name_returns_configured_name() {
         300,
         None,
         None,
+        None,
+        None,
+        None,
     );
     assert_eq!(client.backend_name(), "my-service");
 }
@@ -215,6 +227,9 @@ fn needs_proactive_refresh_false_when_no_token() {
         300,
         None,
         None,
+        None,
+        None,
+        None,
     );
 
     // WHEN / THEN: no token means no proactive refresh needed
@@ -234,6 +249,9 @@ fn needs_proactive_refresh_false_when_token_no_expiry() {
         vec![],
         storage,
         300,
+        None,
+        None,
+        None,
         None,
         None,
     );
@@ -257,6 +275,9 @@ fn needs_proactive_refresh_true_when_within_buffer() {
         vec![],
         storage,
         300, // 300s buffer
+        None,
+        None,
+        None,
         None,
         None,
     );
@@ -287,6 +308,9 @@ fn needs_proactive_refresh_false_when_outside_buffer() {
         vec![],
         storage,
         300,
+        None,
+        None,
+        None,
         None,
         None,
     );

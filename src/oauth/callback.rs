@@ -84,10 +84,16 @@ impl CallbackServer {
 pub async fn start_callback_server(
     expected_state: String,
     port: Option<u16>,
+    path: Option<&str>,
+    host: Option<&str>,
 ) -> Result<CallbackServer> {
-    // Find an available port
-    let addr: SocketAddr = format!("127.0.0.1:{}", port.unwrap_or(0)).parse().unwrap();
-    let listener = TcpListener::bind(addr)
+    let callback_host = host.unwrap_or("127.0.0.1");
+    let callback_path = path.unwrap_or("/oauth/callback");
+
+    // Bind to 127.0.0.1 (even if callback_host is "localhost") since
+    // SocketAddr requires a numeric IP, but use callback_host in the URL.
+    let bind_addr: SocketAddr = format!("127.0.0.1:{}", port.unwrap_or(0)).parse().unwrap();
+    let listener = TcpListener::bind(bind_addr)
         .await
         .map_err(|e| Error::OAuth(format!("Failed to bind callback server: {e}")))?;
 
@@ -95,7 +101,7 @@ pub async fn start_callback_server(
         .local_addr()
         .map_err(|e| Error::OAuth(format!("Failed to get callback server address: {e}")))?;
 
-    let callback_url = format!("http://127.0.0.1:{}/oauth/callback", actual_addr.port());
+    let callback_url = format!("http://{callback_host}:{}{callback_path}", actual_addr.port());
     info!(url = %callback_url, "OAuth callback server listening");
 
     // Create oneshot channel for the result
@@ -108,7 +114,7 @@ pub async fn start_callback_server(
 
     // Build router
     let app = Router::new()
-        .route("/oauth/callback", get(handle_callback))
+        .route(callback_path, get(handle_callback))
         .with_state(state);
 
     // Spawn server task
@@ -233,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_server_binds_to_random_port() {
-        let server = start_callback_server("test_state".to_string(), None)
+        let server = start_callback_server("test_state".to_string(), None, None, None)
             .await
             .unwrap();
         assert!(server.callback_url.starts_with("http://127.0.0.1:"));
@@ -245,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn callback_server_binds_to_specified_port() {
         // Use port 0 as fallback since specific ports might be taken
-        let server = start_callback_server("test_state".to_string(), Some(0))
+        let server = start_callback_server("test_state".to_string(), Some(0), None, None)
             .await
             .unwrap();
         assert!(server.callback_url.starts_with("http://127.0.0.1:"));
@@ -259,7 +265,7 @@ mod tests {
     #[tokio::test]
     async fn callback_flow_success() {
         let state = "csrf_state_123".to_string();
-        let server = start_callback_server(state.clone(), None).await.unwrap();
+        let server = start_callback_server(state.clone(), None, None, None).await.unwrap();
         let callback_url = server.callback_url.clone();
 
         // Simulate the OAuth provider redirecting back
@@ -279,7 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_flow_state_mismatch() {
-        let server = start_callback_server("expected_state".to_string(), None)
+        let server = start_callback_server("expected_state".to_string(), None, None, None)
             .await
             .unwrap();
         let callback_url = server.callback_url.clone();
@@ -297,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_flow_error_from_provider() {
-        let server = start_callback_server("some_state".to_string(), None)
+        let server = start_callback_server("some_state".to_string(), None, None, None)
             .await
             .unwrap();
         let callback_url = server.callback_url.clone();
@@ -317,7 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_flow_missing_code() {
-        let server = start_callback_server("state123".to_string(), None)
+        let server = start_callback_server("state123".to_string(), None, None, None)
             .await
             .unwrap();
         let callback_url = server.callback_url.clone();
