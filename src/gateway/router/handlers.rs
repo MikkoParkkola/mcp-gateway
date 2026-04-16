@@ -18,6 +18,9 @@ use super::helpers::{
     parse_elicitation_params, parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::destructive_confirmation::{
+    ConfirmationOutcome, is_destructive_meta_tool, require_destructive_confirmation,
+};
 use crate::gateway::streaming::create_sse_response;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
@@ -486,6 +489,33 @@ pub(super) async fn meta_mcp_handler(
                 (srv, tl, cl)
             };
 
+            // OWASP ASI09 — destructive meta-tool confirmation gate.
+            //
+            // For any meta-tool carrying `destructiveHint: true`, require explicit
+            // human confirmation via MCP elicitation before execution proceeds.
+            // Non-destructive tools and all backend tool calls skip this check.
+            if is_destructive_meta_tool(tool_name) {
+                let action_desc = describe_destructive_action(tool_name, params.as_ref());
+                let outcome = require_destructive_confirmation(
+                    &state.proxy_manager,
+                    &session_id,
+                    &action_desc,
+                )
+                .await;
+                if outcome == ConfirmationOutcome::Declined {
+                    return build_response(
+                        JsonRpcResponse::error(
+                            Some(id),
+                            -32001,
+                            format!("Operator declined: {action_desc}"),
+                        ),
+                        &session_id,
+                        StatusCode::OK,
+                    );
+                }
+                // Confirmed or Unsupported → fall through to execute
+            }
+
             let mut call_response = state
                 .meta_mcp
                 .handle_tools_call(
@@ -627,6 +657,24 @@ pub(super) async fn meta_mcp_handler(
 
     // Return response with session ID header
     build_response(response, &session_id, StatusCode::OK)
+}
+
+// ── destructive-confirmation helpers ─────────────────────────────────────────
+
+/// Build a human-readable description of the destructive action for the
+/// elicitation message.  Extracts the relevant argument(s) from `params`.
+fn describe_destructive_action(tool_name: &str, params: Option<&Value>) -> String {
+    match tool_name {
+        "gateway_kill_server" => {
+            let server = params
+                .and_then(|p| p.get("arguments"))
+                .and_then(|a| a.get("server"))
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>");
+            format!("kill server '{server}'")
+        }
+        other => format!("execute destructive meta-tool '{other}'"),
+    }
 }
 
 /// GET /metrics — Prometheus text exposition format scrape endpoint.

@@ -1,6 +1,7 @@
 //! Gateway server implementation
 
 pub mod auth;
+pub(crate) mod destructive_confirmation;
 mod differential;
 mod http_error;
 mod meta_mcp;
