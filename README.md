@@ -76,6 +76,8 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
+- **OWASP Agentic AI Top 10.** Compliance matrix mapping all 10 risks to gateway controls. 5/10 covered, 5/10 partial. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
+
 ### Recent additions
 
 - **OpenAPI importer.** `mcp-gateway cap import <spec-url-or-file>` turns an OpenAPI 3 spec into one validated capability YAML per operation. The full Swagger Petstore spec becomes 19 validated capability YAMLs end-to-end:
@@ -423,6 +425,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [Changelog](CHANGELOG.md) | Release history |
+| [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 
 ## Troubleshooting
 
