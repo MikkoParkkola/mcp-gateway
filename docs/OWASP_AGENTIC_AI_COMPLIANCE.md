@@ -19,7 +19,7 @@
 | ASI06 | **Memory and Context Poisoning** — Attacker injects malicious content into agent short- or long-term memory (vector stores, external knowledge bases, session context), which then influences future agent decisions | PARTIAL | `src/security/firewall/input_scanner.rs`: scans tool arguments including memory-write arguments; `src/security/firewall/redactor.rs`: PII/sensitive data redaction before logging; `src/context_compression.rs`: context management; no dedicated memory-store integrity layer | `src/botnaut/security/adversarial/`: adversarial input detection; `src/botnaut/security/poison_resilience/` (POISON_RESILIENCE_PLAN.md); `src/botnaut/security/constitution_guard.py`: runtime guard against goal drift; Botnaut uses DeltaNet TTT state with CRDT merge semantics — state is append-only and versioned | mcp-gateway has no vector-store or long-term memory protection (it is stateless by design); Botnaut's memory poisoning defence is planned (POISON_RESILIENCE_PLAN) but not fully shipped |
 | ASI07 | **Insecure Inter-Agent Communication** — Agent-to-agent messages lack authentication, integrity protection, or confidentiality, enabling MITM, message injection, or replay attacks between agents | PARTIAL | `src/mtls/`: mutual TLS for transport-layer auth between gateway and backends; `src/transport/`: transport abstraction; `src/tracing_context/`: per-request trace propagation; no dedicated agent-message signing or replay-nonce scheme | `src/botnaut/swarm/quantum_safe_consensus.py`: ML-KEM post-quantum consensus with Ed25519 receipts; `src/botnaut/swarm/federation/invitation.py`: federated agent invitation with Ed25519 signatures; `src/botnaut/security/pq_audit.py`: PQC audit; `docs/security/HYBRID_PQ_RATCHET_DESIGN.md` | mcp-gateway assumes TLS is sufficient — no application-layer message signing between agents; replay protection (nonces) not implemented |
 | ASI08 | **Cascading Failures** — Failures in one agent propagate to dependent agents or tools, causing system-wide DoS or inconsistent state due to absent circuit breakers, retry storms, or unbounded recursion | COVERED | `src/failsafe/circuit_breaker.rs`: Closed/Open/HalfOpen state machine with configurable failure threshold; `src/failsafe/rate_limiter.rs`: token-bucket rate limiter (governor crate, per-RPS + burst config); `src/failsafe/retry.rs`: retry with backoff; `src/session_sandbox.rs`: `max_calls` (call count cap) + `max_duration` session timeout + `max_payload_bytes` payload limit; `src/cost_accounting/enforcer.rs`: daily micro-USD atomic budget with day-boundary reset | `src/botnaut/governance/constitutional_kill_switch.py`: kill switch for runaway agents; `docs/resilience/RESILIENCE_GUIDE.md`; `src/botnaut/agent/dag_orchestrator.py`: DAG-based orchestration (bounded execution graphs) | mcp-gateway rate limiter is per-gateway-instance (not per-client); no per-client circuit breaker |
-| ASI09 | **Human-Agent Trust Exploitation** — Agent manipulates or overwhelms the human-in-the-loop (HITL) mechanism, deceives operators into approving malicious actions, or bypasses human oversight via automation | PARTIAL | `src/kill_switch/`: kill-switch module for emergency agent halt; `src/cost_accounting/enforcer.rs`: `AlertAction` escalations on budget breach (human notification path); `src/gateway/ui/`: operator UI with approval flows | `src/botnaut/security/approval.py` + `auto_approver.py`: explicit human approval gate with `auto_approval` policy; `src/botnaut/governance/consent_tracker.py`: consent tracking; `src/botnaut/security/anti_phishing/`: anti-phishing for agent-to-human communication; `docs/ethics/NO_HIDDEN_COSTS.md`: transparency commitment; `GOVERNANCE.md` §1: PBC dual mandate | No structured HITL confirmation protocol in mcp-gateway for high-risk tool invocations; `kill_switch` halts everything but offers no partial approval flow |
+| ASI09 | **Human-Agent Trust Exploitation** — Agent manipulates or overwhelms the human-in-the-loop (HITL) mechanism, deceives operators into approving malicious actions, or bypasses human oversight via automation | COVERED | `src/gateway/destructive_confirmation.rs`: MCP elicitation-based confirmation gate for destructive meta-tools (`gateway_kill_server`); `src/kill_switch/`: kill-switch module for emergency agent halt; `src/cost_accounting/enforcer.rs`: `AlertAction` escalations on budget breach (human notification path); `src/gateway/ui/`: operator UI with approval flows | `src/botnaut/security/approval.py` + `auto_approver.py`: explicit human approval gate with `auto_approval` policy; `src/botnaut/governance/consent_tracker.py`: consent tracking; `src/botnaut/security/anti_phishing/`: anti-phishing for agent-to-human communication; `docs/ethics/NO_HIDDEN_COSTS.md`: transparency commitment; `GOVERNANCE.md` §1: PBC dual mandate | — |
 | ASI10 | **Rogue Agents** — An agent defects from its intended objective, acts deceptively, or coordinates with other compromised agents to pursue misaligned goals outside operator control | PARTIAL | `src/security/firewall/anomaly.rs`: transition-probability anomaly scoring detects behavioural drift; `src/kill_switch/`: emergency halt; `src/cost_accounting/enforcer.rs`: spend cap prevents runaway cost; `src/session_sandbox.rs`: `max_calls` + `max_duration` bound session lifetime | `src/botnaut/security/constitution_enforcer.py`: Ed25519-signed constitution with startup enforcement; `src/botnaut/alignment_safety/constitutional.py`: constitutional AI alignment layer; `src/botnaut/alignment_safety/interpretability.py`: interpretability probes; `src/botnaut/governance/constitutional_verifier/`: runtime constitution verification; `src/botnaut/security/agent_anomaly_detector.py`: agent-specific anomaly detection | mcp-gateway's anomaly detector is statistical and retrospective, not predictive; no multi-agent collusion detection in either system |
 
 ---
@@ -28,11 +28,11 @@
 
 | Status | Count | Risks |
 |--------|-------|-------|
-| **COVERED** | 5/10 | ASI01 (Behaviour Hijack), ASI02 (Tool Misuse), ASI04 (Supply Chain / Rug Pull), ASI05 (Code Execution / RCE), ASI08 (Cascading Failures) |
-| **PARTIAL** | 5/10 | ASI03 (Identity Abuse), ASI06 (Memory Poisoning), ASI07 (Inter-Agent Comms), ASI09 (Human Trust Exploitation), ASI10 (Rogue Agents) |
+| **COVERED** | 6/10 | ASI01 (Behaviour Hijack), ASI02 (Tool Misuse), ASI04 (Supply Chain / Rug Pull), ASI05 (Code Execution / RCE), ASI08 (Cascading Failures), ASI09 (Human Trust Exploitation) |
+| **PARTIAL** | 4/10 | ASI03 (Identity Abuse), ASI06 (Memory Poisoning), ASI07 (Inter-Agent Comms), ASI10 (Rogue Agents) |
 | **GAP** | 0/10 | — |
 
-**Overall**: 5/10 covered, 5/10 partial, 0/10 outright gaps.
+**Overall**: 6/10 covered, 4/10 partial, 0/10 outright gaps.
 
 ---
 
@@ -48,7 +48,7 @@
 
 ### P1 — Strengthen Partial Controls
 
-4. **ASI09 — HITL Protocol**: Implement a structured high-risk tool confirmation protocol in mcp-gateway: tools matching configurable risk patterns should require an explicit operator acknowledgment token before dispatch, not just a kill-switch.
+4. ~~**ASI09 — HITL Protocol**~~: ✅ Implemented. `src/gateway/destructive_confirmation.rs` gates destructive meta-tools via MCP elicitation. Status upgraded to COVERED.
 
 5. **ASI10 — Rogue Agent Detection**: Promote the anomaly detector from retrospective logging to prospective blocking for sessions that exceed a configurable anomaly score threshold. Add multi-agent coordination detection (shared session fingerprinting).
 
@@ -78,6 +78,7 @@
 | `src/failsafe/rate_limiter.rs` | ASI08 |
 | `src/mtls/cert_manager.rs` | ASI03, ASI07 |
 | `src/oauth/` | ASI03 |
+| `src/gateway/destructive_confirmation.rs` | ASI09 |
 | `src/kill_switch/` | ASI08, ASI09, ASI10 |
 
 | Botnaut File / Doc | Controls |
