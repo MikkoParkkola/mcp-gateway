@@ -284,90 +284,90 @@ mod tests {
     #[test]
     fn sign_response_injects_signature_block() {
         // GIVEN: a signer and a plain response
-        let signer = make_signer();
+        let msg_signer = make_signer();
         let response = json!({"content": [{"type": "text", "text": "hello"}]});
 
         // WHEN: signing
-        let signed = signer.sign_response(response, None);
+        let out = msg_signer.sign_response(response, None);
 
         // THEN: _signature block is present with required fields
-        let sig = signed.get("_signature").expect("_signature must be present");
-        assert_eq!(sig["alg"], "hmac-sha256");
-        assert!(sig["sig"].as_str().is_some_and(|s| s.len() == 64));
-        assert!(sig["ts"].as_u64().is_some_and(|t| t > 0));
-        assert_eq!(sig["key_id"], "test");
+        let sig_block = out.get("_signature").expect("_signature must be present");
+        assert_eq!(sig_block["alg"], "hmac-sha256");
+        assert!(sig_block["sig"].as_str().is_some_and(|s| s.len() == 64));
+        assert!(sig_block["ts"].as_u64().is_some_and(|t| t > 0));
+        assert_eq!(sig_block["key_id"], "test");
     }
 
     #[test]
     fn sign_response_echoes_nonce_in_signature() {
         // GIVEN: a signer and a nonce
-        let signer = make_signer();
+        let msg_signer = make_signer();
         let response = json!({"result": "ok"});
 
         // WHEN: signing with a nonce
-        let signed = signer.sign_response(response, Some("nonce-42"));
+        let out = msg_signer.sign_response(response, Some("nonce-42"));
 
         // THEN: the nonce is echoed in the _signature block
-        let sig = signed.get("_signature").unwrap();
-        assert_eq!(sig["nonce"], "nonce-42");
+        let sig_block = out.get("_signature").unwrap();
+        assert_eq!(sig_block["nonce"], "nonce-42");
     }
 
     #[test]
     fn sign_response_removes_existing_signature_before_signing() {
         // GIVEN: a response that already has a stale _signature
-        let signer = make_signer();
+        let msg_signer = make_signer();
         let response = json!({"data": "x", "_signature": {"sig": "stale"}});
 
         // WHEN: signing
-        let signed = signer.sign_response(response, None);
+        let out = msg_signer.sign_response(response, None);
 
         // THEN: the new signature is not the stale one
-        let sig = signed.get("_signature").unwrap();
-        assert_ne!(sig["sig"], "stale");
-        assert_eq!(sig["alg"], "hmac-sha256");
+        let sig_block = out.get("_signature").unwrap();
+        assert_ne!(sig_block["sig"], "stale");
+        assert_eq!(sig_block["alg"], "hmac-sha256");
     }
 
     #[test]
     fn sign_response_mac_covers_body_without_signature_field() {
-        // GIVEN: two identical bodies — one signed, one with a manually injected _signature
-        let signer = make_signer();
+        // GIVEN: two identical bodies — both signed with same secret and nonce
+        let msg_signer = make_signer();
         let body = json!({"content": "test"});
 
         // WHEN: signing the same body twice
-        let s1 = signer.sign_response(body.clone(), Some("n1"));
-        let s2 = signer.sign_response(body.clone(), Some("n1"));
+        let out_a = msg_signer.sign_response(body.clone(), Some("n1"));
+        let out_b = msg_signer.sign_response(body.clone(), Some("n1"));
 
         // THEN: signatures match (deterministic canonical JSON + same secret)
         // NOTE: ts may differ by 1 second in rare cases; compare sig only
-        let sig1 = s1["_signature"]["sig"].as_str().unwrap();
-        let sig2 = s2["_signature"]["sig"].as_str().unwrap();
-        assert_eq!(sig1, sig2, "MAC over identical bodies must be identical");
+        let mac_a = out_a["_signature"]["sig"].as_str().unwrap();
+        let mac_b = out_b["_signature"]["sig"].as_str().unwrap();
+        assert_eq!(mac_a, mac_b, "MAC over identical bodies must be identical");
     }
 
     #[test]
     fn sign_response_different_bodies_produce_different_macs() {
         // GIVEN: two different responses
-        let signer = make_signer();
-        let r1 = json!({"data": "alpha"});
-        let r2 = json!({"data": "beta"});
+        let msg_signer = make_signer();
+        let body_a = json!({"data": "alpha"});
+        let body_b = json!({"data": "beta"});
 
         // WHEN: signing both
-        let s1 = signer.sign_response(r1, None);
-        let s2 = signer.sign_response(r2, None);
+        let out_a = msg_signer.sign_response(body_a, None);
+        let out_b = msg_signer.sign_response(body_b, None);
 
         // THEN: MACs differ
-        assert_ne!(s1["_signature"]["sig"], s2["_signature"]["sig"]);
+        assert_ne!(out_a["_signature"]["sig"], out_b["_signature"]["sig"]);
     }
 
     #[test]
     fn sign_response_different_secrets_produce_different_macs() {
         // GIVEN: two signers with different secrets
-        let s1 = MessageSigner::new(
+        let signer_a = MessageSigner::new(
             b"secret-one-at-least-32-bytes-long!!!!!".to_vec(),
             None,
             "k1".to_string(),
         );
-        let s2 = MessageSigner::new(
+        let signer_b = MessageSigner::new(
             b"secret-two-at-least-32-bytes-long!!!!!".to_vec(),
             None,
             "k2".to_string(),
@@ -375,11 +375,11 @@ mod tests {
         let body = json!({"x": 1});
 
         // WHEN: both sign the same body
-        let r1 = s1.sign_response(body.clone(), None);
-        let r2 = s2.sign_response(body, None);
+        let out_a = signer_a.sign_response(body.clone(), None);
+        let out_b = signer_b.sign_response(body, None);
 
         // THEN: MACs differ (different secrets)
-        assert_ne!(r1["_signature"]["sig"], r2["_signature"]["sig"]);
+        assert_ne!(out_a["_signature"]["sig"], out_b["_signature"]["sig"]);
     }
 
     // ── NonceStore ────────────────────────────────────────────────────────────

@@ -78,6 +78,24 @@ impl MetaMcp {
             )));
         }
 
+        // === PRE-INVOKE: Nonce replay protection (ADR-001, OWASP ASI07) ===
+        //
+        // Check and register the request nonce before any dispatch work so that
+        // replayed requests are rejected cheaply without touching the backend.
+        let request_nonce = args.get("nonce").and_then(Value::as_str);
+        if let Some(ref nonce_store) = self.nonce_store {
+            match request_nonce {
+                Some(nonce) => nonce_store.check_and_register(nonce)?,
+                None if self.require_nonce => {
+                    return Err(Error::json_rpc(
+                        -32001,
+                        "Nonce required when message signing is enforced",
+                    ));
+                }
+                None => {} // backward-compatible: nonce is optional by default
+            }
+        }
+
         tracing::Span::current().record("trace_id", trace_id);
 
         if self.kill_switch.is_killed(server) {
@@ -433,10 +451,20 @@ impl MetaMcp {
             self.promote_tool_for_session(sid, &tool_key);
         }
 
-        Ok(augment_with_trace(
+        // === POST-INVOKE: Response signing (ADR-001, OWASP ASI07) ===
+        //
+        // Sign the assembled response after all post-processing (cost warnings,
+        // security findings, trace augmentation).  The MAC covers the full
+        // response body so consumers can detect any tampering.
+        let mut final_result = augment_with_trace(
             augment_with_predictions(result, predictions),
             trace_id,
-        ))
+        );
+        if let Some(ref signer) = self.message_signer {
+            final_result = signer.sign_response(final_result, request_nonce);
+        }
+
+        Ok(final_result)
     }
 
     /// Record success/failure against both backend and per-capability error budgets.

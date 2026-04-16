@@ -32,6 +32,7 @@ use crate::cost_accounting::registry::CostRegistry;
 use crate::gateway::state::SessionStateStore;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
+use crate::security::message_signing::{MessageSigner, NonceStore};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::{
     JsonRpcResponse, LoggingLevel, RequestId, ToolsListResult, negotiate_version,
@@ -141,6 +142,23 @@ pub struct MetaMcp {
     /// the `visible_in_states` field of each `CapabilityDefinition`.
     /// Transitions via the `gateway_set_state` meta-tool.
     pub(super) session_state: SessionStateStore,
+
+    /// HMAC-SHA256 response signer (ADR-001, OWASP ASI07).
+    ///
+    /// `Some` when `security.message_signing.enabled = true`; `None` otherwise.
+    /// Zero-cost when `None` — no branch is taken on the hot path.
+    pub(super) message_signer: Option<Arc<MessageSigner>>,
+
+    /// Nonce replay-protection store (ADR-001).
+    ///
+    /// `Some` when `security.message_signing.enabled = true`; `None` otherwise.
+    /// Populated alongside `message_signer`; both are `Some` or both `None`.
+    pub(super) nonce_store: Option<Arc<NonceStore>>,
+
+    /// When `true`, requests without a `nonce` are rejected with JSON-RPC -32001.
+    ///
+    /// Corresponds to `security.message_signing.require_nonce` in config.
+    pub(super) require_nonce: bool,
 }
 
 // ============================================================================
@@ -186,6 +204,9 @@ impl MetaMcp {
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
+            message_signer: None,
+            nonce_store: None,
+            require_nonce: false,
         }
     }
 
@@ -268,6 +289,25 @@ impl MetaMcp {
     pub fn enable_idempotency(&mut self, cache: Arc<IdempotencyCache>, cleanup_interval: Duration) {
         spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
         self.idempotency_cache = Some(cache);
+    }
+
+    /// Enable HMAC-SHA256 response signing and nonce replay protection (ADR-001).
+    ///
+    /// Spawns a background eviction task for the nonce store.
+    /// The caller must validate `signer` secrets before calling this method
+    /// (see [`crate::security::message_signing::validate_secret`]).
+    pub fn enable_message_signing(
+        &mut self,
+        signer: MessageSigner,
+        replay_window: std::time::Duration,
+        require_nonce: bool,
+    ) {
+        use crate::security::message_signing::{EVICTION_INTERVAL, spawn_nonce_cleanup_task};
+        let nonce_store = Arc::new(NonceStore::new(replay_window));
+        spawn_nonce_cleanup_task(Arc::clone(&nonce_store), EVICTION_INTERVAL);
+        self.message_signer = Some(Arc::new(signer));
+        self.nonce_store = Some(nonce_store);
+        self.require_nonce = require_nonce;
     }
 
     /// Attach the webhook registry for `gateway_webhook_status` reporting.
