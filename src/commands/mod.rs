@@ -16,6 +16,7 @@ mod plugin;
 mod setup;
 mod skills;
 mod stats;
+mod upgrade;
 
 #[cfg(feature = "webui")]
 pub use add_remove::{run_add_command, run_get_command, run_list_command, run_remove_command};
@@ -30,6 +31,7 @@ pub use skills::{
     run_skills_show,
 };
 pub use stats::run_stats_command;
+pub use upgrade::{check_upgrade, data_dir as upgrade_data_dir, run_upgrade_command};
 
 use std::process::ExitCode;
 

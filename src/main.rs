@@ -176,6 +176,11 @@ async fn main() -> ExitCode {
         Some(Command::Doctor { fix, config }) => {
             commands::run_doctor_command(fix, config.as_deref()).await
         }
+        Some(Command::Upgrade {
+            dry_run,
+            quiet,
+            data_dir,
+        }) => commands::run_upgrade_command(dry_run, quiet, data_dir.as_deref()),
         Some(Command::Serve { stdio: true }) => run_stdio_server(cli).await,
         Some(Command::Serve { stdio: false }) | None => run_server(cli).await,
     }
@@ -243,6 +248,10 @@ fn apply_cli_overrides_and_validate(config: &mut Config, cli: &Cli) -> mcp_gatew
 
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).
 async fn run_stdio_server(cli: Cli) -> ExitCode {
+    if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
+        eprintln!("Warning: upgrade check failed: {e}");
+    }
+
     let config = match Config::load(cli.config.as_deref()) {
         Ok(mut config) => {
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
@@ -276,6 +285,12 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
 
 /// Run the gateway server.
 async fn run_server(cli: Cli) -> ExitCode {
+    // Run post-upgrade migrations before anything else.  Non-fatal: a stamp
+    // write failure must not prevent the gateway from starting.
+    if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
+        eprintln!("Warning: upgrade check failed: {e}");
+    }
+
     let config = match Config::load(cli.config.as_deref()) {
         Ok(mut config) => {
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {

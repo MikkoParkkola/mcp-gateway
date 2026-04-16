@@ -785,10 +785,7 @@ impl MetaMcp {
             guard.clone()
         };
         let backend = backend.ok_or_else(|| {
-            Error::json_rpc(
-                -32603,
-                "Capability backend is not enabled on this gateway",
-            )
+            Error::json_rpc(-32603, "Capability backend is not enabled on this gateway")
         })?;
 
         match backend.reload().await {

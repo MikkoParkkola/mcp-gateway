@@ -344,6 +344,41 @@ pub enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+
+    /// Apply pending post-upgrade migrations and update the version stamp
+    ///
+    /// Reads `~/.mcp-gateway/version.stamp`, compares it to the current binary
+    /// version, backs up `gateway.yaml`, and runs any registered migrations.
+    ///
+    /// This is called automatically at `serve` startup; run it manually after
+    /// a Homebrew `brew upgrade` or other out-of-band binary swap.
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Run interactively after upgrading
+    /// mcp-gateway upgrade
+    ///
+    /// # Preview changes without writing anything
+    /// mcp-gateway upgrade --dry-run
+    ///
+    /// # Silent mode for post_install hooks (errors only)
+    /// mcp-gateway upgrade --quiet
+    /// ```
+    #[command(about = "Apply post-upgrade migrations and update version stamp")]
+    Upgrade {
+        /// Show what would change without writing any files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Suppress all output except errors (useful for Homebrew `post_install`)
+        #[arg(long, short)]
+        quiet: bool,
+
+        /// Override the data directory (default: ~/.mcp-gateway)
+        #[arg(long, env = "MCP_GATEWAY_CONFIG_DIR")]
+        data_dir: Option<PathBuf>,
+    },
 }
 
 /// Setup subcommands: interactive import wizard or config export.
