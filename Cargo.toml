@@ -39,7 +39,7 @@ include = [
 
 [dependencies]
 # Async runtime
-tokio = { version = "1.44", features = ["full", "tracing"] }
+tokio = { version = "1.51", features = ["full", "tracing"] }
 
 # HTTP server/client
 axum = { version = "0.8", features = ["tracing", "http2"] }
