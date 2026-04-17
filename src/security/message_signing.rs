@@ -171,9 +171,7 @@ impl NonceStore {
         let stale: Vec<String> = self
             .seen
             .iter()
-            .filter_map(|e| {
-                (e.value().elapsed() > self.replay_window).then(|| e.key().clone())
-            })
+            .filter_map(|e| (e.value().elapsed() > self.replay_window).then(|| e.key().clone()))
             .collect();
 
         let count = stale.len();
@@ -238,8 +236,7 @@ pub fn validate_secret(secret: &[u8]) -> Result<()> {
 // ── Private helpers ──────────────────────────────────────────────────────────
 
 fn compute_hmac_hex(secret: &[u8], message: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret)
-        .expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(message);
     hex::encode(mac.finalize().into_bytes())
 }
@@ -391,7 +388,9 @@ mod tests {
 
         // WHEN: registering a new nonce
         // THEN: succeeds
-        store.check_and_register("nonce-1").expect("fresh nonce must be accepted");
+        store
+            .check_and_register("nonce-1")
+            .expect("fresh nonce must be accepted");
     }
 
     #[test]

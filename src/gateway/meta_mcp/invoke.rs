@@ -456,10 +456,8 @@ impl MetaMcp {
         // Sign the assembled response after all post-processing (cost warnings,
         // security findings, trace augmentation).  The MAC covers the full
         // response body so consumers can detect any tampering.
-        let mut final_result = augment_with_trace(
-            augment_with_predictions(result, predictions),
-            trace_id,
-        );
+        let mut final_result =
+            augment_with_trace(augment_with_predictions(result, predictions), trace_id);
         if let Some(ref signer) = self.message_signer {
             final_result = signer.sign_response(final_result, request_nonce);
         }

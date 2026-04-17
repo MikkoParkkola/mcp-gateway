@@ -441,8 +441,8 @@ fn routing_instructions_uses_general_for_empty_category() {
 #[test]
 fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_webhooks() {
     let tools = build_meta_tools(false, false, false, false, 0, 0);
-    // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state = 12
-    assert_eq!(tools.len(), 12);
+    // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 13
+    assert_eq!(tools.len(), 13);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_list_servers"));
     assert!(names.contains(&"gateway_list_tools"));
@@ -462,8 +462,8 @@ fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_w
 #[test]
 fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
     let tools = build_meta_tools(true, true, false, false, 0, 0);
-    // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state = 14
-    assert_eq!(tools.len(), 14);
+    // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 15
+    assert_eq!(tools.len(), 15);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_get_stats"));
     assert!(names.contains(&"gateway_webhook_status"));
@@ -493,8 +493,8 @@ fn build_meta_tools_webhooks_only_without_stats() {
 fn build_meta_tools_includes_reload_when_enabled() {
     // GIVEN: reload context enabled
     let tools = build_meta_tools(false, false, true, false, 0, 0);
-    // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state = 13
-    assert_eq!(tools.len(), 13);
+    // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 14
+    assert_eq!(tools.len(), 14);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_reload_config"));
     assert!(names.contains(&"gateway_set_profile"));
@@ -507,8 +507,8 @@ fn build_meta_tools_includes_reload_when_enabled() {
 fn build_meta_tools_all_enabled_includes_reload() {
     // GIVEN: all optional tools enabled
     let tools = build_meta_tools(true, true, true, false, 0, 0);
-    // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state = 15
-    assert_eq!(tools.len(), 15);
+    // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 16
+    assert_eq!(tools.len(), 16);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_reload_config"));
     assert!(names.contains(&"gateway_get_stats"));

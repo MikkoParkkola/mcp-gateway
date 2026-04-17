@@ -7,9 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-04-16
+
+### Security
+
+- **Destructive confirmation gate** (OWASP ASI09): Meta-tools annotated as destructive now require explicit user confirmation before execution, preventing unintended data loss from autonomous agents.
+- **HMAC-SHA256 message signing** (OWASP ASI07, ADR-001): Inter-agent messages carry HMAC-SHA256 signatures with nonce-based replay protection, ensuring message integrity and authenticity across the gateway mesh.
+- **Anomaly blocking gate** (OWASP ASI10): Anomaly detector promoted from warn-only to active blocking — anomalous tool invocation patterns are now rejected, not just logged.
+- **Response content inspection**: Outbound responses scanned for credential exfiltration patterns (API keys, tokens, secrets) before reaching the AI client.
+- **Tool poisoning validator**: Hash-pinned capability definitions detect tampering in OpenAPI-imported tool schemas.
+
 ### Added
 
-- **Kani firewall action proof** — formally verify firewall action resolution so clean requests stay allowed, first-match rule overrides remain explicit, and default severity mapping still blocks/warns/allows as intended.
+- **A2A transport adapter — Phase 1**: Google Agent2Agent (A2A) protocol support with types, client, translator, and provider. Proxy A2A agents as native MCP backends. Feature-gated behind `a2a` (included in defaults).
+- **Upgrade command** (`mcp-gateway upgrade`): Version-stamp tracking, what's-new registry with arrow-style output, config backup before migrations, and post-upgrade migration framework.
+- **`gateway_reload_capabilities` meta-tool**: Agent-callable hot-reload of capability definitions without gateway restart.
+- **FSM state-gated tool visibility** (#113): Finite state machine controls which tools are surfaced based on session state, enabling multi-step workflows where tools appear/disappear as the conversation progresses.
+- **Structured self-healing error responses** (#115): Tool invocation errors now include structured recovery hints (retry, fallback tool, parameter correction) for autonomous agent self-repair.
+- **Response transforms wired into `gateway_invoke`** (#118): Per-capability field projection and PII redaction now applied inline during tool invocation, not just in playbooks.
+- **Universal protocol adapters**: GraphQL and JSON-RPC 2.0 adapters join HTTP REST — backends speaking any of the 3 protocols are proxied transparently.
+- **SKILL.md / agentskills.io compatibility** (#114): Parser, registry, and CLI for the emerging agent skills specification.
+- **Multi-platform MCP guides**: Prompts and annotations tailored for Claude, GPT, Gemini, and other LLM clients.
+- **Trawl web extraction capability**: Structured web content extraction as a built-in capability.
+- **8 knowledge capabilities**: Gzip/deflate/brotli compression added to reqwest; 8 new knowledge-domain capabilities bundled.
+- **OAuth refresh improvements**: `client_id`/`client_secret` sent on token refresh; Google capabilities migrated to new auth flow.
+- **Kani formal verification proofs**: State machine and kill-switch budget decision correctness proved with Kani.
+
+### Changed
+
+- **Unified error handling**: Router, SSE, WebUI, webhook, and middleware error responses consolidated into shared HTTP error builders with consistent JSON-RPC error codes.
+- **Config runtime contract**: Reload outcomes now distinguish restart-required vs. hot-reloadable changes; restart-required outcomes exposed to callers.
+- **Backend metadata cache**: Coalesced cache refreshes with shared snapshots reduce redundant backend queries.
+- **Meta-MCP prompt cache**: Isolated into dedicated module for testability.
+- **Prometheus metrics hardened**: Install and export logic made more robust.
+
+### Fixed
+
+- Missing `KeyInit` import for HMAC message signing.
+- Clippy `doc_markdown` warnings in invoke.rs.
+- Skills parser doc comment incorrectly compiled as doctest.
+- Stale "4 meta-tools" claims removed from all public surfaces.
+- JSON-RPC response serialization and contract hardening.
+- Stdio request parsing alignment and pending-write clearing on failure.
+- Backend notification routing via `notify`.
+- Provider tool content preservation.
+- Transform chain error context propagation.
+- HTTP close header contract alignment.
+- Public capability count claims updated (93 to 101).
+
+### Docs
+
+- **OWASP Agentic AI compliance matrix**: 8/10 Top 10 items covered, with per-item status and mitigation references.
+- **ADR-001**: Inter-agent message signing design (OWASP ASI07).
+- **ADR-002**: A2A transport adapter design.
+- **AP2/Galileo evaluation**: Independent agent protocol evaluation results.
+- **README**: Agent-first install flow, OWASP 8/10 badge, independent review links (Ruach Tov), VS Code / Cursor one-click install badges, tool count corrections.
+- **CODEOWNERS** added.
+
+### CI / Build
+
+- TruffleHog secrets scanning job.
+- Workflow action SHAs pinned.
+- Release workflow lint fix and pre-publish gate.
+- Published crate contents curated (`include` list).
+- Dependabot automation added.
+- Smithery manifest added.
+
+### Tests
+
+- Firewall action resolution proof.
+- Kill-switch budget decision proof.
+- Kani state machine proofs.
+- Meta-MCP tool-count assertions updated for `gateway_reload_capabilities`.
+- README startup claim guards.
 
 ## [2.9.1] - 2026-03-24
 
@@ -294,7 +364,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
-[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.0...HEAD
+[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.10.0...HEAD
+[2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0
+[2.9.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.0...v2.9.1
 [2.9.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.8.1...v2.9.0
 [2.7.3]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.7.1...v2.7.2

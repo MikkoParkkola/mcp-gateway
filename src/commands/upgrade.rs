@@ -149,14 +149,25 @@ struct WhatsNew {
 /// Registry of user-visible changes, sorted ascending by version.
 ///
 /// Add entries here when a release ships noteworthy features.
-static WHATS_NEW: &[WhatsNew] = &[WhatsNew {
-    version: "2.9.1",
-    items: &[
-        "OWASP Agentic AI Top 10: 8/10 covered (destructive confirmation, message signing, anomaly blocking)",
-        "New `upgrade` command with version stamp and migration framework",
-        "New `gateway_reload_capabilities` agent-callable meta-tool",
-    ],
-}];
+static WHATS_NEW: &[WhatsNew] = &[
+    WhatsNew {
+        version: "2.9.1",
+        items: &[
+            "OWASP Agentic AI Top 10: 8/10 covered (destructive confirmation, message signing, anomaly blocking)",
+            "New `upgrade` command with version stamp and migration framework",
+            "New `gateway_reload_capabilities` agent-callable meta-tool",
+        ],
+    },
+    WhatsNew {
+        version: "2.10.0",
+        items: &[
+            "A2A transport adapter — proxy Google Agent2Agent agents as MCP backends",
+            "Security hardening: HMAC signing (ASI07), destructive confirmation (ASI09), anomaly blocking (ASI10)",
+            "FSM state-gated tool visibility for multi-step workflows",
+            "Structured self-healing error responses with recovery hints",
+        ],
+    },
+];
 
 /// Print "What's new" items for all versions strictly after `from` and up to `current`.
 ///
@@ -646,7 +657,7 @@ mod tests {
         let ctx = UpgradeContext {
             data_dir: dir.path(),
             old_ver: SemVer::parse("1.0.0").unwrap(),
-            new_ver: SemVer::parse("2.9.1").unwrap(),
+            new_ver: SemVer::parse("2.10.0").unwrap(),
             dry_run: false,
             quiet: true,
         };
@@ -660,38 +671,38 @@ mod tests {
     #[test]
     fn whats_new_registry_has_entries_for_current_version() {
         // GIVEN: the WHATS_NEW registry
-        // WHEN: we look for entries at 2.9.1
-        let v291 = SemVer::parse("2.9.1").unwrap();
+        // WHEN: we look for entries at 2.10.0
+        let v2100 = SemVer::parse("2.10.0").unwrap();
         let has_entries = WHATS_NEW
             .iter()
-            .any(|w| SemVer::parse(w.version) == Some(v291));
+            .any(|w| SemVer::parse(w.version) == Some(v2100));
         // THEN: at least one entry exists
-        assert!(has_entries, "WHATS_NEW should have entries for v2.9.1");
+        assert!(has_entries, "WHATS_NEW should have entries for v2.10.0");
     }
 
     #[test]
     fn whats_new_items_shown_when_upgrading_past_version() {
-        // GIVEN: upgrading from 2.8.0 to 2.9.1
-        let from = SemVer::parse("2.8.0").unwrap();
-        let to = SemVer::parse("2.9.1").unwrap();
+        // GIVEN: upgrading from 2.9.1 to 2.10.0
+        let from = SemVer::parse("2.9.1").unwrap();
+        let to = SemVer::parse("2.10.0").unwrap();
         // WHEN: collecting what's-new items
         let items: Vec<&str> = WHATS_NEW
             .iter()
             .filter(|w| SemVer::parse(w.version).is_some_and(|v| v > from && v <= to))
             .flat_map(|w| w.items.iter().copied())
             .collect();
-        // THEN: items are not empty (v2.9.1 entries should match)
+        // THEN: items are not empty (v2.10.0 entries should match)
         assert!(
             !items.is_empty(),
-            "Should have what's-new items for 2.8.0 -> 2.9.1"
+            "Should have what's-new items for 2.9.1 -> 2.10.0"
         );
     }
 
     #[test]
     fn whats_new_items_not_shown_for_same_version() {
-        // GIVEN: no version change (already at 2.9.1)
-        let from = SemVer::parse("2.9.1").unwrap();
-        let to = SemVer::parse("2.9.1").unwrap();
+        // GIVEN: no version change (already at 2.10.0)
+        let from = SemVer::parse("2.10.0").unwrap();
+        let to = SemVer::parse("2.10.0").unwrap();
         // WHEN: collecting what's-new items
         let items: Vec<&str> = WHATS_NEW
             .iter()
@@ -739,7 +750,7 @@ mod tests {
         let ctx = UpgradeContext {
             data_dir: dir.path(),
             old_ver: SemVer::parse("0.1.0").unwrap(),
-            new_ver: SemVer::parse("2.9.1").unwrap(),
+            new_ver: SemVer::parse("2.10.0").unwrap(),
             dry_run: false,
             quiet: true,
         };

@@ -463,9 +463,10 @@ impl FirewallVerdict {
     pub fn is_anomaly_block(&self) -> bool {
         !self.allowed
             && !self.findings.is_empty()
-            && self.findings.iter().all(|f| {
-                f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High
-            })
+            && self
+                .findings
+                .iter()
+                .all(|f| f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
     }
 }
 
@@ -872,8 +873,7 @@ mod tests {
             verdict
                 .findings
                 .iter()
-                .any(|f| f.scan_type == ScanType::SequenceAnomaly
-                    && f.severity == Severity::Low),
+                .any(|f| f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::Low),
             "Score 0.95 above log_threshold 0.7 must produce a Low SequenceAnomaly finding"
         );
         assert!(
@@ -897,8 +897,7 @@ mod tests {
             verdict
                 .findings
                 .iter()
-                .any(|f| f.scan_type == ScanType::SequenceAnomaly
-                    && f.severity == Severity::High),
+                .any(|f| f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High),
             "Blocked anomaly finding must be Severity::High"
         );
         assert!(
@@ -925,13 +924,15 @@ mod tests {
         let fw = anomaly_firewall(0.7, Some(0.99));
         prime_session(&fw, "sess");
         let verdict = fw.check_request("sess", "srv", "never_seen_tool", &json!({}), "caller");
-        assert!(verdict.allowed, "Score 0.95 < block_threshold 0.99 must pass");
+        assert!(
+            verdict.allowed,
+            "Score 0.95 < block_threshold 0.99 must pass"
+        );
         assert!(
             verdict
                 .findings
                 .iter()
-                .any(|f| f.scan_type == ScanType::SequenceAnomaly
-                    && f.severity == Severity::Low),
+                .any(|f| f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::Low),
             "Finding must be Low (log-only) when score is below block_threshold"
         );
         assert!(

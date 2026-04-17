@@ -439,10 +439,12 @@ pub(super) async fn meta_mcp_handler(
                             );
                             (-32002_i32, format!("Anomaly detection blocked: {desc}"))
                         } else {
-                            let desc = verdict.findings.first().map_or(
-                                "Security firewall blocked this request",
-                                |f| f.description.as_str(),
-                            );
+                            let desc = verdict
+                                .findings
+                                .first()
+                                .map_or("Security firewall blocked this request", |f| {
+                                    f.description.as_str()
+                                });
                             (-32600_i32, format!("Firewall blocked: {desc}"))
                         };
                         return build_error_response(
