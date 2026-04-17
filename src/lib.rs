@@ -26,6 +26,8 @@
 // threshold.  Clippy cannot show a source location for these — allow crate-wide.
 #![allow(clippy::large_stack_arrays)]
 
+#[cfg(feature = "a2a")]
+pub mod a2a;
 pub mod autotag;
 pub mod backend;
 pub mod cache;

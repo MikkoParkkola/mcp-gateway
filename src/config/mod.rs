@@ -309,17 +309,33 @@ impl Config {
 
     fn validate_backend_urls(&self) -> Result<()> {
         for (name, backend) in &self.backends {
-            if let TransportConfig::Http { http_url, .. } = &backend.transport {
-                if http_url.is_empty() {
-                    return Err(Error::ConfigValidation(format!(
-                        "Backend '{name}' has an empty http_url"
-                    )));
+            match &backend.transport {
+                TransportConfig::Http { http_url, .. } => {
+                    if http_url.is_empty() {
+                        return Err(Error::ConfigValidation(format!(
+                            "Backend '{name}' has an empty http_url"
+                        )));
+                    }
+                    url::Url::parse(http_url).map_err(|e| {
+                        Error::ConfigValidation(format!(
+                            "Backend '{name}' has an invalid http_url '{http_url}': {e}"
+                        ))
+                    })?;
                 }
-                url::Url::parse(http_url).map_err(|e| {
-                    Error::ConfigValidation(format!(
-                        "Backend '{name}' has an invalid http_url '{http_url}': {e}"
-                    ))
-                })?;
+                #[cfg(feature = "a2a")]
+                TransportConfig::A2a { a2a_url, .. } => {
+                    if a2a_url.is_empty() {
+                        return Err(Error::ConfigValidation(format!(
+                            "Backend '{name}' has an empty a2a_url"
+                        )));
+                    }
+                    url::Url::parse(a2a_url).map_err(|e| {
+                        Error::ConfigValidation(format!(
+                            "Backend '{name}' has an invalid a2a_url '{a2a_url}': {e}"
+                        ))
+                    })?;
+                }
+                TransportConfig::Stdio { .. } => {}
             }
         }
         Ok(())
@@ -553,6 +569,32 @@ pub enum TransportConfig {
         #[serde(default)]
         protocol_version: Option<String>,
     },
+    /// A2A (`Agent2Agent`) transport.
+    ///
+    /// The gateway fetches the Agent Card from `<a2a_url>/.well-known/agent.json`
+    /// (or a custom path), converts A2A skills to MCP tools, and proxies
+    /// `tools/call` invocations as A2A `message/send` requests.
+    ///
+    /// Requires the `a2a` Cargo feature (enabled by default).
+    ///
+    /// # Example (gateway.yaml)
+    ///
+    /// ```yaml
+    /// backends:
+    ///   travel-agent:
+    ///     transport: a2a
+    ///     a2a_url: "https://travel.example.com"
+    /// ```
+    #[cfg(feature = "a2a")]
+    A2a {
+        /// Base URL of the remote A2A agent.
+        a2a_url: String,
+        /// Custom path for the Agent Card.
+        ///
+        /// Defaults to `/.well-known/agent.json` when absent.
+        #[serde(default)]
+        a2a_agent_card_path: Option<String>,
+    },
 }
 
 impl Default for TransportConfig {
@@ -581,6 +623,8 @@ impl TransportConfig {
                 ..
             } => "streamable-http",
             Self::Http { .. } => "http",
+            #[cfg(feature = "a2a")]
+            Self::A2a { .. } => "a2a",
         }
     }
 }

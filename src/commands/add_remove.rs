@@ -81,6 +81,8 @@ pub async fn run_add_command(
     let transport_label = match &transport {
         TransportConfig::Stdio { .. } => "stdio",
         TransportConfig::Http { .. } => "http",
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { .. } => "a2a",
     };
     println!("Added '{name}' ({transport_label}).");
 
@@ -335,6 +337,8 @@ mod tests {
                 assert_eq!(http_url, "https://mcp.context7.com/mcp");
             }
             TransportConfig::Stdio { .. } => panic!("expected Http transport"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Http transport"),
         }
     }
 

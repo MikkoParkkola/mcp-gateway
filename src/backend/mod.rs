@@ -275,6 +275,17 @@ impl Backend {
                 transport.initialize().await?;
                 transport
             }
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { a2a_url, .. } => {
+                // A2A backends are managed by A2aProvider, not the legacy
+                // Backend/Transport stack.  Reaching this branch means an A2A
+                // backend was incorrectly started through the legacy path.
+                return Err(crate::Error::Config(format!(
+                    "A2A backend '{name}' (url: {a2a_url}) must be started via A2aProvider, \
+                     not the legacy Backend::start() path",
+                    name = self.name,
+                )));
+            }
         };
 
         *self.transport.write() = Some(transport);
@@ -762,6 +773,8 @@ impl Backend {
         match &self.config.transport {
             TransportConfig::Http { http_url, .. } => Some(http_url.as_str()),
             TransportConfig::Stdio { .. } => None,
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { a2a_url, .. } => Some(a2a_url.as_str()),
         }
     }
 

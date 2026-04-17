@@ -155,6 +155,8 @@ fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredSer
                     format!("stdio: {short}")
                 }
                 TransportConfig::Http { http_url, .. } => format!("http: {http_url}"),
+                #[cfg(feature = "a2a")]
+                TransportConfig::A2a { a2a_url, .. } => format!("a2a: {a2a_url}"),
             };
             format!("{} [{}] ({})", s.name, source_label(&s.source), transport)
         })

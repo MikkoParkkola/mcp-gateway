@@ -330,6 +330,11 @@ fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
             println!("   Transport: http");
             println!("   URL: {http_url}");
         }
+        #[cfg(feature = "a2a")]
+        mcp_gateway::config::TransportConfig::A2a { a2a_url, .. } => {
+            println!("   Transport: a2a");
+            println!("   URL: {a2a_url}");
+        }
     }
     if let Some(ref path) = server.metadata.config_path {
         println!("   Config: {}", path.display());

@@ -138,7 +138,10 @@ serde_urlencoded = "0.7"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [features]
-default = ["webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
+default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
+## A2A (Agent2Agent) transport — proxy A2A agents as MCP backends.
+## No new dependencies: reqwest, serde, serde_json, tokio already present.
+a2a = []
 webui = []
 config-export = []
 cost-governance = []

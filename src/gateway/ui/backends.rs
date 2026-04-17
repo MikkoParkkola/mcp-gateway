@@ -449,6 +449,8 @@ mod tests {
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "node server.js"),
             TransportConfig::Http { .. } => panic!("expected Stdio"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Stdio"),
         }
     }
 
@@ -461,6 +463,8 @@ mod tests {
                 assert_eq!(http_url, "http://localhost:9000");
             }
             TransportConfig::Stdio { .. } => panic!("expected Http"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Http"),
         }
     }
 
@@ -472,6 +476,8 @@ mod tests {
                 assert!(command.contains("tavily"), "command should mention tavily");
             }
             TransportConfig::Http { .. } => panic!("expected Stdio for tavily"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Stdio for tavily"),
         }
         assert!(!desc.is_empty(), "description should not be empty");
     }

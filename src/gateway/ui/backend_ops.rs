@@ -289,6 +289,8 @@ fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
         TransportConfig::Http { http_url, .. } => {
             ("http".to_string(), None, Some(http_url.clone()))
         }
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { a2a_url, .. } => ("a2a".to_string(), None, Some(a2a_url.clone())),
     };
 
     BackendInfo {
@@ -348,6 +350,8 @@ mod tests {
         match &b.transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "node server.js"),
             TransportConfig::Http { .. } => panic!("expected Stdio"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Stdio"),
         }
     }
 
@@ -501,6 +505,8 @@ mod tests {
                 assert_eq!(http_url, "http://localhost:9000");
             }
             TransportConfig::Stdio { .. } => panic!("expected Http after update"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Http after update"),
         }
     }
 
@@ -608,6 +614,8 @@ mod tests {
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "my-cmd"),
             TransportConfig::Http { .. } => panic!("expected Stdio"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Stdio"),
         }
     }
 
@@ -618,6 +626,8 @@ mod tests {
         match transport {
             TransportConfig::Http { http_url, .. } => assert_eq!(http_url, "http://localhost:9000"),
             TransportConfig::Stdio { .. } => panic!("expected Http"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Http"),
         }
     }
 
@@ -629,6 +639,8 @@ mod tests {
                 assert!(command.contains("tavily"));
             }
             TransportConfig::Http { .. } => panic!("expected Stdio for tavily"),
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => panic!("expected Stdio for tavily"),
         }
         assert!(!description.is_empty());
     }
