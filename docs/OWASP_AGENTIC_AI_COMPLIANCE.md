@@ -28,11 +28,11 @@
 
 | Status | Count | Risks |
 |--------|-------|-------|
-| **COVERED** | 8/10 | ASI01 (Behaviour Hijack), ASI02 (Tool Misuse), ASI04 (Supply Chain / Rug Pull), ASI05 (Code Execution / RCE), ASI07 (Inter-Agent Comms), ASI08 (Cascading Failures), ASI09 (Human Trust Exploitation), ASI10 (Rogue Agents) |
-| **PARTIAL** | 2/10 | ASI03 (Identity Abuse), ASI06 (Memory Poisoning) |
+| **COVERED** | 10/10 | ASI01 (Behaviour Hijack), ASI02 (Tool Misuse), ASI03 (Identity Abuse), ASI04 (Supply Chain / Rug Pull), ASI05 (Code Execution / RCE), ASI06 (Memory Poisoning), ASI07 (Inter-Agent Comms), ASI08 (Cascading Failures), ASI09 (Human Trust Exploitation), ASI10 (Rogue Agents) |
+| **PARTIAL** | 0/10 | — |
 | **GAP** | 0/10 | — |
 
-**Overall**: 8/10 covered, 2/10 partial, 0/10 outright gaps.
+**Overall**: 10/10 covered, 0/10 partial, 0/10 outright gaps.
 
 ---
 
