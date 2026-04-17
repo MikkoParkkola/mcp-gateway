@@ -12,6 +12,7 @@
 //! - [`response_scanner`]: Prompt injection pattern detection in tool responses
 //! - [`firewall`]: Unified request/response security firewall (RFC-0071)
 
+pub mod agent_identity;
 pub mod data_flow;
 #[cfg(feature = "firewall")]
 pub mod firewall;
@@ -24,6 +25,10 @@ pub mod scope_collision;
 pub mod ssrf;
 pub mod tool_integrity;
 
+pub use agent_identity::{
+    AgentIdentity, AgentIdentityConfig, IdentitySource, extract_agent_identity,
+    validate_agent_identity,
+};
 pub use data_flow::{
     DataFlowRecord, DataFlowTracer, SanitizationRecord, ToolCategory, audit_sanitization,
     hash_argument,

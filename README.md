@@ -24,7 +24,7 @@
 - [Five MCP hot-reload tools compared](https://ruachtov.ai/blog/five-tools-mcp-restart.html) -- Ruach Tov Collective's BPD-based comparison of mcp-gateway against four restart-focused alternatives. Includes a feature matrix and architectural analysis.
 - [mcp-gateway deep dive](https://ruachtov.ai/blog/mcp-gateway-deep-dive.html) -- Detailed walkthrough of the capability system, SHA-256 integrity pinning, and the v2.5-to-v2.9 development arc.
 
-MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface -- 13 tools minimum, 15 in the README benchmark scenario, 16 when webhook status is surfaced -- and discovers the right backend tool on demand.
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface -- 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced -- and discovers the right backend tool on demand.
 
 Public quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
 
@@ -44,9 +44,9 @@ MCP Gateway removes that tradeoff entirely.
 
 | | Without Gateway | With Gateway |
 |---|----------------|--------------|
-| **Tools in context** | Every definition, every request | 15 Meta-MCP tools in the README benchmark (~1500 tokens) |
-| **Token overhead** | ~15,000 tokens (100 tools) | ~1500 tokens -- **90% savings** |
-| **Cost at scale** | ~$0.22/request (Opus input) | ~$0.022/request -- **$203 saved per 1K** |
+| **Tools in context** | Every definition, every request | 16 Meta-MCP tools in the README benchmark (~1600 tokens) |
+| **Token overhead** | ~15,000 tokens (100 tools) | ~1600 tokens -- **89% savings** |
+| **Cost at scale** | ~$0.22/request (Opus input) | ~$0.024/request -- **$201 saved per 1K** |
 | **Practical tool limit** | 20-50 tools (context pressure) | **Unlimited** -- discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart AI session, lose context | Restart gateway (~8ms), session stays alive |
@@ -232,11 +232,11 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ### 1. Unlimited Tools, Minimal Tokens
 
-The gateway exposes 13 Meta-MCP tools minimum, 15 in the README benchmark scenario, and 16 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
+The gateway exposes 14 Meta-MCP tools minimum, 16 in the README benchmark scenario, and 17 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
 
 **Token math** (Claude Opus @ $15/M input tokens, reproducible via `python benchmarks/token_savings.py --scenario readme`):
 - **Without**: 100 tools x 150 tokens x 1,000 requests = 15M tokens = **$225**
-- **With (README benchmark)**: 15 Meta-MCP tools x 100 tokens x 1,000 requests = 1.5M tokens = **$22.50**
+- **With (README benchmark)**: 16 Meta-MCP tools x 100 tokens x 1,000 requests = 1.6M tokens = **$24.00**
 
 ### 2. Any REST API to MCP Tool -- No Code
 

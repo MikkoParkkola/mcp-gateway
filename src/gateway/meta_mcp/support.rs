@@ -147,7 +147,8 @@ impl ToolInvoker for MetaMcpInvoker<'_> {
             "tool": tool,
             "arguments": arguments
         });
-        self.meta.invoke_tool(&args, None, None).await
+        // Playbook steps are internal invocations with no caller agent.
+        self.meta.invoke_tool(&args, None, None, None).await
     }
 }
 

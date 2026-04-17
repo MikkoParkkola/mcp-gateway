@@ -107,6 +107,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         config_path: None,
         #[cfg(feature = "firewall")]
         firewall: None,
+        agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
     });
 
     // Call handle_initialize directly — this is what dispatch_single calls

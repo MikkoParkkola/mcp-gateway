@@ -58,6 +58,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         config_path: None,
         #[cfg(feature = "firewall")]
         firewall: None,
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
     })
 }
 

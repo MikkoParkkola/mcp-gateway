@@ -42,16 +42,19 @@ static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 impl MetaMcp {
     /// `gateway_invoke` — invoke a tool on a backend with full tracing, caching,
     /// idempotency, error-budget tracking, and predictive prefetch.
+    ///
+    /// `agent_id` identifies the calling agent for audit logging (OWASP ASI03).
     pub(super) async fn invoke_tool(
         &self,
         args: &Value,
         session_id: Option<&str>,
         api_key_name: Option<&str>,
+        agent_id: Option<&str>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, api_key_name, &trace_id_clone)
+            self.invoke_tool_traced(args, session_id, api_key_name, agent_id, &trace_id_clone)
                 .await
         })
         .await
@@ -64,6 +67,7 @@ impl MetaMcp {
         args: &Value,
         session_id: Option<&str>,
         api_key_name: Option<&str>,
+        agent_id: Option<&str>,
         trace_id: &str,
     ) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
@@ -196,6 +200,19 @@ impl MetaMcp {
             ranker.record_use(server, tool);
         }
 
+        // === OWASP ASI03: per-agent identity audit log ===
+        //
+        // Every tool invocation records the agent_id (or "anonymous") as a
+        // structured tracing field so audit tooling can correlate invocations
+        // back to the calling agent without post-processing.
+        let agent_label = agent_id.unwrap_or("anonymous");
+        tracing::info!(
+            agent_id = %agent_label,
+            server   = %server,
+            tool     = %tool,
+            trace_id = %trace_id,
+            "tool invoked"
+        );
         debug!(server, tool, trace_id, "Invoking tool");
 
         // === PRE-INVOKE: Cost governance budget check ===

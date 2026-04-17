@@ -89,6 +89,7 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         config_path,
         #[cfg(feature = "firewall")]
         firewall: None,
+        agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
     })
 }
 
@@ -145,6 +146,7 @@ fn make_app_state_with_reload(
             config_path: Some(config_path),
             #[cfg(feature = "firewall")]
             firewall: None,
+            agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         }),
         live_config,
     )

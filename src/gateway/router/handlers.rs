@@ -26,7 +26,9 @@ use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
-use crate::security::{sanitize_json_value, validate_url_not_ssrf};
+use crate::security::{
+    extract_agent_identity, sanitize_json_value, validate_agent_identity, validate_url_not_ssrf,
+};
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
@@ -208,6 +210,27 @@ pub(super) async fn meta_mcp_handler(
     // Extract mTLS certificate identity (present when mTLS is active and a valid
     // client certificate was presented during the TLS handshake).
     let cert_identity = http_request.extensions().get::<CertIdentity>().cloned();
+
+    // === OWASP ASI03: per-agent identity extraction ===
+    //
+    // Extract the caller's agent_id from: X-Agent-ID header, JWT claim, or query param.
+    // Enforcement (require_id / known_agents allowlist) is config-gated.
+    let bearer_token = http_request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        });
+    let query_str = http_request.uri().query();
+    let agent_identity = extract_agent_identity(&headers, query_str, bearer_token);
+    if let Err(reason) =
+        validate_agent_identity(agent_identity.as_ref(), &state.agent_identity_config)
+    {
+        return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
+            .into_response();
+    }
 
     // Parse JSON body
     let body_bytes = match axum::body::to_bytes(http_request.into_body(), 10 * 1024 * 1024).await {
@@ -475,6 +498,7 @@ pub(super) async fn meta_mcp_handler(
             }
 
             let api_key_name = client.as_ref().map(|c| c.name.as_str());
+            let agent_id = agent_identity.as_ref().map(|a| a.id.as_str());
 
             // Capture server/tool for post-invoke firewall scan (before borrows move).
             #[cfg(feature = "firewall")]
@@ -535,6 +559,7 @@ pub(super) async fn meta_mcp_handler(
                     arguments,
                     Some(session_id.as_str()),
                     api_key_name,
+                    agent_id,
                 )
                 .await;
 

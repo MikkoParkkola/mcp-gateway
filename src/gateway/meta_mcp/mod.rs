@@ -639,6 +639,7 @@ impl MetaMcp {
     /// giving callers transparent one-hop access to pinned tools.
     ///
     /// `api_key_name` — the name of the authenticated API key (for cost accounting).
+    /// `agent_id` — optional caller agent identifier (OWASP ASI03).
     pub async fn handle_tools_call(
         &self,
         id: RequestId,
@@ -646,6 +647,7 @@ impl MetaMcp {
         arguments: Value,
         session_id: Option<&str>,
         api_key_name: Option<&str>,
+        agent_id: Option<&str>,
     ) -> JsonRpcResponse {
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
         if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
@@ -655,7 +657,7 @@ impl MetaMcp {
                 "arguments": arguments,
             });
             let result = self
-                .invoke_tool(&invoke_args, session_id, api_key_name)
+                .invoke_tool(&invoke_args, session_id, api_key_name, agent_id)
                 .await;
             return match result {
                 Ok(content) => {
@@ -672,7 +674,10 @@ impl MetaMcp {
             "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, api_key_name).await,
+            "gateway_invoke" => {
+                self.invoke_tool(&arguments, session_id, api_key_name, agent_id)
+                    .await
+            }
             "gateway_get_stats" => self.get_stats(&arguments).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id).await,
             "gateway_webhook_status" => self.webhook_status(),

@@ -321,7 +321,8 @@ impl MetaMcp {
             "arguments": arguments,
         });
 
-        self.invoke_tool(&invoke_args, session_id, None).await
+        // agent_id is None: code-mode execution is an internal operation.
+        self.invoke_tool(&invoke_args, session_id, None, None).await
     }
 
     /// Execute a sequential chain of `{tool, arguments}` steps.
@@ -359,7 +360,7 @@ impl MetaMcp {
                 "arguments": arguments,
             });
 
-            match self.invoke_tool(&invoke_args, session_id, None).await {
+            match self.invoke_tool(&invoke_args, session_id, None, None).await {
                 Ok(result) => results.push(json!({
                     "step": idx,
                     "tool": tool_ref,

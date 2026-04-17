@@ -14,7 +14,7 @@ use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_h
 use super::proxy::ProxyManager;
 use super::streaming::NotificationMultiplexer;
 use crate::backend::BackendRegistry;
-use crate::config::StreamingConfig;
+use crate::config::{AgentIdentityConfig, StreamingConfig};
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
 use crate::security::ToolPolicy;
@@ -71,6 +71,8 @@ pub struct AppState {
     /// Security firewall — bidirectional request/response scanning (RFC-0071).
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<Firewall>>,
+    /// Per-agent identity configuration (OWASP ASI03).
+    pub agent_identity_config: AgentIdentityConfig,
 }
 
 /// Create the router.

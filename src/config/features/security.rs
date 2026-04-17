@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::security::agent_identity::AgentIdentityConfig;
 use crate::security::policy::ToolPolicyConfig;
 
 // ── MessageSigningConfig ──────────────────────────────────────────────────────
@@ -76,6 +77,9 @@ pub struct SecurityConfig {
     /// Inter-agent message signing (ADR-001, OWASP ASI07). Default: disabled.
     #[serde(default)]
     pub message_signing: MessageSigningConfig,
+    /// Per-agent identity verification (OWASP ASI03). Default: disabled.
+    #[serde(default)]
+    pub agent_identity: AgentIdentityConfig,
 }
 
 impl Default for SecurityConfig {
@@ -87,6 +91,7 @@ impl Default for SecurityConfig {
             #[cfg(feature = "firewall")]
             firewall: crate::security::firewall::FirewallConfig::default(),
             message_signing: MessageSigningConfig::default(),
+            agent_identity: AgentIdentityConfig::default(),
         }
     }
 }

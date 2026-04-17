@@ -1,9 +1,9 @@
 {
-  "last_verified": "2026-04-12",
+  "last_verified": "2026-04-16",
   "meta_tools": {
-    "minimum": 13,
-    "readme_benchmark": 15,
-    "with_webhook_status": 16
+    "minimum": 14,
+    "readme_benchmark": 16,
+    "with_webhook_status": 17
   },
   "capability_count": 101,
   "startup_benchmark": {
@@ -16,7 +16,7 @@
   "readme_token_savings": {
     "direct_tools": 100,
     "direct_tokens_per_tool": 150,
-    "gateway_tools": 15,
+    "gateway_tools": 16,
     "gateway_tokens_per_tool": 100,
     "requests": 1000,
     "model": "Claude Opus",

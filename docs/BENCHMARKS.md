@@ -14,10 +14,10 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 
 | Claim | Value | Source |
 |------|-------|--------|
-| Meta-tools exposed to the AI | 13 minimum / 15 README benchmark / 16 with webhook status | `benchmarks/public_claims.json` |
+| Meta-tools exposed to the AI | 14 minimum / 16 README benchmark / 17 with webhook status | `benchmarks/public_claims.json` |
 | Built-in capability YAMLs | 101 total (marketed as 100+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
-| README token-savings scenario | 100 tools → ~1500 gateway tokens → **90% savings** | `python benchmarks/token_savings.py --scenario readme` |
+| README token-savings scenario | 100 tools → ~1600 gateway tokens → **89% savings** | `python benchmarks/token_savings.py --scenario readme` |
 
 ## Startup Performance
 
@@ -41,13 +41,13 @@ python benchmarks/token_savings.py --scenario readme --json
 Reference scenario assumptions:
 
 - 100 direct tools at ~150 tokens each
-- 14 Meta-MCP tools in the README benchmark scenario at ~100 tokens each
+- 16 Meta-MCP tools in the README benchmark scenario at ~100 tokens each
 - 1,000 requests
 - Claude Opus input pricing at $15 / million tokens
 
-The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 15th tool.
+The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 17th tool.
 
-This yields the README headline numbers: **~1500 gateway tokens**, **90% savings**, and **$203 saved per 1K requests**.
+This yields the README headline numbers: **~1600 gateway tokens**, **89% savings**, and **$201 saved per 1K requests**.
 
 ## Memory Usage
 
