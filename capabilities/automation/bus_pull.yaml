@@ -5,6 +5,14 @@ description: >
   Pass the subscription_id returned by bus_subscribe as since_ts.
   Returns up to max_msgs messages in ascending ts order.
   Re-call with the ts of the last returned message to advance the cursor.
+  When agent_id is provided, the query also returns DMs (to_agent = agent_id)
+  in addition to broadcasts (to_agent IS NONE). Without agent_id, only
+  broadcasts are returned, so private DMs to other agents stay private.
+  All scalar inputs are bound as SurrealQL parameters via the HTTP /sql query
+  string ($topic_pattern, $since_ts, $current_agent, $max_msgs).
+  ed25519 signature verification is the caller's responsibility — fetch
+  pubkey via bus_announce/bus_agent record, then nacl/cryptography verify
+  the signature field over the canonical message bytes.
   [keywords: agent, bus, pull, poll, receive, message, inter-agent]
 
 schema:
@@ -13,7 +21,7 @@ schema:
     properties:
       topic_pattern:
         type: string
-        description: "Topic prefix, e.g. bus.global or bus.proj.botnaut. Use % for wildcard SQL LIKE."
+        description: "Topic prefix, e.g. bus.global or bus.proj.botnaut"
       since_ts:
         type: string
         description: "ISO-8601 cursor timestamp from bus_subscribe or last bus_pull"
@@ -49,10 +57,16 @@ providers:
         Surreal-Db: prod
         Accept: application/json
         Authorization: "Basic cm9vdDpyb290"
+      params:
+        topic_pattern: "{topic_pattern}"
+        since_ts: "{since_ts}"
+        current_agent: "{agent_id}"
+        max_msgs: "{max_msgs}"
       body_content_type: text/plain
-      # topic_pattern uses SurrealQL string::startsWith for prefix match.
-      # since_ts is an ISO-8601 string cast to datetime.
-      body: "SELECT * FROM bus_msg WHERE string::starts_with(topic, '{topic_pattern}') AND ts > <datetime>'{since_ts}' ORDER BY ts ASC LIMIT {max_msgs};"
+      # DM filter: a row is delivered if it's a broadcast (to_agent IS NONE)
+      # OR addressed to the current agent. Without $current_agent, only
+      # broadcasts pass — DMs to others are filtered out.
+      body: "SELECT * FROM bus_msg WHERE string::starts_with(topic, $topic_pattern) AND ts > <datetime> $since_ts AND (to_agent IS NONE OR to_agent = $current_agent) ORDER BY ts ASC LIMIT type::int($max_msgs);"
 
 auth:
   required: false

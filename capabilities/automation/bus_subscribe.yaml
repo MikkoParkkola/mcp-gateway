@@ -44,7 +44,8 @@ providers:
         Accept: application/json
         Authorization: "Basic cm9vdDpyb290"
       body_content_type: text/plain
-      # Returns the current wall time as the subscription cursor.
+      # Returns the current wall time as the subscription cursor. No user input
+      # is interpolated, so this query has no injection surface.
       body: "RETURN time::now();"
 
 auth:
