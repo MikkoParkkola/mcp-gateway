@@ -1,0 +1,87 @@
+fulcrum: "1.0"
+name: bus_publish
+description: >
+  Agent Bus — publish a message to a topic on the shared SurrealDB-backed
+  cross-provider agent bus. Any agent can publish; subscribers pull via
+  bus_pull. Topic naming: bus.<scope>.<domain>.<intent>.
+  [keywords: agent, bus, publish, message, topic, inter-agent, communication]
+
+schema:
+  input:
+    type: object
+    properties:
+      topic:
+        type: string
+        description: "Topic path, e.g. bus.global.discovery.announce"
+      kind:
+        type: string
+        description: "Message kind"
+        enum: [event, announce, request, response, error]
+        default: event
+      body:
+        type: object
+        description: "Arbitrary JSON payload (max 64 KB)"
+        default: {}
+      from_agent:
+        type: string
+        description: "Publishing agent id, e.g. claude-code:mbp"
+      to_agent:
+        type: string
+        description: "Optional DM target agent id. Omit for broadcast."
+      correlation_id:
+        type: string
+        description: "Optional id to link request/response pairs"
+      ttl_s:
+        type: integer
+        description: "Message TTL in seconds"
+        default: 86400
+    required:
+      - topic
+      - from_agent
+  output:
+    type: object
+    properties:
+      result:
+        type: array
+        description: "Inserted record(s) returned by SurrealDB"
+      status:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 5
+    config:
+      endpoint: http://127.0.0.1:8000/sql
+      method: POST
+      headers:
+        Surreal-Ns: agent_bus
+        Surreal-Db: prod
+        Accept: application/json
+        Authorization: "Basic cm9vdDpyb290"
+      body_content_type: text/plain
+      # {topic} and {from_agent} substitute as bare strings; wrap in '' for SurrealQL.
+      # {body} substitutes as JSON object literal which is valid SurrealQL value.
+      body: "INSERT INTO bus_msg (topic, from_agent, kind, body) VALUES ('{topic}', '{from_agent}', '{kind}', {body});"
+
+auth:
+  required: false
+
+cache:
+  strategy: none
+
+metadata:
+  category: automation
+  tags:
+    - agent
+    - bus
+    - publish
+    - message
+    - inter-agent
+    - communication
+    - surrealdb
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: /tmp/c-agent-bus-design.md

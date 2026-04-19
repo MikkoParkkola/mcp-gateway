@@ -1,0 +1,69 @@
+fulcrum: "1.0"
+name: bus_subscribe
+description: >
+  Agent Bus — register a topic subscription cursor. Returns a subscription_id
+  (the current latest message timestamp) that bus_pull uses as a since_ts
+  cursor to fetch new messages since the call. Lightweight: no server-side
+  state, just a timestamp snapshot.
+  [keywords: agent, bus, subscribe, topic, cursor, inter-agent]
+
+schema:
+  input:
+    type: object
+    properties:
+      topic_pattern:
+        type: string
+        description: "Topic prefix to subscribe to, e.g. bus.global or bus.proj.botnaut"
+      agent_id:
+        type: string
+        description: "Subscribing agent id (for DM delivery, e.g. claude-code:mbp)"
+    required:
+      - topic_pattern
+  output:
+    type: object
+    properties:
+      subscription_id:
+        type: string
+        description: "Opaque cursor (ISO-8601 ts). Pass to bus_pull as since_ts."
+      topic_pattern:
+        type: string
+      agent_id:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 5
+    config:
+      endpoint: http://127.0.0.1:8000/sql
+      method: POST
+      headers:
+        Surreal-Ns: agent_bus
+        Surreal-Db: prod
+        Accept: application/json
+        Authorization: "Basic cm9vdDpyb290"
+      body_content_type: text/plain
+      # Returns the current wall time as the subscription cursor.
+      body: "RETURN time::now();"
+
+auth:
+  required: false
+
+cache:
+  strategy: none
+
+metadata:
+  category: automation
+  tags:
+    - agent
+    - bus
+    - subscribe
+    - topic
+    - cursor
+    - inter-agent
+    - surrealdb
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: /tmp/c-agent-bus-design.md

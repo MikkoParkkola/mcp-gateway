@@ -1,0 +1,79 @@
+fulcrum: "1.0"
+name: bus_announce
+description: >
+  Agent Bus — register or refresh an agent in the bus registry. Upserts a
+  bus_agent record keyed by agent name. Also publishes a
+  bus.global.discovery.announce broadcast so other agents notice the arrival.
+  Call on startup and periodically (every 5 min) as a heartbeat.
+  [keywords: agent, bus, announce, register, discovery, heartbeat, inter-agent]
+
+schema:
+  input:
+    type: object
+    properties:
+      name:
+        type: string
+        description: "Unique agent id, e.g. claude-code:mbp or codex:ci-runner"
+      provider:
+        type: string
+        description: "Agent provider: claude | codex | goose | custom"
+        default: claude
+      host:
+        type: string
+        description: "Hostname or environment, e.g. mbp-m4 or github-actions"
+        default: ""
+      capabilities:
+        type: array
+        description: "List of capability tags this agent offers, e.g. [ocr, code-review]"
+        items:
+          type: string
+        default: []
+    required:
+      - name
+  output:
+    type: object
+    properties:
+      result:
+        type: array
+        description: "Upserted bus_agent record"
+      status:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 5
+    config:
+      endpoint: http://127.0.0.1:8000/sql
+      method: POST
+      headers:
+        Surreal-Ns: agent_bus
+        Surreal-Db: prod
+        Accept: application/json
+        Authorization: "Basic cm9vdDpyb290"
+      body_content_type: text/plain
+      # UPSERT to bus_agent:<name> and INSERT announce message in one transaction.
+      body: "BEGIN TRANSACTION; UPSERT bus_agent:'{name}' MERGE { name: '{name}', provider: '{provider}', host: '{host}', ts_last: time::now() }; INSERT INTO bus_msg (topic, from_agent, kind, body) VALUES ('bus.global.discovery.announce', '{name}', 'announce', { provider: '{provider}', host: '{host}' }); COMMIT TRANSACTION;"
+
+auth:
+  required: false
+
+cache:
+  strategy: none
+
+metadata:
+  category: automation
+  tags:
+    - agent
+    - bus
+    - announce
+    - register
+    - discovery
+    - heartbeat
+    - inter-agent
+    - surrealdb
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: /tmp/c-agent-bus-design.md
