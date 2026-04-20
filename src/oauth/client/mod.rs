@@ -92,6 +92,7 @@ struct ClientRegistrationResponse {
 impl OAuthClient {
     /// Create a new OAuth client for a backend
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         http_client: Client,
         backend_name: String,
@@ -428,7 +429,8 @@ impl OAuthClient {
             self.callback_port,
             self.callback_path.as_deref(),
             self.callback_host.as_deref(),
-        ).await?;
+        )
+        .await?;
         let callback_url = callback_server.callback_url.clone();
 
         // Now ensure we have a client ID, passing the actual callback URL for registration

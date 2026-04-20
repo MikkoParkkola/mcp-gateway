@@ -101,7 +101,10 @@ pub async fn start_callback_server(
         .local_addr()
         .map_err(|e| Error::OAuth(format!("Failed to get callback server address: {e}")))?;
 
-    let callback_url = format!("http://{callback_host}:{}{callback_path}", actual_addr.port());
+    let callback_url = format!(
+        "http://{callback_host}:{}{callback_path}",
+        actual_addr.port()
+    );
     info!(url = %callback_url, "OAuth callback server listening");
 
     // Create oneshot channel for the result
@@ -265,7 +268,9 @@ mod tests {
     #[tokio::test]
     async fn callback_flow_success() {
         let state = "csrf_state_123".to_string();
-        let server = start_callback_server(state.clone(), None, None, None).await.unwrap();
+        let server = start_callback_server(state.clone(), None, None, None)
+            .await
+            .unwrap();
         let callback_url = server.callback_url.clone();
 
         // Simulate the OAuth provider redirecting back
