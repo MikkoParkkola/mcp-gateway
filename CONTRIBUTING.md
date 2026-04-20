@@ -192,3 +192,34 @@ Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/label
 ## License
 
 By contributing, you agree your contributions will be licensed under the MIT License.
+
+## Contributor Checklist
+
+We want your PR to merge fast. Here is what helps.
+
+### Required (these block merge)
+
+- [ ] **Tests for new behavior**, not just regression. If your change adds a config field, add a test that exercises it. If it adds a branch, add a test that hits it.
+- [ ] **CI green on Linux**. We ignore known-flaky checks labelled `flaky-ci`, but Linux must pass.
+- [ ] **`cargo fmt --all && cargo clippy --all-features -- -D warnings`** clean on your branch.
+- [ ] **Threat-model note for security-sensitive code** (auth, OAuth, URL handling, path handling, secrets, deserialization of untrusted input): a short note in the PR description covering what inputs come from untrusted sources, what validation you run, what you chose not to validate and why.
+
+### Strongly encouraged
+
+- [ ] **CHANGELOG entry** under `[Unreleased]` if the change is user-visible.
+- [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
+- [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.
+- [ ] **Doc comments on user-facing config fields**. They surface in `cargo doc` and in downstream IDE tooltips.
+
+### What we handle, so do not block on these
+
+- Release versioning, crates.io publishing, compiled CHANGELOG at release time. Maintainer tasks.
+- Lint drift on `main` that pre-dates your branch. Our responsibility. If clippy was green on your branch base, we fix main and rebase your PR.
+- Security review beyond the threat-model note. We do the deep dive.
+- Windows CI flakes and other known-environmental failures. We label the PR `flaky-ci` and treat Linux as the source of truth.
+
+### If you get stuck
+
+- Open a draft PR early. We would rather help you finish than review a polished PR that missed the target.
+- Leave a comment and tag `@MikkoParkkola`. No minimum response-time promise, usually within 24h on weekdays.
+- First PR? Say so in the description. We will be patient.
