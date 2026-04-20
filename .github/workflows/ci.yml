@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@580628bb9d5455140899afe2cb981ff5640bf399 # main
+      - uses: trufflesecurity/trufflehog@4d2a8ef686341ee81a283d1d0fbcb97a5017ef35 # main
         with:
           extra_args: --only-verified
 
