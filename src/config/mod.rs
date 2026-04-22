@@ -529,6 +529,28 @@ pub struct OAuthConfig {
     /// Client ID (optional — uses dynamic registration or generates one if not set).
     #[serde(default)]
     pub client_id: Option<String>,
+    /// Client secret for providers that issue fixed credentials (e.g. Slack, Figma).
+    /// When set, sent as `client_secret` in the token-exchange request.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// Hostname for the local OAuth callback server (default: `"localhost"`).
+    ///
+    /// When set to `"localhost"` (the default) the server dual-binds both
+    /// `127.0.0.1` and `[::1]` so the redirect works regardless of how the
+    /// browser resolves `localhost`.  Set to `"127.0.0.1"` to force IPv4-only.
+    #[serde(default)]
+    pub callback_host: Option<String>,
+    /// Fixed port for the OAuth callback server (default: OS-assigned ephemeral port).
+    ///
+    /// Use a fixed port (e.g. `8085`) when the OAuth app in the provider dashboard
+    /// requires an exact redirect URI (Slack, Figma, etc.).
+    #[serde(default)]
+    pub callback_port: Option<u16>,
+    /// URL path for the OAuth callback endpoint (default: `"/oauth/callback"`).
+    ///
+    /// Override when a provider requires a specific redirect URI path.
+    #[serde(default)]
+    pub callback_path: Option<String>,
     /// Seconds before expiry to proactively refresh the token (default: 300).
     #[serde(default = "default_token_refresh_buffer")]
     pub token_refresh_buffer_secs: u64,

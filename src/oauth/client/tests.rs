@@ -116,7 +116,7 @@ fn new_client_has_no_valid_token() {
         "http://localhost:8080".to_string(),
         vec!["read".to_string()],
         storage,
-        300,
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
     assert!(!client.has_valid_token());
 }
@@ -131,7 +131,7 @@ fn client_with_valid_token_returns_true() {
         "http://localhost:8080".to_string(),
         vec![],
         storage,
-        300,
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
 
     // Inject a non-expired token
@@ -157,7 +157,7 @@ fn client_with_expired_token_returns_false() {
         "http://localhost:8080".to_string(),
         vec![],
         storage,
-        300,
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
 
     // Inject an expired token
@@ -183,7 +183,7 @@ fn backend_name_returns_configured_name() {
         "http://localhost:8080".to_string(),
         vec![],
         storage,
-        300,
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
     assert_eq!(client.backend_name(), "my-service");
 }
@@ -204,7 +204,7 @@ fn needs_proactive_refresh_false_when_no_token() {
         "http://localhost".to_string(),
         vec![],
         storage,
-        300,
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
 
     // WHEN / THEN: no token means no proactive refresh needed
@@ -223,7 +223,7 @@ fn needs_proactive_refresh_false_when_token_no_expiry() {
         "http://localhost".to_string(),
         vec![],
         storage,
-        300,
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
     let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
     *client.current_token.write() = Some(token);
@@ -244,7 +244,7 @@ fn needs_proactive_refresh_true_when_within_buffer() {
         "http://localhost".to_string(),
         vec![],
         storage,
-        300, // 300s buffer
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -272,7 +272,7 @@ fn needs_proactive_refresh_false_when_outside_buffer() {
         "http://localhost".to_string(),
         vec![],
         storage,
-        300,
+        OAuthClientConfig { token_refresh_buffer_secs: 300, ..Default::default() },
     );
     let token = TokenInfo::from_response("tok".to_string(), None, None, Some(3600), None);
     *client.current_token.write() = Some(token);
