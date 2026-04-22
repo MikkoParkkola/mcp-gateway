@@ -6,7 +6,7 @@ Share, discover, and install capability definitions from the community.
 
 ### From the Built-in Registry
 
-All 100+ built-in capabilities ship with mcp-gateway. The exact tracked inventory is currently 101 YAMLs. Browse what is available:
+All 100+ built-in capabilities ship with mcp-gateway. The exact tracked inventory is currently 106 YAMLs. Browse what is available:
 
 ```bash
 # List everything

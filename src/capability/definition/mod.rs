@@ -238,7 +238,7 @@ impl ProviderConfig {
     #[must_use]
     pub fn protocol_config(&self) -> ProtocolConfig {
         match self.service.as_str() {
-            "rest" | "" => ProtocolConfig::Rest(self.config.clone()),
+            "rest" | "" => ProtocolConfig::Rest(Box::new(self.config.clone())),
             "graphql" => {
                 // Build GraphqlConfig from the flat RestConfig fields.
                 // The YAML `config:` block uses RestConfig for all service
@@ -299,7 +299,7 @@ impl ProviderConfig {
                     service = %self.service,
                     "Unknown service type, falling back to REST protocol"
                 );
-                ProtocolConfig::Rest(self.config.clone())
+                ProtocolConfig::Rest(Box::new(self.config.clone()))
             }
         }
     }
@@ -388,6 +388,28 @@ pub struct RestConfig {
     /// is treated as XML automatically.
     #[serde(default)]
     pub response_format: String,
+
+    /// Override the `Content-Type` header for the request body.
+    ///
+    /// When empty (the default) POST/PUT/PATCH bodies are sent as
+    /// `application/json`.  Set to `"text/plain"` to send a raw string body
+    /// (useful for databases like `SurrealDB` whose `/sql` endpoint requires
+    /// `text/plain`).  The `body` template value must be a JSON string
+    /// (`"SELECT ..."`) — it is serialised without the outer quotes before
+    /// sending.
+    ///
+    /// # Example (YAML)
+    ///
+    /// ```yaml
+    /// config:
+    ///   base_url: http://127.0.0.1:8000
+    ///   path: /sql
+    ///   method: POST
+    ///   body_content_type: "text/plain"
+    ///   body: "SELECT * FROM bus_msg WHERE topic = '{topic}' LIMIT {max_msg}"
+    /// ```
+    #[serde(default)]
+    pub body_content_type: String,
 }
 
 impl RestConfig {
@@ -534,7 +556,11 @@ pub struct JsonRpcConfig {
 #[serde(tag = "protocol", rename_all = "snake_case")]
 pub enum ProtocolConfig {
     /// REST/HTTP protocol (the original and default).
-    Rest(RestConfig),
+    ///
+    /// Boxed to reduce the size difference between enum variants (clippy
+    /// `large_enum_variant`).  `RestConfig` is the largest variant because it
+    /// carries many optional fields; boxing keeps the enum itself small.
+    Rest(Box<RestConfig>),
     /// GraphQL protocol — sends `{ query, variables }` as a POST.
     Graphql(GraphqlConfig),
     /// JSON-RPC 2.0 protocol — sends `{ jsonrpc, id, method, params }` as a POST.
@@ -560,7 +586,7 @@ impl ProtocolConfig {
     #[must_use]
     pub fn as_rest(&self) -> Option<&RestConfig> {
         match self {
-            ProtocolConfig::Rest(c) => Some(c),
+            ProtocolConfig::Rest(c) => Some(c.as_ref()),
             _ => None,
         }
     }
