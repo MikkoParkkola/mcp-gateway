@@ -16,6 +16,8 @@ Thumbs.db
 /servers.yaml
 config.yaml
 *.log
+gateway.yaml.bak.*
+history.txt
 
 # User capabilities (may contain credential references)
 /capabilities/*.yaml
