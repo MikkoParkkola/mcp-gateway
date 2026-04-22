@@ -3,6 +3,7 @@
 //! Performs a series of diagnostic checks and prints a pass/fail/warn table.
 //! Exit code is `SUCCESS` when all required checks pass, `FAILURE` otherwise.
 
+use std::fmt::Write as _;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -399,7 +400,7 @@ pub struct DlpRule {
 
 /// All MCP DLP rules derived from RFC-0132 Appendix and Cloudflare reference.
 ///
-/// Patterns are POSIX ERE-compatible (grep -E, nginx `~`, HAProxy `acl`).
+/// Patterns are POSIX ERE-compatible (grep -E, nginx `~`, `HAProxy` `acl`).
 /// The `\s{0,5}` allowance covers compacted vs. pretty-printed JSON.
 pub const DLP_RULES: &[DlpRule] = &[
     DlpRule {
@@ -480,11 +481,12 @@ fn render_grep(rules: &[DlpRule]) -> String {
     out.push('\n');
 
     for rule in rules {
-        out.push_str(&format!(
-            "# [{}] {} — {}\n",
+        let _ = writeln!(
+            out,
+            "# [{}] {} — {}",
             rule.category, rule.name, rule.description
-        ));
-        out.push_str(&format!("grep -EP '{}'\n\n", rule.regex));
+        );
+        let _ = writeln!(out, "grep -EP '{}'\n", rule.regex);
     }
     out
 }
@@ -508,14 +510,14 @@ fn render_nginx(rules: &[DlpRule]) -> String {
     out.push_str("# -- Combined map (1 = detected MCP traffic) --\n");
     out.push_str("map $request_body $mcp_shadow {\n");
     out.push_str("    default          0;\n");
-    out.push_str(&format!("    ~*({combined_regex})  1;\n"));
+    let _ = writeln!(out, "    ~*({combined_regex})  1;");
     out.push_str("}\n\n");
 
     out.push_str("# -- Or use individual if blocks inside location /mcp { ... } --\n");
     for rule in rules {
-        out.push_str(&format!("# [{}] {}\n", rule.category, rule.name));
-        out.push_str(&format!("# {}\n", rule.description));
-        out.push_str(&format!("if ($request_body ~* '{}') {{\n", rule.regex));
+        let _ = writeln!(out, "# [{}] {}", rule.category, rule.name);
+        let _ = writeln!(out, "# {}", rule.description);
+        let _ = writeln!(out, "if ($request_body ~* '{}') {{", rule.regex);
         out.push_str("    # set $mcp_shadow 1; access_log ... mcp_shadow;\n");
         out.push_str("}\n\n");
     }
@@ -534,11 +536,11 @@ fn render_yaml(rules: &[DlpRule]) -> String {
     out.push_str("dlp_rules:\n");
 
     for rule in rules {
-        out.push_str(&format!("  - name: \"{}\"\n", rule.name));
-        out.push_str(&format!("    category: \"{}\"\n", rule.category));
+        let _ = writeln!(out, "  - name: \"{}\"", rule.name);
+        let _ = writeln!(out, "    category: \"{}\"", rule.category);
         let escaped_regex = rule.regex.replace('\\', "\\\\").replace('"', "\\\"");
-        out.push_str(&format!("    regex: \"{escaped_regex}\"\n"));
-        out.push_str(&format!("    description: \"{}\"\n", rule.description));
+        let _ = writeln!(out, "    regex: \"{escaped_regex}\"");
+        let _ = writeln!(out, "    description: \"{}\"", rule.description);
         out.push('\n');
     }
     out
@@ -714,7 +716,10 @@ mod tests {
             assert!(!rule.name.is_empty(), "name must not be empty");
             assert!(!rule.category.is_empty(), "category must not be empty");
             assert!(!rule.regex.is_empty(), "regex must not be empty");
-            assert!(!rule.description.is_empty(), "description must not be empty");
+            assert!(
+                !rule.description.is_empty(),
+                "description must not be empty"
+            );
         }
     }
 
@@ -736,7 +741,10 @@ mod tests {
     #[test]
     fn render_grep_contains_header_disclaimer() {
         let out = render_grep(DLP_RULES);
-        assert!(out.contains("OPERATOR NOTE"), "must include operator disclaimer");
+        assert!(
+            out.contains("OPERATOR NOTE"),
+            "must include operator disclaimer"
+        );
         assert!(out.contains("RFC-0132"), "must cite RFC-0132");
     }
 
@@ -768,8 +776,14 @@ mod tests {
     #[test]
     fn render_nginx_contains_map_block() {
         let out = render_nginx(DLP_RULES);
-        assert!(out.contains("map $request_body $mcp_shadow"), "must include map block");
-        assert!(out.contains("OPERATOR NOTE"), "must include operator disclaimer");
+        assert!(
+            out.contains("map $request_body $mcp_shadow"),
+            "must include map block"
+        );
+        assert!(
+            out.contains("OPERATOR NOTE"),
+            "must include operator disclaimer"
+        );
     }
 
     #[test]
@@ -789,7 +803,10 @@ mod tests {
     #[test]
     fn render_yaml_starts_with_dlp_rules_key() {
         let out = render_yaml(DLP_RULES);
-        assert!(out.contains("dlp_rules:"), "must have top-level dlp_rules: key");
+        assert!(
+            out.contains("dlp_rules:"),
+            "must have top-level dlp_rules: key"
+        );
     }
 
     #[test]
@@ -820,7 +837,10 @@ mod tests {
     #[test]
     fn render_yaml_contains_disclaimer() {
         let out = render_yaml(DLP_RULES);
-        assert!(out.contains("OPERATOR NOTE"), "yaml must include operator disclaimer");
+        assert!(
+            out.contains("OPERATOR NOTE"),
+            "yaml must include operator disclaimer"
+        );
     }
 
     // ── run_doctor_shadow_command ─────────────────────────────────────────────

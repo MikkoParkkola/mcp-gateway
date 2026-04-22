@@ -31,7 +31,9 @@ pub async fn run_cap_command(cmd: CapCommand) -> ExitCode {
             format,
             write_config,
             config_path,
-        } => cap_discover(format, write_config, config_path).await,
+            shadow,
+            gateway_config,
+        } => cap_discover(format, write_config, config_path, shadow, gateway_config).await,
         CapCommand::Install {
             name,
             from_github,
@@ -252,11 +254,17 @@ async fn cap_discover(
     format: String,
     write_config: bool,
     config_path: Option<std::path::PathBuf>,
+    shadow: bool,
+    gateway_config: Option<std::path::PathBuf>,
 ) -> ExitCode {
     let discovery = AutoDiscovery::new();
     println!("🔍 Discovering MCP servers...\n");
     match discovery.discover_all().await {
         Ok(servers) => {
+            if shadow {
+                return cap_discover_shadow(servers, &format, gateway_config).await;
+            }
+
             if servers.is_empty() {
                 print_discover_empty();
                 return ExitCode::SUCCESS;
@@ -288,6 +296,51 @@ async fn cap_discover(
             ExitCode::FAILURE
         }
     }
+}
+
+/// Handle `cap discover --shadow`: show only servers that are not registered
+/// as backends in the gateway configuration.
+async fn cap_discover_shadow(
+    discovered: Vec<mcp_gateway::discovery::DiscoveredServer>,
+    format: &str,
+    gateway_config: Option<std::path::PathBuf>,
+) -> ExitCode {
+    // Resolve which gateway config to load. Try the provided path first, then
+    // fall back to `gateway.yaml` in the current directory.
+    let config_path = gateway_config.unwrap_or_else(|| std::path::PathBuf::from("gateway.yaml"));
+
+    let registered_names: std::collections::HashSet<String> =
+        if let Ok(config) = mcp_gateway::config::Config::load(Some(&config_path)) {
+            config.backends.into_keys().collect()
+        } else {
+            // Config not found or unreadable — all discovered servers are unregistered.
+            eprintln!(
+                "⚠️  Could not load gateway config from '{}'; \
+                 treating all discovered servers as unregistered.",
+                config_path.display()
+            );
+            std::collections::HashSet::new()
+        };
+
+    let shadow_servers: Vec<_> = discovered
+        .into_iter()
+        .filter(|s| !registered_names.contains(&s.name))
+        .collect();
+
+    if shadow_servers.is_empty() {
+        println!("✅ No shadow servers found — all discovered MCP servers are registered.");
+        return ExitCode::SUCCESS;
+    }
+
+    println!(
+        "⚠️  Found {} shadow (unregistered) MCP server(s):\n",
+        shadow_servers.len()
+    );
+    print_discovered_servers(&shadow_servers, format);
+    println!("💡 To register these servers, run:");
+    println!("   mcp-gateway cap discover --write-config");
+
+    ExitCode::SUCCESS
 }
 
 fn print_discover_empty() {

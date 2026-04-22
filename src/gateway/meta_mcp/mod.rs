@@ -632,6 +632,37 @@ impl MetaMcp {
         self.handle_tools_list_for_session(id, session_id)
     }
 
+    /// Variant of [`handle_tools_list_with_params`] that accepts a per-request
+    /// Code Mode override from the URL query parameter `?codemode=search_and_execute`.
+    ///
+    /// Precedence rules:
+    /// - If the static config already has `code_mode.enabled = true`, the
+    ///   result is always Code Mode regardless of `url_override`.
+    /// - If `url_override` is `true`, Code Mode is active for this request only.
+    /// - If both are `false`, the standard full meta-tool list is returned.
+    ///
+    /// When Code Mode is active via the URL override, the spec-preview filtered
+    /// path is bypassed (Code Mode always returns exactly two tools).
+    pub fn handle_tools_list_with_url_override(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+        session_id: Option<&str>,
+        url_override: bool,
+    ) -> JsonRpcResponse {
+        let effective_code_mode = self.code_mode_enabled || url_override;
+        if effective_code_mode && !self.code_mode_enabled {
+            // URL-activated Code Mode: return the two fixed tools directly.
+            let result = ToolsListResult {
+                tools: build_code_mode_tools(),
+                next_cursor: None,
+            };
+            return JsonRpcResponse::success_serialized(id, result);
+        }
+        // No override (or static config already handles it): follow normal path.
+        self.handle_tools_list_with_params(id, params, session_id)
+    }
+
     /// Handle `tools/call` — dispatch to the appropriate handler.
     ///
     /// Surfaced tool calls are intercepted before the meta-tool match arm and

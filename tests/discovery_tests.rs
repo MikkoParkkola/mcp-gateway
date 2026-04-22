@@ -134,3 +134,100 @@ async fn test_deduplication() {
         );
     }
 }
+
+// ── Shadow detection unit tests ───────────────────────────────────────────────
+
+/// Build a minimal DiscoveredServer with the given name.
+fn make_discovered(name: &str) -> mcp_gateway::discovery::DiscoveredServer {
+    use mcp_gateway::config::TransportConfig;
+    use mcp_gateway::discovery::{DiscoveredServer, ServerMetadata};
+
+    DiscoveredServer {
+        name: name.to_string(),
+        description: format!("{name} server"),
+        source: DiscoverySource::Environment,
+        transport: TransportConfig::Http {
+            http_url: format!("http://localhost:3000/{name}"),
+            streamable_http: false,
+            protocol_version: None,
+        },
+        metadata: ServerMetadata::default(),
+    }
+}
+
+#[test]
+fn shadow_filter_excludes_registered_servers() {
+    // GIVEN: a set of registered backend names
+    let registered: std::collections::HashSet<String> =
+        ["tavily", "github"].iter().map(|s| s.to_string()).collect();
+
+    // AND: discovered servers that overlap with registered ones
+    let discovered = vec![
+        make_discovered("tavily"),
+        make_discovered("github"),
+        make_discovered("unregistered-tool"),
+    ];
+
+    // WHEN: filtering to shadow (unregistered) servers
+    let shadows: Vec<_> = discovered
+        .into_iter()
+        .filter(|s| !registered.contains(&s.name))
+        .collect();
+
+    // THEN: only the unregistered server remains
+    assert_eq!(shadows.len(), 1);
+    assert_eq!(shadows[0].name, "unregistered-tool");
+}
+
+#[test]
+fn shadow_filter_returns_all_when_no_registered() {
+    // GIVEN: an empty registry (gateway config has no backends)
+    let registered: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let discovered = vec![make_discovered("server-a"), make_discovered("server-b")];
+
+    // WHEN: filtering
+    let shadows: Vec<_> = discovered
+        .into_iter()
+        .filter(|s| !registered.contains(&s.name))
+        .collect();
+
+    // THEN: all discovered servers are returned as shadows
+    assert_eq!(shadows.len(), 2);
+}
+
+#[test]
+fn shadow_filter_returns_empty_when_all_registered() {
+    // GIVEN: all discovered servers are already registered
+    let registered: std::collections::HashSet<String> =
+        ["alpha", "beta"].iter().map(|s| s.to_string()).collect();
+
+    let discovered = vec![make_discovered("alpha"), make_discovered("beta")];
+
+    // WHEN: filtering
+    let shadows: Vec<_> = discovered
+        .into_iter()
+        .filter(|s| !registered.contains(&s.name))
+        .collect();
+
+    // THEN: no shadows
+    assert!(shadows.is_empty());
+}
+
+#[test]
+fn shadow_filter_is_case_sensitive() {
+    // GIVEN: registered name "Tavily" (different case)
+    let registered: std::collections::HashSet<String> =
+        ["Tavily"].iter().map(|s| s.to_string()).collect();
+
+    let discovered = vec![make_discovered("tavily")];
+
+    // WHEN: filtering (case-sensitive comparison matches gateway config keys)
+    let shadows: Vec<_> = discovered
+        .into_iter()
+        .filter(|s| !registered.contains(&s.name))
+        .collect();
+
+    // THEN: "tavily" (lowercase) is treated as unregistered
+    assert_eq!(shadows.len(), 1);
+}
