@@ -334,6 +334,24 @@ pub enum Command {
     /// Checks configuration, port availability, required env vars, HTTP
     /// reachability for HTTP backends, and whether any AI client is already
     /// pointed at the gateway.
+    ///
+    /// With `--shadow`, skips the health checks and instead emits DLP/firewall
+    /// regex rules for operator-side network detection of MCP traffic.  These
+    /// are **heuristic guidance** for external tools (firewalls, SIEMs, proxies)
+    /// — the gateway does not intercept arbitrary outbound traffic itself.
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Emit shell-grep patterns (default)
+    /// mcp-gateway doctor --shadow
+    ///
+    /// # Emit nginx log_format filter snippet
+    /// mcp-gateway doctor --shadow --shadow-format nginx
+    ///
+    /// # Emit YAML rule set for SIEM import
+    /// mcp-gateway doctor --shadow --shadow-format yaml
+    /// ```
     #[command(about = "Check gateway configuration and backend health")]
     Doctor {
         /// Attempt to auto-fix issues where possible (e.g. create missing dirs)
@@ -343,6 +361,19 @@ pub enum Command {
         /// Gateway config file to inspect (auto-detected when omitted)
         #[arg(short, long)]
         config: Option<PathBuf>,
+
+        /// Emit operator-facing DLP/firewall regex rules for network-layer MCP
+        /// detection instead of running the normal health checks.
+        ///
+        /// Rules are heuristic only — the gateway cannot intercept arbitrary
+        /// outbound traffic.  Deploy the exported rules in your firewall, SIEM,
+        /// or reverse proxy to detect unauthorised MCP sessions.
+        #[arg(long)]
+        shadow: bool,
+
+        /// Output format for `--shadow` rule export: "grep", "nginx", or "yaml"
+        #[arg(long, default_value = "grep", value_name = "FORMAT")]
+        shadow_format: String,
     },
 
     /// Apply pending post-upgrade migrations and update the version stamp
