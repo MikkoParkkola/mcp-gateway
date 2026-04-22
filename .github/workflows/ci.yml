@@ -44,7 +44,14 @@ jobs:
 
   kani:
     name: Kani
-    runs-on: ubuntu-20.04
+    # ubuntu-20.04 was retired by GitHub in April 2025. Jobs targeting it
+    # queue forever waiting on a runner image that no longer exists, then
+    # get auto-cancelled at the 24h workflow max — which is exactly what
+    # was happening here on every run for ~3 days. Pin to ubuntu-22.04
+    # (still on the runner-image LTS path) for reproducibility; latest
+    # would also work but pinning matches Kani upstream's CI matrix.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Run Kani proofs
