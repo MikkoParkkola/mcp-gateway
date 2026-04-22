@@ -363,10 +363,9 @@ mod tests {
 
     #[tokio::test]
     async fn callback_server_custom_path() {
-        let server =
-            start_callback_server("st".to_string(), None, None, Some("/auth/cb"))
-                .await
-                .unwrap();
+        let server = start_callback_server("st".to_string(), None, None, Some("/auth/cb"))
+            .await
+            .unwrap();
         assert!(server.callback_url.ends_with("/auth/cb"));
         for h in server.server_handles {
             h.abort();
