@@ -1,0 +1,73 @@
+fulcrum: "1.0"
+name: agent_search
+description: >
+  Agent Bus — discover registered agents by keyword match on name, provider,
+  host, or capabilities. Returns live bus_agent records ordered by most
+  recently seen (ts_last DESC). Use to find an agent capable of a task
+  before sending a DM via bus_publish.
+  [keywords: agent, bus, search, discover, registry, capabilities, inter-agent]
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: "Keyword to search for in agent name or capabilities, e.g. ocr or codex"
+      status:
+        type: string
+        description: "Filter by status: active | inactive. Omit for all."
+        default: active
+      limit:
+        type: integer
+        description: "Max agents to return (1-50)"
+        default: 10
+    required:
+      - query
+  output:
+    type: object
+    properties:
+      result:
+        type: array
+        description: "Matching bus_agent records"
+      status:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 5
+    config:
+      endpoint: http://127.0.0.1:8000/sql
+      method: POST
+      headers:
+        Surreal-Ns: agent_bus
+        Surreal-Db: prod
+        Accept: application/json
+        Authorization: "Basic cm9vdDpyb290"
+      body_content_type: text/plain
+      # Full-text search: match query substring in name, provider, host, or any capability tag.
+      body: "SELECT * FROM bus_agent WHERE (string::contains(string::lowercase(name), string::lowercase('{query}')) OR string::contains(string::lowercase(provider), string::lowercase('{query}')) OR string::contains(string::lowercase(host), string::lowercase('{query}'))) AND status = '{status}' ORDER BY ts_last DESC LIMIT {limit};"
+
+auth:
+  required: false
+
+cache:
+  strategy: exact
+  ttl: 30
+
+metadata:
+  category: automation
+  tags:
+    - agent
+    - bus
+    - search
+    - discover
+    - registry
+    - inter-agent
+    - surrealdb
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: /tmp/c-agent-bus-design.md

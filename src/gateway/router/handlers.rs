@@ -225,6 +225,14 @@ pub(super) async fn meta_mcp_handler(
         });
     let query_str = http_request.uri().query();
     let agent_identity = extract_agent_identity(&headers, query_str, bearer_token);
+
+    // Per-connection Code Mode override (issue #146 / RFC-0132).
+    // Accepted value: ?codemode=search_and_execute
+    // When the static config already enables Code Mode, this is a no-op.
+    let code_mode_url_active: bool = query_str.is_some_and(|q| {
+        q.split('&')
+            .any(|pair| pair == "codemode=search_and_execute")
+    });
     if let Err(reason) =
         validate_agent_identity(agent_identity.as_ref(), &state.agent_identity_config)
     {
@@ -353,10 +361,11 @@ pub(super) async fn meta_mcp_handler(
             Some(session_id.as_str()),
             header_profile.as_deref(),
         ),
-        "tools/list" => state.meta_mcp.handle_tools_list_with_params(
+        "tools/list" => state.meta_mcp.handle_tools_list_with_url_override(
             id,
             params.as_ref(),
             Some(session_id.as_str()),
+            code_mode_url_active,
         ),
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());

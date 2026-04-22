@@ -1,0 +1,97 @@
+fulcrum: "1.0"
+name: bus_announce
+description: >
+  Agent Bus — register or refresh an agent in the bus registry. Upserts a
+  bus_agent record keyed by agent name. Also publishes a
+  bus.global.discovery.announce broadcast so other agents notice the arrival.
+  Call on startup and periodically (every 5 min) as a heartbeat.
+  Name validation: the schema rejects names with spaces, control chars, or
+  unsupported punctuation (allowed: alphanumeric plus . _ - : / @ +) and
+  caps length at 64 chars. Pass the agent's ed25519 public key (base64) so
+  pull-side verifiers can check signatures on messages from this agent.
+  All inputs are bound as SurrealQL parameters via the HTTP /sql query
+  string ($name, $provider, $host, $pubkey, $capabilities_json).
+  [keywords: agent, bus, announce, register, discovery, heartbeat, inter-agent]
+
+schema:
+  input:
+    type: object
+    properties:
+      name:
+        type: string
+        description: "Unique agent id, e.g. claude-code:mbp or codex:ci-runner"
+      provider:
+        type: string
+        description: "Agent provider: claude | codex | goose | custom"
+        default: claude
+      host:
+        type: string
+        description: "Hostname or environment, e.g. mbp-m4 or github-actions"
+        default: ""
+      capabilities:
+        type: array
+        description: "List of capability tags this agent offers, e.g. [ocr, code-review]"
+        items:
+          type: string
+        default: []
+      pubkey:
+        type: string
+        description: "Agent's ed25519 public key (base64) for signature verification"
+    required:
+      - name
+  output:
+    type: object
+    properties:
+      result:
+        type: array
+        description: "Upserted bus_agent record"
+      status:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 5
+    config:
+      endpoint: http://127.0.0.1:8000/sql
+      method: POST
+      headers:
+        Surreal-Ns: agent_bus
+        Surreal-Db: prod
+        Accept: application/json
+        Authorization: "Basic cm9vdDpyb290"
+      params:
+        name: "{name}"
+        provider: "{provider}"
+        host: "{host}"
+        pubkey: "{pubkey}"
+      body_content_type: text/plain
+      # UPSERT bus_agent + INSERT announce in a single transaction.
+      # Scalar fields bind as $vars; capabilities is the only array literal,
+      # serialized by serde and parsed as a SurrealQL array literal.
+      # Name format is enforced by the schema ASSERT — invalid names are
+      # rejected by SurrealDB before any row is written.
+      body: "BEGIN TRANSACTION; UPSERT bus_agent CONTENT { name: $name, provider: $provider, host: $host, pubkey: $pubkey, capabilities: {capabilities}, ts_last: time::now() }; INSERT INTO bus_msg { topic: 'bus.global.discovery.announce', from_agent: $name, kind: 'announce', body: { provider: $provider, host: $host, capabilities: {capabilities} } }; COMMIT TRANSACTION;"
+
+auth:
+  required: false
+
+cache:
+  strategy: none
+
+metadata:
+  category: automation
+  tags:
+    - agent
+    - bus
+    - announce
+    - register
+    - discovery
+    - heartbeat
+    - inter-agent
+    - surrealdb
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: /tmp/c-agent-bus-design.md

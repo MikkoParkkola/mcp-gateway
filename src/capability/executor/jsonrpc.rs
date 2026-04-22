@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn protocol_config_as_jsonrpc_returns_none_for_rest_variant() {
-        let config = ProtocolConfig::Rest(crate::capability::RestConfig::default());
+        let config = ProtocolConfig::Rest(Box::default());
         assert!(config.as_jsonrpc().is_none());
     }
 

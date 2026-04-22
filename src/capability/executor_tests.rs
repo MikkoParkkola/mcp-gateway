@@ -394,3 +394,67 @@ fn build_url_with_static_params_substitution_in_endpoint() {
     );
     assert!(url.contains("version=2"), "URL should contain version=2");
 }
+
+// ── body_content_type tests ──────────────────────────────────────────────────
+
+#[test]
+fn body_content_type_text_plain_uses_raw_string_body() {
+    // Verify that when body_content_type = "text/plain" and the body template
+    // is a JSON string, attach_request_body builds a raw-string request (not
+    // JSON-encoded).  We can't easily inspect the built request in a unit test
+    // without a live HTTP server, so we at least verify that the RestConfig
+    // deserialises correctly from YAML and that substitute_string works.
+    let executor = CapabilityExecutor::new();
+    let config = RestConfig {
+        body: Some(serde_json::Value::String(
+            "SELECT * FROM bus_msg WHERE topic = '{topic}' LIMIT {max_msg}".to_string(),
+        )),
+        body_content_type: "text/plain".to_string(),
+        ..Default::default()
+    };
+
+    let params = serde_json::json!({"topic": "bus.demo.test", "max_msg": 50});
+
+    // substitute_string is the path taken for plain-text bodies.
+    let sql = executor
+        .substitute_string(config.body.as_ref().unwrap().as_str().unwrap(), &params)
+        .unwrap();
+
+    assert!(
+        sql.contains("bus.demo.test"),
+        "SQL should contain topic: {sql}"
+    );
+    assert!(sql.contains("50"), "SQL should contain max_msg: {sql}");
+    assert!(
+        !sql.contains('{'),
+        "All placeholders should be resolved: {sql}"
+    );
+}
+
+#[test]
+fn body_content_type_empty_defaults_to_json() {
+    // Default behaviour: body_content_type is empty → use JSON body.
+    // RestConfig::default() should produce empty body_content_type.
+    let config = RestConfig::default();
+    assert!(
+        config.body_content_type.is_empty(),
+        "Default body_content_type must be empty (→ JSON)"
+    );
+}
+
+#[test]
+fn body_content_type_deserialises_from_yaml() {
+    let yaml = r#"
+base_url: "http://127.0.0.1:8000"
+path: "/sql"
+method: "POST"
+body_content_type: "text/plain"
+body: "SELECT * FROM bus_msg LIMIT 10"
+"#;
+    let config: RestConfig = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(config.body_content_type, "text/plain");
+    assert_eq!(
+        config.body.unwrap().as_str().unwrap(),
+        "SELECT * FROM bus_msg LIMIT 10"
+    );
+}

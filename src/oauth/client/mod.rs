@@ -53,6 +53,18 @@ pub struct OAuthClient {
     /// Client ID (registered or generated)
     client_id: RwLock<Option<String>>,
 
+    /// Pre-configured client secret (for providers like Slack / Figma).
+    client_secret: Option<String>,
+
+    /// Callback host override (default: "localhost", dual-binds IPv4+IPv6).
+    callback_host: Option<String>,
+
+    /// Fixed callback port (None = OS-assigned).
+    callback_port: Option<u16>,
+
+    /// Callback URL path (default: "/oauth/callback").
+    callback_path: Option<String>,
+
     /// Seconds before expiry at which the background task proactively refreshes.
     ///
     /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
@@ -77,6 +89,26 @@ struct ClientRegistrationResponse {
     client_secret: Option<String>,
 }
 
+/// Configuration for constructing an [`OAuthClient`].
+///
+/// Bundles the optional per-provider settings so that [`OAuthClient::new`]
+/// stays within Clippy's argument-count limit.
+#[derive(Debug, Default)]
+pub struct OAuthClientConfig {
+    /// Pre-configured client ID.
+    pub client_id: Option<String>,
+    /// Pre-configured client secret (Slack, Figma, …).
+    pub client_secret: Option<String>,
+    /// Callback host override (default: `"localhost"`, dual-binds IPv4+IPv6).
+    pub callback_host: Option<String>,
+    /// Fixed callback port (`None` = OS-assigned).
+    pub callback_port: Option<u16>,
+    /// Callback URL path (default: `"/oauth/callback"`).
+    pub callback_path: Option<String>,
+    /// Seconds before expiry to proactively refresh (default: 300).
+    pub token_refresh_buffer_secs: u64,
+}
+
 impl OAuthClient {
     /// Create a new OAuth client for a backend
     #[must_use]
@@ -86,7 +118,7 @@ impl OAuthClient {
         resource_url: String,
         scopes: Vec<String>,
         storage: Arc<TokenStorage>,
-        token_refresh_buffer_secs: u64,
+        cfg: OAuthClientConfig,
     ) -> Self {
         Self {
             http_client,
@@ -98,8 +130,12 @@ impl OAuthClient {
             storage,
             current_token: RwLock::new(None),
             scopes,
-            client_id: RwLock::new(None),
-            token_refresh_buffer_secs,
+            client_id: RwLock::new(cfg.client_id),
+            client_secret: cfg.client_secret,
+            callback_host: cfg.callback_host,
+            callback_port: cfg.callback_port,
+            callback_path: cfg.callback_path,
+            token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
         }
     }
 
@@ -402,7 +438,13 @@ impl OAuthClient {
 
         // Start callback server FIRST to get the actual callback URL
         // This must happen BEFORE client registration so we know the port
-        let callback_server = callback::start_callback_server(state.clone(), None).await?;
+        let callback_server = callback::start_callback_server(
+            state.clone(),
+            self.callback_host.as_deref(),
+            self.callback_port,
+            self.callback_path.as_deref(),
+        )
+        .await?;
         let callback_url = callback_server.callback_url.clone();
 
         // Now ensure we have a client ID, passing the actual callback URL for registration
@@ -477,6 +519,11 @@ impl OAuthClient {
         params.insert("redirect_uri", redirect_uri);
         params.insert("client_id", &client_id);
         params.insert("code_verifier", code_verifier);
+        // Include client_secret when the provider requires it (Slack, Figma, etc.)
+        let secret_ref: Option<String> = self.client_secret.clone();
+        if let Some(ref secret) = secret_ref {
+            params.insert("client_secret", secret.as_str());
+        }
 
         let response = self
             .http_client
@@ -489,6 +536,13 @@ impl OAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            // #143 — structured telemetry: token exchange failure event.
+            warn!(
+                event = "oauth.token_exchange.failure",
+                backend = %self.backend_name,
+                http_status = status.as_u16(),
+                "OAuth token exchange failed"
+            );
             return Err(Error::OAuth(format!(
                 "Token exchange failed: HTTP {status} - {body}"
             )));
@@ -498,6 +552,15 @@ impl OAuthClient {
             .json()
             .await
             .map_err(|e| Error::OAuth(format!("Failed to parse token response: {e}")))?;
+
+        // #143 — structured telemetry: token exchange success event.
+        info!(
+            event = "oauth.token_exchange.success",
+            backend = %self.backend_name,
+            has_refresh_token = token_response.refresh_token.is_some(),
+            expires_in = token_response.expires_in,
+            "OAuth token exchange succeeded"
+        );
 
         Ok(TokenInfo::from_response(
             token_response.access_token,
@@ -525,6 +588,10 @@ impl OAuthClient {
         params.insert("grant_type", "refresh_token");
         params.insert("refresh_token", refresh_token);
         params.insert("client_id", &client_id);
+        let secret_ref: Option<String> = self.client_secret.clone();
+        if let Some(ref secret) = secret_ref {
+            params.insert("client_secret", secret.as_str());
+        }
 
         let response = self
             .http_client

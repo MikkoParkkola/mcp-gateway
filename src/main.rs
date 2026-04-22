@@ -173,8 +173,17 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Doctor { fix, config }) => {
-            commands::run_doctor_command(fix, config.as_deref()).await
+        Some(Command::Doctor {
+            fix,
+            config,
+            shadow,
+            shadow_format,
+        }) => {
+            if shadow {
+                commands::run_doctor_shadow_command(&shadow_format)
+            } else {
+                commands::run_doctor_command(fix, config.as_deref()).await
+            }
         }
         Some(Command::Upgrade {
             dry_run,

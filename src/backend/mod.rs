@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::{BackendConfig, TransportConfig};
 use crate::failsafe::{Failsafe, with_retry};
-use crate::oauth::{OAuthClient, TokenStorage};
+use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::protocol::{
     JsonRpcResponse, Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult, Tool, ToolsListResult,
@@ -325,7 +325,14 @@ impl Backend {
             resource_url.to_string(),
             oauth_config.scopes.clone(),
             storage,
-            oauth_config.token_refresh_buffer_secs,
+            OAuthClientConfig {
+                client_id: oauth_config.client_id.clone(),
+                client_secret: oauth_config.client_secret.clone(),
+                callback_host: oauth_config.callback_host.clone(),
+                callback_port: oauth_config.callback_port,
+                callback_path: oauth_config.callback_path.clone(),
+                token_refresh_buffer_secs: oauth_config.token_refresh_buffer_secs,
+            },
         );
 
         Ok(Some(oauth))

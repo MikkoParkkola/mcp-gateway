@@ -59,7 +59,7 @@ src/
     proxy.rs             Backend proxy manager
     streaming.rs         SSE notification multiplexer
     meta_mcp/            Meta-MCP tool implementations (search, invoke, list)
-    oauth/               OAuth 2.0 (agent auth, OIDC JWT)
+    oauth/               OAuth 2.0 (agent auth, OIDC JWT) — see [docs/OAUTH_CONFIG.md](docs/OAUTH_CONFIG.md)
     ui/                  Embedded web dashboard (feature: webui)
     webhooks/            Webhook receiver
   backend/             Backend lifecycle (spawn, connect, health, tool cache)

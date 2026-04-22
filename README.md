@@ -420,6 +420,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 |----------|----------|
 | [Quick Start](docs/QUICKSTART.md) | Zero to running in 2 minutes |
 | [Configuration Reference](docs/QUICKSTART.md#configuration) | All config options |
+| [OAuth Configuration](docs/OAUTH_CONFIG.md) | OAuth 2.0 setup with Slack and Figma examples |
 | [Deployment Guide](docs/DEPLOYMENT.md) | Docker, systemd, TLS/mTLS, scaling |
 | [OpenAPI Import](docs/OPENAPI_IMPORT.md) | Generate capabilities from OpenAPI specs |
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |

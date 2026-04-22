@@ -78,6 +78,10 @@ pub enum CapCommand {
     ///
     /// Checks Claude Desktop, VS Code, Cursor, Windsurf, ~/.config/mcp/,
     /// running MCP processes, and `MCP_SERVER_*` environment variables.
+    ///
+    /// Use `--shadow` to show only servers that are *not* already registered
+    /// as backends in the gateway configuration (i.e. shadow / unregistered
+    /// servers).
     #[command(about = "Auto-discover existing MCP servers on this machine")]
     Discover {
         /// Output format: "table" (human-readable), "json", or "yaml"
@@ -91,6 +95,16 @@ pub enum CapCommand {
         /// Path for the generated config (default: mcp-gateway-discovered.yaml)
         #[arg(long)]
         config_path: Option<PathBuf>,
+
+        /// Show only servers that are NOT registered in the gateway config
+        /// (shadow / unregistered servers).
+        #[arg(long)]
+        shadow: bool,
+
+        /// Gateway config file to compare against when using --shadow.
+        /// Defaults to `gateway.yaml` in the current directory.
+        #[arg(long)]
+        gateway_config: Option<PathBuf>,
     },
 
     /// Download a capability from a GitHub repository into the local directory

@@ -343,12 +343,12 @@ fn protocol_config_rest_round_trips_through_serde_json() {
     // GIVEN: a ProtocolConfig::Rest with populated fields
     // WHEN: serialized to JSON and back
     // THEN: all fields preserved
-    let config = ProtocolConfig::Rest(RestConfig {
+    let config = ProtocolConfig::Rest(Box::new(RestConfig {
         base_url: "https://api.example.com".to_string(),
         path: "/v1/users".to_string(),
         method: "POST".to_string(),
         ..Default::default()
-    });
+    }));
 
     let json = serde_json::to_string(&config).unwrap();
     let restored: ProtocolConfig = serde_json::from_str(&json).unwrap();
@@ -365,12 +365,12 @@ fn protocol_config_rest_round_trips_through_serde_yaml() {
     // GIVEN: a ProtocolConfig::Rest
     // WHEN: serialized to YAML and back
     // THEN: all fields preserved
-    let config = ProtocolConfig::Rest(RestConfig {
+    let config = ProtocolConfig::Rest(Box::new(RestConfig {
         base_url: "https://api.weather.com".to_string(),
         path: "/forecast".to_string(),
         method: "GET".to_string(),
         ..Default::default()
-    });
+    }));
 
     let yaml = serde_yaml::to_string(&config).unwrap();
     let restored: ProtocolConfig = serde_yaml::from_str(&yaml).unwrap();
@@ -382,7 +382,7 @@ fn protocol_config_rest_round_trips_through_serde_yaml() {
 
 #[test]
 fn protocol_config_protocol_name_returns_rest() {
-    let config = ProtocolConfig::Rest(RestConfig::default());
+    let config = ProtocolConfig::Rest(Box::default());
     assert_eq!(config.protocol_name(), "rest");
 }
 
@@ -392,7 +392,7 @@ fn protocol_config_as_rest_returns_some_for_rest_variant() {
         base_url: "https://example.com".to_string(),
         ..Default::default()
     };
-    let config = ProtocolConfig::Rest(inner.clone());
+    let config = ProtocolConfig::Rest(Box::new(inner.clone()));
     let extracted = config.as_rest().unwrap();
     assert_eq!(extracted.base_url, inner.base_url);
 }
@@ -582,7 +582,7 @@ fn protocol_config_as_rest_returns_none_for_graphql_variant() {
 
 #[test]
 fn protocol_config_as_graphql_returns_none_for_rest_variant() {
-    let config = ProtocolConfig::Rest(RestConfig::default());
+    let config = ProtocolConfig::Rest(Box::default());
     assert!(config.as_graphql().is_none());
 }
 
@@ -824,7 +824,7 @@ fn protocol_config_jsonrpc_round_trips_through_serde_yaml() {
 
 #[test]
 fn protocol_config_as_jsonrpc_returns_none_for_non_jsonrpc() {
-    let rest = ProtocolConfig::Rest(RestConfig::default());
+    let rest = ProtocolConfig::Rest(Box::default());
     assert!(rest.as_jsonrpc().is_none());
 
     let gql = ProtocolConfig::Graphql(GraphqlConfig::default());

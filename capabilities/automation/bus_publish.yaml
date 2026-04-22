@@ -1,0 +1,108 @@
+fulcrum: "1.0"
+name: bus_publish
+description: >
+  Agent Bus — publish a message to a topic on the shared SurrealDB-backed
+  cross-provider agent bus. Any agent can publish; subscribers pull via
+  bus_pull. Topic naming: bus.<scope>.<domain>.<intent>.
+  Scalar fields are bound as SurrealQL parameters ($topic, $from_agent, $kind,
+  $to_agent, $correlation_id, $signature, $ttl_s) via the HTTP /sql query
+  string, so SurrealQL injection is not possible through user input. The body
+  object is serialized as a JSON literal (serde-escaped, safe).
+  signature: optional ed25519 signature (base64) over the canonical
+  "{topic}|{from_agent}|{to_agent}|{kind}|{body_json}" bytes. Generators sign
+  with their private key (env ED25519_PRIVKEY); pull-side verifiers look up the
+  pubkey on bus_agent and check the signature.
+  [keywords: agent, bus, publish, message, topic, inter-agent, communication]
+
+schema:
+  input:
+    type: object
+    properties:
+      topic:
+        type: string
+        description: "Topic path, e.g. bus.global.discovery.announce"
+      kind:
+        type: string
+        description: "Message kind"
+        enum: [event, announce, request, response, error]
+        default: event
+      body:
+        type: object
+        description: "Arbitrary JSON payload (max 64 KB)"
+        default: {}
+      from_agent:
+        type: string
+        description: "Publishing agent id, e.g. claude-code:mbp"
+      to_agent:
+        type: string
+        description: "Optional DM target agent id. Omit for broadcast."
+      correlation_id:
+        type: string
+        description: "Optional id to link request/response pairs"
+      ttl_s:
+        type: integer
+        description: "Message TTL in seconds"
+        default: 86400
+      signature:
+        type: string
+        description: "Optional ed25519 signature (base64) over canonical bytes"
+    required:
+      - topic
+      - from_agent
+  output:
+    type: object
+    properties:
+      result:
+        type: array
+        description: "Inserted record(s) returned by SurrealDB"
+      status:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 5
+    config:
+      endpoint: http://127.0.0.1:8000/sql
+      method: POST
+      headers:
+        Surreal-Ns: agent_bus
+        Surreal-Db: prod
+        Accept: application/json
+        Authorization: "Basic cm9vdDpyb290"
+      # Scalar inputs travel as URL query parameters → SurrealDB exposes them
+      # as $topic, $from_agent, $kind, etc. inside the SQL body. The body
+      # object is the only field substituted as a JSON literal — serde_json
+      # escapes it safely and SurrealQL parses it as an object literal.
+      params:
+        topic: "{topic}"
+        from_agent: "{from_agent}"
+        kind: "{kind}"
+        to_agent: "{to_agent}"
+        correlation_id: "{correlation_id}"
+        ttl_s: "{ttl_s}"
+        signature: "{signature}"
+      body_content_type: text/plain
+      body: "INSERT INTO bus_msg { topic: $topic, from_agent: $from_agent, kind: $kind, to_agent: $to_agent, correlation_id: $correlation_id, ttl_s: type::int($ttl_s), signature: $signature, body: {body} };"
+
+auth:
+  required: false
+
+cache:
+  strategy: none
+
+metadata:
+  category: automation
+  tags:
+    - agent
+    - bus
+    - publish
+    - message
+    - inter-agent
+    - communication
+    - surrealdb
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: /tmp/c-agent-bus-design.md
