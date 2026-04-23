@@ -72,3 +72,11 @@ backends:
     command: "python -m experimental_server"
     description: "Experimental features"
     enabled: false
+
+capabilities:
+  enabled: true
+  name: "gateway"
+  directories:
+    - "./capabilities"
+  # Built-in examples include REST connectors such as weather, GitHub, Notion,
+  # and the HeyGen video-generation tools under capabilities/media/.

@@ -1,5 +1,6 @@
 //! Parameter substitution, response extraction, and cache-key helpers.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::Response;
 use serde_json::Value;
 
@@ -34,7 +35,26 @@ impl CapabilityExecutor {
             )));
         }
 
-        let is_xml = detect_xml_format(response.headers(), &config.response_format);
+        let response_format = config.response_format.to_ascii_lowercase();
+        if response_format == "binary" {
+            let mime_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| Error::Protocol(format!("Failed to read binary response: {e}")))?;
+            return Ok(serde_json::json!({
+                "data": STANDARD.encode(&bytes),
+                "mime_type": mime_type,
+                "size": bytes.len(),
+            }));
+        }
+
+        let is_xml = detect_xml_format(response.headers(), &response_format);
 
         let body: Value = if is_xml {
             let text = response

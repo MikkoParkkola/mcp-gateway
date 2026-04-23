@@ -1,0 +1,69 @@
+fulcrum: "1.0"
+name: video_agent_create
+description: >
+  Generate a HeyGen talking-avatar video from a plain-language prompt.
+  The Video Agent chooses avatar, voice, and layout automatically and returns
+  a video_id that can be polled with video_get.
+
+schema:
+  input:
+    type: object
+    properties:
+      prompt:
+        type: string
+        description: Natural-language prompt describing the video to generate
+        examples:
+          - "A presenter explaining our product launch in 30 seconds"
+    required:
+      - prompt
+  output:
+    type: object
+    properties:
+      data:
+        type: object
+        properties:
+          session_id:
+            type: string
+          status:
+            type: string
+          video_id:
+            type: string
+          created_at:
+            type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 60
+    config:
+      base_url: https://api.heygen.com
+      path: /v1/video-agent/create
+      method: POST
+      body:
+        prompt: "{prompt}"
+
+auth:
+  required: true
+  type: bearer
+  key: "env:HEYGEN_API_KEY"
+  description: >
+    Requires a HeyGen API key. Create one in the HeyGen API dashboard and set
+    HEYGEN_API_KEY before invoking this tool.
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: media
+  tags:
+    - heygen
+    - video
+    - avatar
+    - generation
+    - prompt
+  cost_category: paid
+  execution_time: medium
+  read_only: false
+  docs: https://developers.heygen.com/cli

@@ -1,0 +1,80 @@
+fulcrum: "1.0"
+name: video_create
+description: >
+  Generate a HeyGen avatar video with explicit avatar, script, and voice
+  control. Use when you need deterministic inputs instead of the Video Agent.
+
+schema:
+  input:
+    type: object
+    properties:
+      type:
+        type: string
+        description: HeyGen video type
+        enum: [avatar]
+        default: avatar
+      avatar_id:
+        type: string
+        description: Avatar ID to render
+      script:
+        type: string
+        description: Script for the avatar to speak
+      voice_id:
+        type: string
+        description: Voice ID to use for narration
+    required:
+      - avatar_id
+      - script
+      - voice_id
+  output:
+    type: object
+    properties:
+      data:
+        type: object
+        properties:
+          video_id:
+            type: string
+          status:
+            type: string
+          created_at:
+            type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 60
+    config:
+      base_url: https://api.heygen.com
+      path: /v1/video/create
+      method: POST
+      body:
+        type: "{type}"
+        avatar_id: "{avatar_id}"
+        script: "{script}"
+        voice_id: "{voice_id}"
+
+auth:
+  required: true
+  type: bearer
+  key: "env:HEYGEN_API_KEY"
+  description: >
+    Requires a HeyGen API key. Create one in the HeyGen API dashboard and set
+    HEYGEN_API_KEY before invoking this tool.
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: media
+  tags:
+    - heygen
+    - video
+    - avatar
+    - script
+    - voice
+  cost_category: paid
+  execution_time: medium
+  read_only: false
+  docs: https://developers.heygen.com/cli

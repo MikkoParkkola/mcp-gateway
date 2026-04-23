@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::capability::response_cache::ResponseCache;
+use axum::{Router, body::Body, http::header, response::Response as AxumResponse, routing::get};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[test]
 fn test_build_url() {
@@ -429,6 +431,42 @@ fn body_content_type_text_plain_uses_raw_string_body() {
         !sql.contains('{'),
         "All placeholders should be resolved: {sql}"
     );
+}
+
+#[tokio::test]
+async fn handle_response_binary_returns_base64_payload() {
+    async fn binary_handler() -> AxumResponse {
+        AxumResponse::builder()
+            .status(200)
+            .header(header::CONTENT_TYPE, "video/mp4")
+            .body(Body::from(vec![0_u8, 1, 2, 3, 4, 5]))
+            .unwrap()
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/video", get(binary_handler)))
+            .await
+            .unwrap();
+    });
+
+    let executor = CapabilityExecutor::new();
+    let response = executor
+        .client
+        .get(format!("http://{addr}/video"))
+        .send()
+        .await
+        .unwrap();
+    let config = RestConfig {
+        response_format: "binary".to_string(),
+        ..Default::default()
+    };
+
+    let body = executor.handle_response(response, &config).await.unwrap();
+    assert_eq!(body["mime_type"], "video/mp4");
+    assert_eq!(body["size"], 6);
+    assert_eq!(body["data"], STANDARD.encode([0_u8, 1, 2, 3, 4, 5]));
 }
 
 #[test]

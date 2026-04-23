@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Capabilities](https://img.shields.io/badge/REST%20capabilities-100%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
+[![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
 [![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_covered-brightgreen.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -246,7 +246,109 @@ Turn any REST API into a tool by dropping a YAML file (~30 seconds) or importing
 mcp-gateway cap import stripe-openapi.yaml --output capabilities/ --prefix stripe
 ```
 
-The gateway ships with **100+ built-in capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
+The gateway ships with **110+ built-in capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
+
+#### HeyGen video connector
+
+mcp-gateway now ships HeyGen video-generation capabilities in `capabilities/media/`:
+
+- `video_agent_create`
+- `video_create`
+- `video_get`
+- `video_download`
+- `voice_list`
+- `avatar_list`
+
+Setup:
+
+```bash
+export HEYGEN_API_KEY=your-api-key
+```
+
+Make sure your config loads the built-in capability directory:
+
+```yaml
+capabilities:
+  enabled: true
+  directories:
+    - ./capabilities
+```
+
+The request schemas ship hand-written for the initial connector, but HeyGen's CLI can act as the schema source of truth for future regeneration:
+
+```bash
+heygen video-agent create --request-schema
+heygen video create --request-schema
+```
+
+Map that JSON into each capability's `schema.input` block when refreshing the connector.
+
+Example end-to-end workflow:
+
+```bash
+# 1. Create the video with the Video Agent
+CREATE=$(curl -s http://127.0.0.1:39401/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":1,
+    "method":"tools/call",
+    "params":{
+      "name":"gateway_invoke",
+      "arguments":{
+        "backend":"capabilities",
+        "tool":"video_agent_create",
+        "args":{"prompt":"A presenter explaining our product launch in 30 seconds"}
+      }
+    }
+  }')
+
+VIDEO_ID=$(printf '%s' "$CREATE" | jq -r '.result.content[0].text | fromjson | (.data.video_id // .video_id)')
+
+# 2. Poll until completed and fetch the downloadable URL
+VIDEO_URL=$(while true; do
+  BODY=$(curl -s http://127.0.0.1:39401/mcp \
+    -H 'Content-Type: application/json' \
+    -d "{
+      \"jsonrpc\":\"2.0\",
+      \"id\":1,
+      \"method\":\"tools/call\",
+      \"params\":{
+        \"name\":\"gateway_invoke\",
+        \"arguments\":{
+          \"backend\":\"capabilities\",
+          \"tool\":\"video_get\",
+          \"args\":{\"video_id\":\"$VIDEO_ID\"}
+        }
+      }
+    }")
+  STATUS=$(printf '%s' "$BODY" | jq -r '.result.content[0].text | fromjson | (.data.status // .status)')
+  if [ "$STATUS" = "completed" ]; then
+    printf '%s' "$BODY" | jq -r '.result.content[0].text | fromjson | (.data.video_url // .video_url)'
+    break
+  fi
+  sleep 5
+done)
+
+# 3. Download and save a local MP4
+curl -s http://127.0.0.1:39401/mcp \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"jsonrpc\":\"2.0\",
+    \"id\":1,
+    \"method\":\"tools/call\",
+    \"params\":{
+      \"name\":\"gateway_invoke\",
+      \"arguments\":{
+        \"backend\":\"capabilities\",
+        \"tool\":\"video_download\",
+        \"args\":{\"video_url\":\"$VIDEO_URL\"}
+      }
+    }
+  }" \
+| jq -r '.result.content[0].text | fromjson | .data' \
+| base64 --decode > heygen-explainer.mp4
+```
 
 ### 3. Change Your MCP Stack Without Losing Your AI Session
 
@@ -301,7 +403,7 @@ Embedded web UI at `/ui` -- live status, searchable tools, server health, config
 
 | Feature | Description |
 |---------|-------------|
-| **Capability System** | REST API to MCP tool via YAML. Hot-reloaded. [100+ built-in](capabilities/). OpenAPI import supported. |
+| **Capability System** | REST API to MCP tool via YAML. Hot-reloaded. [110+ built-in](capabilities/). OpenAPI import supported. |
 | **Transform Chains** | Namespace, filter, rename, and response transforms. [Example](examples/transform-example.yaml). |
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-Discovery** | Discover MCP servers from existing client configs and running processes. |

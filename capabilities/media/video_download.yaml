@@ -1,0 +1,62 @@
+fulcrum: "1.0"
+name: video_download
+description: >
+  Download a completed HeyGen video from the video_url returned by video_get.
+  Returns base64-encoded MP4 bytes plus MIME type and size so callers can save
+  the file locally.
+
+schema:
+  input:
+    type: object
+    properties:
+      video_url:
+        type: string
+        description: Direct video URL returned by video_get
+        format: uri
+    required:
+      - video_url
+  output:
+    type: object
+    properties:
+      data:
+        type: string
+        description: Base64-encoded video bytes
+      mime_type:
+        type: string
+        description: MIME type returned by the download endpoint
+      size:
+        type: integer
+        description: Downloaded byte length
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 120
+    config:
+      endpoint: "{video_url}"
+      method: GET
+      response_format: binary
+
+auth:
+  required: false
+  type: none
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: media
+  tags:
+    - heygen
+    - video
+    - download
+    - binary
+    - mp4
+  cost_category: free
+  execution_time: medium
+  read_only: true
+  produces:
+    - fileData
+  docs: https://developers.heygen.com/cli

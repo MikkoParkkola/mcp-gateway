@@ -1,0 +1,76 @@
+fulcrum: "1.0"
+name: video_get
+description: >
+  Fetch status and metadata for a HeyGen video by ID. Use this to poll until
+  generation completes and the video_url becomes available.
+
+schema:
+  input:
+    type: object
+    properties:
+      video_id:
+        type: string
+        description: HeyGen video ID returned from video_agent_create or video_create
+    required:
+      - video_id
+  output:
+    type: object
+    properties:
+      data:
+        type: object
+        properties:
+          id:
+            type: string
+          title:
+            type: string
+          status:
+            type: string
+          video_url:
+            type: string
+          thumbnail_url:
+            type: string
+          duration:
+            type: number
+          created_at:
+            type: integer
+          completed_at:
+            type: integer
+          failure_code:
+            type: string
+          failure_message:
+            type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.heygen.com
+      path: /v1/video/{video_id}
+      method: GET
+
+auth:
+  required: true
+  type: bearer
+  key: "env:HEYGEN_API_KEY"
+  description: >
+    Requires a HeyGen API key. Create one in the HeyGen API dashboard and set
+    HEYGEN_API_KEY before invoking this tool.
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: media
+  tags:
+    - heygen
+    - video
+    - status
+    - polling
+    - metadata
+  cost_category: paid
+  execution_time: fast
+  read_only: true
+  docs: https://developers.heygen.com/cli

@@ -1,0 +1,51 @@
+fulcrum: "1.0"
+name: avatar_list
+description: List the avatars available from HeyGen.
+
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+    properties:
+      data:
+        type: object
+      avatars:
+        type: array
+        items:
+          type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.heygen.com
+      path: /v1/avatars
+      method: GET
+
+auth:
+  required: true
+  type: bearer
+  key: "env:HEYGEN_API_KEY"
+  description: >
+    Requires a HeyGen API key. Create one in the HeyGen API dashboard and set
+    HEYGEN_API_KEY before invoking this tool.
+
+cache:
+  strategy: exact
+  ttl: 300
+
+metadata:
+  category: media
+  tags:
+    - heygen
+    - avatar
+    - list
+    - media
+  cost_category: paid
+  execution_time: fast
+  read_only: true
+  docs: https://developers.heygen.com/cli

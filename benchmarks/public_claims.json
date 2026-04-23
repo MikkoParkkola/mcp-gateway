@@ -5,7 +5,7 @@
     "readme_benchmark": 16,
     "with_webhook_status": 17
   },
-  "capability_count": 106,
+  "capability_count": 112,
   "startup_benchmark": {
     "command": "hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'",
     "mean_ms": 8.0,
