@@ -207,7 +207,7 @@ pub(crate) fn build_playbook_tool() -> Tool {
             "required": ["name"]
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(write_non_idempotent_open_world_annotations()),
     }
 }
 
@@ -250,6 +250,18 @@ fn write_idempotent_annotations() -> ToolAnnotations {
         destructive_hint: Some(false),
         idempotent_hint: Some(true),
         open_world_hint: Some(false),
+    }
+}
+
+/// Annotations for write operations that are non-idempotent and open-world
+/// (e.g. running a playbook that may call external tools with side-effects).
+fn write_non_idempotent_open_world_annotations() -> ToolAnnotations {
+    ToolAnnotations {
+        title: None,
+        read_only_hint: Some(false),
+        destructive_hint: Some(false),
+        idempotent_hint: Some(false),
+        open_world_hint: Some(true),
     }
 }
 
@@ -324,7 +336,7 @@ pub(crate) fn build_set_profile_tool() -> Tool {
             "required": ["profile"]
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(write_idempotent_annotations()),
     }
 }
 
@@ -343,7 +355,7 @@ pub(crate) fn build_get_profile_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(read_only_annotations()),
     }
 }
 
@@ -369,7 +381,7 @@ pub(crate) fn build_list_disabled_capabilities_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(read_only_annotations()),
     }
 }
 
@@ -390,7 +402,7 @@ pub(crate) fn build_list_profiles_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(read_only_annotations()),
     }
 }
 
@@ -423,7 +435,7 @@ pub(crate) fn build_set_state_tool() -> Tool {
             "required": ["state"]
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(write_idempotent_annotations()),
     }
 }
 
@@ -592,7 +604,7 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
             "required": ["query"]
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(read_only_annotations()),
     }
 }
 
@@ -637,7 +649,7 @@ pub(crate) fn build_code_mode_execute_tool() -> Tool {
             }
         }),
         output_schema: None,
-        annotations: None,
+        annotations: Some(write_non_idempotent_open_world_annotations()),
     }
 }
 
