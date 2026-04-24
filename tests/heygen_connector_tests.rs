@@ -24,11 +24,13 @@ fn extract_json(result: &mcp_gateway::protocol::ToolsCallResult) -> Value {
 }
 
 fn pick_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
-    keys.iter().find_map(|key| value.get(key).and_then(Value::as_str))
+    keys.iter()
+        .find_map(|key| value.get(key).and_then(Value::as_str))
 }
 
 fn pick_u64(value: &Value, keys: &[&str]) -> Option<u64> {
-    keys.iter().find_map(|key| value.get(key).and_then(Value::as_u64))
+    keys.iter()
+        .find_map(|key| value.get(key).and_then(Value::as_u64))
 }
 
 #[tokio::test]
@@ -59,9 +61,8 @@ async fn video_agent_create_to_download_round_trip_with_real_api() {
         assert!(backend.has_capability(name), "missing capability {name}");
     }
 
-    let prompt = std::env::var("HEYGEN_TEST_PROMPT").unwrap_or_else(|_| {
-        "A presenter explaining our product launch in 30 seconds.".to_string()
-    });
+    let prompt = std::env::var("HEYGEN_TEST_PROMPT")
+        .unwrap_or_else(|_| "A presenter explaining our product launch in 30 seconds.".to_string());
 
     let create = backend
         .call_tool("video_agent_create", json!({ "prompt": prompt }))
@@ -110,7 +111,9 @@ async fn video_agent_create_to_download_round_trip_with_real_api() {
         )
         .expect("download data should be valid base64");
     assert!(
-        pick_string(&download_json, &["mime_type"]).unwrap_or_default().contains("mp4"),
+        pick_string(&download_json, &["mime_type"])
+            .unwrap_or_default()
+            .contains("mp4"),
         "expected mp4 mime type, got: {download_json:?}"
     );
     assert_eq!(
