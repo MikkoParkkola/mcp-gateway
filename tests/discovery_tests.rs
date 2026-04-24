@@ -137,7 +137,7 @@ async fn test_deduplication() {
 
 // ── Shadow detection unit tests ───────────────────────────────────────────────
 
-/// Build a minimal DiscoveredServer with the given name.
+/// Build a minimal `DiscoveredServer` with the given name.
 fn make_discovered(name: &str) -> mcp_gateway::discovery::DiscoveredServer {
     use mcp_gateway::config::TransportConfig;
     use mcp_gateway::discovery::{DiscoveredServer, ServerMetadata};
@@ -158,8 +158,10 @@ fn make_discovered(name: &str) -> mcp_gateway::discovery::DiscoveredServer {
 #[test]
 fn shadow_filter_excludes_registered_servers() {
     // GIVEN: a set of registered backend names
-    let registered: std::collections::HashSet<String> =
-        ["tavily", "github"].iter().map(|s| s.to_string()).collect();
+    let registered: std::collections::HashSet<String> = ["tavily", "github"]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     // AND: discovered servers that overlap with registered ones
     let discovered = vec![
@@ -199,8 +201,10 @@ fn shadow_filter_returns_all_when_no_registered() {
 #[test]
 fn shadow_filter_returns_empty_when_all_registered() {
     // GIVEN: all discovered servers are already registered
-    let registered: std::collections::HashSet<String> =
-        ["alpha", "beta"].iter().map(|s| s.to_string()).collect();
+    let registered: std::collections::HashSet<String> = ["alpha", "beta"]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     let discovered = vec![make_discovered("alpha"), make_discovered("beta")];
 
@@ -217,8 +221,10 @@ fn shadow_filter_returns_empty_when_all_registered() {
 #[test]
 fn shadow_filter_is_case_sensitive() {
     // GIVEN: registered name "Tavily" (different case)
-    let registered: std::collections::HashSet<String> =
-        ["Tavily"].iter().map(|s| s.to_string()).collect();
+    let registered: std::collections::HashSet<String> = ["Tavily"]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     let discovered = vec![make_discovered("tavily")];
 
