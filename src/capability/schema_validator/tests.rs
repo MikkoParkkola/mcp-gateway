@@ -45,6 +45,28 @@ fn required_param_present_passes() {
     assert!(result.is_valid());
 }
 
+#[test]
+fn validate_output_reuses_object_schema_rules() {
+    let schema = schema_with_props(
+        json!({ "status": { "type": "string" }, "count": { "type": "integer" } }),
+        &["status", "count"],
+    );
+    let result = validate_output(&json!({ "status": "ok", "count": "2" }), &schema);
+
+    assert!(result.is_valid(), "violations: {:?}", result.violations);
+    assert_eq!(result.coerced["count"], json!(2));
+}
+
+#[test]
+fn output_error_heading_matches_result_validation() {
+    let schema = schema_with_props(json!({ "status": { "type": "string" } }), &["status"]);
+    let result = validate_output(&json!({}), &schema);
+    let message = result.format_output_error(&schema);
+
+    assert!(message.starts_with("Tool result validation failed:"));
+    assert!(message.contains("status"));
+}
+
 // ── Unknown parameters ──────────────────────────────────────────────────
 
 #[test]

@@ -57,7 +57,9 @@ pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
-pub use schema_validator::{SchemaValidationResult, ValidationViolation, validate_arguments};
+pub use schema_validator::{
+    SchemaValidationResult, ValidationViolation, validate_arguments, validate_output,
+};
 pub use validator::{Issue, IssueSeverity, validate_capabilities, validate_capability_definition};
 pub use watcher::CapabilityWatcher;
 

@@ -1,4 +1,4 @@
-//! Strict JSON Schema validator for capability tool arguments.
+//! Strict JSON Schema validator for capability tool arguments and results.
 //!
 //! Validates LLM-supplied arguments against the `schema.input` defined in a
 //! capability YAML before any HTTP request is made.  The goal is to produce
@@ -64,7 +64,18 @@ impl SchemaValidationResult {
     /// the call, including the list of valid parameters from the schema.
     #[must_use]
     pub fn format_error(&self, schema: &Value) -> String {
-        let mut out = String::from("Tool call validation failed:\n\n");
+        self.format_error_with_heading(schema, "Tool call validation failed:")
+    }
+
+    /// Format violations into an LLM-friendly error string for output validation.
+    #[must_use]
+    pub fn format_output_error(&self, schema: &Value) -> String {
+        self.format_error_with_heading(schema, "Tool result validation failed:")
+    }
+
+    fn format_error_with_heading(&self, schema: &Value, heading: &str) -> String {
+        let mut out = String::from(heading);
+        out.push_str("\n\n");
 
         for v in &self.violations {
             if v.param.is_empty() {
@@ -210,6 +221,16 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
         violations,
         coerced,
     }
+}
+
+/// Validate `result` against `output_schema`.
+///
+/// This uses the same bounded JSON Schema subset as [`validate_arguments`]:
+/// required properties, unknown properties, basic type checks/coercions, enums,
+/// and simple numeric/string constraints.
+#[must_use]
+pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidationResult {
+    validate_arguments(result, output_schema)
 }
 
 // ── Per-property validation ───────────────────────────────────────────────────
