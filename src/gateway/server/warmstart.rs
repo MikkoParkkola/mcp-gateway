@@ -29,17 +29,18 @@ pub(super) fn build_warm_start_list(
 }
 
 pub(super) fn spawn_warm_start_task(
-    backends: Arc<BackendRegistry>,
+    backends: &Arc<BackendRegistry>,
     warm_start_list: Vec<String>,
     mode: WarmStartMode,
 ) {
-    tokio::spawn(async move {
-        for name in warm_start_list {
+    for name in warm_start_list {
+        let backends = Arc::clone(backends);
+        tokio::spawn(async move {
             let Some(backend) = backends.get(&name) else {
                 if matches!(mode, WarmStartMode::Http) {
                     warn!(backend = %name, "Backend not found for warm-start");
                 }
-                continue;
+                return;
             };
 
             match backend.start().await {
@@ -63,8 +64,8 @@ pub(super) fn spawn_warm_start_task(
                 }
                 Err(e) => warn!(backend = %name, error = %e, "Warm-start failed"),
             }
-        }
-    });
+        });
+    }
 }
 
 fn resolve_warm_start_names(

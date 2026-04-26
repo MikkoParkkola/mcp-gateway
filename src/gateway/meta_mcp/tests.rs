@@ -362,6 +362,156 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
     );
 }
 
+struct SearchTestTransport {
+    response: crate::protocol::JsonRpcResponse,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for SearchTestTransport {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        assert_eq!(method, "tools/list");
+        Ok(self.response.clone())
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+fn search_test_tool(name: &str) -> crate::protocol::Tool {
+    crate::protocol::Tool {
+        name: name.to_string(),
+        title: None,
+        description: Some(format!("{name} test tool")),
+        input_schema: json!({"type": "object"}),
+        output_schema: None,
+        annotations: None,
+    }
+}
+
+#[tokio::test]
+async fn gateway_search_includes_stale_non_empty_backend_cache() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::protocol::{JsonRpcResponse, ToolsListResult};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "stale_backend",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::ZERO,
+    ));
+    let response = JsonRpcResponse::success_serialized(
+        RequestId::Number(1),
+        ToolsListResult {
+            tools: vec![search_test_tool("search_flights")],
+            next_cursor: None,
+        },
+    );
+    let transport = Arc::new(SearchTestTransport { response });
+    let transport_dyn: Arc<dyn Transport> = transport;
+    backend.set_transport_for_test(transport_dyn);
+
+    backend.get_tools_shared().await.unwrap();
+    assert_eq!(backend.cached_tools_count(), 1);
+    assert!(
+        !backend.has_cached_tools(),
+        "zero TTL should make the cache stale immediately"
+    );
+
+    registry.register(backend);
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+
+    let result = meta
+        .code_mode_search(
+            &json!({
+                "query": "search_flights",
+                "include_schema": false
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result["total"], 1);
+    assert_eq!(result["matches"][0]["tool"], "stale_backend:search_flights");
+
+    let by_server_glob = meta
+        .code_mode_search(
+            &json!({
+                "query": "stale_backend:*",
+                "include_schema": false
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(by_server_glob["total"], 1);
+    assert_eq!(
+        by_server_glob["matches"][0]["tool"],
+        "stale_backend:search_flights"
+    );
+}
+
+#[tokio::test]
+async fn gateway_search_server_qualified_query_fills_empty_backend_cache() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::protocol::{JsonRpcResponse, ToolsListResult};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "trvl",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let response = JsonRpcResponse::success_serialized(
+        RequestId::Number(1),
+        ToolsListResult {
+            tools: vec![search_test_tool("search_flights")],
+            next_cursor: None,
+        },
+    );
+    let transport = Arc::new(SearchTestTransport { response });
+    let transport_dyn: Arc<dyn Transport> = transport;
+    backend.set_transport_for_test(transport_dyn);
+
+    assert_eq!(backend.cached_tools_count(), 0);
+    registry.register(backend);
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+
+    let result = meta
+        .code_mode_search(
+            &json!({
+                "query": "trvl:*",
+                "include_schema": false
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result["total"], 1);
+    assert_eq!(result["matches"][0]["tool"], "trvl:search_flights");
+}
+
 #[tokio::test]
 async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
     // GIVEN: code mode disabled, calling gateway_execute with no tool/chain

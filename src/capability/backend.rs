@@ -219,11 +219,12 @@ impl CapabilityBackend {
         }
 
         // Upsert each capability into the indexed store.
-        {
-            let mut caps = self.capabilities.write();
-            for cap in loaded {
+        for cap in loaded {
+            {
+                let mut caps = self.capabilities.write();
                 caps.upsert(cap);
             }
+            tokio::task::yield_now().await;
         }
 
         info!(backend = %self.name, count = count, path = path, "Loaded capabilities");

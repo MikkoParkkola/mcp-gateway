@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use reqwest::Client;
 use serde_json::Value;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{Mutex, Semaphore, watch};
 use tracing::{debug, info, warn};
 
 use crate::config::{BackendConfig, TransportConfig};
@@ -18,7 +18,7 @@ use crate::failsafe::{Failsafe, with_retry};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::protocol::{
     JsonRpcResponse, Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
-    ResourcesTemplatesListResult, Tool, ToolsListResult,
+    ResourcesTemplatesListResult, Tool, ToolAnnotations, ToolsListResult,
 };
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
@@ -161,6 +161,9 @@ pub struct Backend {
     config: BackendConfig,
     /// Transport
     transport: RwLock<Option<Arc<dyn Transport>>>,
+    /// Serializes backend startup so concurrent warm-start/client requests do
+    /// not spawn duplicate stdio processes for the same backend.
+    start_lock: Mutex<()>,
     /// Failsafe mechanisms
     failsafe: Failsafe,
     /// Cached tools
@@ -194,6 +197,7 @@ impl Backend {
             name: name.to_string(),
             config,
             transport: RwLock::new(None),
+            start_lock: Mutex::new(()),
             failsafe: Failsafe::new(name, failsafe_config),
             tools_cache: CachedMetadata::new(),
             resources_cache: CachedMetadata::new(),
@@ -229,6 +233,15 @@ impl Backend {
             }
         }
 
+        let _start_guard = self.start_lock.lock().await;
+
+        {
+            let transport = self.transport.read();
+            if transport.as_ref().is_some_and(|t| t.is_connected()) {
+                return Ok(());
+            }
+        }
+
         // Start transport
         self.start().await
     }
@@ -251,6 +264,7 @@ impl Backend {
                     command,
                     self.config.env.clone(),
                     cwd.clone(),
+                    self.config.timeout,
                     protocol_version.clone(),
                 );
                 transport.start().await?;
@@ -436,6 +450,9 @@ impl Backend {
                 self.ensure_started().await?;
 
                 let response = self.request_internal(method, None).await?;
+                if let Some(error) = response.error {
+                    return Err(Error::json_rpc(error.code, error.message));
+                }
                 let items = if let Some(result) = response.result {
                     parse(result)?
                 } else {
@@ -454,7 +471,9 @@ impl Backend {
     /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
-            Ok(serde_json::from_value::<ToolsListResult>(result)?.tools)
+            let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
+            normalize_tool_annotations(&self.name, &mut tools);
+            Ok(tools)
         })
         .await
     }
@@ -890,6 +909,114 @@ impl Default for BackendRegistry {
     }
 }
 
+pub(crate) fn normalize_tool_annotations(server: &str, tools: &mut [Tool]) {
+    for tool in tools {
+        let inferred_read_only = infer_read_only_tool(&tool.name);
+        let annotations = tool
+            .annotations
+            .get_or_insert_with(ToolAnnotations::default);
+        let read_only = annotations.read_only_hint.unwrap_or(inferred_read_only);
+        let destructive = annotations
+            .destructive_hint
+            .unwrap_or_else(|| infer_destructive_tool(&tool.name, read_only));
+
+        annotations.read_only_hint = Some(read_only);
+        annotations.destructive_hint = Some(destructive);
+        annotations.idempotent_hint = Some(
+            annotations
+                .idempotent_hint
+                .unwrap_or_else(|| infer_idempotent_tool(&tool.name, read_only, destructive)),
+        );
+        annotations.open_world_hint = Some(
+            annotations
+                .open_world_hint
+                .unwrap_or_else(|| infer_open_world_tool(server, &tool.name)),
+        );
+    }
+}
+
+fn infer_read_only_tool(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let read_prefixes = [
+        "analyze",
+        "auth_lookup",
+        "benchmark",
+        "calculate",
+        "check",
+        "classify",
+        "count",
+        "describe",
+        "detect",
+        "estimate",
+        "fetch",
+        "find",
+        "fingerprint",
+        "get",
+        "health",
+        "info",
+        "list",
+        "lookup",
+        "preview",
+        "query",
+        "read",
+        "recall",
+        "search",
+        "status",
+        "suggest",
+        "validate",
+        "verify",
+    ];
+    read_prefixes
+        .iter()
+        .any(|prefix| name == *prefix || name.starts_with(&format!("{prefix}_")))
+}
+
+fn infer_destructive_tool(name: &str, read_only: bool) -> bool {
+    if read_only {
+        return false;
+    }
+
+    let name = name.to_ascii_lowercase();
+    let destructive_words = [
+        "archive", "bash", "clear", "delete", "forget", "kill", "login", "post", "remove", "run",
+        "send", "submit", "type", "write",
+    ];
+    destructive_words.iter().any(|word| name.contains(word))
+}
+
+fn infer_idempotent_tool(name: &str, read_only: bool, destructive: bool) -> bool {
+    if read_only {
+        return true;
+    }
+    if destructive {
+        return false;
+    }
+
+    let name = name.to_ascii_lowercase();
+    name.starts_with("set_")
+        || name.starts_with("clear_")
+        || name.starts_with("focus_")
+        || name.starts_with("connect")
+}
+
+fn infer_open_world_tool(server: &str, name: &str) -> bool {
+    let server = server.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+
+    if matches!(
+        server.as_str(),
+        "hebb" | "metacognition" | "pithy" | "cached-grep" | "haiku-file-reader"
+    ) {
+        return false;
+    }
+
+    if name.contains("validate") || name.contains("fingerprint") || name.contains("auth_lookup") {
+        return false;
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -952,6 +1079,46 @@ mod tests {
             output_schema: None,
             annotations: None,
         }
+    }
+
+    #[test]
+    fn normalize_tool_annotations_fills_missing_hints() {
+        let mut tools = vec![sample_tool("search_messages"), sample_tool("send_message")];
+
+        normalize_tool_annotations("beeper", &mut tools);
+
+        let search = tools[0].annotations.as_ref().unwrap();
+        assert_eq!(search.read_only_hint, Some(true));
+        assert_eq!(search.destructive_hint, Some(false));
+        assert_eq!(search.idempotent_hint, Some(true));
+        assert_eq!(search.open_world_hint, Some(true));
+
+        let send = tools[1].annotations.as_ref().unwrap();
+        assert_eq!(send.read_only_hint, Some(false));
+        assert_eq!(send.destructive_hint, Some(true));
+        assert_eq!(send.idempotent_hint, Some(false));
+        assert_eq!(send.open_world_hint, Some(true));
+    }
+
+    #[test]
+    fn normalize_tool_annotations_preserves_existing_true_hints_and_adds_false_hints() {
+        let mut tool = sample_tool("recall");
+        tool.annotations = Some(ToolAnnotations {
+            read_only_hint: Some(true),
+            destructive_hint: None,
+            idempotent_hint: None,
+            open_world_hint: None,
+            title: None,
+        });
+        let mut tools = vec![tool];
+
+        normalize_tool_annotations("hebb", &mut tools);
+
+        let annotations = tools[0].annotations.as_ref().unwrap();
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.destructive_hint, Some(false));
+        assert_eq!(annotations.idempotent_hint, Some(true));
+        assert_eq!(annotations.open_world_hint, Some(false));
     }
 
     #[test]
@@ -1062,5 +1229,25 @@ mod tests {
             backend.get_cached_tool("echo").map(|tool| tool.name),
             Some("echo".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn get_tools_does_not_cache_json_rpc_error_response() {
+        let backend = Arc::new(Backend::new(
+            "test",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        let response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "backend down");
+        let transport = Arc::new(MockTransport::new(response, Duration::from_millis(0)));
+        let transport_dyn: Arc<dyn Transport> = transport.clone();
+        *backend.transport.write() = Some(transport_dyn);
+
+        let result = backend.get_tools().await;
+
+        assert!(result.is_err());
+        assert!(!backend.has_cached_tools());
+        assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
     }
 }

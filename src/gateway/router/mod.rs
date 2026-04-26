@@ -21,6 +21,7 @@ use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 
+mod authorization;
 mod backend_handlers;
 mod handlers;
 pub(crate) mod helpers;

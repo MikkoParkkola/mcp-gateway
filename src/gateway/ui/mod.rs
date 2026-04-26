@@ -41,11 +41,11 @@ fn uptime_secs() -> u64 {
 
 /// Returns `true` when the caller has admin-level access.
 ///
-/// When auth is disabled the middleware sets name="anonymous" — treat
-/// that as admin (no point restricting with no auth configured).
-/// Only "public" (unauthenticated with auth enabled) is restricted.
+/// Admin access is explicit. The auth middleware marks the bearer token and
+/// auth-disabled anonymous client as admin; API keys must opt in with
+/// `admin: true`.
 fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
-    client.is_some_and(|c| c.name != "public")
+    client.is_some_and(|c| c.admin)
 }
 
 /// Build the authenticated `/ui/api/*` and `/dashboard` sub-router.

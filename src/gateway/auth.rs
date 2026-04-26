@@ -19,6 +19,7 @@ use governor::{
 use tracing::{debug, warn};
 
 use super::middleware::{bearer_unauthorized_response, rate_limited_response};
+use crate::Result;
 use crate::config::AuthConfig;
 use crate::key_server::KeyServer;
 
@@ -55,12 +56,18 @@ pub struct ResolvedApiKey {
     pub allowed_tools: Option<Vec<String>>,
     /// Denied tools (blocklist if Some)
     pub denied_tools: Option<Vec<String>>,
+    /// Admin-level UI and management tool access.
+    pub admin: bool,
 }
 
 impl ResolvedAuthConfig {
-    /// Create resolved config from `AuthConfig`
-    pub fn from_config(config: &AuthConfig) -> Self {
-        let bearer_token = config.resolve_bearer_token();
+    /// Create resolved config from `AuthConfig`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any `env:VAR_NAME` secret reference cannot be resolved.
+    pub fn try_from_config(config: &AuthConfig) -> Result<Self> {
+        let bearer_token = config.resolve_bearer_token()?;
 
         // Log if auto-generated token
         if config.bearer_token.as_deref() == Some("auto")
@@ -72,15 +79,18 @@ impl ResolvedAuthConfig {
         let api_keys: Vec<ResolvedApiKey> = config
             .api_keys
             .iter()
-            .map(|k| ResolvedApiKey {
-                key: k.resolve_key(),
-                name: k.name.clone(),
-                rate_limit: k.rate_limit,
-                backends: k.backends.clone(),
-                allowed_tools: k.allowed_tools.clone(),
-                denied_tools: k.denied_tools.clone(),
+            .map(|k| {
+                Ok(ResolvedApiKey {
+                    key: k.resolve_key()?,
+                    name: k.name.clone(),
+                    rate_limit: k.rate_limit,
+                    backends: k.backends.clone(),
+                    allowed_tools: k.allowed_tools.clone(),
+                    denied_tools: k.denied_tools.clone(),
+                    admin: k.admin,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // Pre-create rate limiters for clients with rate limits
         let rate_limiters = DashMap::new();
@@ -93,13 +103,22 @@ impl ResolvedAuthConfig {
             }
         }
 
-        Self {
+        Ok(Self {
             enabled: config.enabled,
             bearer_token,
             api_keys,
             public_paths: config.public_paths.clone(),
             rate_limiters,
-        }
+        })
+    }
+
+    /// Create resolved config from `AuthConfig`.
+    ///
+    /// Panics if a configured environment-backed secret is missing. Runtime startup
+    /// paths should prefer [`Self::try_from_config`] so the error is returned.
+    #[must_use]
+    pub fn from_config(config: &AuthConfig) -> Self {
+        Self::try_from_config(config).expect("auth config secret references should resolve")
     }
 
     /// Check if a path is public (bypasses auth)
@@ -121,6 +140,7 @@ impl ResolvedAuthConfig {
                 backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
+                admin: true,
             });
         }
 
@@ -133,6 +153,7 @@ impl ResolvedAuthConfig {
                     backends: key.backends.clone(),
                     allowed_tools: key.allowed_tools.clone(),
                     denied_tools: key.denied_tools.clone(),
+                    admin: key.admin,
                 });
             }
         }
@@ -165,6 +186,8 @@ pub struct AuthenticatedClient {
     pub allowed_tools: Option<Vec<String>>,
     /// Denied tools (blocklist if Some). Supports glob patterns.
     pub denied_tools: Option<Vec<String>>,
+    /// Admin-level UI and management tool access.
+    pub admin: bool,
 }
 
 impl AuthenticatedClient {
@@ -182,7 +205,7 @@ impl AuthenticatedClient {
     /// - If both are None, fall back to global policy (caller's responsibility).
     ///
     /// Returns `Ok(())` if allowed, `Err(message)` if denied.
-    pub fn check_tool_scope(&self, server: &str, tool: &str) -> Result<(), String> {
+    pub fn check_tool_scope(&self, server: &str, tool: &str) -> std::result::Result<(), String> {
         let qualified = format!("{server}:{tool}");
 
         // If allowlist is set, ONLY tools in the list are permitted
@@ -253,6 +276,7 @@ pub async fn auth_middleware(
             backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
+            admin: true,
         });
         return next.run(request).await;
     }
@@ -268,6 +292,7 @@ pub async fn auth_middleware(
             backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
+            admin: false,
         });
         return next.run(request).await;
     }
@@ -370,6 +395,7 @@ mod tests {
                     backends: vec!["tavily".to_string()],
                     allowed_tools: None,
                     denied_tools: None,
+                    admin: false,
                 },
                 ResolvedApiKey {
                     key: "key2".to_string(),
@@ -378,6 +404,7 @@ mod tests {
                     backends: vec![],
                     allowed_tools: None,
                     denied_tools: None,
+                    admin: false,
                 },
             ],
             public_paths: vec![],
@@ -428,6 +455,7 @@ mod tests {
             backends: vec!["tavily".to_string(), "brave".to_string()],
             allowed_tools: None,
             denied_tools: None,
+            admin: false,
         };
 
         let client_unrestricted = AuthenticatedClient {
@@ -436,6 +464,7 @@ mod tests {
             backends: vec![], // empty = all access
             allowed_tools: None,
             denied_tools: None,
+            admin: false,
         };
 
         let client_wildcard = AuthenticatedClient {
@@ -444,6 +473,7 @@ mod tests {
             backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
+            admin: false,
         };
 
         // Restricted client
@@ -468,6 +498,7 @@ mod tests {
             backends: vec![],
             allowed_tools: None,
             denied_tools: None,
+            admin: false,
         };
 
         // No restrictions = all tools allowed (fallback to global policy)
@@ -483,6 +514,7 @@ mod tests {
             backends: vec![],
             allowed_tools: Some(vec!["search_web".to_string(), "read_file".to_string()]),
             denied_tools: None,
+            admin: false,
         };
 
         // Tools in allowlist
@@ -502,6 +534,7 @@ mod tests {
             backends: vec![],
             allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
             denied_tools: None,
+            admin: false,
         };
 
         // Tools matching glob patterns
@@ -527,6 +560,7 @@ mod tests {
             backends: vec![],
             allowed_tools: None,
             denied_tools: Some(vec!["write_file".to_string(), "delete_file".to_string()]),
+            admin: false,
         };
 
         // Tools in denylist
@@ -546,6 +580,7 @@ mod tests {
             backends: vec![],
             allowed_tools: None,
             denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
+            admin: false,
         };
 
         // Tools matching deny glob patterns
@@ -578,6 +613,7 @@ mod tests {
                 "search_*".to_string(),
             ]),
             denied_tools: None,
+            admin: false,
         };
 
         // Qualified match: only filesystem:read_file allowed, not other servers
@@ -599,6 +635,7 @@ mod tests {
                 "filesystem_write".to_string(),
                 "filesystem_delete".to_string(),
             ]),
+            admin: false,
         };
 
         // In allowlist and NOT in denylist
@@ -633,6 +670,7 @@ mod tests {
             backends: vec![],
             allowed_tools: Some(vec!["search_*".to_string()]),
             denied_tools: None,
+            admin: false,
         };
 
         let err = client_allow
@@ -649,6 +687,7 @@ mod tests {
             backends: vec![],
             allowed_tools: None,
             denied_tools: Some(vec!["exec_*".to_string()]),
+            admin: false,
         };
 
         let err = client_deny

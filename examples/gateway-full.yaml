@@ -28,11 +28,13 @@ auth:
   # bearer_token: "auto"
 
   # API keys for multi-client access with per-client restrictions.
+  # `env:VAR_NAME` secret references must exist at startup.
   # api_keys:
   #   - key: "env:CLIENT_A_KEY"
   #     name: "Client A"
   #     rate_limit: 100           # Requests per minute (0 = unlimited)
   #     backends: ["tavily"]      # Restrict to specific backends (empty = all)
+  #     admin: false              # Set true only for UI/config management keys
   #   - key: "my-literal-key"
   #     name: "Client B"
   #     backends: []              # All backends

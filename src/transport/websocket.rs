@@ -35,7 +35,9 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use super::Transport;
-use crate::protocol::{JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId};
+use crate::protocol::{
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+};
 use crate::{Error, Result};
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -79,11 +81,11 @@ impl McpFrame {
             McpFrame::Request(req) => serde_json::to_string(req)?,
             McpFrame::Response(res) => serde_json::to_string(res)?,
             McpFrame::Notification { method, params } => {
-                serde_json::to_string(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": params,
-                }))?
+                serde_json::to_string(&JsonRpcNotification {
+                    jsonrpc: "2.0".to_string(),
+                    method: method.clone(),
+                    params: params.clone(),
+                })?
             }
             McpFrame::Ping => r#"{"type":"ping"}"#.to_string(),
             McpFrame::Pong => r#"{"type":"pong"}"#.to_string(),

@@ -5,11 +5,13 @@ use super::helpers::{
 };
 use super::{AppState, create_router};
 use crate::backend::{Backend, BackendRegistry};
-use crate::config::{AuthConfig, BackendConfig, FailsafeConfig, StreamingConfig};
+use crate::config::{
+    ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig, StreamingConfig, SurfacedToolConfig,
+};
 use crate::gateway::test_helpers::MetaMcp;
 use crate::gateway::{
-    AgentAuthState, AgentRegistry, GatewayKeyPair, NotificationMultiplexer, ProxyManager,
-    ResolvedAuthConfig,
+    AgentAuthState, AgentIdentity as OAuthAgentIdentity, AgentRegistry, GatewayKeyPair,
+    NotificationMultiplexer, ProxyManager, ResolvedAuthConfig,
 };
 use crate::mtls::{MtlsConfig, MtlsPolicy};
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -25,6 +27,8 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tower::ServiceExt;
+
+use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
 fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Arc<AppState> {
     let backends = Arc::new(BackendRegistry::new());
@@ -64,6 +68,43 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
 
 fn test_router_app_state() -> Arc<AppState> {
     test_router_app_state_with_streaming(StreamingConfig::default())
+}
+
+fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
+    let backends = Arc::new(BackendRegistry::new());
+    let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
+    let streaming_config = StreamingConfig::default();
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        streaming_config.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let agent_auth = AgentAuthState::new(true, Arc::new(AgentRegistry::new()));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
+
+    Arc::new(AppState {
+        backends,
+        meta_mcp,
+        meta_mcp_enabled: true,
+        multiplexer,
+        proxy_manager,
+        streaming_config,
+        auth_config,
+        key_server: None,
+        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+        sanitize_input: false,
+        ssrf_protection: false,
+        inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+        agent_auth,
+        gateway_key_pair,
+        capability_dirs: Vec::new(),
+        config_path: None,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
+    })
 }
 
 fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
@@ -107,6 +148,60 @@ fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
     let state = test_router_app_state();
     state.backends.register(backend);
     state
+}
+
+fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
+    let backends = Arc::new(BackendRegistry::new());
+    let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
+    let streaming_config = StreamingConfig::default();
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        streaming_config.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(auth));
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
+
+    Arc::new(AppState {
+        backends,
+        meta_mcp,
+        meta_mcp_enabled: true,
+        multiplexer,
+        proxy_manager,
+        streaming_config,
+        auth_config,
+        key_server: None,
+        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+        sanitize_input: false,
+        ssrf_protection: false,
+        inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+        agent_auth,
+        gateway_key_pair,
+        capability_dirs: Vec::new(),
+        config_path: None,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
+    })
+}
+
+fn scoped_auth_config(admin: bool) -> AuthConfig {
+    AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![ApiKeyConfig {
+            key: "scoped-key".to_string(),
+            name: "scoped-client".to_string(),
+            rate_limit: 0,
+            backends: vec!["demo".to_string()],
+            allowed_tools: Some(vec!["allowed_tool".to_string()]),
+            denied_tools: None,
+            admin,
+        }],
+        public_paths: vec!["/health".to_string()],
+    }
 }
 
 struct RouterNotificationTestTransport {
@@ -725,6 +820,188 @@ async fn backend_handler_notification_failure_surfaces_error() {
         transport.notify_methods.lock().unwrap().as_slice(),
         ["notifications/initialized"]
     );
+}
+
+#[tokio::test]
+async fn backend_handler_tools_call_enforces_api_key_tool_scope() {
+    let backend = Arc::new(Backend::new(
+        "demo",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport = Arc::new(RouterNotificationTestTransport::success());
+    let transport_dyn: Arc<dyn Transport> = transport.clone();
+    backend.set_transport_for_test(transport_dyn);
+
+    let state = test_router_app_state_with_auth(&scoped_auth_config(false));
+    state.backends.register(backend);
+    let router = create_router(state);
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {
+                    "name": "blocked_tool",
+                    "arguments": {}
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], -32600);
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("allowlist"))
+    );
+    assert!(transport.request_methods.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn meta_mcp_gateway_execute_enforces_api_key_tool_scope() {
+    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_execute",
+                    "arguments": {
+                        "tool": "demo:blocked_tool",
+                        "arguments": {}
+                    }
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], -32600);
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("allowlist"))
+    );
+}
+
+#[tokio::test]
+async fn meta_mcp_management_tool_requires_admin_client() {
+    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_reload_config",
+                    "arguments": {}
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("admin access"))
+    );
+}
+
+#[test]
+fn authorize_tool_target_enforces_agent_scope() {
+    let state = test_router_app_state();
+    let identity = OAuthAgentIdentity {
+        client_id: "agent-a".to_string(),
+        agent_name: "Agent A".to_string(),
+        scopes: vec![
+            crate::gateway::oauth::Scope::parse("tools:demo:allowed_tool:execute").unwrap(),
+        ],
+        raw_scopes: vec!["tools:demo:allowed_tool:execute".to_string()],
+    };
+    let args = json!({});
+
+    let result = authorize_tool_target(
+        state.as_ref(),
+        None,
+        Some(&identity),
+        None,
+        ToolTarget {
+            server: "demo",
+            tool: "blocked_tool",
+            arguments: &args,
+        },
+    );
+
+    assert!(
+        result.is_ok(),
+        "agent auth disabled should not enforce scopes"
+    );
+
+    let enabled_state = test_router_app_state_with_agent_auth_enabled();
+    let result = authorize_tool_target(
+        enabled_state.as_ref(),
+        None,
+        Some(&identity),
+        None,
+        ToolTarget {
+            server: "demo",
+            tool: "blocked_tool",
+            arguments: &args,
+        },
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn surfaced_tool_calls_resolve_to_backend_authorization_target() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(vec![
+        SurfacedToolConfig {
+            server: "demo".to_string(),
+            tool: "pinned_tool".to_string(),
+        },
+    ]);
+
+    let targets = backend_tool_targets_for_call(&meta, "pinned_tool", &json!({"x": 1}));
+
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].server, "demo");
+    assert_eq!(targets[0].tool, "pinned_tool");
 }
 
 #[tokio::test]

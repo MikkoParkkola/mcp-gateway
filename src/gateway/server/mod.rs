@@ -102,6 +102,8 @@ impl Gateway {
         config: Config,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        config.validate()?;
+
         let backends = Arc::new(BackendRegistry::new());
 
         // Register backends
@@ -330,50 +332,60 @@ impl Gateway {
             self.config.webhooks.clone(),
         )));
 
-        // Load capabilities if enabled
+        // Load capabilities if enabled. Capability directories can be large;
+        // when webhook route construction does not depend on them, populate the
+        // backend in the background so health/MCP endpoints bind promptly.
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
             let executor = Arc::new(CapabilityExecutor::new());
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
             ));
+            meta_mcp.set_capabilities(Arc::clone(&cap_backend));
 
-            let mut total_caps = 0;
-            for dir in &self.config.capabilities.directories {
-                match cap_backend.load_from_directory(dir).await {
-                    Ok(count) => {
-                        total_caps += count;
-                        debug!(directory = %dir, count = count, "Loaded capabilities");
+            let capability_dirs = self.config.capabilities.directories.clone();
+            let capability_name = self.config.capabilities.name.clone();
 
-                        // Register webhooks from capabilities
-                        if self.config.webhooks.enabled {
-                            for cap in cap_backend.list_capabilities() {
-                                if !cap.webhooks.is_empty() {
-                                    webhook_registry.write().register_capability(&cap);
-                                }
-                            }
+            let cap_backend_for_load = Arc::clone(&cap_backend);
+            let webhook_registry_for_load = Arc::clone(&webhook_registry);
+            let webhooks_enabled = self.config.webhooks.enabled;
+            tokio::spawn(async move {
+                // Let the HTTP listener bind before large capability scans start.
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+                let mut total_caps = 0;
+                for dir in &capability_dirs {
+                    match cap_backend_for_load.load_from_directory(dir).await {
+                        Ok(count) => {
+                            total_caps += count;
+                            debug!(directory = %dir, count = count, "Loaded capabilities");
+                        }
+                        Err(e) => {
+                            // Don't fail startup if capability dir doesn't exist
+                            debug!(directory = %dir, error = %e, "Failed to load capabilities");
                         }
                     }
-                    Err(e) => {
-                        // Don't fail startup if capability dir doesn't exist
-                        debug!(directory = %dir, error = %e, "Failed to load capabilities");
+                }
+
+                if webhooks_enabled {
+                    for cap in cap_backend_for_load.list_capabilities() {
+                        if !cap.webhooks.is_empty() {
+                            webhook_registry_for_load.write().register_capability(&cap);
+                        }
                     }
                 }
-            }
 
-            if total_caps > 0 {
-                info!(
-                    capabilities = total_caps,
-                    name = %self.config.capabilities.name,
-                    "Capability backend ready"
-                );
-            }
+                if total_caps > 0 {
+                    info!(
+                        capabilities = total_caps,
+                        name = %capability_name,
+                        "Capability backend ready"
+                    );
+                }
+            });
 
             // Start file watcher for hot-reload
-            let watcher = match CapabilityWatcher::start(
-                Arc::clone(&cap_backend),
-                shutdown_tx.subscribe(),
-            ) {
+            match CapabilityWatcher::start(Arc::clone(&cap_backend), shutdown_tx.subscribe()) {
                 Ok(w) => {
                     info!("Capability hot-reload enabled");
                     Some(w)
@@ -382,10 +394,7 @@ impl Gateway {
                     warn!(error = %e, "Failed to start capability watcher, hot-reload disabled");
                     None
                 }
-            };
-
-            meta_mcp.set_capabilities(cap_backend);
-            watcher
+            }
         } else {
             None
         };
@@ -417,7 +426,7 @@ impl Gateway {
         ));
         multiplexer.spawn_reaper_on();
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-        let auth_config = Arc::new(ResolvedAuthConfig::from_config(&self.config.auth));
+        let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(&self.config.auth)?);
 
         // Wire webhook registry into MetaMcp for gateway_webhook_status.
         if self.config.webhooks.enabled {
@@ -464,7 +473,7 @@ impl Gateway {
         let key_server = if self.config.key_server.enabled {
             let mut ks_config = self.config.key_server.clone();
             // Resolve admin token (expand env:VAR_NAME)
-            ks_config.admin_token = ks_config.resolve_admin_token();
+            ks_config.admin_token = ks_config.resolve_admin_token()?;
 
             let cleanup_interval = std::time::Duration::from_secs(ks_config.cleanup_interval_secs);
             let ks = Arc::new(KeyServer::new(ks_config));
@@ -489,7 +498,7 @@ impl Gateway {
         // Build agent registry from config.
         let agent_registry = Arc::new(AgentRegistry::new());
         for def in &self.config.agent_auth.agents {
-            let secret = def.resolved_hs256_secret();
+            let secret = def.resolved_hs256_secret()?;
             agent_registry.register(AgentDefinition {
                 client_id: def.client_id.clone(),
                 name: def.name.clone(),
@@ -581,9 +590,10 @@ impl Gateway {
 
         // Add webhook routes if enabled
         if self.config.webhooks.enabled {
-            let webhook_routes = webhook_registry
-                .read()
-                .create_routes(Arc::clone(&multiplexer));
+            let webhook_routes = WebhookRegistry::create_dynamic_routes(
+                Arc::clone(&webhook_registry),
+                Arc::clone(&multiplexer),
+            );
             app = app.merge(webhook_routes);
             info!(
                 enabled = true,
@@ -624,11 +634,7 @@ impl Gateway {
         {
             let warm_start_list =
                 build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, true);
-            spawn_warm_start_task(
-                Arc::clone(&self.backends),
-                warm_start_list,
-                WarmStartMode::Http,
-            );
+            spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Http);
         }
 
         // Start health check task
@@ -837,11 +843,7 @@ impl Gateway {
         {
             let warm_start_list =
                 build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, false);
-            spawn_warm_start_task(
-                Arc::clone(&self.backends),
-                warm_start_list,
-                WarmStartMode::Stdio,
-            );
+            spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Stdio);
         }
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");

@@ -25,6 +25,7 @@ history.txt
 
 # Claude Code
 .claude/
+.agents/
 
 # Build artifacts
 .mypy_cache/
@@ -37,6 +38,7 @@ history.txt
 
 # Internal planning docs and drafts
 docs/plans/
+docs/submissions/
 linkedin-post-draft.md
 .gitnexus
 AGENTS.md

@@ -37,9 +37,9 @@ pub struct Redactor {
 
 /// (pattern, description) pairs.
 ///
-/// 11 credential patterns covering AWS keys, GitHub tokens (4 variants),
-/// Slack tokens, generic API keys, JWTs, private keys, bearer tokens, and
-/// database connection strings.
+/// 13 credential patterns covering AWS keys, GitHub tokens (4 variants),
+/// Slack tokens, generic API keys, JWTs, private keys, bearer tokens,
+/// database connection strings, `OpenAI` project keys, and Ethereum private keys.
 const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
     // AWS
     (r"(?:AKIA|ASIA)[A-Z0-9]{16}", "AWS Access Key ID"),
@@ -75,6 +75,10 @@ const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
         r"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}",
         "Database Connection String",
     ),
+    // OpenAI project API keys (sk-proj-...)
+    (r"sk-proj-[A-Za-z0-9_-]{40,}", "OpenAI Project API Key"),
+    // Ethereum private key (0x + 64 hex nibbles = 32 bytes)
+    (r"0x[a-fA-F0-9]{64}", "Ethereum Private Key"),
 ];
 
 impl Redactor {
@@ -273,6 +277,33 @@ mod tests {
             findings
                 .iter()
                 .any(|f| f.description.contains("Database Connection"))
+        );
+    }
+
+    #[test]
+    fn detects_openai_project_key() {
+        let key = "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJ1234567890";
+        let mut v = serde_json::json!({ "key": key });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.description.contains("OpenAI Project")),
+            "Expected OpenAI key detection"
+        );
+    }
+
+    #[test]
+    fn detects_ethereum_private_key() {
+        let key = format!(
+            "0x{}{}",
+            "ac0974bec39a17e36ba4a6b4d238ff944", "bacb478cbed5efcae784d7bf4f2ff80"
+        );
+        let mut v = serde_json::json!({ "pk": key });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert!(
+            findings.iter().any(|f| f.description.contains("Ethereum")),
+            "Expected Ethereum key detection"
         );
     }
 

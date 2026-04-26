@@ -296,14 +296,14 @@ async fn build_headers_send_request_no_session() {
     );
 }
 
-/// notify mode: Content-Type + combined Accept, session forwarded, NO custom
-/// headers, NO x-trace-id even when ambient trace and custom headers exist.
+/// notify mode: Content-Type + combined Accept, session and custom headers
+/// forwarded, NO x-trace-id even when ambient trace exists.
 #[tokio::test]
-async fn build_headers_notify_excludes_custom_and_trace() {
+async fn build_headers_notify_includes_custom_but_excludes_trace() {
     use crate::gateway::trace;
 
     let mut custom = HashMap::new();
-    custom.insert("X-Should-Not-Appear".to_string(), "nope".to_string());
+    custom.insert("X-Notify-Auth".to_string(), "notify-token".to_string());
     let t = make_transport_with_headers("http://localhost", custom);
     *t.session_id.write() = Some("notify-sess".to_string());
 
@@ -318,9 +318,9 @@ async fn build_headers_notify_excludes_custom_and_trace() {
         map["mcp-session-id"], "notify-sess",
         "notify must include session header"
     );
-    assert!(
-        !map.contains_key("x-should-not-appear"),
-        "notify must NOT include custom headers"
+    assert_eq!(
+        map["x-notify-auth"], "notify-token",
+        "notify must include custom headers"
     );
     assert!(
         !map.contains_key("x-trace-id"),

@@ -4,6 +4,8 @@ use std::env;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{Error, Result};
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_TOKEN_TTL_SECS: u64 = 3600;
@@ -93,13 +95,20 @@ impl Default for KeyServerConfig {
 
 impl KeyServerConfig {
     /// Resolve the admin token, expanding `env:VAR_NAME` syntax.
-    #[must_use]
-    pub fn resolve_admin_token(&self) -> Option<String> {
-        self.admin_token.as_ref().map(|t| {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    pub fn resolve_admin_token(&self) -> Result<Option<String>> {
+        self.admin_token.as_ref().map_or(Ok(None), |t| {
             if let Some(var) = t.strip_prefix("env:") {
-                env::var(var).unwrap_or_else(|_| t.clone())
+                env::var(var).map(Some).map_err(|_| {
+                    Error::ConfigValidation(format!(
+                        "key_server.admin_token references missing environment variable '{var}'"
+                    ))
+                })
             } else {
-                t.clone()
+                Ok(Some(t.clone()))
             }
         })
     }

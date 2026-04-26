@@ -18,6 +18,7 @@ fn test_no_tool_restrictions() {
         backends: vec![],
         allowed_tools: None,
         denied_tools: None,
+        admin: false,
     };
 
     // All tools should be allowed (fallback to global policy)
@@ -39,6 +40,7 @@ fn test_allowlist_exact_match() {
             "list_directory".to_string(),
         ]),
         denied_tools: None,
+        admin: false,
     };
 
     // Tools in allowlist should be permitted
@@ -71,6 +73,7 @@ fn test_allowlist_glob_patterns() {
         backends: vec![],
         allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
         denied_tools: None,
+        admin: false,
     };
 
     // Tools matching glob patterns should be allowed
@@ -102,6 +105,7 @@ fn test_denylist_exact_match() {
             "delete_file".to_string(),
             "execute_command".to_string(),
         ]),
+        admin: false,
     };
 
     // Tools in denylist should be blocked
@@ -137,6 +141,7 @@ fn test_denylist_glob_patterns() {
         backends: vec![],
         allowed_tools: None,
         denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
+        admin: false,
     };
 
     // Tools matching deny patterns should be blocked
@@ -170,6 +175,7 @@ fn test_qualified_name_matching() {
             "database:*".to_string(),
         ]),
         denied_tools: None,
+        admin: false,
     };
 
     // Qualified match: filesystem:read_file allowed, but not on other servers
@@ -201,6 +207,7 @@ fn test_allowlist_and_denylist_combination() {
             "filesystem_write".to_string(),
             "filesystem_delete".to_string(),
         ]),
+        admin: false,
     };
 
     // In allowlist AND NOT in denylist: allowed
@@ -237,6 +244,7 @@ fn test_api_key_config_with_tool_scopes() {
         backends: vec![],
         allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
         denied_tools: Some(vec!["read_secrets".to_string()]),
+        admin: false,
     };
 
     // Verify config fields are set correctly
@@ -256,6 +264,7 @@ fn test_empty_allowlist() {
         backends: vec![],
         allowed_tools: Some(vec![]), // Empty allowlist = nothing allowed
         denied_tools: None,
+        admin: false,
     };
 
     // All tools should be denied with empty allowlist
@@ -272,6 +281,7 @@ fn test_empty_denylist() {
         backends: vec![],
         allowed_tools: None,
         denied_tools: Some(vec![]), // Empty denylist = no additional blocks
+        admin: false,
     };
 
     // Empty denylist should not block anything (falls back to global policy)
@@ -292,6 +302,7 @@ fn test_pattern_matching_edge_cases() {
             "*ends_with_this".to_string(), // This should NOT match (only suffix * supported)
         ]),
         denied_tools: None,
+        admin: false,
     };
 
     // Prefix glob works

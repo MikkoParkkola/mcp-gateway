@@ -10,11 +10,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
-    extract::State,
-    http::HeaderMap,
-    response::IntoResponse,
-    routing::{MethodFilter, on},
+    extract::{OriginalUri, State},
+    http::{HeaderMap, Method, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{MethodFilter, any, on},
 };
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
@@ -165,6 +166,15 @@ impl WebhookRegistry {
         self.webhooks.get(path)
     }
 
+    /// Get a cloneable webhook handler tuple by path.
+    #[must_use]
+    pub fn get_cloned(
+        &self,
+        path: &str,
+    ) -> Option<(String, String, WebhookDefinition, Arc<EndpointStats>)> {
+        self.webhooks.get(path).cloned()
+    }
+
     /// Return status info for all registered endpoints, sorted by path.
     #[must_use]
     pub fn list_endpoints(&self) -> Vec<WebhookEndpointInfo> {
@@ -219,6 +229,26 @@ impl WebhookRegistry {
 
         router
     }
+
+    /// Create a dynamic dispatcher route for webhook paths.
+    ///
+    /// This allows the HTTP listener to bind before all capability files have
+    /// loaded. The registry is checked at request time, so endpoints become
+    /// available as soon as the capability loader registers them.
+    #[must_use = "the returned Router must be merged into the application router"]
+    pub fn create_dynamic_routes(
+        registry: Arc<RwLock<Self>>,
+        multiplexer: Arc<NotificationMultiplexer>,
+    ) -> Router<()> {
+        let base_path = registry.read().config.base_path.clone();
+        let route = format!("{base_path}/{{*path}}");
+        let state = DynamicWebhookHandlerState {
+            registry,
+            multiplexer,
+        };
+
+        Router::new().route(&route, any(dynamic_webhook_handler).with_state(state))
+    }
 }
 
 // ============================================================================
@@ -236,6 +266,13 @@ struct WebhookHandlerState {
     stats: Arc<EndpointStats>,
 }
 
+/// State for the dynamic webhook dispatcher.
+#[derive(Clone)]
+struct DynamicWebhookHandlerState {
+    registry: Arc<RwLock<WebhookRegistry>>,
+    multiplexer: Arc<NotificationMultiplexer>,
+}
+
 /// Map HTTP method string to axum `MethodFilter`.
 ///
 /// Defaults to POST for unrecognised method strings.
@@ -247,6 +284,55 @@ fn method_to_filter(method: &str) -> MethodFilter {
         "DELETE" => MethodFilter::DELETE,
         _ => MethodFilter::POST, // POST and any unknown method
     }
+}
+
+/// Check a request method against a configured webhook method.
+fn method_matches(actual: &Method, configured: &str) -> bool {
+    match configured.to_uppercase().as_str() {
+        "GET" => actual == Method::GET,
+        "PUT" => actual == Method::PUT,
+        "PATCH" => actual == Method::PATCH,
+        "DELETE" => actual == Method::DELETE,
+        _ => actual == Method::POST,
+    }
+}
+
+/// Dynamic webhook dispatcher used when capabilities load in the background.
+async fn dynamic_webhook_handler(
+    State(state): State<DynamicWebhookHandlerState>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let path = uri.path().to_string();
+    let Some((capability_name, webhook_name, definition, webhook_stats)) =
+        state.registry.read().get_cloned(&path)
+    else {
+        return (StatusCode::NOT_FOUND, "Unknown webhook endpoint").into_response();
+    };
+
+    if !method_matches(&method, &definition.method) {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            format!("Webhook endpoint expects {}", definition.method),
+        )
+            .into_response();
+    }
+
+    let config = state.registry.read().config.clone();
+    let handler_state = WebhookHandlerState {
+        multiplexer: Arc::clone(&state.multiplexer),
+        capability_name,
+        webhook_name,
+        definition,
+        config,
+        stats: webhook_stats,
+    };
+
+    webhook_handler(State(handler_state), headers, body)
+        .await
+        .into_response()
 }
 
 /// Webhook handler function.

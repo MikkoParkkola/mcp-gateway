@@ -22,6 +22,7 @@ fn test_auth_config_resolution() {
             backends: vec!["tavily".to_string()],
             allowed_tools: None,
             denied_tools: None,
+            admin: false,
         }],
         public_paths: vec!["/health".to_string()],
     };
@@ -73,6 +74,7 @@ fn test_api_key_auth_with_restrictions() {
                 backends: vec!["tavily".to_string(), "brave".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
+                admin: false,
             },
             ApiKeyConfig {
                 key: "unrestricted-key".to_string(),
@@ -81,6 +83,7 @@ fn test_api_key_auth_with_restrictions() {
                 backends: vec![], // empty = all access
                 allowed_tools: None,
                 denied_tools: None,
+                admin: false,
             },
         ],
         public_paths: vec![],
@@ -116,6 +119,7 @@ fn test_rate_limiting() {
             backends: vec![],
             allowed_tools: None,
             denied_tools: None,
+            admin: false,
         }],
         public_paths: vec![],
     };
@@ -194,6 +198,7 @@ fn test_client_backend_access_patterns() {
         backends: vec!["*".to_string()],
         allowed_tools: None,
         denied_tools: None,
+        admin: false,
     };
     assert!(wildcard_client.can_access_backend("anything"));
     assert!(wildcard_client.can_access_backend("tavily"));
@@ -205,6 +210,7 @@ fn test_client_backend_access_patterns() {
         backends: vec![],
         allowed_tools: None,
         denied_tools: None,
+        admin: false,
     };
     assert!(all_access_client.can_access_backend("anything"));
 
@@ -215,6 +221,7 @@ fn test_client_backend_access_patterns() {
         backends: vec!["backend-a".to_string(), "backend-b".to_string()],
         allowed_tools: None,
         denied_tools: None,
+        admin: false,
     };
     assert!(restricted_client.can_access_backend("backend-a"));
     assert!(restricted_client.can_access_backend("backend-b"));

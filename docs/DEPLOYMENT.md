@@ -279,6 +279,8 @@ auth:
   public_paths: ["/health"]
 ```
 
+`env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
+
 For multi-client setups with per-client tool scoping, see the [README auth section](../README.md#authentication).
 
 ## Backup and Recovery

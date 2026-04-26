@@ -12,6 +12,10 @@ use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
 use super::AppState;
+use super::authorization::{
+    authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
+    require_admin_tool_access,
+};
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_http_error_response, build_http_response, build_response, extract_tools_call_params,
@@ -21,14 +25,13 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::destructive_confirmation::{
     ConfirmationOutcome, is_destructive_meta_tool, require_destructive_confirmation,
 };
+use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::streaming::create_sse_response;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
-use crate::security::{
-    extract_agent_identity, sanitize_json_value, validate_agent_identity, validate_url_not_ssrf,
-};
+use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
@@ -210,6 +213,10 @@ pub(super) async fn meta_mcp_handler(
     // Extract mTLS certificate identity (present when mTLS is active and a valid
     // client certificate was presented during the TLS handshake).
     let cert_identity = http_request.extensions().get::<CertIdentity>().cloned();
+    let oauth_agent_identity = http_request
+        .extensions()
+        .get::<OAuthAgentIdentity>()
+        .cloned();
 
     // === OWASP ASI03: per-agent identity extraction ===
     //
@@ -370,93 +377,47 @@ pub(super) async fn meta_mcp_handler(
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 
-            // Apply tool policy check and SSRF validation for gateway_invoke calls
-            if tool_name == "gateway_invoke"
-                && let Some(ref args) = params
+            if is_admin_meta_tool(tool_name)
+                && let Err(e) = require_admin_tool_access(client.as_ref(), tool_name)
             {
-                let server = args
-                    .get("arguments")
-                    .and_then(|a| a.get("server"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let tool = args
-                    .get("arguments")
-                    .and_then(|a| a.get("tool"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !server.is_empty() && !tool.is_empty() {
-                    // Global policy check
-                    if let Err(e) = state.tool_policy.check(server, tool) {
-                        return build_error_response(
-                            Some(id),
-                            -32600,
-                            e.to_string(),
-                            &session_id,
-                            StatusCode::FORBIDDEN,
-                        );
-                    }
+                return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
+            }
 
-                    // mTLS certificate-based policy check (defense-in-depth layer)
-                    if !state.mtls_policy.is_empty() {
-                        use crate::mtls::PolicyDecision;
-                        let decision =
-                            state
-                                .mtls_policy
-                                .evaluate(cert_identity.as_ref(), server, tool);
-                        if decision == PolicyDecision::Deny {
-                            let identity_label = cert_identity
-                                .as_ref()
-                                .map_or("<unauthenticated>", |id| id.display_name.as_str());
-                            warn!(
-                                server = server,
-                                tool = tool,
-                                identity = identity_label,
-                                "Tool invocation denied by mTLS policy"
-                            );
-                            return build_error_response(
-                                Some(id),
-                                -32600,
-                                format!(
-                                    "Tool '{tool}' on server '{server}' is blocked by \
-                                         certificate policy"
-                                ),
-                                &session_id,
-                                StatusCode::FORBIDDEN,
-                            );
-                        }
-                    }
-
-                    // Per-client tool scope check
-                    if let Some(ref c) = client
-                        && let Err(e) = c.check_tool_scope(server, tool)
-                    {
-                        return build_error_response(
-                            Some(id),
-                            -32600,
-                            e,
-                            &session_id,
-                            StatusCode::FORBIDDEN,
-                        );
-                    }
+            let backend_targets =
+                backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
+            for target in &backend_targets {
+                if let Err(e) = authorize_tool_target(
+                    state.as_ref(),
+                    client.as_ref(),
+                    oauth_agent_identity.as_ref(),
+                    cert_identity.as_ref(),
+                    target.as_target(),
+                ) {
+                    return build_error_response(
+                        Some(id),
+                        e.code,
+                        e.message,
+                        &session_id,
+                        e.status,
+                    );
                 }
 
                 // Firewall: pre-invocation request scan
                 #[cfg(feature = "firewall")]
-                if let Some(ref fw) = state.firewall
-                    && !server.is_empty()
-                    && !tool.is_empty()
-                {
+                if let Some(ref fw) = state.firewall {
+                    let target = target.as_target();
                     let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                    let invoke_args = args
-                        .get("arguments")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                    let verdict =
-                        fw.check_request(&session_id, server, tool, &invoke_args, caller_name);
+                    let verdict = fw.check_request(
+                        &session_id,
+                        target.server,
+                        target.tool,
+                        target.arguments,
+                        caller_name,
+                    );
                     if verdict.action == FirewallAction::Warn {
                         warn!(
-                            server = server,
-                            tool = tool,
+                            server = target.server,
+                            tool = target.tool,
                             findings = verdict.findings.len(),
                             "Firewall: request warning"
                         );
@@ -488,50 +449,10 @@ pub(super) async fn meta_mcp_handler(
                         );
                     }
                 }
-
-                // SSRF protection: validate backend URL before proxying
-                if state.ssrf_protection
-                    && !server.is_empty()
-                    && let Some(backend) = state.backends.get(server)
-                    && let Some(url) = backend.transport_url()
-                    && let Err(e) = validate_url_not_ssrf(url)
-                {
-                    return build_error_response(
-                        Some(id),
-                        -32600,
-                        e.to_string(),
-                        &session_id,
-                        StatusCode::FORBIDDEN,
-                    );
-                }
             }
 
             let api_key_name = client.as_ref().map(|c| c.name.as_str());
             let agent_id = agent_identity.as_ref().map(|a| a.id.as_str());
-
-            // Capture server/tool for post-invoke firewall scan (before borrows move).
-            #[cfg(feature = "firewall")]
-            let (fw_server, fw_tool, fw_caller) = {
-                let srv = params
-                    .as_ref()
-                    .and_then(|p| p.get("arguments"))
-                    .and_then(|a| a.get("server"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let tl = params
-                    .as_ref()
-                    .and_then(|p| p.get("arguments"))
-                    .and_then(|a| a.get("tool"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let cl = client
-                    .as_ref()
-                    .map_or("anonymous", |c| c.name.as_str())
-                    .to_string();
-                (srv, tl, cl)
-            };
 
             // OWASP ASI09 — destructive meta-tool confirmation gate.
             //
@@ -575,19 +496,26 @@ pub(super) async fn meta_mcp_handler(
             // Firewall: post-invocation response scan + credential redaction.
             #[cfg(feature = "firewall")]
             if let Some(ref fw) = state.firewall
-                && !fw_server.is_empty()
-                && !fw_tool.is_empty()
                 && let Some(ref mut result_val) = call_response.result
             {
-                let verdict =
-                    fw.check_response(&session_id, &fw_server, &fw_tool, result_val, &fw_caller);
-                if verdict.action == FirewallAction::Warn {
-                    warn!(
-                        server = %fw_server,
-                        tool = %fw_tool,
-                        findings = verdict.findings.len(),
-                        "Firewall: response warning"
+                let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                for target in &backend_targets {
+                    let target = target.as_target();
+                    let verdict = fw.check_response(
+                        &session_id,
+                        target.server,
+                        target.tool,
+                        result_val,
+                        caller_name,
                     );
+                    if verdict.action == FirewallAction::Warn {
+                        warn!(
+                            server = target.server,
+                            tool = target.tool,
+                            findings = verdict.findings.len(),
+                            "Firewall: response warning"
+                        );
+                    }
                 }
             }
 

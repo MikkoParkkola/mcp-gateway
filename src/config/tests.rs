@@ -163,6 +163,28 @@ fn validate_default_config_passes() {
 }
 
 #[test]
+fn validate_rejects_missing_env_backed_auth_secret() {
+    let config = Config {
+        auth: AuthConfig {
+            enabled: true,
+            bearer_token: Some("env:MCP_GATEWAY_TEST_SECRET_SHOULD_NOT_EXIST".to_string()),
+            ..AuthConfig::default()
+        },
+        ..Config::default()
+    };
+
+    let result = config.validate();
+
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("MCP_GATEWAY_TEST_SECRET_SHOULD_NOT_EXIST")
+    );
+}
+
+#[test]
 fn validate_rejects_empty_backend_name() {
     // GIVEN: a config with an empty backend name
     let mut config = Config::default();

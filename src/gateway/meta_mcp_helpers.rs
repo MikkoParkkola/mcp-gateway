@@ -529,10 +529,14 @@ pub(crate) fn build_search_response(
     }
 }
 
-/// Extract the search limit from arguments, defaulting to 10.
+const DEFAULT_SEARCH_LIMIT: usize = 10;
+const MAX_SEARCH_LIMIT: usize = 25;
+
+/// Extract the search limit from arguments, defaulting to 10 and clamping to a
+/// hard maximum so discovery output stays bounded regardless of backend count.
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn extract_search_limit(args: &Value) -> usize {
-    extract_u64_or(args, "limit", 10) as usize
+    (extract_u64_or(args, "limit", DEFAULT_SEARCH_LIMIT as u64) as usize).min(MAX_SEARCH_LIMIT)
 }
 
 /// Extract a required string parameter from JSON arguments.

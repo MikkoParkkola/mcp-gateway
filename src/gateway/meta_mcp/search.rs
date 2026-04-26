@@ -3,9 +3,14 @@
 //! Implements `gateway_search` (Code Mode), `gateway_execute` (Code Mode),
 //! `gateway_list_tools`, `gateway_search_tools`, and the chain executor.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
+use tracing::debug;
 
 use crate::autotag;
+use crate::backend::Backend;
+use crate::protocol::Tool;
 use crate::ranking::json_to_search_result;
 use crate::routing_profile::RoutingProfile;
 use crate::{Error, Result};
@@ -16,6 +21,7 @@ use super::super::meta_mcp_helpers::{
     build_search_response, build_suggestions, extract_bool_or, extract_optional_str,
     extract_required_str, extract_search_limit, is_glob_pattern, parse_code_mode_tool_ref,
     parse_tool_arguments, ranked_results_to_json, tool_matches_glob, tool_matches_query,
+    tool_name_matches_glob,
 };
 use super::MetaMcp;
 use super::support::{
@@ -30,6 +36,66 @@ struct CodeModeSearchOptions {
 }
 
 impl MetaMcp {
+    async fn backend_tools_for_discovery(
+        backend: &Arc<Backend>,
+        allow_empty_cache_fetch: bool,
+    ) -> Option<Arc<Vec<Tool>>> {
+        let tools = backend.get_cached_tools_snapshot();
+        if !tools.is_empty() {
+            Self::refresh_stale_backend_tools_in_background(backend);
+            return Some(tools);
+        }
+
+        if allow_empty_cache_fetch {
+            return match backend.get_tools_shared().await {
+                Ok(tools) if !tools.is_empty() => Some(tools),
+                Ok(_) => None,
+                Err(e) => {
+                    debug!(
+                        backend = %backend.name,
+                        error = %e,
+                        "On-demand backend tool-cache fill failed"
+                    );
+                    None
+                }
+            };
+        }
+
+        None
+    }
+
+    fn code_mode_backend_candidates(&self, query: &str) -> (Vec<Arc<Backend>>, bool) {
+        if let Some((server, _)) = query.split_once(':')
+            && !server.is_empty()
+            && !server.contains('*')
+            && !server.contains('?')
+        {
+            return self
+                .backends
+                .get(server)
+                .map_or_else(|| (Vec::new(), false), |backend| (vec![backend], true));
+        }
+
+        (self.backends.all(), false)
+    }
+
+    async fn refresh_stale_backend_tools(backend: Arc<Backend>) {
+        if let Err(e) = backend.get_tools_shared().await {
+            debug!(
+                backend = %backend.name,
+                error = %e,
+                "Background backend tool-cache refresh failed"
+            );
+        }
+    }
+
+    fn refresh_stale_backend_tools_in_background(backend: &Arc<Backend>) {
+        if !backend.has_cached_tools() {
+            let backend = Arc::clone(backend);
+            tokio::spawn(Self::refresh_stale_backend_tools(backend));
+        }
+    }
+
     fn current_search_state(&self, session_id: Option<&str>) -> String {
         session_id.map_or_else(
             || crate::gateway::state::DEFAULT_STATE.to_string(),
@@ -37,11 +103,17 @@ impl MetaMcp {
         )
     }
 
-    fn code_mode_tool_matches(tool: &crate::protocol::Tool, query: &str, use_glob: bool) -> bool {
+    fn code_mode_tool_matches(
+        server: &str,
+        tool: &crate::protocol::Tool,
+        query: &str,
+        use_glob: bool,
+    ) -> bool {
+        let tool_ref = format!("{server}:{}", tool.name).to_lowercase();
         if use_glob {
-            tool_matches_glob(tool, query)
+            tool_matches_glob(tool, query) || tool_name_matches_glob(&tool_ref, query)
         } else {
-            tool_matches_query(tool, query)
+            tool_matches_query(tool, query) || tool_ref.contains(query)
         }
     }
 
@@ -72,7 +144,7 @@ impl MetaMcp {
                     continue;
                 }
                 collect_tool_tags_for_code_mode(&tool, all_tags);
-                if Self::code_mode_tool_matches(&tool, query, options.use_glob) {
+                if Self::code_mode_tool_matches(&cap.name, &tool, query, options.use_glob) {
                     let mut entry =
                         build_code_mode_match_json(&cap.name, &tool, options.include_schema);
                     if cap_killed {
@@ -92,12 +164,15 @@ impl MetaMcp {
         matches: &mut Vec<Value>,
         all_tags: &mut Vec<String>,
     ) {
-        for backend in self.backends.all() {
-            if !backend.has_cached_tools() || !profile.backend_allowed(&backend.name) {
+        let (backends, allow_empty_cache_fetch) = self.code_mode_backend_candidates(query);
+        for backend in backends {
+            if !profile.backend_allowed(&backend.name) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Ok(tools) = backend.get_tools_shared().await {
+            if let Some(tools) =
+                Self::backend_tools_for_discovery(&backend, allow_empty_cache_fetch).await
+            {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -114,7 +189,7 @@ impl MetaMcp {
                     collect_tool_tags_for_code_mode(tool, all_tags);
                 }
                 for tool in enriched {
-                    if Self::code_mode_tool_matches(&tool, query, options.use_glob) {
+                    if Self::code_mode_tool_matches(&backend.name, &tool, query, options.use_glob) {
                         let mut entry = build_code_mode_match_json(
                             &backend.name,
                             &tool,
@@ -179,11 +254,11 @@ impl MetaMcp {
         all_tags: &mut Vec<String>,
     ) {
         for backend in self.backends.all() {
-            if !backend.has_cached_tools() || !profile.backend_allowed(&backend.name) {
+            if !profile.backend_allowed(&backend.name) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Ok(tools) = backend.get_tools_shared().await {
+            if let Some(tools) = Self::backend_tools_for_discovery(&backend, false).await {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -470,16 +545,14 @@ impl MetaMcp {
             }
         }
 
-        // MCP backend tools (only from cached/warm-started backends — no blocking starts)
+        // MCP backend tools use cached/warm-started snapshots. Stale non-empty
+        // snapshots stay visible while a background refresh updates the cache.
         for backend in self.backends.all() {
-            if !backend.has_cached_tools() {
-                continue;
-            }
             if !profile.backend_allowed(&backend.name) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Ok(tools) = backend.get_tools_shared().await {
+            if let Some(tools) = Self::backend_tools_for_discovery(&backend, false).await {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name) {
                         continue;

@@ -25,9 +25,10 @@ use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::{
-    JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, is_version_mismatch_error,
-    negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
 };
+use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
 /// HTTP transport for MCP servers using SSE or Streamable HTTP protocol
@@ -106,7 +107,15 @@ impl HttpTransport {
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(30))
             .tcp_nodelay(true)
-            .redirect(reqwest::redirect::Policy::limited(5)) // Follow redirects
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 {
+                    return attempt.stop();
+                }
+                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
+                    return attempt.error(e.to_string());
+                }
+                attempt.follow()
+            }))
             .build()
             .map_err(|e| Error::Transport(e.to_string()))?;
 
@@ -250,8 +259,13 @@ impl HttpTransport {
             }
         }
 
-        // Send initialized notification
-        self.notify("notifications/initialized", None).await?;
+        // Some Streamable HTTP backends either close the initialize request
+        // immediately or do not implement client notifications. The gateway
+        // can still use request/response tools in that case, so notification
+        // delivery must not make backend startup fail.
+        if let Err(error) = self.notify("notifications/initialized", None).await {
+            debug!(url = %self.base_url, error = %error, "Initialized notification failed (ignored)");
+        }
 
         self.connected.store(true, Ordering::Relaxed);
         debug!(url = %self.base_url, streamable = %self.streamable_http, "HTTP transport initialized");
@@ -316,15 +330,15 @@ impl HttpTransport {
             debug!(method = %method, "Sending request without session ID");
         }
 
-        // User-supplied custom headers (SSE, send_request, and close; not notify).
-        if !matches!(mode, HeaderMode::Notify) {
-            for (key, value) in &self.headers {
-                if let (Ok(k), Ok(v)) = (
-                    key.parse::<reqwest::header::HeaderName>(),
-                    value.parse::<reqwest::header::HeaderValue>(),
-                ) {
-                    headers.insert(k, v);
-                }
+        // User-supplied custom headers apply to all calls, including
+        // notifications, because some backends require the same auth header for
+        // `notifications/initialized` as for normal requests.
+        for (key, value) in &self.headers {
+            if let (Ok(k), Ok(v)) = (
+                key.parse::<reqwest::header::HeaderName>(),
+                value.parse::<reqwest::header::HeaderValue>(),
+            ) {
+                headers.insert(k, v);
             }
         }
 
@@ -577,11 +591,11 @@ impl Transport for HttpTransport {
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         let message_url = self.get_message_url();
 
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        });
+        let notification = JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+        };
 
         let headers = self.build_mcp_headers(HeaderMode::Notify).await?;
 

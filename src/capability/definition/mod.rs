@@ -5,6 +5,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
+use crate::protocol::ToolAnnotations;
 use crate::transform::TransformConfig;
 
 /// A capability definition describing how to call a REST API
@@ -754,6 +755,26 @@ pub struct CapabilityMetadata {
     #[serde(default)]
     pub read_only: bool,
 
+    /// Whether the operation may destructively modify user-visible state.
+    ///
+    /// When omitted, capability tools infer a conservative value from
+    /// `read_only`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive: Option<bool>,
+
+    /// Whether repeating the same call has no additional effect.
+    ///
+    /// When omitted, capability tools infer `true` for read-only operations and
+    /// `false` for write operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotent: Option<bool>,
+
+    /// Whether the operation interacts with external services or entities.
+    ///
+    /// API capabilities default to open-world because they call REST services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_world: Option<bool>,
+
     /// Data types or entities this tool produces as output.
     ///
     /// Examples: `["teamId", "issueId", "userId"]`
@@ -900,7 +921,18 @@ impl CapabilityDefinition {
             } else {
                 Some(self.schema.output.clone())
             },
-            annotations: None,
+            annotations: Some(self.tool_annotations()),
+        }
+    }
+
+    fn tool_annotations(&self) -> ToolAnnotations {
+        let read_only = self.metadata.read_only;
+        ToolAnnotations {
+            title: None,
+            read_only_hint: Some(read_only),
+            destructive_hint: Some(self.metadata.destructive.unwrap_or(!read_only)),
+            idempotent_hint: Some(self.metadata.idempotent.unwrap_or(read_only)),
+            open_world_hint: Some(self.metadata.open_world.unwrap_or(true)),
         }
     }
 

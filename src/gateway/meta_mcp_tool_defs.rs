@@ -592,7 +592,7 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of results to return (default 10)",
+                    "description": "Maximum number of results to return (default 10, hard-capped at 25)",
                     "default": 10
                 },
                 "include_schema": {

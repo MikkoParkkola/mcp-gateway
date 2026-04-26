@@ -12,8 +12,12 @@
 //! default to PEM).
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use rcgen::string::Ia5String;
 use rcgen::{
@@ -274,15 +278,36 @@ impl CertGenerator {
     pub fn write_to_dir(cert: &GeneratedCert, dir: &Path, stem: &str) -> Result<()> {
         fs::create_dir_all(dir)
             .map_err(|e| Error::Config(format!("Cannot create dir '{}': {e}", dir.display())))?;
+        #[cfg(unix)]
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| Error::Config(format!("Cannot set dir permissions: {e}")))?;
 
         fs::write(dir.join(format!("{stem}.crt")), &cert.cert_pem)
             .map_err(|e| Error::Config(format!("Cannot write cert: {e}")))?;
 
-        fs::write(dir.join(format!("{stem}.key")), &cert.key_pem)
-            .map_err(|e| Error::Config(format!("Cannot write key: {e}")))?;
+        write_private_key(&dir.join(format!("{stem}.key")), &cert.key_pem)?;
 
         Ok(())
     }
+}
+
+fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let mut file = options
+        .open(path)
+        .map_err(|e| Error::Config(format!("Cannot write key: {e}")))?;
+    file.write_all(key_pem.as_bytes())
+        .map_err(|e| Error::Config(format!("Cannot write key: {e}")))?;
+
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|e| Error::Config(format!("Cannot set key permissions: {e}")))?;
+
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -496,6 +521,26 @@ mod tests {
 
         let contents = fs::read_to_string(dir.path().join("myca.crt")).unwrap();
         assert!(contents.contains("BEGIN CERTIFICATE"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_to_dir_private_key_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = CertGenerator::init_ca(&CaParams {
+            cn: "CA",
+            validity_days: 365,
+        })
+        .unwrap();
+
+        CertGenerator::write_to_dir(&ca, dir.path(), "ca").unwrap();
+
+        let mode = fs::metadata(dir.path().join("ca.key"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     // ─── load_certs / load_private_key ────────────────────────────────────────

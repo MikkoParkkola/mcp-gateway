@@ -56,6 +56,55 @@ fn to_mcp_tool_single_tag_formats_correctly() {
 }
 
 #[test]
+fn to_mcp_tool_read_only_capability_has_protocol_annotations() {
+    let mut cap = make_capability("weather", "Get weather", vec!["forecast"]);
+    cap.metadata.read_only = true;
+
+    let annotations = cap
+        .to_mcp_tool()
+        .annotations
+        .expect("capability tools should be annotated");
+
+    assert_eq!(annotations.read_only_hint, Some(true));
+    assert_eq!(annotations.destructive_hint, Some(false));
+    assert_eq!(annotations.idempotent_hint, Some(true));
+    assert_eq!(annotations.open_world_hint, Some(true));
+}
+
+#[test]
+fn to_mcp_tool_write_capability_uses_conservative_defaults() {
+    let cap = make_capability("submit_form", "Submit a form", vec!["form"]);
+
+    let annotations = cap
+        .to_mcp_tool()
+        .annotations
+        .expect("capability tools should be annotated");
+
+    assert_eq!(annotations.read_only_hint, Some(false));
+    assert_eq!(annotations.destructive_hint, Some(true));
+    assert_eq!(annotations.idempotent_hint, Some(false));
+    assert_eq!(annotations.open_world_hint, Some(true));
+}
+
+#[test]
+fn to_mcp_tool_capability_metadata_can_override_annotation_defaults() {
+    let mut cap = make_capability("start_scan", "Start a scan", vec!["security"]);
+    cap.metadata.destructive = Some(false);
+    cap.metadata.idempotent = Some(false);
+    cap.metadata.open_world = Some(false);
+
+    let annotations = cap
+        .to_mcp_tool()
+        .annotations
+        .expect("capability tools should be annotated");
+
+    assert_eq!(annotations.read_only_hint, Some(false));
+    assert_eq!(annotations.destructive_hint, Some(false));
+    assert_eq!(annotations.idempotent_hint, Some(false));
+    assert_eq!(annotations.open_world_hint, Some(false));
+}
+
+#[test]
 fn build_description_with_empty_tags_is_plain() {
     let cap = make_capability("no_tags", "Plain description", vec![]);
     assert_eq!(cap.build_description(), "Plain description");

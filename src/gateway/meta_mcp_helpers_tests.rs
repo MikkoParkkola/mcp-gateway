@@ -764,6 +764,12 @@ fn extract_search_limit_respects_custom_value() {
 }
 
 #[test]
+fn extract_search_limit_clamps_large_values() {
+    let args = json!({"limit": 500});
+    assert_eq!(extract_search_limit(&args), 25);
+}
+
+#[test]
 fn extract_search_limit_ignores_non_integer() {
     let args = json!({"limit": "not a number"});
     assert_eq!(extract_search_limit(&args), 10);

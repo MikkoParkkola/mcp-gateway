@@ -33,6 +33,7 @@ auth:
     - key: "env:ADMIN_API_KEY"
       name: "Admin"
       rate_limit: 0
+      admin: true             # Required for Web UI mutations and management meta-tools
       # No restrictions = full access (falls back to global policy)
 
     # Restricted bot: No filesystem or execution tools

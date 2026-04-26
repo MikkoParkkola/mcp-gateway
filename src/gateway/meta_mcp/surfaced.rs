@@ -85,6 +85,11 @@ impl MetaMcp {
 // ============================================================================
 
 impl MetaMcp {
+    /// Return the backend server name for a statically surfaced tool.
+    pub(crate) fn surfaced_tool_server(&self, tool_name: &str) -> Option<&str> {
+        self.surfaced_tools_map.get(tool_name).map(String::as_str)
+    }
+
     /// Resolve a surfaced tool config to a [`Tool`] schema.
     ///
     /// Returns `None` when:

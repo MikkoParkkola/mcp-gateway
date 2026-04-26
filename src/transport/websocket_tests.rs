@@ -141,6 +141,7 @@ fn notification_serialises_without_id() {
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["method"], "notifications/initialized");
     assert!(v.get("id").is_none());
+    assert!(v.get("params").is_none());
 }
 
 #[test]

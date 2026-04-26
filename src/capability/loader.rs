@@ -60,6 +60,10 @@ impl CapabilityLoader {
             .await
             .map_err(|e| Error::Config(format!("Failed to read directory entry: {e}")))?
         {
+            // Large capability directories load in the background at startup;
+            // yield between entries so the gateway listener remains responsive.
+            tokio::task::yield_now().await;
+
             let path = entry.path();
 
             // Skip hidden files/directories

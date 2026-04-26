@@ -231,8 +231,10 @@ async fn handle_callback(
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
+        let escaped_error = escape_html(error);
+        let escaped_description = escape_html(description);
         return Html(format!(
-            "<html><body><h1>Authorization Failed</h1><p>{error}: {description}</p></body></html>"
+            "<html><body><h1>Authorization Failed</h1><p>{escaped_error}: {escaped_description}</p></body></html>"
         ));
     }
 
@@ -293,6 +295,21 @@ async fn handle_callback(
     )
 }
 
+fn escape_html(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +347,14 @@ mod tests {
         assert!(params.code.is_none());
         assert!(params.state.is_none());
         assert!(params.error.is_none());
+    }
+
+    #[test]
+    fn escape_html_escapes_provider_error_text() {
+        assert_eq!(
+            escape_html("<script>alert('x') & \"y\"</script>"),
+            "&lt;script&gt;alert(&#39;x&#39;) &amp; &quot;y&quot;&lt;/script&gt;"
+        );
     }
 
     // =========================================================================

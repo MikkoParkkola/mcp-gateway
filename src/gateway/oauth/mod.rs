@@ -144,17 +144,15 @@ pub async fn agent_auth_middleware(
 /// Check whether the [`AgentIdentity`] in `extensions` grants access to
 /// `(backend, tool, action)` and emit an audit log entry.
 ///
-/// Returns `Ok(())` on success or an `Err(Response)` (403) on denial.
+/// Returns `Ok(())` on success or a denial reason on failure.
 ///
 /// Call this from tool dispatch handlers, **after** the middleware has run.
-// `Response` is inherently large in axum; boxing it would complicate caller code.
-#[allow(clippy::result_large_err)]
-pub fn check_agent_scope_and_audit(
+pub fn check_agent_scope_and_audit_reason(
     identity: &AgentIdentity,
     backend: &str,
     tool: &str,
     action: &Action,
-) -> Result<(), Response> {
+) -> Result<(), String> {
     let raw_action = format!("{action:?}").to_lowercase();
 
     match check_scopes(&identity.scopes, &identity.client_id, backend, tool, action) {
@@ -186,9 +184,24 @@ pub fn check_agent_scope_and_audit(
                 action = %raw_action,
                 "Agent scope denied: {reason}"
             );
-            Err(forbidden_response(&reason))
+            Err(reason)
         }
     }
+}
+
+/// Check agent scope, emit audit, and convert denial into a `403` response.
+///
+/// Call this from Axum handlers that want a ready-to-return HTTP response.
+// `Response` is inherently large in axum; boxing it would complicate caller code.
+#[allow(clippy::result_large_err)]
+pub fn check_agent_scope_and_audit(
+    identity: &AgentIdentity,
+    backend: &str,
+    tool: &str,
+    action: &Action,
+) -> Result<(), Response> {
+    check_agent_scope_and_audit_reason(identity, backend, tool, action)
+        .map_err(|reason| forbidden_response(&reason))
 }
 
 // ── JWKS endpoint handler ─────────────────────────────────────────────────────

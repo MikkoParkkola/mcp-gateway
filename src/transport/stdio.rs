@@ -21,8 +21,8 @@ use tracing::{debug, error, info, warn};
 
 use super::Transport;
 use crate::protocol::{
-    JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, is_version_mismatch_error,
-    negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
 };
 use crate::{Error, Result};
 
@@ -42,6 +42,8 @@ pub struct StdioTransport {
     env: HashMap<String, String>,
     /// Working directory
     cwd: Option<String>,
+    /// Request timeout for initialize and JSON-RPC calls
+    request_timeout: std::time::Duration,
     /// Writer handle
     writer: Mutex<Option<tokio::process::ChildStdin>>,
     /// Negotiated protocol version (config override or auto-negotiated)
@@ -59,6 +61,7 @@ impl StdioTransport {
         command: &str,
         env: HashMap<String, String>,
         cwd: Option<String>,
+        request_timeout: std::time::Duration,
         protocol_version: Option<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -69,6 +72,7 @@ impl StdioTransport {
             command: command.to_string(),
             env,
             cwd,
+            request_timeout,
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
         })
@@ -80,12 +84,14 @@ impl StdioTransport {
     ///
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
-        let parts: Vec<&str> = self.command.split_whitespace().collect();
+        let parts = shlex::split(&self.command).ok_or_else(|| {
+            Error::Config(format!("Invalid stdio command quoting: {}", self.command))
+        })?;
         if parts.is_empty() {
             return Err(Error::Config("Empty command".to_string()));
         }
 
-        let program = parts[0];
+        let program = parts[0].as_str();
         let args = &parts[1..];
 
         let mut cmd = Command::new(program);
@@ -118,6 +124,10 @@ impl StdioTransport {
             .stdout
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
         *self.writer.lock().await = Some(stdin);
         *self.child.lock().await = Some(child);
@@ -151,8 +161,23 @@ impl StdioTransport {
             debug!("Stdio reader task ended");
         });
 
-        // Initialize with protocol version negotiation
-        self.initialize().await?;
+        let command = self.command.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                debug!(command = %command, line_len = line.len(), "Received line from stderr");
+            }
+        });
+
+        // Initialize with protocol version negotiation. If initialization
+        // fails, tear down the spawned process now; otherwise reader tasks keep
+        // the transport Arc alive and failed starts leak orphan MCP servers.
+        if let Err(error) = self.initialize().await {
+            if let Err(close_error) = self.close().await {
+                warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
+            }
+            return Err(error);
+        }
 
         Ok(())
     }
@@ -383,7 +408,7 @@ impl Transport for StdioTransport {
         }
 
         // Wait for response with timeout
-        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        match tokio::time::timeout(self.request_timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
             Err(_) => {
@@ -394,11 +419,11 @@ impl Transport for StdioTransport {
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        });
+        let notification = JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+        };
 
         let message = serde_json::to_string(&notification)?;
         self.write_message(&message).await
@@ -429,7 +454,13 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_transport(cmd: &str) -> Arc<StdioTransport> {
-        StdioTransport::new(cmd, HashMap::new(), None, None)
+        StdioTransport::new(
+            cmd,
+            HashMap::new(),
+            None,
+            std::time::Duration::from_secs(30),
+            None,
+        )
     }
 
     // =========================================================================
@@ -450,14 +481,27 @@ mod tests {
     fn new_with_env_and_cwd() {
         let mut env = HashMap::new();
         env.insert("NODE_ENV".to_string(), "test".to_string());
-        let t = StdioTransport::new("node index.js", env, Some("/tmp".to_string()), None);
+        let t = StdioTransport::new(
+            "node index.js",
+            env,
+            Some("/tmp".to_string()),
+            std::time::Duration::from_secs(45),
+            None,
+        );
         assert_eq!(t.env.get("NODE_ENV").unwrap(), "test");
         assert_eq!(t.cwd.as_deref(), Some("/tmp"));
+        assert_eq!(t.request_timeout, std::time::Duration::from_secs(45));
     }
 
     #[test]
     fn new_with_explicit_protocol_version() {
-        let t = StdioTransport::new("echo", HashMap::new(), None, Some("2025-06-18".to_string()));
+        let t = StdioTransport::new(
+            "echo",
+            HashMap::new(),
+            None,
+            std::time::Duration::from_secs(30),
+            Some("2025-06-18".to_string()),
+        );
         assert_eq!(*t.protocol_version.read(), Some("2025-06-18".to_string()));
     }
 

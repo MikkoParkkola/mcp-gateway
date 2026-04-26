@@ -98,6 +98,7 @@ impl KeyServer {
                 Some(temp.scopes.tools.clone())
             },
             denied_tools: None,
+            admin: false,
         };
 
         let ev = AuditEvent::used(&temp, None);

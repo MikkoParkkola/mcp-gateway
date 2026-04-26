@@ -14,6 +14,7 @@ use std::time::Duration;
 use super::CapabilityExecutor;
 use super::rest::{ExecutionContext, ProtocolExecutor};
 use crate::capability::definition::ProtocolConfig;
+use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
 /// JSON-RPC 2.0 protocol executor.
@@ -145,6 +146,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
                 "JSON-RPC endpoint URL not configured".to_string(),
             ));
         }
+        validate_url_not_ssrf(&jsonrpc_config.endpoint)?;
 
         // Build the JSON-RPC 2.0 request body
         let body = Self::build_request(jsonrpc_config, &params)?;

@@ -11,6 +11,7 @@ use std::time::Duration;
 use super::CapabilityExecutor;
 use super::rest::{ExecutionContext, ProtocolExecutor};
 use crate::capability::definition::ProtocolConfig;
+use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
 /// GraphQL protocol executor.
@@ -201,6 +202,7 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 "GraphQL endpoint URL not configured".to_string(),
             ));
         }
+        validate_url_not_ssrf(&graphql_config.endpoint)?;
 
         // Build the { query, variables } body
         let body = Self::build_body(graphql_config, &params)?;

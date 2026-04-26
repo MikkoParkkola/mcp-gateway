@@ -4,6 +4,8 @@ use std::env;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{Error, Result};
+
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
 /// Authentication configuration for gateway access.
@@ -41,23 +43,30 @@ impl Default for AuthConfig {
 
 impl AuthConfig {
     /// Resolve the bearer token (expand env vars, generate if `auto`).
-    #[must_use]
-    pub fn resolve_bearer_token(&self) -> Option<String> {
-        self.bearer_token.as_ref().map(|token| {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    pub fn resolve_bearer_token(&self) -> Result<Option<String>> {
+        self.bearer_token.as_ref().map_or(Ok(None), |token| {
             if token == "auto" {
                 use rand::RngExt;
                 let random_bytes: [u8; 32] = rand::rng().random();
-                format!(
+                Ok(Some(format!(
                     "mcp_{}",
                     base64::Engine::encode(
                         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
                         random_bytes
                     )
-                )
+                )))
             } else if let Some(var_name) = token.strip_prefix("env:") {
-                env::var(var_name).unwrap_or_else(|_| token.clone())
+                env::var(var_name).map(Some).map_err(|_| {
+                    Error::ConfigValidation(format!(
+                        "auth.bearer_token references missing environment variable '{var_name}'"
+                    ))
+                })
             } else {
-                token.clone()
+                Ok(Some(token.clone()))
             }
         })
     }
@@ -85,16 +94,26 @@ pub struct ApiKeyConfig {
     /// Supports glob patterns. Acts as a blocklist on top of global policy.
     #[serde(default)]
     pub denied_tools: Option<Vec<String>>,
+    /// Whether this API key can use admin-only HTTP UI and management tools.
+    #[serde(default)]
+    pub admin: bool,
 }
 
 impl ApiKeyConfig {
     /// Resolve the API key (expand env vars).
-    #[must_use]
-    pub fn resolve_key(&self) -> String {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    pub fn resolve_key(&self) -> Result<String> {
         if let Some(var_name) = self.key.strip_prefix("env:") {
-            env::var(var_name).unwrap_or_else(|_| self.key.clone())
+            env::var(var_name).map_err(|_| {
+                Error::ConfigValidation(format!(
+                    "auth.api_keys[].key references missing environment variable '{var_name}'"
+                ))
+            })
         } else {
-            self.key.clone()
+            Ok(self.key.clone())
         }
     }
 
@@ -161,13 +180,20 @@ pub struct AgentDefinitionConfig {
 
 impl AgentDefinitionConfig {
     /// Resolve the HS256 secret, expanding `env:VAR_NAME` syntax.
-    #[must_use]
-    pub fn resolved_hs256_secret(&self) -> Option<String> {
-        self.hs256_secret.as_ref().map(|s| {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an `env:VAR_NAME` reference cannot be resolved.
+    pub fn resolved_hs256_secret(&self) -> Result<Option<String>> {
+        self.hs256_secret.as_ref().map_or(Ok(None), |s| {
             if let Some(var) = s.strip_prefix("env:") {
-                env::var(var).unwrap_or_else(|_| s.clone())
+                env::var(var).map(Some).map_err(|_| {
+                    Error::ConfigValidation(format!(
+                        "agent_auth.agents[].hs256_secret references missing environment variable '{var}'"
+                    ))
+                })
             } else {
-                s.clone()
+                Ok(Some(s.clone()))
             }
         })
     }

@@ -37,6 +37,7 @@ use super::response_cache::ResponseCache;
 use super::{CapabilityDefinition, ProviderConfig, RestConfig};
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
+use crate::security::validate_url_not_ssrf;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
 
@@ -68,6 +69,15 @@ impl CapabilityExecutor {
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 {
+                    return attempt.stop();
+                }
+                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
+                    return attempt.error(e.to_string());
+                }
+                attempt.follow()
+            }))
             .build()
             .expect("Failed to create HTTP client")
     }
@@ -249,6 +259,7 @@ impl CapabilityExecutor {
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
+        validate_url_not_ssrf(&url)?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 
         let method = config.method.parse::<Method>().map_err(|e| {
