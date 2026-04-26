@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::cache::ResponseCache;
+use crate::capability::validate_output;
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::idempotency::{GuardOutcome, enforce};
@@ -33,6 +34,30 @@ use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_k
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_trace, resolve_idempotency_key,
 };
+
+fn enforce_output_schema(
+    server: &str,
+    tool: &str,
+    result: Value,
+    output_schema: Option<&Value>,
+) -> Result<Value> {
+    let Some(schema) = output_schema else {
+        return Ok(result);
+    };
+
+    let validation = validate_output(&result, schema);
+    if validation.is_valid() {
+        Ok(validation.coerced)
+    } else {
+        Err(Error::json_rpc(
+            -32603,
+            format!(
+                "Tool '{tool}' on server '{server}' returned a result that violated its declared output schema:\n\n{}",
+                validation.format_output_error(schema)
+            ),
+        ))
+    }
+}
 
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
@@ -576,7 +601,11 @@ impl MetaMcp {
                 response = t.transform_result(tool, response).await?;
             }
 
-            return Ok(response);
+            let output_schema = cap.get(tool).and_then(|cap_def| {
+                (!cap_def.schema.output.is_null()).then_some(cap_def.schema.output)
+            });
+
+            return enforce_output_schema(server, tool, response, output_schema.as_ref());
         }
 
         let backend = self
@@ -621,7 +650,18 @@ impl MetaMcp {
             });
         }
 
-        Ok(response.result.unwrap_or(json!(null)))
+        let result = response.result.unwrap_or(json!(null));
+        let output_schema = self
+            .get_tool_registry()
+            .and_then(|registry| registry.get(&format!("{server}:{tool}")))
+            .and_then(|entry| entry.tool.output_schema)
+            .or_else(|| {
+                backend
+                    .get_cached_tool(tool)
+                    .and_then(|cached| cached.output_schema)
+            });
+
+        enforce_output_schema(server, tool, result, output_schema.as_ref())
     }
 
     // ========================================================================
@@ -929,6 +969,8 @@ mod response_transform_tests {
     use crate::provider::transforms::ResponseTransform;
     use crate::transform::{RedactRule, TransformConfig};
 
+    use super::enforce_output_schema;
+
     /// Prove the component used by `dispatch_to_backend`: given a non-empty
     /// `response_transform` in a capability definition, `ResponseTransform`
     /// strips all fields not listed in `project`.
@@ -1024,6 +1066,78 @@ mod response_transform_tests {
         assert_eq!(card_val, "[CC_REDACTED]");
         // Non-sensitive fields are untouched
         assert_eq!(result["user"], json!("Alice"));
+    }
+
+    #[test]
+    fn enforce_output_schema_accepts_valid_result() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "count": { "type": "integer" }
+            },
+            "required": ["id", "count"]
+        });
+
+        let result = enforce_output_schema(
+            "demo",
+            "search",
+            json!({"id": "abc", "count": 2}),
+            Some(&schema),
+        )
+        .expect("schema-valid result should pass");
+
+        assert_eq!(result["id"], json!("abc"));
+        assert_eq!(result["count"], json!(2));
+    }
+
+    #[test]
+    fn enforce_output_schema_rejects_unexpected_fields() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "data": { "type": "string" }
+            },
+            "required": ["data"]
+        });
+
+        let err = enforce_output_schema(
+            "demo",
+            "get_data",
+            json!({"data": "ok", "exfil": "secret"}),
+            Some(&schema),
+        )
+        .expect_err("extra fields must fail closed");
+
+        let message = err.to_string();
+        assert!(message.contains("violated its declared output schema"));
+        assert!(message.contains("Tool result validation failed"));
+        assert!(message.contains("exfil"));
+    }
+
+    #[tokio::test]
+    async fn response_transform_runs_before_output_validation() {
+        let transform = ResponseTransform::new(&TransformConfig {
+            project: vec!["id".to_string()],
+            ..Default::default()
+        });
+        let raw = json!({
+            "id": "abc",
+            "internal_token": "secret"
+        });
+        let transformed = transform.transform_result("my_tool", raw).await.unwrap();
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" }
+            },
+            "required": ["id"]
+        });
+
+        let result = enforce_output_schema("demo", "my_tool", transformed, Some(&schema))
+            .expect("post-transform result should satisfy schema");
+
+        assert_eq!(result, json!({"id": "abc"}));
     }
 
     /// Verify `TransformConfig::is_empty` returns expected values.
