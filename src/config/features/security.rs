@@ -174,7 +174,7 @@ pub struct ToolContractConfig {
 ///           - 'BEGIN PRIVATE KEY'
 ///         action_mode: true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ResponseContractConfig {
     /// Enable the contract gate. Default: `false` (opt-in).
@@ -188,18 +188,6 @@ pub struct ResponseContractConfig {
     pub fail_closed: bool,
     /// Per-tool contracts keyed by tool name.
     pub tools: std::collections::HashMap<String, ToolContractConfig>,
-}
-
-impl Default for ResponseContractConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            action_mode: false,
-            default_max_bytes: None,
-            fail_closed: false,
-            tools: std::collections::HashMap::new(),
-        }
-    }
 }
 
 // ── SecurityConfig ────────────────────────────────────────────────────────────

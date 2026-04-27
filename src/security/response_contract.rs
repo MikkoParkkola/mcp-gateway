@@ -45,8 +45,8 @@ impl ToolResponseContract {
     #[must_use]
     pub fn validate(&self, text: &str) -> Option<ContractViolation> {
         // 1. Size check
-        if let Some(max) = self.max_bytes {
-            if text.len() > max {
+        if let Some(max) = self.max_bytes
+            && text.len() > max {
                 return Some(ContractViolation {
                     reason: "max_bytes_exceeded",
                     detail: format!(
@@ -57,7 +57,6 @@ impl ToolResponseContract {
                     should_block: self.action_mode,
                 });
             }
-        }
 
         // 2. Forbidden pattern check
         if !self.forbidden_patterns.is_empty() {

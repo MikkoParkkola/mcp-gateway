@@ -136,6 +136,7 @@ impl Gateway {
     /// # Errors
     ///
     /// Currently infallible; returns `Result` for forward-compatibility.
+    #[allow(clippy::too_many_lines)]
     async fn build_meta_mcp(&self) -> Result<BuiltMetaMcp> {
         // ── Response cache ───────────────────────────────────────────────────
         let cache = if self.config.cache.enabled {
