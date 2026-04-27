@@ -126,7 +126,10 @@ mod tests {
     fn action_mode_false_does_not_block() {
         let contract = make_contract(Some(5), &[], false);
         let violation = contract.validate("This is too long").unwrap();
-        assert!(!violation.should_block, "observe mode must never set should_block");
+        assert!(
+            !violation.should_block,
+            "observe mode must never set should_block"
+        );
     }
 
     #[test]

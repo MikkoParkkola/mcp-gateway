@@ -276,8 +276,7 @@ pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
             continue;
         }
 
-        let entry: serde_json::Value =
-            serde_json::from_str(trimmed).map_err(|e| {
+        let entry: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("line {}: invalid JSON: {e}", line_no + 1),
@@ -373,10 +372,7 @@ pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
 /// # Errors
 ///
 /// Returns `io::Error` if the file cannot be read.
-pub fn show_session_entries(
-    path: &Path,
-    session: &str,
-) -> io::Result<Vec<serde_json::Value>> {
+pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<serde_json::Value>> {
     let content = std::fs::read_to_string(path)?;
     let mut results = Vec::new();
 
@@ -415,22 +411,16 @@ fn expand_tilde(s: &str) -> PathBuf {
 /// Read the last non-empty line of `path` to recover `(counter, last_entry_hash)`.
 fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
     let content = std::fs::read_to_string(path)?;
-    let last_line = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .last();
+    let last_line = content.lines().filter(|l| !l.trim().is_empty()).last();
 
     let Some(line) = last_line else {
         return Ok((0, "genesis".to_string()));
     };
 
-    let entry: serde_json::Value = serde_json::from_str(line)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let entry: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    let counter = entry
-        .get("counter")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let counter = entry.get("counter").and_then(|v| v.as_u64()).unwrap_or(0);
     let entry_hash = entry
         .get("entry_hash")
         .and_then(|v| v.as_str())
@@ -452,12 +442,14 @@ fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
     // Build a clean copy without the hash-and-sig fields.
     let core: serde_json::Map<String, serde_json::Value> = obj
         .iter()
-        .filter(|(k, _)| k.as_str() != "entry_hash" && k.as_str() != "sig" && k.as_str() != "key_id")
+        .filter(|(k, _)| {
+            k.as_str() != "entry_hash" && k.as_str() != "sig" && k.as_str() != "key_id"
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let core_json = serde_json::to_string(&core)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let core_json =
+        serde_json::to_string(&core).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     let hash_bytes = sha256_raw(core_json.as_bytes());
     Ok(format!("sha256:{}", hex::encode(hash_bytes)))
@@ -473,8 +465,7 @@ fn sha256_raw(data: &[u8]) -> [u8; 32] {
 /// Compute `HMAC-SHA256(key, message)` and return lowercase hex.
 fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
     // HMAC accepts any key length; the `expect` here cannot panic.
-    let mut mac =
-        HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(message);
     hex::encode(mac.finalize().into_bytes())
 }
@@ -509,11 +500,7 @@ mod tests {
         })
     }
 
-    fn write_entry(
-        logger: &TransparencyLogger,
-        session: &str,
-        counter_hint: &str,
-    ) {
+    fn write_entry(logger: &TransparencyLogger, session: &str, counter_hint: &str) {
         logger
             .log_invocation(
                 session,
@@ -669,7 +656,10 @@ mod tests {
 
         // THEN: sig and key_id are present and correctly formatted
         let sig = entry["sig"].as_str().expect("sig must be a string");
-        assert!(sig.starts_with("hmac-sha256:"), "sig must have hmac-sha256 prefix");
+        assert!(
+            sig.starts_with("hmac-sha256:"),
+            "sig must have hmac-sha256 prefix"
+        );
         assert_eq!(sig.len(), "hmac-sha256:".len() + 64); // 64 hex chars = 32 bytes
         assert_eq!(entry["key_id"], "test-key");
     }

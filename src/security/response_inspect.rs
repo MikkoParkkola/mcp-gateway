@@ -393,7 +393,10 @@ mod tests {
         // Should have finding but not block (Medium threshold)
         let has_medium = r.findings.iter().any(|f| f.category == "encoding");
         if has_medium {
-            assert!(!r.should_block, "Medium findings must not block in action mode");
+            assert!(
+                !r.should_block,
+                "Medium findings must not block in action mode"
+            );
         }
     }
 
@@ -420,4 +423,3 @@ mod tests {
         let _ = extract_text_from_result(&v); // Should not panic
     }
 }
-

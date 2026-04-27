@@ -341,6 +341,7 @@ mod tests {
     fn flatten_tool_call_result_rejects_empty_content() {
         let err = flatten_tool_call_result(ToolsCallResult {
             content: vec![],
+            structured_content: None,
             is_error: false,
         })
         .unwrap_err();
@@ -361,6 +362,7 @@ mod tests {
                     annotations: None,
                 },
             ],
+            structured_content: None,
             is_error: false,
         })
         .unwrap();
@@ -399,6 +401,7 @@ mod tests {
                     annotations: None,
                 },
             ],
+            structured_content: None,
             is_error: false,
         })
         .unwrap();

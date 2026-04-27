@@ -8,7 +8,6 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
-use tracing::{error, info};
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
     config::Config,
@@ -17,6 +16,7 @@ use mcp_gateway::{
     setup_tracing,
     validator::ValidateConfig,
 };
+use tracing::{error, info};
 
 // ── New command imports ────────────────────────────────────────────────────────
 // These modules live in the binary-only `commands/` tree and are not part of
