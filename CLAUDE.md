@@ -142,7 +142,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 | **Dual MCP + A2A transport** | Cross-provider agent messaging (#145, MIK-2970) | Treat A2A as an afterthought; avoid compiling it out of default builds |
 | **Capability definitions public (mcp-gateway) / private (mcp-gateway-private)** | Public catalog for community; private API credentials / deploy configs | Mix private capabilities into the public catalog |
 | **`cargo clippy --all-targets -- -D warnings` + `cargo fmt --check`** gates | Zero-debt discipline in Rust source | Ship code with lints suppressed ad hoc |
-| **License: MIT** | Maximum adoption for infrastructure | Relicense without explicit user direction |
+| **Mixed per-file licensing: MIT core + PolyForm Noncommercial 1.0.0 EE** | Core gateway stays MIT for adoption; security firewall, agent-identity, data-flow, message-signing, policy, response-inspect/scanner, scope-collision, tool-integrity, cost-accounting, key-server, and transparency-log paths require commercial terms for commercial use (see [LICENSE-EE.md](LICENSE-EE.md), v2.11.0+) | Collapse package metadata back to plain MIT |
 
 ## Anti-Patterns (things agents get wrong in this repo)
 

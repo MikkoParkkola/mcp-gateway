@@ -946,20 +946,21 @@ fn build_stats_response_custom_price() {
 fn wrap_tool_success_produces_valid_response() {
     let id = RequestId::Number(1);
     let content = json!({"servers": []});
-    let response = wrap_tool_success(id, &content);
+    let response = wrap_tool_success(id, &content, false);
     assert!(response.error.is_none());
     assert!(response.result.is_some());
 
     let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
     assert!(!result.is_error);
     assert_eq!(result.content.len(), 1);
+    assert!(result.structured_content.is_none());
 }
 
 #[test]
 fn wrap_tool_success_content_is_pretty_json() {
     let id = RequestId::Number(42);
     let content = json!({"key": "value"});
-    let response = wrap_tool_success(id, &content);
+    let response = wrap_tool_success(id, &content, false);
 
     let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
     if let Content::Text { text, .. } = &result.content[0] {
@@ -970,6 +971,20 @@ fn wrap_tool_success_content_is_pretty_json() {
     } else {
         panic!("Expected text content");
     }
+}
+
+#[test]
+fn wrap_tool_success_with_output_schema_includes_structured_content() {
+    let id = RequestId::Number(99);
+    let content = json!({"matches": [{"server": "ado", "tool": "list_projects", "description": "List projects", "score": 1.0}]});
+    let response = wrap_tool_success(id, &content, true);
+
+    let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert!(!result.is_error);
+    // Must have both content (text fallback) and structuredContent
+    assert_eq!(result.content.len(), 1);
+    let sc = result.structured_content.expect("structuredContent must be present when has_output_schema is true");
+    assert_eq!(sc["matches"][0]["server"], "ado");
 }
 
 // ── tool_matches_query synonym expansion ────────────────────────────

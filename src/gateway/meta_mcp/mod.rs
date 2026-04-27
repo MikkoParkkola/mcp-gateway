@@ -737,7 +737,7 @@ impl MetaMcp {
             return match result {
                 Ok(content) => {
                     use super::meta_mcp_helpers::wrap_tool_success;
-                    wrap_tool_success(id, &content)
+                    wrap_tool_success(id, &content, false)
                 }
                 Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
             };
@@ -798,7 +798,10 @@ impl MetaMcp {
         };
 
         match result {
-            Ok(content) => wrap_tool_success(id, &content),
+            Ok(content) => {
+                let has_output_schema = tool_name == "gateway_search_tools";
+                wrap_tool_success(id, &content, has_output_schema)
+            }
             Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
         }
     }
