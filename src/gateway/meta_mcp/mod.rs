@@ -159,6 +159,12 @@ pub struct MetaMcp {
     ///
     /// Corresponds to `security.message_signing.require_nonce` in config.
     pub(super) require_nonce: bool,
+
+    /// Tamper-evident hash-chain transparency log (issue #133, D3).
+    ///
+    /// `Some` when `security.transparency_log.enabled = true`; `None` otherwise.
+    /// Zero overhead when `None` — no allocation or I/O on the hot path.
+    pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
 // ============================================================================
@@ -207,6 +213,7 @@ impl MetaMcp {
             message_signer: None,
             nonce_store: None,
             require_nonce: false,
+            transparency_logger: None,
         }
     }
 
@@ -310,9 +317,20 @@ impl MetaMcp {
         self.require_nonce = require_nonce;
     }
 
+    /// Attach a transparency logger (issue #133, D3).
+    ///
+    /// When set, every completed tool invocation is committed to the
+    /// hash-chain log.  Failures are non-fatal — a `warn!` is emitted but
+    /// the invocation result is not affected.
+    pub fn enable_transparency_log(
+        &mut self,
+        logger: crate::security::TransparencyLogger,
+    ) {
+        self.transparency_logger = Some(Arc::new(logger));
+    }
+
     /// Attach the webhook registry for `gateway_webhook_status` reporting.
-    pub fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {
-        *self.webhook_registry.write() = Some(registry);
+    pub fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {        *self.webhook_registry.write() = Some(registry);
     }
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.

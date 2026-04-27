@@ -5,6 +5,48 @@ use serde::{Deserialize, Serialize};
 pub use crate::security::agent_identity::AgentIdentityConfig;
 use crate::security::policy::ToolPolicyConfig;
 
+// ── TransparencyLogConfig ─────────────────────────────────────────────────────
+
+/// Configuration for the tamper-evident hash-chain transparency log (issue #133, D3).
+///
+/// When `enabled = true` every completed tool invocation is appended to a
+/// file-backed NDJSON hash-chain so any post-hoc tampering is detectable.
+///
+/// ```yaml
+/// security:
+///   transparency_log:
+///     enabled: true
+///     path: "~/.mcp-gateway/transparency/transparency.jsonl"
+///     shared_secret: "${MCP_GATEWAY_TRANSPARENCY_SECRET}"
+///     key_id: "v1"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TransparencyLogConfig {
+    /// Enable the transparency log. Default: `false` (opt-in).
+    pub enabled: bool,
+    /// Path to the NDJSON log file (`~` is expanded at startup).
+    pub path: String,
+    /// Key identifier written into `key_id` for rotation tracking.
+    pub key_id: String,
+    /// HMAC shared secret (resolved from env var at load time).
+    ///
+    /// When empty, `sig` / `key_id` are omitted from each entry — the hash
+    /// chain alone still provides tamper evidence.
+    pub shared_secret: String,
+}
+
+impl Default for TransparencyLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: "~/.mcp-gateway/transparency/transparency.jsonl".to_string(),
+            key_id: "default".to_string(),
+            shared_secret: String::new(),
+        }
+    }
+}
+
 // ── MessageSigningConfig ──────────────────────────────────────────────────────
 
 /// Configuration for inter-agent HMAC-SHA256 message signing (ADR-001).
@@ -80,6 +122,9 @@ pub struct SecurityConfig {
     /// Per-agent identity verification (OWASP ASI03). Default: disabled.
     #[serde(default)]
     pub agent_identity: AgentIdentityConfig,
+    /// Tamper-evident hash-chain transparency log (issue #133, D3). Default: disabled.
+    #[serde(default)]
+    pub transparency_log: TransparencyLogConfig,
 }
 
 impl Default for SecurityConfig {
@@ -92,6 +137,7 @@ impl Default for SecurityConfig {
             firewall: crate::security::firewall::FirewallConfig::default(),
             message_signing: MessageSigningConfig::default(),
             agent_identity: AgentIdentityConfig::default(),
+            transparency_log: TransparencyLogConfig::default(),
         }
     }
 }

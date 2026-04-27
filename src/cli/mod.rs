@@ -39,7 +39,7 @@ use clap_complete::Shell;
 use crate::cli::output::OutputFormat;
 
 pub use skills::SkillsCommand;
-pub use subcommands::{CapCommand, PluginCommand, TlsCommand};
+pub use subcommands::{AuditCommand, CapCommand, PluginCommand, TlsCommand};
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
 // Defined here (library crate) so both the CLI parser and the binary-only
@@ -410,6 +410,20 @@ pub enum Command {
         #[arg(long, env = "MCP_GATEWAY_CONFIG_DIR")]
         data_dir: Option<PathBuf>,
     },
+
+    /// Transparency log audit — verify chain integrity and query by session
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Verify the full hash chain
+    /// mcp-gateway audit verify
+    ///
+    /// # Show entries for a specific session
+    /// mcp-gateway audit show --session sess-abc123
+    /// ```
+    #[command(subcommand, about = "Transparency log audit commands")]
+    Audit(AuditCommand),
 }
 
 /// Setup subcommands: interactive import wizard or config export.

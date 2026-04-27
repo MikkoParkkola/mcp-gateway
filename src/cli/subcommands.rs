@@ -353,3 +353,29 @@ pub enum TlsCommand {
         out: PathBuf,
     },
 }
+
+/// Transparency log audit subcommands
+#[derive(Subcommand, Debug)]
+pub enum AuditCommand {
+    /// Verify the tamper-evidence hash chain of the transparency log
+    #[command(about = "Verify the transparency log hash chain")]
+    Verify {
+        /// Path to the transparency log file
+        /// (default: ~/.mcp-gateway/transparency/transparency.jsonl)
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+
+    /// Show log entries for a specific session
+    #[command(about = "Show transparency log entries for a session")]
+    Show {
+        /// Session ID to filter by
+        #[arg(long, required = true)]
+        session: String,
+
+        /// Path to the transparency log file
+        /// (default: ~/.mcp-gateway/transparency/transparency.jsonl)
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+}

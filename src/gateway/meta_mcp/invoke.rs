@@ -15,6 +15,7 @@ use crate::cache::ResponseCache;
 use crate::capability::validate_output;
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
+use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, enforce};
 use crate::playbook::PlaybookEngine;
 use crate::provider::Transform as _;
@@ -98,6 +99,16 @@ impl MetaMcp {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         let arguments = parse_tool_arguments(args)?;
+
+        // === PRE-INVOKE: Compute request hash for transparency log ============
+        //
+        // Computed eagerly here so the hash covers the raw arguments before any
+        // secret injection or transformation.  Zero-cost when the logger is None.
+        let request_hash = if self.transparency_logger.is_some() {
+            format!("sha256:{}", sha256_hex(canonical_json(&arguments).as_bytes()))
+        } else {
+            String::new()
+        };
 
         // Validate tool name syntax before any work — prevents session corruption
         // from malformed names injected by compromised backend servers.
@@ -491,6 +502,26 @@ impl MetaMcp {
         #[cfg(feature = "spec-preview")]
         if let Some(sid) = session_id {
             self.promote_tool_for_session(sid, &tool_key);
+        }
+
+        // === POST-INVOKE: Transparency log (issue #133, D3) ==================
+        //
+        // Commit the request+response pair to the hash-chain log AFTER all
+        // post-processing so `result` reflects what the caller actually receives.
+        // Failures are non-fatal — we log a warning but never abort the invocation.
+        if let Some(ref tl) = self.transparency_logger {
+            let response_hash = format!("sha256:{}", sha256_hex(canonical_json(&result).as_bytes()));
+            let caller = api_key_name.unwrap_or("anonymous");
+            let sid = session_id.unwrap_or("unknown");
+            if let Err(e) = tl.log_invocation(sid, caller, server, tool, &request_hash, &response_hash) {
+                warn!(
+                    server,
+                    tool,
+                    trace_id,
+                    error = %e,
+                    "Transparency log write failed (non-fatal)"
+                );
+            }
         }
 
         // === POST-INVOKE: Response signing (ADR-001, OWASP ASI07) ===

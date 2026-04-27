@@ -228,8 +228,30 @@ impl Gateway {
             meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
         }
 
-        let meta_mcp = Arc::new(meta_mcp_builder);
+        let mut meta_mcp = Arc::new(meta_mcp_builder);
         meta_mcp.set_transition_tracker(Arc::clone(&transition_tracker));
+
+        // ── Transparency log (issue #133, D3) ─────────────────────────────────
+        if self.config.security.transparency_log.enabled {
+            use crate::security::transparency_log::TransparencyLogConfig;
+            let tl_cfg = Arc::new(TransparencyLogConfig {
+                enabled: self.config.security.transparency_log.enabled,
+                path: self.config.security.transparency_log.path.clone(),
+                key_id: self.config.security.transparency_log.key_id.clone(),
+                shared_secret: self.config.security.transparency_log.shared_secret.clone(),
+            });
+            match crate::security::TransparencyLogger::open(tl_cfg) {
+                Ok(logger) => {
+                    Arc::get_mut(&mut meta_mcp)
+                        .expect("no other Arc references at this point")
+                        .enable_transparency_log(logger);
+                    info!("Transparency log enabled");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to open transparency log — continuing without it");
+                }
+            }
+        }
 
         Ok(BuiltMetaMcp {
             meta_mcp,

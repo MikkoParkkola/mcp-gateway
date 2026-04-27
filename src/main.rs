@@ -9,9 +9,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use tracing::{error, info};
-
 use mcp_gateway::{
-    cli::{Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
+    cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
     config::Config,
     config_persistence::{load_existing_or_default, write_config},
     gateway::Gateway,
@@ -190,8 +189,95 @@ async fn main() -> ExitCode {
             quiet,
             data_dir,
         }) => commands::run_upgrade_command(dry_run, quiet, data_dir.as_deref()),
+        Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd),
         Some(Command::Serve { stdio: true }) => run_stdio_server(cli).await,
         Some(Command::Serve { stdio: false }) | None => run_server(cli).await,
+    }
+}
+
+/// Dispatch an `audit` subcommand (transparency log chain verification / session query).
+fn run_audit_command(cmd: AuditCommand) -> ExitCode {
+    use mcp_gateway::security::transparency_log::{show_session_entries, verify_log};
+    use std::path::PathBuf;
+
+    /// Resolve the log path: use the provided `--path` flag, or fall back to
+    /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
+    fn resolve_path(path: Option<PathBuf>) -> PathBuf {
+        path.unwrap_or_else(|| {
+            dirs::home_dir()
+                .map(|h| {
+                    h.join(".mcp-gateway")
+                        .join("transparency")
+                        .join("transparency.jsonl")
+                })
+                .unwrap_or_else(|| PathBuf::from("transparency.jsonl"))
+        })
+    }
+
+    match cmd {
+        AuditCommand::Verify { path } => {
+            let log_path = resolve_path(path);
+            if !log_path.exists() {
+                eprintln!(
+                    "Error: transparency log not found at {}",
+                    log_path.display()
+                );
+                return ExitCode::FAILURE;
+            }
+            match verify_log(&log_path) {
+                Err(e) => {
+                    eprintln!("Error reading log: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(result) if result.ok => {
+                    println!(
+                        "✓ Chain verified — {} entries checked, no tampering detected.",
+                        result.entries_checked
+                    );
+                    ExitCode::SUCCESS
+                }
+                Ok(result) => {
+                    let at = result
+                        .error_at_counter
+                        .map_or_else(|| "?".to_string(), |n| n.to_string());
+                    let msg = result
+                        .error_message
+                        .unwrap_or_else(|| "unknown error".to_string());
+                    eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        AuditCommand::Show { session, path } => {
+            let log_path = resolve_path(path);
+            if !log_path.exists() {
+                eprintln!(
+                    "Error: transparency log not found at {}",
+                    log_path.display()
+                );
+                return ExitCode::FAILURE;
+            }
+            match show_session_entries(&log_path, &session) {
+                Err(e) => {
+                    eprintln!("Error reading log: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(entries) if entries.is_empty() => {
+                    println!("No entries found for session '{session}'.");
+                    ExitCode::SUCCESS
+                }
+                Ok(entries) => {
+                    for entry in &entries {
+                        match serde_json::to_string_pretty(entry) {
+                            Ok(pretty) => println!("{pretty}"),
+                            Err(e) => eprintln!("Serialisation error: {e}"),
+                        }
+                    }
+                    ExitCode::SUCCESS
+                }
+            }
+        }
     }
 }
 

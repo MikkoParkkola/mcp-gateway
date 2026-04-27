@@ -24,6 +24,7 @@ pub mod sanitize;
 pub mod scope_collision;
 pub mod ssrf;
 pub mod tool_integrity;
+pub mod transparency_log;
 
 pub use agent_identity::{
     AgentIdentity, AgentIdentityConfig, IdentitySource, extract_agent_identity,
@@ -41,3 +42,4 @@ pub use sanitize::{
 pub use scope_collision::{detect_collisions, validate_tool_name};
 pub use ssrf::{check_host_not_ssrf, validate_redirect_chain, validate_url_not_ssrf};
 pub use tool_integrity::ToolIntegrityChecker;
+pub use transparency_log::{TransparencyLogConfig, TransparencyLogger};
