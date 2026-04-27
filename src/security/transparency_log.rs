@@ -115,9 +115,10 @@ impl TransparencyLogger {
         let path = expand_tilde(&config.path);
 
         if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
 
         // Recover state from the last line (if the file already exists).
         let (counter, last_entry_hash) = if path.exists() {
@@ -191,8 +192,7 @@ impl TransparencyLogger {
         });
 
         // ── Step 2: entry_hash = sha256(canonical JSON of core) ───────────────
-        let core_json = serde_json::to_string(&entry_core)
-            .map_err(|e| io::Error::other(e))?;
+        let core_json = serde_json::to_string(&entry_core).map_err(io::Error::other)?;
         let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
         let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
 
@@ -225,8 +225,7 @@ impl TransparencyLogger {
         }
 
         // ── Write to file ─────────────────────────────────────────────────────
-        let line = serde_json::to_string(&full_entry)
-            .map_err(|e| io::Error::other(e))?;
+        let line = serde_json::to_string(&full_entry).map_err(io::Error::other)?;
 
         writeln!(inner.writer, "{line}")?;
         inner.writer.flush()?;
@@ -409,7 +408,7 @@ fn expand_tilde(s: &str) -> PathBuf {
 /// Read the last non-empty line of `path` to recover `(counter, last_entry_hash)`.
 fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
     let content = std::fs::read_to_string(path)?;
-    let last_line = content.lines().filter(|l| !l.trim().is_empty()).next_back();
+    let last_line = content.lines().rfind(|l| !l.trim().is_empty());
 
     let Some(line) = last_line else {
         return Ok((0, "genesis".to_string()));
@@ -418,7 +417,10 @@ fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
     let entry: serde_json::Value =
         serde_json::from_str(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    let counter = entry.get("counter").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let counter = entry
+        .get("counter")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
     let entry_hash = entry
         .get("entry_hash")
         .and_then(|v| v.as_str())
@@ -446,8 +448,7 @@ fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let core_json =
-        serde_json::to_string(&core).map_err(|e| io::Error::other(e))?;
+    let core_json = serde_json::to_string(&core).map_err(io::Error::other)?;
 
     let hash_bytes = sha256_raw(core_json.as_bytes());
     Ok(format!("sha256:{}", hex::encode(hash_bytes)))

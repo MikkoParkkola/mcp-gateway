@@ -150,7 +150,7 @@ pub struct ToolContractConfig {
     pub max_bytes: Option<usize>,
     /// Regex patterns that must NOT appear in the response text.
     pub forbidden_patterns: Vec<String>,
-    /// Override global action_mode for this tool. `null` means use global.
+    /// Override global `action_mode` for this tool. `null` means use global.
     pub action_mode: Option<bool>,
 }
 
@@ -179,7 +179,7 @@ pub struct ToolContractConfig {
 pub struct ResponseContractConfig {
     /// Enable the contract gate. Default: `false` (opt-in).
     pub enabled: bool,
-    /// Block violating responses (action_mode=true) or just observe. Default: `false`.
+    /// Block violating responses (`action_mode=true`) or just observe. Default: `false`.
     pub action_mode: bool,
     /// Default max response bytes for all tools (overridable per-tool). Default: `None`.
     pub default_max_bytes: Option<usize>,
