@@ -655,7 +655,11 @@ pub(crate) fn build_circuit_breaker_stats_json(server: &str, stats: &CircuitBrea
 /// with the raw JSON value, as required by the MCP spec (2025-06-18) for tools
 /// that declare an `outputSchema`. The text `content` is always included as a
 /// fallback for clients that don't support structured output.
-pub(crate) fn wrap_tool_success(id: RequestId, content: &Value, has_output_schema: bool) -> JsonRpcResponse {
+pub(crate) fn wrap_tool_success(
+    id: RequestId,
+    content: &Value,
+    has_output_schema: bool,
+) -> JsonRpcResponse {
     let result = ToolsCallResult {
         content: vec![Content::Text {
             text: serde_json::to_string_pretty(content).unwrap_or_default(),

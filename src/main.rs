@@ -204,13 +204,11 @@ fn run_audit_command(cmd: AuditCommand) -> ExitCode {
     /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
     fn resolve_path(path: Option<PathBuf>) -> PathBuf {
         path.unwrap_or_else(|| {
-            dirs::home_dir()
-                .map(|h| {
+            dirs::home_dir().map_or_else(|| PathBuf::from("transparency.jsonl"), |h| {
                     h.join(".mcp-gateway")
                         .join("transparency")
                         .join("transparency.jsonl")
                 })
-                .unwrap_or_else(|| PathBuf::from("transparency.jsonl"))
         })
     }
 

@@ -463,8 +463,8 @@ impl MetaMcp {
                 let effective_action_mode = tool_entry
                     .and_then(|e| e.action_mode)
                     .unwrap_or(contract_cfg.action_mode);
-                let patterns: &[String] = tool_entry
-                    .map_or(&[], |e| e.forbidden_patterns.as_slice());
+                let patterns: &[String] =
+                    tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
 
                 let forbidden_patterns = if patterns.is_empty() {
                     regex::RegexSet::empty()
