@@ -274,8 +274,17 @@ pub struct ToolsCallParams {
 /// Tools call result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsCallResult {
-    /// Content items
+    /// Content items (text representation for backward compatibility)
     pub content: Vec<Content>,
+    /// Structured JSON content matching the tool's `outputSchema`.
+    ///
+    /// Per the MCP spec (2025-06-18), when a tool declares an `outputSchema`,
+    /// the response **must** include `structuredContent` with a JSON object
+    /// that conforms to that schema. Clients that enforce this requirement
+    /// (e.g. the Python SDK `mcp>=1.24.0`, Kiro) will reject responses that
+    /// omit this field when `outputSchema` is present.
+    #[serde(rename = "structuredContent", skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     /// Whether result is an error
     #[serde(rename = "isError", default)]
     pub is_error: bool,
