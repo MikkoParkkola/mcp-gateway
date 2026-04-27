@@ -656,7 +656,6 @@ pub(crate) fn wrap_tool_success(id: RequestId, content: &Value) -> JsonRpcRespon
             text: serde_json::to_string_pretty(content).unwrap_or_default(),
             annotations: None,
         }],
-        structured_content: None,
         is_error: false,
     };
     JsonRpcResponse::success_serialized(id, result)
