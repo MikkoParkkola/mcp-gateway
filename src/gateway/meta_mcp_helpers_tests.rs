@@ -983,7 +983,9 @@ fn wrap_tool_success_with_output_schema_includes_structured_content() {
     assert!(!result.is_error);
     // Must have both content (text fallback) and structuredContent
     assert_eq!(result.content.len(), 1);
-    let sc = result.structured_content.expect("structuredContent must be present when has_output_schema is true");
+    let sc = result
+        .structured_content
+        .expect("structuredContent must be present when has_output_schema is true");
     assert_eq!(sc["matches"][0]["server"], "ado");
 }
 

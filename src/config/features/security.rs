@@ -150,7 +150,7 @@ pub struct ToolContractConfig {
     pub max_bytes: Option<usize>,
     /// Regex patterns that must NOT appear in the response text.
     pub forbidden_patterns: Vec<String>,
-    /// Override global action_mode for this tool. `null` means use global.
+    /// Override global `action_mode` for this tool. `null` means use global.
     pub action_mode: Option<bool>,
 }
 
@@ -174,12 +174,12 @@ pub struct ToolContractConfig {
 ///           - 'BEGIN PRIVATE KEY'
 ///         action_mode: true
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ResponseContractConfig {
     /// Enable the contract gate. Default: `false` (opt-in).
     pub enabled: bool,
-    /// Block violating responses (action_mode=true) or just observe. Default: `false`.
+    /// Block violating responses (`action_mode=true`) or just observe. Default: `false`.
     pub action_mode: bool,
     /// Default max response bytes for all tools (overridable per-tool). Default: `None`.
     pub default_max_bytes: Option<usize>,
@@ -188,18 +188,6 @@ pub struct ResponseContractConfig {
     pub fail_closed: bool,
     /// Per-tool contracts keyed by tool name.
     pub tools: std::collections::HashMap<String, ToolContractConfig>,
-}
-
-impl Default for ResponseContractConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            action_mode: false,
-            default_max_bytes: None,
-            fail_closed: false,
-            tools: std::collections::HashMap::new(),
-        }
-    }
 }
 
 // ── SecurityConfig ────────────────────────────────────────────────────────────

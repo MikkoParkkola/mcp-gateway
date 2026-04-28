@@ -105,7 +105,10 @@ impl MetaMcp {
         // Computed eagerly here so the hash covers the raw arguments before any
         // secret injection or transformation.  Zero-cost when the logger is None.
         let request_hash = if self.transparency_logger.is_some() {
-            format!("sha256:{}", sha256_hex(canonical_json(&arguments).as_bytes()))
+            format!(
+                "sha256:{}",
+                sha256_hex(canonical_json(&arguments).as_bytes())
+            )
         } else {
             String::new()
         };
@@ -443,7 +446,10 @@ impl MetaMcp {
                     ));
                 }
                 if let Some(obj) = result.as_object_mut() {
-                    obj.insert("_contract_violation".to_string(), serde_json::Value::Bool(true));
+                    obj.insert(
+                        "_contract_violation".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
                     obj.insert(
                         "_contract_reason".to_string(),
                         serde_json::Value::String("no_contract_declared".to_string()),
@@ -457,9 +463,8 @@ impl MetaMcp {
                 let effective_action_mode = tool_entry
                     .and_then(|e| e.action_mode)
                     .unwrap_or(contract_cfg.action_mode);
-                let patterns: &[String] = tool_entry
-                    .map(|e| e.forbidden_patterns.as_slice())
-                    .unwrap_or(&[]);
+                let patterns: &[String] =
+                    tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
 
                 let forbidden_patterns = if patterns.is_empty() {
                     regex::RegexSet::empty()
@@ -505,7 +510,10 @@ impl MetaMcp {
                         ));
                     }
                     if let Some(obj) = result.as_object_mut() {
-                        obj.insert("_contract_violation".to_string(), serde_json::Value::Bool(true));
+                        obj.insert(
+                            "_contract_violation".to_string(),
+                            serde_json::Value::Bool(true),
+                        );
                         obj.insert(
                             "_contract_reason".to_string(),
                             serde_json::Value::String(violation.reason.to_string()),
@@ -631,10 +639,13 @@ impl MetaMcp {
         // post-processing so `result` reflects what the caller actually receives.
         // Failures are non-fatal — we log a warning but never abort the invocation.
         if let Some(ref tl) = self.transparency_logger {
-            let response_hash = format!("sha256:{}", sha256_hex(canonical_json(&result).as_bytes()));
+            let response_hash =
+                format!("sha256:{}", sha256_hex(canonical_json(&result).as_bytes()));
             let caller = api_key_name.unwrap_or("anonymous");
             let sid = session_id.unwrap_or("unknown");
-            if let Err(e) = tl.log_invocation(sid, caller, server, tool, &request_hash, &response_hash) {
+            if let Err(e) =
+                tl.log_invocation(sid, caller, server, tool, &request_hash, &response_hash)
+            {
                 warn!(
                     server,
                     tool,

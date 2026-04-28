@@ -352,6 +352,7 @@ impl CapabilityBackend {
                     text: error_text,
                     annotations: None,
                 }],
+                structured_content: None,
                 is_error: true,
             });
         }
@@ -369,6 +370,7 @@ impl CapabilityBackend {
                 text,
                 annotations: None,
             }],
+            structured_content: None,
             is_error: false,
         })
     }

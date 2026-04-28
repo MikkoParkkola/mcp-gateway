@@ -45,18 +45,18 @@ impl ToolResponseContract {
     #[must_use]
     pub fn validate(&self, text: &str) -> Option<ContractViolation> {
         // 1. Size check
-        if let Some(max) = self.max_bytes {
-            if text.len() > max {
-                return Some(ContractViolation {
-                    reason: "max_bytes_exceeded",
-                    detail: format!(
-                        "Response size {} bytes exceeds declared limit of {} bytes",
-                        text.len(),
-                        max
-                    ),
-                    should_block: self.action_mode,
-                });
-            }
+        if let Some(max) = self.max_bytes
+            && text.len() > max
+        {
+            return Some(ContractViolation {
+                reason: "max_bytes_exceeded",
+                detail: format!(
+                    "Response size {} bytes exceeds declared limit of {} bytes",
+                    text.len(),
+                    max
+                ),
+                should_block: self.action_mode,
+            });
         }
 
         // 2. Forbidden pattern check
@@ -126,7 +126,10 @@ mod tests {
     fn action_mode_false_does_not_block() {
         let contract = make_contract(Some(5), &[], false);
         let violation = contract.validate("This is too long").unwrap();
-        assert!(!violation.should_block, "observe mode must never set should_block");
+        assert!(
+            !violation.should_block,
+            "observe mode must never set should_block"
+        );
     }
 
     #[test]

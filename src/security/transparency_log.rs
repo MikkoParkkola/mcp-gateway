@@ -114,10 +114,10 @@ impl TransparencyLogger {
     pub fn open(config: Arc<TransparencyLogConfig>) -> io::Result<Self> {
         let path = expand_tilde(&config.path);
 
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
         }
 
         // Recover state from the last line (if the file already exists).
@@ -169,7 +169,7 @@ impl TransparencyLogger {
         let mut inner = self
             .inner
             .lock()
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "transparency log mutex poisoned"))?;
+            .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
 
         inner.counter += 1;
         let counter = inner.counter;
@@ -192,20 +192,19 @@ impl TransparencyLogger {
         });
 
         // ── Step 2: entry_hash = sha256(canonical JSON of core) ───────────────
-        let core_json = serde_json::to_string(&entry_core)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let core_json = serde_json::to_string(&entry_core).map_err(io::Error::other)?;
         let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
         let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
 
         // ── Step 3: sig = hmac_sha256(secret, entry_hash_bytes) ──────────────
-        let (sig_opt, key_id_opt) = if !self.config.shared_secret.is_empty() {
+        let (sig_opt, key_id_opt) = if self.config.shared_secret.is_empty() {
+            (None, None)
+        } else {
             let sig_hex = hmac_sha256_hex(self.config.shared_secret.as_bytes(), &entry_hash_bytes);
             (
                 Some(format!("hmac-sha256:{sig_hex}")),
                 Some(self.config.key_id.clone()),
             )
-        } else {
-            (None, None)
         };
 
         // ── Assemble the full entry ───────────────────────────────────────────
@@ -213,7 +212,7 @@ impl TransparencyLogger {
         {
             let obj = full_entry
                 .as_object_mut()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "entry is not an object"))?;
+                .ok_or_else(|| io::Error::other("entry is not an object"))?;
 
             obj.insert(
                 "entry_hash".to_string(),
@@ -226,8 +225,7 @@ impl TransparencyLogger {
         }
 
         // ── Write to file ─────────────────────────────────────────────────────
-        let line = serde_json::to_string(&full_entry)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let line = serde_json::to_string(&full_entry).map_err(io::Error::other)?;
 
         writeln!(inner.writer, "{line}")?;
         inner.writer.flush()?;
@@ -276,17 +274,16 @@ pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
             continue;
         }
 
-        let entry: serde_json::Value =
-            serde_json::from_str(trimmed).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("line {}: invalid JSON: {e}", line_no + 1),
-                )
-            })?;
+        let entry: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("line {}: invalid JSON: {e}", line_no + 1),
+            )
+        })?;
 
         let counter = entry
             .get("counter")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -335,8 +332,7 @@ pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
                 error_at_counter: Some(counter),
                 error_message: Some(format!(
                     "entry {counter}: prev_entry_hash mismatch \
-                     (expected '{}', got '{}')",
-                    prev_hash, stored_prev_hash
+                     (expected '{prev_hash}', got '{stored_prev_hash}')"
                 )),
             });
         }
@@ -373,10 +369,7 @@ pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
 /// # Errors
 ///
 /// Returns `io::Error` if the file cannot be read.
-pub fn show_session_entries(
-    path: &Path,
-    session: &str,
-) -> io::Result<Vec<serde_json::Value>> {
+pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<serde_json::Value>> {
     let content = std::fs::read_to_string(path)?;
     let mut results = Vec::new();
 
@@ -404,10 +397,10 @@ pub fn show_session_entries(
 
 /// Expand a leading `~/` in `s` to the user's home directory.
 fn expand_tilde(s: &str) -> PathBuf {
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
     PathBuf::from(s)
 }
@@ -415,21 +408,18 @@ fn expand_tilde(s: &str) -> PathBuf {
 /// Read the last non-empty line of `path` to recover `(counter, last_entry_hash)`.
 fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
     let content = std::fs::read_to_string(path)?;
-    let last_line = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .last();
+    let last_line = content.lines().rfind(|l| !l.trim().is_empty());
 
     let Some(line) = last_line else {
         return Ok((0, "genesis".to_string()));
     };
 
-    let entry: serde_json::Value = serde_json::from_str(line)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let entry: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     let counter = entry
         .get("counter")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     let entry_hash = entry
         .get("entry_hash")
@@ -442,7 +432,7 @@ fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
 
 /// Recompute the `entry_hash` for an existing entry read from the log file.
 ///
-/// Strips `entry_hash`, `sig`, and `key_id`, serialises what remains (BTreeMap
+/// Strips `entry_hash`, `sig`, and `key_id`, serialises what remains (`BTreeMap`
 /// so alphabetically sorted), and returns `"sha256:<hex>"`.
 fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
     let obj = entry
@@ -452,12 +442,13 @@ fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
     // Build a clean copy without the hash-and-sig fields.
     let core: serde_json::Map<String, serde_json::Value> = obj
         .iter()
-        .filter(|(k, _)| k.as_str() != "entry_hash" && k.as_str() != "sig" && k.as_str() != "key_id")
+        .filter(|(k, _)| {
+            k.as_str() != "entry_hash" && k.as_str() != "sig" && k.as_str() != "key_id"
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let core_json = serde_json::to_string(&core)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let core_json = serde_json::to_string(&core).map_err(io::Error::other)?;
 
     let hash_bytes = sha256_raw(core_json.as_bytes());
     Ok(format!("sha256:{}", hex::encode(hash_bytes)))
@@ -473,8 +464,7 @@ fn sha256_raw(data: &[u8]) -> [u8; 32] {
 /// Compute `HMAC-SHA256(key, message)` and return lowercase hex.
 fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
     // HMAC accepts any key length; the `expect` here cannot panic.
-    let mut mac =
-        HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(message);
     hex::encode(mac.finalize().into_bytes())
 }
@@ -509,11 +499,7 @@ mod tests {
         })
     }
 
-    fn write_entry(
-        logger: &TransparencyLogger,
-        session: &str,
-        counter_hint: &str,
-    ) {
+    fn write_entry(logger: &TransparencyLogger, session: &str, counter_hint: &str) {
         logger
             .log_invocation(
                 session,
@@ -669,7 +655,10 @@ mod tests {
 
         // THEN: sig and key_id are present and correctly formatted
         let sig = entry["sig"].as_str().expect("sig must be a string");
-        assert!(sig.starts_with("hmac-sha256:"), "sig must have hmac-sha256 prefix");
+        assert!(
+            sig.starts_with("hmac-sha256:"),
+            "sig must have hmac-sha256 prefix"
+        );
         assert_eq!(sig.len(), "hmac-sha256:".len() + 64); // 64 hex chars = 32 bytes
         assert_eq!(entry["key_id"], "test-key");
     }

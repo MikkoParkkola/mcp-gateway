@@ -334,15 +334,13 @@ impl MetaMcp {
     /// When set, every completed tool invocation is committed to the
     /// hash-chain log.  Failures are non-fatal — a `warn!` is emitted but
     /// the invocation result is not affected.
-    pub fn enable_transparency_log(
-        &mut self,
-        logger: crate::security::TransparencyLogger,
-    ) {
+    pub fn enable_transparency_log(&mut self, logger: crate::security::TransparencyLogger) {
         self.transparency_logger = Some(Arc::new(logger));
     }
 
     /// Attach the webhook registry for `gateway_webhook_status` reporting.
-    pub fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {        *self.webhook_registry.write() = Some(registry);
+    pub fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {
+        *self.webhook_registry.write() = Some(registry);
     }
 
     /// Enable action mode for response-side anomaly screening (issue #133, D2).
@@ -357,10 +355,7 @@ impl MetaMcp {
     ///
     /// When set, every tool response is validated against the declared contract
     /// before delivery to the client.
-    pub fn set_response_contract(
-        &mut self,
-        config: crate::config::ResponseContractConfig,
-    ) {
+    pub fn set_response_contract(&mut self, config: crate::config::ResponseContractConfig) {
         self.response_contract = Some(Arc::new(config));
     }
 

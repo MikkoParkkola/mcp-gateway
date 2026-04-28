@@ -8,7 +8,6 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
-use tracing::{error, info};
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
     config::Config,
@@ -17,6 +16,7 @@ use mcp_gateway::{
     setup_tracing,
     validator::ValidateConfig,
 };
+use tracing::{error, info};
 
 // ── New command imports ────────────────────────────────────────────────────────
 // These modules live in the binary-only `commands/` tree and are not part of
@@ -204,13 +204,14 @@ fn run_audit_command(cmd: AuditCommand) -> ExitCode {
     /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
     fn resolve_path(path: Option<PathBuf>) -> PathBuf {
         path.unwrap_or_else(|| {
-            dirs::home_dir()
-                .map(|h| {
+            dirs::home_dir().map_or_else(
+                || PathBuf::from("transparency.jsonl"),
+                |h| {
                     h.join(".mcp-gateway")
                         .join("transparency")
                         .join("transparency.jsonl")
-                })
-                .unwrap_or_else(|| PathBuf::from("transparency.jsonl"))
+                },
+            )
         })
     }
 
