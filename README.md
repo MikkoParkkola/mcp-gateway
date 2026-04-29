@@ -115,6 +115,7 @@ That's it. Your AI clients now talk to the gateway and the gateway routes to eve
 | **Homebrew (macOS/Linux, recommended)** | `brew install MikkoParkkola/tap/mcp-gateway` |
 | **Cargo** | `cargo install mcp-gateway` |
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
+| **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
 | **Docker** | `docker run -v $(pwd)/gateway.yaml:/config.yaml ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml` |
 
 <details>
@@ -129,6 +130,11 @@ curl -L https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mc
 
 # Linux x86_64
 curl -L https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mcp-gateway-linux-x86_64 -o mcp-gateway && chmod +x mcp-gateway
+```
+
+```powershell
+# Windows x64 (PowerShell)
+Invoke-WebRequest -Uri https://github.com/MikkoParkkola/mcp-gateway/releases/latest/download/mcp-gateway-windows-x86_64.exe -OutFile mcp-gateway.exe
 ```
 
 </details>
