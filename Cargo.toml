@@ -37,6 +37,13 @@ include = [
     "docs/QUICKSTART.md",
 ]
 
+[workspace]
+members = [
+    "crates/gateway-core",
+]
+resolver = "2"
+
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.51", features = ["full", "tracing"] }
