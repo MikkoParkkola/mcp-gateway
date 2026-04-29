@@ -13,6 +13,12 @@ schema:
         type: array
         description: List of teams with states and labels
 
+transform:
+  project:
+    - nodes
+  rename:
+    nodes: teams
+
 auth:
   required: true
   type: api_key
@@ -41,6 +47,7 @@ providers:
               }
             }
           }
+      response_path: data.teams
 
 cache:
   strategy: exact

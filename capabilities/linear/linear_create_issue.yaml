@@ -57,6 +57,10 @@ schema:
         type: object
         description: Created issue
 
+transform:
+  project:
+    - issue
+
 auth:
   required: true
   type: api_key
@@ -102,6 +106,7 @@ providers:
             dueDate: "{dueDate}"
             createAsUser: "{createAsUser}"
             displayIconUrl: "{displayIconUrl}"
+      response_path: data.issueCreate
 
 cache:
   strategy: none

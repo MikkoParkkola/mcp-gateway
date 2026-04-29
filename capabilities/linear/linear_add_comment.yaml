@@ -19,6 +19,10 @@ schema:
       comment:
         type: object
 
+transform:
+  project:
+    - comment
+
 auth:
   required: true
   type: api_key
@@ -51,6 +55,7 @@ providers:
         variables:
           issueId: "{issueId}"
           body: "{body}"
+      response_path: data.commentCreate
 
 cache:
   strategy: none
