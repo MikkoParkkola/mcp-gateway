@@ -3,6 +3,7 @@
 //! Resolves credential patterns like `{keychain.SERVICE}` and `{env.VAR}`
 //! from secure system keychains and environment variables.
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Command;
 
 use dashmap::DashMap;

@@ -139,6 +139,7 @@ impl ProcessScanner {
     }
 
     /// Parse ps output (macOS/Linux)
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn parse_ps_output(&self, output: &str) -> Vec<DiscoveredServer> {
         let mut servers = Vec::new();
 

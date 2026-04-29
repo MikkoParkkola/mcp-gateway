@@ -104,6 +104,7 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(not(windows))]
 fn temp_config_path(path: &Path) -> PathBuf {
     let mut tmp_path = path.as_os_str().to_os_string();
     tmp_path.push(".tmp");
