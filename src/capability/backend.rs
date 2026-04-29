@@ -363,16 +363,7 @@ impl CapabilityBackend {
             .execute(&capability, validation.coerced)
             .await?;
 
-        let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
-
-        Ok(ToolsCallResult {
-            content: vec![Content::Text {
-                text,
-                annotations: None,
-            }],
-            structured_content: None,
-            is_error: false,
-        })
+        Ok(build_success_tool_result(&capability, result))
     }
 
     /// Check if a capability exists — O(1) via the name index.
@@ -436,6 +427,18 @@ impl CapabilityBackend {
         }
 
         detected
+    }
+}
+
+fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -> ToolsCallResult {
+    let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+    ToolsCallResult {
+        content: vec![Content::Text {
+            text,
+            annotations: None,
+        }],
+        structured_content: (!capability.schema.output.is_null()).then_some(result),
+        is_error: false,
     }
 }
 
@@ -516,6 +519,7 @@ pub struct CapabilityBackendStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn make_backend() -> CapabilityBackend {
         let executor = Arc::new(CapabilityExecutor::new());
@@ -726,6 +730,58 @@ providers:
         assert_eq!(reload_count, 1);
         assert!(backend.has_capability("alpha"));
         assert_eq!(backend.get_tools().len(), 1);
+    }
+
+    #[test]
+    fn build_success_tool_result_populates_structured_content_when_output_schema_exists() {
+        let yaml = r#"
+name: linear_get_issue_test
+description: Test capability with output schema
+schema:
+  input:
+    type: object
+    properties:
+      identifier:
+        type: string
+    required: [identifier]
+  output:
+    type: object
+    properties:
+      issue:
+        type: object
+        properties:
+          id:
+            type: string
+          title:
+            type: string
+        required: [id, title]
+    required: [issue]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: "https://api.example.com"
+      path: /issue
+      method: GET
+"#;
+        let cap = crate::capability::parse_capability(yaml).unwrap();
+        let result = build_success_tool_result(
+            &cap,
+            json!({ "issue": { "id": "abc", "title": "Test issue" } }),
+        );
+
+        assert!(!result.is_error);
+        assert_eq!(
+            result.structured_content,
+            Some(json!({ "issue": { "id": "abc", "title": "Test issue" } }))
+        );
+        let text = match &result.content[0] {
+            Content::Text { text, .. } => text,
+            other => panic!("expected text content, got {other:?}"),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(text).expect("text should be JSON");
+        assert_eq!(parsed["issue"]["id"], json!("abc"));
+        assert_eq!(parsed["issue"]["title"], json!("Test issue"));
     }
 
     #[test]

@@ -46,9 +46,18 @@ fn enforce_output_schema(
         return Ok(result);
     };
 
-    let validation = validate_output(&result, schema);
+    if result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(result);
+    }
+
+    let validation_target = extract_output_validation_target(&result).unwrap_or_else(|| result.clone());
+    let validation = validate_output(&validation_target, schema);
     if validation.is_valid() {
-        Ok(validation.coerced)
+        Ok(apply_validated_output(result, validation.coerced))
     } else {
         Err(Error::json_rpc(
             -32603,
@@ -58,6 +67,44 @@ fn enforce_output_schema(
             ),
         ))
     }
+}
+
+fn extract_output_validation_target(result: &Value) -> Option<Value> {
+    if let Some(structured) = result.get("structuredContent") {
+        return Some(structured.clone());
+    }
+
+    let content = result.get("content")?.as_array()?;
+    if content.len() != 1 {
+        return None;
+    }
+    let text = content[0].get("text")?.as_str()?;
+    serde_json::from_str::<Value>(text).ok()
+}
+
+fn apply_validated_output(result: Value, validated: Value) -> Value {
+    let Some(obj) = result.as_object() else {
+        return validated;
+    };
+    if !(obj.contains_key("content") || obj.contains_key("structuredContent")) {
+        return validated;
+    }
+
+    let mut obj = obj.clone();
+    obj.insert("structuredContent".to_owned(), validated.clone());
+    if let Some(content) = obj.get_mut("content").and_then(Value::as_array_mut)
+        && content.len() == 1
+        && let Some(text_obj) = content[0].as_object_mut()
+        && text_obj.get("type").and_then(Value::as_str) == Some("text")
+    {
+        text_obj.insert(
+            "text".to_owned(),
+            Value::String(
+                serde_json::to_string_pretty(&validated).unwrap_or_else(|_| validated.to_string()),
+            ),
+        );
+    }
+    Value::Object(obj)
 }
 
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
@@ -1276,6 +1323,71 @@ mod response_transform_tests {
         assert!(message.contains("violated its declared output schema"));
         assert!(message.contains("Tool result validation failed"));
         assert!(message.contains("exfil"));
+    }
+
+    #[test]
+    fn enforce_output_schema_validates_structured_content_inside_mcp_result() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "issue": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string" }
+                    },
+                    "required": ["id"]
+                }
+            },
+            "required": ["issue"]
+        });
+
+        let result = enforce_output_schema(
+            "fulcrum",
+            "linear_get_issue",
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": "{\"issue\":{\"id\":\"abc\"}}"
+                }],
+                "structuredContent": { "issue": { "id": "abc" } },
+                "isError": false
+            }),
+            Some(&schema),
+        )
+        .expect("structuredContent should be validated, not the MCP envelope");
+
+        assert_eq!(result["structuredContent"]["issue"]["id"], json!("abc"));
+        assert_eq!(
+            result["content"][0]["text"],
+            json!("{\n  \"issue\": {\n    \"id\": \"abc\"\n  }\n}")
+        );
+    }
+
+    #[test]
+    fn enforce_output_schema_skips_mcp_error_envelopes() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "issue": { "type": "object" }
+            }
+        });
+
+        let result = enforce_output_schema(
+            "fulcrum",
+            "linear_get_issue",
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": "bad input"
+                }],
+                "isError": true
+            }),
+            Some(&schema),
+        )
+        .expect("tool-error MCP envelope should bypass output validation");
+
+        assert_eq!(result["isError"], json!(true));
+        assert_eq!(result["content"][0]["text"], json!("bad input"));
     }
 
     #[tokio::test]
