@@ -1,6 +1,8 @@
 //! Shared helpers for mutating and persisting gateway config files.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(windows))]
+use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::config_reload::{ReloadContext, ReloadOutcome};
