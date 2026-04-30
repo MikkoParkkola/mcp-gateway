@@ -5,6 +5,8 @@ This project is indexed by GitNexus as **mcp-gateway** (11322 symbols, 27517 rel
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
+**Bet Responsibility**: mcp-gateway owns Bet 4 — shared platform primitives for integrations, tool routing, hooks, policy, and gateway-mediated capability reuse.
+
 ## Always Do
 
 - **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
