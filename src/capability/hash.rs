@@ -152,4 +152,21 @@ mod tests {
         let twice = rewrite_with_pin(&once, &hash);
         assert_eq!(once, twice);
     }
+
+    #[test]
+    fn hash_is_stable_for_windows_paths_and_crlf() {
+        let body = concat!(
+            "name: foo\r\n",
+            "description: Windows path fixture\r\n",
+            "providers:\r\n",
+            "  primary:\r\n",
+            "    service: rest\r\n",
+            "    config:\r\n",
+            "      endpoint: C:\\Users\\mikko\\capabilities\\foo.yaml\r\n"
+        );
+        let hash = compute_capability_hash(body);
+        let pinned = rewrite_with_pin(body, &hash);
+        assert_eq!(compute_capability_hash(&pinned), hash);
+        assert!(pinned.contains(r"C:\Users\mikko\capabilities\foo.yaml"));
+    }
 }

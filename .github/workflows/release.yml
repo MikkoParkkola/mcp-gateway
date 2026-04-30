@@ -48,18 +48,27 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: mcp-gateway-linux-x86_64
+            suffix: ""
             packages: musl-tools
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             artifact: mcp-gateway-linux-aarch64
+            suffix: ""
             packages: musl-tools gcc-aarch64-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: mcp-gateway-darwin-arm64
+            suffix: ""
             packages: ""
           - os: macos-15
             target: x86_64-apple-darwin
             artifact: mcp-gateway-darwin-x86_64
+            suffix: ""
+            packages: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: mcp-gateway-windows-x86_64
+            suffix: .exe
             packages: ""
 
     runs-on: ${{ matrix.os }}
@@ -80,15 +89,18 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
+        shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/mcp-gateway ${{ matrix.artifact }}
-          chmod +x ${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/mcp-gateway${{ matrix.suffix }} ${{ matrix.artifact }}${{ matrix.suffix }}
+          if [ "${{ matrix.suffix }}" = "" ]; then
+            chmod +x ${{ matrix.artifact }}
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}${{ matrix.suffix }}
 
   release:
     needs: build
@@ -137,6 +149,7 @@ jobs:
             - `mcp-gateway-darwin-x86_64` - macOS Intel
             - `mcp-gateway-linux-x86_64` - Linux x86_64 (static musl)
             - `mcp-gateway-linux-aarch64` - Linux ARM64 (static musl)
+            - `mcp-gateway-windows-x86_64.exe` - Windows x86_64 (MSVC)
 
             ## Verify checksums
             ```bash

@@ -1,6 +1,8 @@
 //! Shared helpers for mutating and persisting gateway config files.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(windows))]
+use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::config_reload::{ReloadContext, ReloadOutcome};
@@ -104,6 +106,7 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(not(windows))]
 fn temp_config_path(path: &Path) -> PathBuf {
     let mut tmp_path = path.as_os_str().to_os_string();
     tmp_path.push(".tmp");
