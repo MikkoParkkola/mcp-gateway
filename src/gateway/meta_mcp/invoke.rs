@@ -58,7 +58,7 @@ fn enforce_output_schema(
         extract_output_validation_target(&result).unwrap_or_else(|| result.clone());
     let validation = validate_output(&validation_target, schema);
     if validation.is_valid() {
-        Ok(apply_validated_output(result, validation.coerced))
+        Ok(apply_validated_output(&result, validation.coerced))
     } else {
         Err(Error::json_rpc(
             -32603,
@@ -83,7 +83,7 @@ fn extract_output_validation_target(result: &Value) -> Option<Value> {
     serde_json::from_str::<Value>(text).ok()
 }
 
-fn apply_validated_output(result: Value, validated: Value) -> Value {
+fn apply_validated_output(result: &Value, validated: Value) -> Value {
     let Some(obj) = result.as_object() else {
         return validated;
     };
