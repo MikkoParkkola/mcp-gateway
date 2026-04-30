@@ -9,6 +9,24 @@ use crate::{Error, Result};
 use super::xml::xml_to_json;
 use super::{super::RestConfig, CapabilityExecutor};
 
+fn graphql_error_message(body: &Value) -> Option<String> {
+    let errors = body.get("errors").and_then(Value::as_array)?;
+    if errors.is_empty() {
+        return None;
+    }
+
+    let messages: Vec<&str> = errors
+        .iter()
+        .filter_map(|error| error.get("message").and_then(Value::as_str))
+        .collect();
+
+    if messages.is_empty() {
+        Some(serde_json::to_string(errors).unwrap_or_else(|_| "Unknown GraphQL error".to_string()))
+    } else {
+        Some(messages.join("; "))
+    }
+}
+
 impl CapabilityExecutor {
     /// Handle an API response.
     ///
@@ -71,7 +89,13 @@ impl CapabilityExecutor {
         };
 
         if let Some(ref path) = config.response_path {
-            self.extract_path(&body, path)
+            let projected = self.extract_path(&body, path)?;
+            if projected.is_null()
+                && let Some(message) = graphql_error_message(&body)
+            {
+                return Err(Error::Protocol(format!("GraphQL error: {message}")));
+            }
+            Ok(projected)
         } else {
             Ok(body)
         }

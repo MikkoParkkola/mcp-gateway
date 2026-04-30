@@ -1087,6 +1087,7 @@ fn load_repo_capability(relative_path: &str) -> CapabilityDefinition {
         .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()))
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn assert_linear_capability_shape(
     relative_path: &str,
     expected_response_path: &str,
@@ -1121,6 +1122,7 @@ fn assert_linear_capability_shape(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn linear_capability_payload_shapes_match_declared_output_schemas() {
     assert_linear_capability_shape(
         "capabilities/linear/linear_create_issue.yaml",

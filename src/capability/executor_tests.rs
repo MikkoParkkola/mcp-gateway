@@ -2,7 +2,13 @@
 
 use super::*;
 use crate::capability::response_cache::ResponseCache;
-use axum::{Router, body::Body, http::header, response::Response as AxumResponse, routing::get};
+use axum::{
+    Json, Router,
+    body::Body,
+    http::header,
+    response::Response as AxumResponse,
+    routing::{get, post},
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[test]
@@ -467,6 +473,97 @@ async fn handle_response_binary_returns_base64_payload() {
     assert_eq!(body["mime_type"], "video/mp4");
     assert_eq!(body["size"], 6);
     assert_eq!(body["data"], STANDARD.encode([0_u8, 1, 2, 3, 4, 5]));
+}
+
+#[tokio::test]
+async fn handle_response_graphql_error_with_null_projection_returns_error() {
+    async fn graphql_error_handler() -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "data": null,
+            "errors": [
+                { "message": "Field \"createAsUser\" is not defined by type \"IssueCreateInput\"." },
+                { "message": "Field \"displayIconUrl\" is not defined by type \"IssueCreateInput\"." }
+            ]
+        }))
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/graphql", post(graphql_error_handler)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let executor = CapabilityExecutor::new();
+    let response = executor
+        .client
+        .post(format!("http://{addr}/graphql"))
+        .json(&serde_json::json!({ "query": "mutation Broken { issueCreate { success } }" }))
+        .send()
+        .await
+        .unwrap();
+    let config = RestConfig {
+        response_path: Some("data.issueCreate".to_string()),
+        ..Default::default()
+    };
+
+    let err = executor
+        .handle_response(response, &config)
+        .await
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("GraphQL error"), "{message}");
+    assert!(message.contains("createAsUser"), "{message}");
+    assert!(message.contains("displayIconUrl"), "{message}");
+}
+
+#[tokio::test]
+async fn handle_response_graphql_success_with_response_path_is_unchanged() {
+    async fn graphql_success_handler() -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "data": {
+                "issueCreate": {
+                    "success": true,
+                    "issue": {
+                        "id": "lin-123",
+                        "identifier": "MIK-3181"
+                    }
+                }
+            }
+        }))
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/graphql", post(graphql_success_handler)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let executor = CapabilityExecutor::new();
+    let response = executor
+        .client
+        .post(format!("http://{addr}/graphql"))
+        .json(&serde_json::json!({ "query": "mutation Ok { issueCreate { success } }" }))
+        .send()
+        .await
+        .unwrap();
+    let config = RestConfig {
+        response_path: Some("data.issueCreate".to_string()),
+        ..Default::default()
+    };
+
+    let body = executor.handle_response(response, &config).await.unwrap();
+    assert_eq!(body["success"], true);
+    assert_eq!(body["issue"]["identifier"], "MIK-3181");
 }
 
 #[test]
