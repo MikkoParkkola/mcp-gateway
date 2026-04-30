@@ -43,12 +43,10 @@ schema:
         description: "Due date in YYYY-MM-DD format"
       createAsUser:
         type: string
-        description: "Display name for agent attribution (AIG compliance). Default: Claude Elite"
-        default: "Claude Elite"
+        description: "DEPRECATED: ignored. Linear's IssueCreateInput accepts this only for OAuth-app auth; with personal API key the mutation silent-fails (server validation error swallowed by response_path projection). See linear/SKILL.md silent-failure trap (2026-04-30 bisect)."
       displayIconUrl:
         type: string
-        description: "Avatar URL for agent identity"
-        default: "https://www.anthropic.com/images/icons/safari-pinned-tab.svg"
+        description: "DEPRECATED: ignored. Same constraint as createAsUser."
     required: [title, teamId]
   output:
     type: object
@@ -104,8 +102,12 @@ providers:
             stateId: "{stateId}"
             estimate: "{estimate}"
             dueDate: "{dueDate}"
-            createAsUser: "{createAsUser}"
-            displayIconUrl: "{displayIconUrl}"
+            # createAsUser + displayIconUrl intentionally omitted — Linear's
+            # IssueCreateInput accepts those fields only for OAuth-app auth.
+            # With a personal API key, including them triggers a server-side
+            # validation error which the REST provider's response_path
+            # projection silently swallows (caller sees empty {} success).
+            # Bisect: MIK-3179/3180/3181, 2026-04-30.
       response_path: data.issueCreate
 
 cache:
