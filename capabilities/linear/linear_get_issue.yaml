@@ -19,6 +19,12 @@ schema:
         type: object
         description: Full issue details
 
+transform:
+  project:
+    - nodes[0]
+  rename:
+    nodes[0]: issue
+
 auth:
   required: true
   type: api_key
@@ -69,6 +75,7 @@ providers:
           }
         variables:
           term: "{identifier}"
+      response_path: data.searchIssues
 
 cache:
   strategy: exact

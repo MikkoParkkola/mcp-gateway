@@ -48,6 +48,10 @@ schema:
       issue:
         type: object
 
+transform:
+  project:
+    - issue
+
 auth:
   required: true
   type: api_key
@@ -91,6 +95,7 @@ providers:
             parentId: "{parentId}"
             estimate: "{estimate}"
             dueDate: "{dueDate}"
+      response_path: data.issueUpdate
 
 cache:
   strategy: none

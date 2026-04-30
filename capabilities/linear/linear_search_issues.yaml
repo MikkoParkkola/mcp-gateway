@@ -24,6 +24,12 @@ schema:
         type: array
         description: Matching issues
 
+transform:
+  project:
+    - nodes
+  rename:
+    nodes: issues
+
 auth:
   required: true
   type: api_key
@@ -62,6 +68,7 @@ providers:
           term: "{query}"
           first: "{first|50}"
           after: "{after|}"
+      response_path: data.searchIssues
 
 cache:
   strategy: exact

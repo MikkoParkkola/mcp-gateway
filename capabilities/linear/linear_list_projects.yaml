@@ -12,6 +12,12 @@ schema:
       projects:
         type: array
 
+transform:
+  project:
+    - nodes
+  rename:
+    nodes: projects
+
 auth:
   required: true
   type: api_key
@@ -46,6 +52,7 @@ providers:
             }
           }
         variables: {}
+      response_path: data.projects
 
 cache:
   strategy: exact

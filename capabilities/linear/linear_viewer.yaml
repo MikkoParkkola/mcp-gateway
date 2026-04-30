@@ -18,6 +18,13 @@ schema:
       displayName:
         type: string
 
+transform:
+  project:
+    - id
+    - name
+    - email
+    - displayName
+
 auth:
   required: true
   type: api_key
@@ -37,6 +44,7 @@ providers:
         Content-Type: "application/json"
       body:
         query: "{ viewer { id name email displayName active admin url } }"
+      response_path: data.viewer
 
 cache:
   strategy: exact

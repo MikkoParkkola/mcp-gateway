@@ -1078,3 +1078,258 @@ fn response_transform_included_in_serialization_when_non_empty() {
     // THEN: response_transform key is present
     assert!(yaml.contains("response_transform"));
 }
+
+fn load_repo_capability(relative_path: &str) -> CapabilityDefinition {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+    let yaml = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    serde_yaml::from_str(&yaml)
+        .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()))
+}
+
+fn assert_linear_capability_shape(
+    relative_path: &str,
+    expected_response_path: &str,
+    raw_after_response_path: serde_json::Value,
+    expected_shaped: serde_json::Value,
+) {
+    let cap = load_repo_capability(relative_path);
+    let provider = cap
+        .providers
+        .get("primary")
+        .unwrap_or_else(|| panic!("{relative_path} missing primary provider"));
+
+    assert_eq!(
+        provider.config.response_path.as_deref(),
+        Some(expected_response_path),
+        "{relative_path} should keep the GraphQL extraction path wired",
+    );
+
+    let pipeline = crate::transform::TransformPipeline::compile(&cap.transform);
+    let shaped = pipeline.apply(raw_after_response_path);
+    assert_eq!(
+        shaped, expected_shaped,
+        "{relative_path} should shape payloads to its declared output schema",
+    );
+
+    let validation = crate::capability::validate_output(&shaped, &cap.schema.output);
+    assert!(
+        validation.is_valid(),
+        "{}",
+        validation.format_error(&cap.schema.output)
+    );
+}
+
+#[test]
+fn linear_capability_payload_shapes_match_declared_output_schemas() {
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_create_issue.yaml",
+        "data.issueCreate",
+        serde_json::json!({
+            "success": true,
+            "issue": {
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Created issue",
+                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "state": { "name": "Backlog" },
+                "team": { "key": "MIK" },
+                "priority": 4,
+                "priorityLabel": "Low"
+            }
+        }),
+        serde_json::json!({
+            "issue": {
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Created issue",
+                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "state": { "name": "Backlog" },
+                "team": { "key": "MIK" },
+                "priority": 4,
+                "priorityLabel": "Low"
+            }
+        }),
+    );
+
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_update_issue.yaml",
+        "data.issueUpdate",
+        serde_json::json!({
+            "success": true,
+            "issue": {
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Updated issue",
+                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "state": { "name": "Canceled" },
+                "priority": 4,
+                "priorityLabel": "Low",
+                "assignee": { "name": "mikko.parkkola" }
+            }
+        }),
+        serde_json::json!({
+            "issue": {
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Updated issue",
+                "url": "https://linear.app/parm/issue/MIK-1/test",
+                "state": { "name": "Canceled" },
+                "priority": 4,
+                "priorityLabel": "Low",
+                "assignee": { "name": "mikko.parkkola" }
+            }
+        }),
+    );
+
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_add_comment.yaml",
+        "data.commentCreate",
+        serde_json::json!({
+            "success": true,
+            "comment": {
+                "id": "comment-1",
+                "body": "ok",
+                "createdAt": "2026-04-29T10:13:21.226Z",
+                "user": { "name": "mikko.parkkola@iki.fi" },
+                "issue": { "identifier": "MIK-1", "title": "Validation" }
+            }
+        }),
+        serde_json::json!({
+            "comment": {
+                "id": "comment-1",
+                "body": "ok",
+                "createdAt": "2026-04-29T10:13:21.226Z",
+                "user": { "name": "mikko.parkkola@iki.fi" },
+                "issue": { "identifier": "MIK-1", "title": "Validation" }
+            }
+        }),
+    );
+
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_get_issue.yaml",
+        "data.searchIssues",
+        serde_json::json!({
+            "nodes": [{
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Validation",
+                "comments": { "nodes": [] },
+                "children": { "nodes": [] }
+            }]
+        }),
+        serde_json::json!({
+            "issue": {
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Validation",
+                "comments": { "nodes": [] },
+                "children": { "nodes": [] }
+            }
+        }),
+    );
+
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_search_issues.yaml",
+        "data.searchIssues",
+        serde_json::json!({
+            "nodes": [{
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Validation",
+                "url": "https://linear.app/parm/issue/MIK-1/test"
+            }],
+            "pageInfo": { "hasNextPage": false, "endCursor": "cursor-1" }
+        }),
+        serde_json::json!({
+            "issues": [{
+                "id": "issue-1",
+                "identifier": "MIK-1",
+                "title": "Validation",
+                "url": "https://linear.app/parm/issue/MIK-1/test"
+            }]
+        }),
+    );
+
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_get_teams.yaml",
+        "data.teams",
+        serde_json::json!({
+            "nodes": [{
+                "id": "team-1",
+                "name": "Mikko",
+                "key": "MIK",
+                "description": null,
+                "states": { "nodes": [] },
+                "labels": { "nodes": [] }
+            }]
+        }),
+        serde_json::json!({
+            "teams": [{
+                "id": "team-1",
+                "name": "Mikko",
+                "key": "MIK",
+                "description": null,
+                "states": { "nodes": [] },
+                "labels": { "nodes": [] }
+            }]
+        }),
+    );
+
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_list_projects.yaml",
+        "data.projects",
+        serde_json::json!({
+            "nodes": [{
+                "id": "project-1",
+                "name": "Gateway",
+                "description": "Validation",
+                "state": "planned",
+                "progress": 0.5,
+                "completedAt": null,
+                "startDate": null,
+                "targetDate": null,
+                "teams": { "nodes": [] },
+                "lead": null,
+                "projectMilestones": { "nodes": [] },
+                "url": "https://linear.app/parm/project/test"
+            }]
+        }),
+        serde_json::json!({
+            "projects": [{
+                "id": "project-1",
+                "name": "Gateway",
+                "description": "Validation",
+                "state": "planned",
+                "progress": 0.5,
+                "completedAt": null,
+                "startDate": null,
+                "targetDate": null,
+                "teams": { "nodes": [] },
+                "lead": null,
+                "projectMilestones": { "nodes": [] },
+                "url": "https://linear.app/parm/project/test"
+            }]
+        }),
+    );
+
+    assert_linear_capability_shape(
+        "capabilities/linear/linear_viewer.yaml",
+        "data.viewer",
+        serde_json::json!({
+            "id": "user-1",
+            "name": "mikko.parkkola@iki.fi",
+            "email": "mikko.parkkola@iki.fi",
+            "displayName": "mikko.parkkola",
+            "active": true,
+            "admin": true,
+            "url": "https://linear.app/parm/profiles/mikko.parkkola"
+        }),
+        serde_json::json!({
+            "id": "user-1",
+            "name": "mikko.parkkola@iki.fi",
+            "email": "mikko.parkkola@iki.fi",
+            "displayName": "mikko.parkkola"
+        }),
+    );
+}
