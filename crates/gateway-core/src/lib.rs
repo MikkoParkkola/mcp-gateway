@@ -33,7 +33,9 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { tools: HashMap::new() }
+        Self {
+            tools: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, server: &str, tool: ToolDef) {
@@ -43,15 +45,32 @@ impl ToolRegistry {
 
     pub fn search(&self, query: &str) -> Vec<ToolMatch> {
         let q = query.to_lowercase();
-        let mut matches: Vec<ToolMatch> = self.tools.values()
+        let mut matches: Vec<ToolMatch> = self
+            .tools
+            .values()
             .filter_map(|t| {
-                let score = if t.name.to_lowercase().contains(&q) { 0.8 }
-                    else if t.description.to_lowercase().contains(&q) { 0.5 }
-                    else { 0.0 };
-                if score > 0.0 { Some(ToolMatch { tool: t.clone(), score }) } else { None }
+                let score = if t.name.to_lowercase().contains(&q) {
+                    0.8
+                } else if t.description.to_lowercase().contains(&q) {
+                    0.5
+                } else {
+                    0.0
+                };
+                if score > 0.0 {
+                    Some(ToolMatch {
+                        tool: t.clone(),
+                        score,
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
-        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        matches.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         matches
     }
 
@@ -70,12 +89,15 @@ mod tests {
     #[test]
     fn test_registry_search() {
         let mut reg = ToolRegistry::new();
-        reg.register("test", ToolDef {
-            name: "test_tool".into(),
-            server: "test".into(),
-            description: "A test tool".into(),
-            input_schema: serde_json::json!({}),
-        });
+        reg.register(
+            "test",
+            ToolDef {
+                name: "test_tool".into(),
+                server: "test".into(),
+                description: "A test tool".into(),
+                input_schema: serde_json::json!({}),
+            },
+        );
         let results = reg.search("test");
         assert!(!results.is_empty());
     }
