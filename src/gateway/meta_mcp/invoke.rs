@@ -805,11 +805,21 @@ impl MetaMcp {
             let mut response = serde_json::to_value(result)?;
 
             // Apply per-capability response_transform when configured.
+            //
+            // The transform pipeline (project, rename, hide, etc.) operates on
+            // the *capability payload*, not the MCP envelope. Without unwrapping
+            // first, `transform.project: [issue]` for a Linear mutation would
+            // search for an "issue" key at the top of `{content, structuredContent,
+            // isError}`, find nothing, and silently return `{}`. See bug report:
+            // https://github.com/MikkoParkkola/mcp-gateway/issues/167.
             if let Some(cap_def) = cap.get(tool)
                 && !cap_def.response_transform.is_empty()
             {
                 let t = ResponseTransform::new(&cap_def.response_transform);
-                response = t.transform_result(tool, response).await?;
+                let inner = extract_output_validation_target(&response)
+                    .unwrap_or_else(|| response.clone());
+                let transformed = t.transform_result(tool, inner).await?;
+                response = apply_validated_output(&response, transformed);
             }
 
             let output_schema = cap.get(tool).and_then(|cap_def| {
