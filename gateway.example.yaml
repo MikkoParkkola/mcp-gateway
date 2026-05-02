@@ -1,0 +1,170 @@
+env_files: []
+server:
+  host: 127.0.0.1
+  port: 39401
+  ws_port: null
+  request_timeout: 30s
+  shutdown_timeout: 30s
+  max_body_size: 10485760
+auth:
+  enabled: false
+  bearer_token: null
+  api_keys: []
+  public_paths:
+  - /health
+meta_mcp:
+  enabled: true
+  cache_tools: true
+  cache_ttl: 300s
+  warm_start: []
+  surfaced_tools: []
+streaming:
+  enabled: true
+  buffer_size: 100
+  keep_alive_interval: 15s
+  auto_subscribe: []
+  session_ttl: 1800s
+  session_reaper_interval: 60s
+failsafe:
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    success_threshold: 3
+    reset_timeout: 30s
+  retry:
+    enabled: true
+    max_attempts: 3
+    initial_backoff: 0s
+    max_backoff: 10s
+    multiplier: 2.0
+  rate_limit:
+    enabled: true
+    requests_per_second: 100
+    burst_size: 50
+  health_check:
+    enabled: true
+    interval: 30s
+    timeout: 5s
+backends:
+  gitnexus:
+    description: Codebase knowledge graph — impact analysis, blast radius, call chains, clusters, execution flows. 16 MCP tools.
+    enabled: true
+    command: gitnexus mcp
+    cwd: null
+    protocol_version: null
+    idle_timeout: 300s
+    timeout: 30s
+    env: {}
+    headers: {}
+    oauth: null
+    secrets: []
+    passthrough: false
+  trvl:
+    description: Travel search - flights and hotels via Google (inspired by fli)
+    enabled: true
+    command: /Users/mikko/github/trvl/bin/trvl mcp
+    cwd: null
+    protocol_version: null
+    idle_timeout: 300s
+    timeout: 30s
+    env: {}
+    headers: {}
+    oauth: null
+    secrets: []
+    passthrough: false
+  superhuman_mail:
+    description: Superhuman Mail MCP — inbox + calendar via mcp-remote OAuth bridge to mcp.mail.superhuman.com. Tools — query_email_and_calendar (NL), list_threads (structured filters), get_thread, get_read_statuses, get_availability. First run triggers OAuth flow in browser. Requires Superhuman Business plan or higher with Ask AI enabled. MIT npm package @superhuman/mcp-mail v1.0.2.
+    enabled: true
+    command: npx -y @superhuman/mcp-mail
+    cwd: null
+    protocol_version: null
+    idle_timeout: 600s
+    timeout: 60s
+    env: {}
+    headers: {}
+    oauth: null
+    secrets: []
+    passthrough: false
+capabilities:
+  enabled: true
+  name: gateway
+  directories:
+  - ./capabilities
+  - /Users/mikko/github/mcp-gateway-private/capabilities
+cache:
+  enabled: true
+  default_ttl: 60s
+  max_entries: 10000
+playbooks:
+  enabled: false
+  directories:
+  - playbooks
+security:
+  sanitize_input: true
+  ssrf_protection: true
+  tool_policy:
+    enabled: true
+    default_action: allow
+    allow: []
+    deny: []
+    use_default_deny: true
+    log_denied: true
+  firewall:
+    enabled: true
+    scan_requests: true
+    scan_responses: true
+    prompt_injection_detection: true
+    credential_redaction: true
+    anomaly_detection: false
+    audit_log: null
+    rules: []
+    anomaly_threshold: 0.7
+webhooks:
+  enabled: true
+  base_path: /webhooks
+  require_signature: true
+  rate_limit: 100
+routing_profiles: {}
+default_routing_profile: default
+code_mode:
+  enabled: false
+mtls:
+  enabled: false
+  server_cert: ''
+  server_key: ''
+  ca_cert: ''
+  require_client_cert: false
+  crl_path: null
+  policies: []
+key_server:
+  enabled: false
+  token_ttl_secs: 3600
+  max_tokens_per_identity: 5
+  max_oidc_token_age_secs: 300
+  cleanup_interval_secs: 60
+  oidc: []
+  policies: []
+  admin_token: null
+agent_auth:
+  enabled: false
+  agents: []
+marketplace:
+  marketplace_url: https://plugins.mcpgateway.io
+  plugin_dir: ~/.mcp-gateway/plugins
+cost_governance:
+  enabled: false
+  currency: USD
+  budgets:
+    daily: null
+    per_tool: {}
+    per_key: {}
+  alerts:
+  - at_percent: 50
+    action: log
+  - at_percent: 80
+    action: notify
+  - at_percent: 100
+    action: block
+  tool_costs: {}
+  default_cost: 0.0
+  alternatives: null
