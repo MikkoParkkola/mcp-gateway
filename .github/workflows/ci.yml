@@ -79,7 +79,13 @@ jobs:
       - name: Run Kani proofs
         uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f # v1.1
         with:
-          args: --output-format=terse
+          # Kani 0.67.0 bundles nightly rustc 1.93; the project's
+          # rust-version=1.95 is a deployment requirement, not a Kani
+          # build requirement. --ignore-rust-version skips Cargo's
+          # rust-version check so Kani can still verify proofs while
+          # we wait for an upstream Kani release shipping a newer
+          # nightly bundle.
+          args: --output-format=terse --ignore-rust-version
 
   public-claims:
     name: Public claims

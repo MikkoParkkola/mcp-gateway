@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # A dummy src/main.rs lets `cargo build` download and compile dependencies
 # without invalidating the cache when only source code changes.
 COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
 RUN mkdir src && echo 'fn main() {}' > src/main.rs
 RUN cargo build --release 2>/dev/null || true
 RUN rm -rf src

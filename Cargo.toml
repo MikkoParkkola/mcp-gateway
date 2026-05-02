@@ -192,3 +192,7 @@ must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 unused_async = "allow"
+# Stylistic only — Duration::from_secs(60) reads fine; new in Rust 1.95.
+# Mechanically rewriting 50+ call sites risks subtle semantic confusion
+# (e.g. 3600 read as "an hour" vs "60 minutes" vs "magic number").
+duration_suboptimal_units = "allow"
