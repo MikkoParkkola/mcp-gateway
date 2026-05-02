@@ -816,8 +816,8 @@ impl MetaMcp {
                 && !cap_def.response_transform.is_empty()
             {
                 let t = ResponseTransform::new(&cap_def.response_transform);
-                let inner = extract_output_validation_target(&response)
-                    .unwrap_or_else(|| response.clone());
+                let inner =
+                    extract_output_validation_target(&response).unwrap_or_else(|| response.clone());
                 let transformed = t.transform_result(tool, inner).await?;
                 response = apply_validated_output(&response, transformed);
             }
