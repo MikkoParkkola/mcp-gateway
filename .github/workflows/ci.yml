@@ -76,6 +76,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Strip rust-version for Kani toolchain compatibility
+        # Kani 0.67.0 (the latest model-checking/kani-github-action @ v1.1
+        # SHA pin) ships nightly rustc 1.93. The project's
+        # rust-version=1.95 (commit f2063376) is a deployment-target
+        # requirement, not a verification requirement. Cargo's
+        # rust-version gate fires before kani runs, so we strip the
+        # field for this job only. Re-enable when Kani upstream ships a
+        # release with a 1.95-compatible nightly bundle.
+        run: sed -i '/^rust-version = /d' Cargo.toml
       - name: Run Kani proofs
         uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f # v1.1
         with:

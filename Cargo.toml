@@ -2,7 +2,7 @@
 name = "mcp-gateway"
 version = "2.11.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
 description = "Universal MCP Gateway - Single-port multiplexing with Meta-MCP for ~95% context token savings"
 license = "MIT"
@@ -192,3 +192,7 @@ must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 unused_async = "allow"
+# Stylistic only — Duration::from_secs(60) reads fine; new in Rust 1.95.
+# Mechanically rewriting 50+ call sites risks subtle semantic confusion
+# (e.g. 3600 read as "an hour" vs "60 minutes" vs "magic number").
+duration_suboptimal_units = "allow"
