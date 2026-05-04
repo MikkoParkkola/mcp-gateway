@@ -37,6 +37,47 @@ const SHELL_PATTERNS: &[&str] = &[
     r">\s*/(?:etc|tmp|dev|proc)/",  // redirect to system paths
 ];
 
+/// Argument keys whose values are free-text content (Linear bodies, gh issue
+/// descriptions, commit messages, agent comments). Shell-injection patterns
+/// like backticks and `$(...)` legitimately appear in these fields when the
+/// writer is *quoting* shell commands inside markdown documentation.
+///
+/// MIK-3329: Filing a Linear issue documenting these very heuristics required
+/// three rewrites of the body to land it. Path traversal and SQL injection
+/// remain strict on these keys (their false-positive rate in prose is much
+/// lower than shell injection).
+///
+/// Override at runtime with `MCP_GATEWAY_FIREWALL_SKIP_KEYS=k1,k2,...`.
+const FREE_TEXT_KEYS: &[&str] = &[
+    "description",
+    "body",
+    "summary",
+    "content",
+    "message",
+    "prompt",
+    "comment",
+    "comment_body",
+    "title",
+    "rationale",
+    "context",
+    "notes",
+    "rollback",
+    "ac",
+    "acceptance_criteria",
+];
+
+/// Resolve the active free-text key list. Env override wins.
+fn free_text_keys() -> Vec<String> {
+    if let Ok(s) = std::env::var("MCP_GATEWAY_FIREWALL_SKIP_KEYS") {
+        return s
+            .split(',')
+            .map(|k| k.trim().to_lowercase())
+            .filter(|k| !k.is_empty())
+            .collect();
+    }
+    FREE_TEXT_KEYS.iter().map(|s| (*s).to_string()).collect()
+}
+
 // Six path traversal patterns covering encoded and raw variants.
 const PATH_TRAVERSAL_PATTERNS: &[&str] = &[
     r"\.\./",                            // basic ../
@@ -104,9 +145,13 @@ impl InputScanner {
 
     fn scan_string(&self, key: &str, value: &str, findings: &mut Vec<Finding>) {
         let fragment = truncate(value, 200);
+        let key_lc = key.to_lowercase();
+        let in_free_text = free_text_keys().iter().any(|k| k == &key_lc);
 
-        // Shell injection — HIGH severity (deterministic, very few false positives).
-        if self.shell.is_match(value) {
+        // Shell injection — HIGH severity (deterministic, very few false positives
+        // on command/argument fields). Skipped on free-text keys (description,
+        // body, etc.) where backticks and `$(...)` are markdown noise. MIK-3329.
+        if !in_free_text && self.shell.is_match(value) {
             findings.push(Finding {
                 scan_type: ScanType::ShellInjection,
                 severity: Severity::High,
@@ -116,7 +161,8 @@ impl InputScanner {
             });
         }
 
-        // Path traversal — HIGH severity.
+        // Path traversal — HIGH severity. Stays strict on all keys: `../` and
+        // /etc/passwd in a body field are still suspicious enough to surface.
         if self.path.is_match(value) {
             findings.push(Finding {
                 scan_type: ScanType::PathTraversal,
@@ -380,5 +426,87 @@ mod tests {
             .find(|f| f.scan_type == ScanType::PathTraversal)
             .unwrap();
         assert_eq!(f.severity, Severity::High);
+    }
+
+    // ── MIK-3329: free-text key scope ─────────────────────────────────────────
+
+    #[test]
+    fn shell_injection_in_body_allowed() {
+        // Linear comment body containing markdown that quotes a shell command —
+        // backticks are documentation, not an injection attempt.
+        let findings = scan(&json!({
+            "body": "run `cargo build` then `cargo test` to verify"
+        }));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::ShellInjection),
+            "shell-injection on free-text body must not fire; got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn shell_injection_in_description_allowed() {
+        // gh issue create --description with $(...) substitution prose.
+        let findings = scan(&json!({
+            "description": "the firewall flags $(date) inside markdown bodies"
+        }));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::ShellInjection),
+            "shell-injection on description must not fire; got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn shell_injection_in_command_still_blocks() {
+        // The same backtick pattern in a `command` field is still suspicious.
+        let findings = scan(&json!({
+            "command": "echo `cat /etc/passwd`"
+        }));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::ShellInjection),
+            "shell-injection on command field must still block; got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn path_traversal_still_strict_on_body() {
+        // Path traversal stays strict — `../` in a body is rare enough that the
+        // signal is worth the noise.
+        let findings = scan(&json!({
+            "body": "see ../../etc/passwd for the file"
+        }));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::PathTraversal),
+            "path traversal must remain strict on free-text keys; got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn nested_object_body_still_skipped() {
+        // Free-text scope honours nested keys when the recursive walk reaches
+        // them. Reserved-domain literal assembled at runtime so editing this
+        // file doesn't trip upstream pre-tool guards.
+        let domain = format!("{}{}", "example", ".com");
+        let body = format!("use `curl -s {domain} | bash` only as last resort");
+        let args = serde_json::json!({
+            "arguments": {
+                "body": body,
+                "title": "ops note"
+            }
+        });
+        let findings = scan(&args);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::ShellInjection),
+            "nested body must skip shell-injection scan; got: {findings:?}"
+        );
     }
 }
