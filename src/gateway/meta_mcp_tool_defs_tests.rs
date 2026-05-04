@@ -133,6 +133,46 @@ fn base_tool_read_only_hints_match_spec() {
 }
 
 #[test]
+fn all_gateway_meta_tools_have_complete_annotations_with_titles() {
+    let mut tools = build_meta_tools(true, true, true, true, 42, 3);
+    tools.extend(build_code_mode_tools());
+
+    for tool in tools {
+        let annotations = tool
+            .annotations
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} missing annotations", tool.name));
+
+        assert_eq!(
+            annotations.title.as_ref(),
+            tool.title.as_ref(),
+            "{} annotation title must mirror tool title",
+            tool.name
+        );
+        assert!(
+            annotations.read_only_hint.is_some(),
+            "{} missing readOnlyHint",
+            tool.name
+        );
+        assert!(
+            annotations.destructive_hint.is_some(),
+            "{} missing destructiveHint",
+            tool.name
+        );
+        assert!(
+            annotations.idempotent_hint.is_some(),
+            "{} missing idempotentHint",
+            tool.name
+        );
+        assert!(
+            annotations.open_world_hint.is_some(),
+            "{} missing openWorldHint",
+            tool.name
+        );
+    }
+}
+
+#[test]
 fn search_tools_has_output_schema_with_matches_array() {
     // GIVEN: any counts
     // WHEN: building base tools

@@ -426,7 +426,7 @@ Embedded web UI at `/ui` -- live status, searchable tools, server health, config
 - **Reload Outcomes**: `gateway_reload_config` and `/ui/api/reload` return `restart_required` for listener changes (for example `server.host` / `server.port`); `env_files` list edits remain startup-only
 - **Config Discovery**: Auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, `/etc/mcp-gateway/`
 - **"Did You Mean?"**: Levenshtein-based typo correction on tool names
-- **Tool Annotations**: MCP 2025-11-25 `readOnlyHint`, `destructiveHint`, `openWorldHint`
+- **Tool Annotations**: MCP 2025-11-25 `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; gateway meta-tools are fully annotated, while backend tools use the hybrid pass-through/fill policy in [ADR-003](docs/adr/ADR-003-mcp-tool-annotation-policy.md)
 - **Dynamic Descriptions**: Live tool/server counts in meta-tool descriptions
 - **Tunnel Mode**: Expose via Tailscale or pipenet without opening ports
 - **Shell Completions**: `mcp-gateway completions bash|zsh|fish`

@@ -1122,6 +1122,28 @@ mod tests {
     }
 
     #[test]
+    fn normalize_tool_annotations_preserves_downstream_annotation_title_and_hints() {
+        let mut tool = sample_tool("remote_write");
+        tool.annotations = Some(ToolAnnotations {
+            title: Some("Remote Write".to_string()),
+            read_only_hint: Some(false),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(false),
+            open_world_hint: Some(false),
+        });
+        let mut tools = vec![tool];
+
+        normalize_tool_annotations("remote-api", &mut tools);
+
+        let annotations = tools[0].annotations.as_ref().unwrap();
+        assert_eq!(annotations.title.as_deref(), Some("Remote Write"));
+        assert_eq!(annotations.read_only_hint, Some(false));
+        assert_eq!(annotations.destructive_hint, Some(false));
+        assert_eq!(annotations.idempotent_hint, Some(false));
+        assert_eq!(annotations.open_world_hint, Some(false));
+    }
+
+    #[test]
     fn cached_metadata_tracks_freshness() {
         let cache = CachedMetadata::new();
         assert!(!cache.is_fresh(Duration::from_secs(60)));

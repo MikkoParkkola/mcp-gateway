@@ -13,9 +13,9 @@ use crate::protocol::{Tool, ToolAnnotations};
 // ============================================================================
 
 /// Annotations for read-only, idempotent, closed-world discovery meta-tools.
-fn read_only_annotations() -> ToolAnnotations {
+fn read_only_annotations(title: &str) -> ToolAnnotations {
     ToolAnnotations {
-        title: None,
+        title: Some(title.to_string()),
         read_only_hint: Some(true),
         destructive_hint: Some(false),
         idempotent_hint: Some(true),
@@ -34,7 +34,7 @@ fn build_list_servers_tool(server_count: usize) -> Tool {
         )),
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("List Servers")),
     }
 }
 
@@ -59,7 +59,7 @@ fn build_list_tools_tool(tool_count: usize, server_count: usize) -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("List Tools")),
     }
 }
 
@@ -106,7 +106,7 @@ fn build_search_tools_tool(tool_count: usize, server_count: usize) -> Tool {
             "required": ["query"]
         }),
         output_schema: Some(search_tools_output_schema()),
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("Search Tools")),
     }
 }
 
@@ -132,7 +132,7 @@ fn build_invoke_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(ToolAnnotations {
-            title: None,
+            title: Some("Invoke Tool".to_string()),
             read_only_hint: Some(false),
             destructive_hint: Some(false),
             idempotent_hint: Some(false),
@@ -178,7 +178,7 @@ pub(crate) fn build_stats_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("Get Gateway Statistics")),
     }
 }
 
@@ -207,7 +207,7 @@ pub(crate) fn build_playbook_tool() -> Tool {
             "required": ["name"]
         }),
         output_schema: None,
-        annotations: Some(write_non_idempotent_open_world_annotations()),
+        annotations: Some(write_non_idempotent_open_world_annotations("Run Playbook")),
     }
 }
 
@@ -227,14 +227,14 @@ pub(crate) fn build_webhook_status_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("Webhook Status")),
     }
 }
 
 /// Annotations for write operations that are destructive but idempotent (kill switch).
-fn destructive_idempotent_annotations() -> ToolAnnotations {
+fn destructive_idempotent_annotations(title: &str) -> ToolAnnotations {
     ToolAnnotations {
-        title: None,
+        title: Some(title.to_string()),
         read_only_hint: Some(false),
         destructive_hint: Some(true),
         idempotent_hint: Some(true),
@@ -243,9 +243,9 @@ fn destructive_idempotent_annotations() -> ToolAnnotations {
 }
 
 /// Annotations for write operations that are non-destructive and idempotent.
-fn write_idempotent_annotations() -> ToolAnnotations {
+fn write_idempotent_annotations(title: &str) -> ToolAnnotations {
     ToolAnnotations {
-        title: None,
+        title: Some(title.to_string()),
         read_only_hint: Some(false),
         destructive_hint: Some(false),
         idempotent_hint: Some(true),
@@ -255,9 +255,9 @@ fn write_idempotent_annotations() -> ToolAnnotations {
 
 /// Annotations for write operations that are non-idempotent and open-world
 /// (e.g. running a playbook that may call external tools with side-effects).
-fn write_non_idempotent_open_world_annotations() -> ToolAnnotations {
+fn write_non_idempotent_open_world_annotations(title: &str) -> ToolAnnotations {
     ToolAnnotations {
-        title: None,
+        title: Some(title.to_string()),
         read_only_hint: Some(false),
         destructive_hint: Some(false),
         idempotent_hint: Some(false),
@@ -286,7 +286,7 @@ pub(crate) fn build_kill_server_tool() -> Tool {
             "required": ["server"]
         }),
         output_schema: None,
-        annotations: Some(destructive_idempotent_annotations()),
+        annotations: Some(destructive_idempotent_annotations("Kill Server")),
     }
 }
 
@@ -311,7 +311,7 @@ pub(crate) fn build_revive_server_tool() -> Tool {
             "required": ["server"]
         }),
         output_schema: None,
-        annotations: Some(write_idempotent_annotations()),
+        annotations: Some(write_idempotent_annotations("Revive Server")),
     }
 }
 
@@ -336,7 +336,7 @@ pub(crate) fn build_set_profile_tool() -> Tool {
             "required": ["profile"]
         }),
         output_schema: None,
-        annotations: Some(write_idempotent_annotations()),
+        annotations: Some(write_idempotent_annotations("Set Routing Profile")),
     }
 }
 
@@ -355,7 +355,7 @@ pub(crate) fn build_get_profile_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("Get Routing Profile")),
     }
 }
 
@@ -381,7 +381,7 @@ pub(crate) fn build_list_disabled_capabilities_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("List Disabled Capabilities")),
     }
 }
 
@@ -402,7 +402,7 @@ pub(crate) fn build_list_profiles_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("List Tool Profiles")),
     }
 }
 
@@ -435,7 +435,7 @@ pub(crate) fn build_set_state_tool() -> Tool {
             "required": ["state"]
         }),
         output_schema: None,
-        annotations: Some(write_idempotent_annotations()),
+        annotations: Some(write_idempotent_annotations("Set Workflow State")),
     }
 }
 
@@ -456,7 +456,7 @@ pub(crate) fn build_reload_config_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(write_idempotent_annotations()),
+        annotations: Some(write_idempotent_annotations("Reload Config")),
     }
 }
 
@@ -492,7 +492,7 @@ pub(crate) fn build_cost_report_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("Cost Report")),
     }
 }
 
@@ -560,7 +560,7 @@ pub(crate) fn build_reload_capabilities_tool() -> Tool {
             "required": []
         }),
         output_schema: None,
-        annotations: Some(write_idempotent_annotations()),
+        annotations: Some(write_idempotent_annotations("Reload Capabilities")),
     }
 }
 
@@ -604,7 +604,7 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
             "required": ["query"]
         }),
         output_schema: None,
-        annotations: Some(read_only_annotations()),
+        annotations: Some(read_only_annotations("Search Tools")),
     }
 }
 
@@ -649,7 +649,7 @@ pub(crate) fn build_code_mode_execute_tool() -> Tool {
             }
         }),
         output_schema: None,
-        annotations: Some(write_non_idempotent_open_world_annotations()),
+        annotations: Some(write_non_idempotent_open_world_annotations("Execute Tool")),
     }
 }
 
