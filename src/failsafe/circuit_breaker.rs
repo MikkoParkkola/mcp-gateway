@@ -77,7 +77,8 @@ pub struct CircuitBreakerStats {
     pub failure_threshold: u32,
 }
 
-/// Circuit breaker for backend protection
+/// Circuit breaker for backend or client protection.
+#[derive(Debug)]
 pub struct CircuitBreaker {
     /// Backend name
     name: String,

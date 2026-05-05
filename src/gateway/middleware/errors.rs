@@ -24,6 +24,10 @@ pub(crate) fn rate_limited_response(message: impl Into<String>) -> Response {
     )
 }
 
+pub(crate) fn circuit_open_response(message: impl Into<String>) -> Response {
+    jsonrpc_error_response(StatusCode::SERVICE_UNAVAILABLE, -32003, message, None)
+}
+
 fn jsonrpc_error_response(
     status: StatusCode,
     code: i32,

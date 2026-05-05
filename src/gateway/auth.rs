@@ -18,9 +18,12 @@ use governor::{
 };
 use tracing::{debug, warn};
 
-use super::middleware::{bearer_unauthorized_response, rate_limited_response};
+use super::middleware::{
+    bearer_unauthorized_response, circuit_open_response, rate_limited_response,
+};
 use crate::Result;
-use crate::config::AuthConfig;
+use crate::config::{AuthConfig, CircuitBreakerConfig};
+use crate::failsafe::{CircuitBreaker, CircuitState};
 use crate::key_server::KeyServer;
 
 /// Type alias for our rate limiter
@@ -37,8 +40,12 @@ pub struct ResolvedAuthConfig {
     pub api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
-    /// Rate limiters per client (keyed by client name)
+    /// Rate limiters per client (keyed by resolved authenticated identity).
     rate_limiters: DashMap<String, Arc<ClientRateLimiter>>,
+    /// Optional client circuit-breaker policy shared across per-client breaker instances.
+    client_circuit_breaker: Option<CircuitBreakerConfig>,
+    /// Circuit breakers per authenticated client (keyed by resolved authenticated identity).
+    client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
 }
 
 /// Resolved API key with expanded values
@@ -109,6 +116,8 @@ impl ResolvedAuthConfig {
             api_keys,
             public_paths: config.public_paths.clone(),
             rate_limiters,
+            client_circuit_breaker: config.client_circuit_breaker.clone(),
+            client_circuit_breakers: DashMap::new(),
         })
     }
 
@@ -170,6 +179,87 @@ impl ResolvedAuthConfig {
             // No rate limiter = unlimited
             true
         }
+    }
+
+    /// Check rate limiting for a fully resolved authenticated client.
+    ///
+    /// Static API keys are pre-created at startup; temporary key-server identities
+    /// create their per-client bucket on first use from the verified OIDC identity.
+    #[must_use]
+    pub fn check_authenticated_client_rate_limit(&self, client: &AuthenticatedClient) -> bool {
+        if client.rate_limit == 0 {
+            return true;
+        }
+
+        let Some(quota) = NonZeroU32::new(client.rate_limit) else {
+            return true;
+        };
+        let limiter = self
+            .rate_limiters
+            .entry(client.name.clone())
+            .or_insert_with(|| Arc::new(RateLimiter::direct(Quota::per_minute(quota))))
+            .clone();
+        limiter.check().is_ok()
+    }
+
+    /// Check whether this authenticated client's dispatch circuit allows a request.
+    #[must_use]
+    pub fn check_client_circuit_breaker(&self, client_name: &str) -> bool {
+        let Some(config) = self.client_circuit_breaker.as_ref() else {
+            return true;
+        };
+        if !config.enabled {
+            return true;
+        }
+
+        self.client_circuit_breaker_for(client_name, config)
+            .can_proceed()
+    }
+
+    /// Record a successful dispatch for this authenticated client.
+    pub fn record_client_success(&self, client_name: &str) {
+        if let Some(breaker) = self.active_client_circuit_breaker(client_name) {
+            breaker.record_success();
+        }
+    }
+
+    /// Record a failed dispatch for this authenticated client.
+    pub fn record_client_failure(&self, client_name: &str) {
+        if let Some(breaker) = self.active_client_circuit_breaker(client_name) {
+            breaker.record_failure();
+        }
+    }
+
+    /// Return the current circuit state for tests and observability adapters.
+    #[must_use]
+    pub fn client_circuit_state(&self, client_name: &str) -> Option<CircuitState> {
+        self.client_circuit_breakers
+            .get(client_name)
+            .map(|breaker| breaker.state())
+    }
+
+    fn active_client_circuit_breaker(&self, client_name: &str) -> Option<Arc<CircuitBreaker>> {
+        let config = self.client_circuit_breaker.as_ref()?;
+        if !config.enabled {
+            return None;
+        }
+        Some(self.client_circuit_breaker_for(client_name, config))
+    }
+
+    fn client_circuit_breaker_for(
+        &self,
+        client_name: &str,
+        config: &CircuitBreakerConfig,
+    ) -> Arc<CircuitBreaker> {
+        self.client_circuit_breakers
+            .entry(client_name.to_string())
+            .or_insert_with(|| {
+                Arc::new(CircuitBreaker::new(
+                    &format!("client:{client_name}"),
+                    config,
+                ))
+            })
+            .clone()
     }
 }
 
@@ -316,10 +406,17 @@ pub async fn auth_middleware(
 
     // 1. Try static auth (existing behavior)
     if let Some(client) = auth_config.validate_token(token) {
-        if !auth_config.check_rate_limit(&client.name) {
+        if !auth_config.check_authenticated_client_rate_limit(&client) {
             warn!(client = %client.name, path = %path, "Rate limit exceeded");
             return rate_limited_response(format!(
                 "Rate limit exceeded for client '{}'. Try again later.",
+                client.name
+            ));
+        }
+        if !auth_config.check_client_circuit_breaker(&client.name) {
+            warn!(client = %client.name, path = %path, "Client circuit breaker open");
+            return circuit_open_response(format!(
+                "Client '{}' circuit breaker is open. Try again later.",
                 client.name
             ));
         }
@@ -332,6 +429,20 @@ pub async fn auth_middleware(
     if let Some(ref ks) = state.key_server
         && let Some((client, identity_token)) = ks.validate_token(token).await
     {
+        if !auth_config.check_authenticated_client_rate_limit(&client) {
+            warn!(client = %client.name, path = %path, "Rate limit exceeded");
+            return rate_limited_response(format!(
+                "Rate limit exceeded for client '{}'. Try again later.",
+                client.name
+            ));
+        }
+        if !auth_config.check_client_circuit_breaker(&client.name) {
+            warn!(client = %client.name, path = %path, "Client circuit breaker open");
+            return circuit_open_response(format!(
+                "Client '{}' circuit breaker is open. Try again later.",
+                client.name
+            ));
+        }
         debug!(client = %client.name, path = %path, "Authenticated via temporary token");
         request
             .extensions_mut()
@@ -357,6 +468,8 @@ mod tests {
             api_keys: vec![],
             public_paths: vec!["/health".to_string(), "/metrics".to_string()],
             rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
         };
 
         assert!(config.is_public_path("/health"));
@@ -374,6 +487,8 @@ mod tests {
             api_keys: vec![],
             public_paths: vec![],
             rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
         };
 
         let client = config.validate_token("secret123");
@@ -409,6 +524,8 @@ mod tests {
             ],
             public_paths: vec![],
             rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
         };
 
         let client_a = config.validate_token("key1").unwrap();
@@ -436,6 +553,8 @@ mod tests {
             api_keys: vec![],
             public_paths: vec![],
             rate_limiters,
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
         };
 
         // First two requests should succeed

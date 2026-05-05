@@ -628,6 +628,14 @@ pub(super) async fn meta_mcp_handler(
     )
     .increment(1);
 
+    if let Some(ref client) = client {
+        if response.error.is_some() {
+            state.auth_config.record_client_failure(&client.name);
+        } else {
+            state.auth_config.record_client_success(&client.name);
+        }
+    }
+
     // Return response with session ID header
     build_response(response, &session_id, StatusCode::OK)
 }

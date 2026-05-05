@@ -4,6 +4,7 @@ use std::env;
 
 use serde::{Deserialize, Serialize};
 
+use super::failsafe::CircuitBreakerConfig;
 use crate::{Error, Result};
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
@@ -24,6 +25,9 @@ pub struct AuthConfig {
     /// Paths that bypass authentication (default: `["/health"]`).
     #[serde(default = "default_public_paths")]
     pub public_paths: Vec<String>,
+    /// Optional per-client circuit breaker applied after authenticated identity is established.
+    #[serde(default)]
+    pub client_circuit_breaker: Option<CircuitBreakerConfig>,
 }
 
 fn default_public_paths() -> Vec<String> {
@@ -37,6 +41,7 @@ impl Default for AuthConfig {
             bearer_token: None,
             api_keys: Vec::new(),
             public_paths: default_public_paths(),
+            client_circuit_breaker: None,
         }
     }
 }

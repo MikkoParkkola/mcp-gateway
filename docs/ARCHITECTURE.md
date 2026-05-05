@@ -134,7 +134,7 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 
 - **Auth** is disabled by default for local-only use. Enable for networked deployments.
 - **Bearer tokens** support auto-generation, env vars, and literals.
-- **API keys** support per-client rate limits and backend restrictions.
+- **API keys** support per-client rate limits, opt-in per-client circuit breakers, and backend restrictions.
 - **Secrets** use OS keychain (macOS Keychain, Linux secret-service) -- never stored in config files.
 - **OAuth** supports per-backend configuration with dynamic client registration.
 - **`/health`** is always public (configurable via `auth.public_paths`).

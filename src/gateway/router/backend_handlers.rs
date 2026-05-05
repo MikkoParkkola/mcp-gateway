@@ -245,8 +245,12 @@ pub(super) async fn backend_handler(
     // Handle notifications - forward to backend but return 202 Accepted
     if method.starts_with("notifications/") {
         return match backend.notify(&method, params).await {
-            Ok(()) => (StatusCode::ACCEPTED, Json(json!({}))),
+            Ok(()) => {
+                record_client_success(&state, client.as_ref());
+                (StatusCode::ACCEPTED, Json(json!({})))
+            }
             Err(e) => {
+                record_client_failure(&state, client.as_ref());
                 error!(backend = %name, error = %e, "Backend notification failed");
                 let response = JsonRpcResponse::error(None, e.to_rpc_code(), e.to_string());
                 build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
@@ -277,6 +281,7 @@ pub(super) async fn backend_handler(
                 // Forward the sanitized params to the backend
                 return match backend.request(&method, Some(sanitized_params)).await {
                     Ok(mut response) => {
+                        record_client_success(&state, client.as_ref());
                         scan_direct_backend_response(
                             &state,
                             &name,
@@ -287,6 +292,7 @@ pub(super) async fn backend_handler(
                         build_http_response(&response, StatusCode::OK)
                     }
                     Err(e) => {
+                        record_client_failure(&state, client.as_ref());
                         error!(backend = %name, error = %e, "Backend request failed");
                         let response =
                             JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
@@ -302,6 +308,7 @@ pub(super) async fn backend_handler(
     // Forward to backend
     match backend.request(&method, params.clone()).await {
         Ok(mut response) => {
+            record_client_success(&state, client.as_ref());
             if method == "tools/list" {
                 normalize_tools_list_response(&name, &mut response);
             } else if method == "tools/call" {
@@ -316,10 +323,23 @@ pub(super) async fn backend_handler(
             build_http_response(&response, StatusCode::OK)
         }
         Err(e) => {
+            record_client_failure(&state, client.as_ref());
             error!(backend = %name, error = %e, "Backend request failed");
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
             build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
+    if let Some(client) = client {
+        state.auth_config.record_client_success(&client.name);
+    }
+}
+
+fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
+    if let Some(client) = client {
+        state.auth_config.record_client_failure(&client.name);
     }
 }
 

@@ -6,7 +6,10 @@
 //! - Rate limiting
 //! - Backend access control
 
-use mcp_gateway::config::{ApiKeyConfig, AuthConfig};
+use std::time::Duration;
+
+use mcp_gateway::config::{ApiKeyConfig, AuthConfig, CircuitBreakerConfig};
+use mcp_gateway::failsafe::CircuitState;
 use mcp_gateway::gateway::auth::{AuthenticatedClient, ResolvedAuthConfig};
 
 /// Test that `ResolvedAuthConfig` correctly resolves from `AuthConfig`
@@ -25,6 +28,7 @@ fn test_auth_config_resolution() {
             admin: false,
         }],
         public_paths: vec!["/health".to_string()],
+        client_circuit_breaker: None,
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -45,6 +49,7 @@ fn test_bearer_token_auth() {
         bearer_token: Some("secret-bearer-token".to_string()),
         api_keys: vec![],
         public_paths: vec![],
+        client_circuit_breaker: None,
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -87,6 +92,7 @@ fn test_api_key_auth_with_restrictions() {
             },
         ],
         public_paths: vec![],
+        client_circuit_breaker: None,
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -122,6 +128,7 @@ fn test_rate_limiting() {
             admin: false,
         }],
         public_paths: vec![],
+        client_circuit_breaker: None,
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -137,6 +144,31 @@ fn test_rate_limiting() {
     assert!(resolved.check_rate_limit("Unknown Client"));
 }
 
+#[test]
+fn test_resolved_client_rate_limit_creates_identity_bucket() {
+    let auth_config = AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![],
+        public_paths: vec![],
+        client_circuit_breaker: None,
+    };
+
+    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let temporary_client = AuthenticatedClient {
+        name: "temporary@example.com".to_string(),
+        rate_limit: 2,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+    };
+
+    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
+    assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
+    assert!(!resolved.check_authenticated_client_rate_limit(&temporary_client));
+}
+
 /// Test public paths bypass authentication
 #[test]
 fn test_public_paths() {
@@ -149,6 +181,7 @@ fn test_public_paths() {
             "/metrics".to_string(),
             "/api/public/".to_string(),
         ],
+        client_circuit_breaker: None,
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -175,6 +208,7 @@ fn test_auto_generated_token() {
         bearer_token: Some("auto".to_string()),
         api_keys: vec![],
         public_paths: vec![],
+        client_circuit_breaker: None,
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
@@ -236,8 +270,106 @@ fn test_disabled_auth() {
         bearer_token: Some("ignored".to_string()),
         api_keys: vec![],
         public_paths: vec![],
+        client_circuit_breaker: None,
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
     assert!(!resolved.enabled);
+}
+
+#[test]
+fn test_client_circuit_breaker_is_per_client() {
+    let auth_config = AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![
+            ApiKeyConfig {
+                key: "client-a-key".to_string(),
+                name: "client-a".to_string(),
+                rate_limit: 0,
+                backends: vec![],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+            },
+            ApiKeyConfig {
+                key: "client-b-key".to_string(),
+                name: "client-b".to_string(),
+                rate_limit: 0,
+                backends: vec![],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+            },
+        ],
+        public_paths: vec![],
+        client_circuit_breaker: Some(CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 2,
+            success_threshold: 1,
+            reset_timeout: Duration::from_secs(60),
+        }),
+    };
+
+    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+
+    assert!(resolved.check_client_circuit_breaker("client-a"));
+    resolved.record_client_failure("client-a");
+    assert_eq!(
+        resolved.client_circuit_state("client-a"),
+        Some(CircuitState::Closed)
+    );
+    resolved.record_client_failure("client-a");
+
+    assert_eq!(
+        resolved.client_circuit_state("client-a"),
+        Some(CircuitState::Open)
+    );
+    assert!(!resolved.check_client_circuit_breaker("client-a"));
+    assert!(resolved.check_client_circuit_breaker("client-b"));
+}
+
+#[test]
+fn test_client_circuit_breaker_recovers_after_successful_probe() {
+    let auth_config = AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![ApiKeyConfig {
+            key: "client-key".to_string(),
+            name: "recovering-client".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }],
+        public_paths: vec![],
+        client_circuit_breaker: Some(CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 1,
+            success_threshold: 1,
+            reset_timeout: Duration::from_millis(1),
+        }),
+    };
+
+    let resolved = ResolvedAuthConfig::from_config(&auth_config);
+
+    resolved.record_client_failure("recovering-client");
+    assert_eq!(
+        resolved.client_circuit_state("recovering-client"),
+        Some(CircuitState::Open)
+    );
+    std::thread::sleep(Duration::from_millis(2));
+    assert!(resolved.check_client_circuit_breaker("recovering-client"));
+    assert_eq!(
+        resolved.client_circuit_state("recovering-client"),
+        Some(CircuitState::HalfOpen)
+    );
+
+    resolved.record_client_success("recovering-client");
+
+    assert_eq!(
+        resolved.client_circuit_state("recovering-client"),
+        Some(CircuitState::Closed)
+    );
 }
