@@ -201,6 +201,7 @@ fn scoped_auth_config(admin: bool) -> AuthConfig {
             admin,
         }],
         public_paths: vec!["/health".to_string()],
+        client_circuit_breaker: None,
     }
 }
 

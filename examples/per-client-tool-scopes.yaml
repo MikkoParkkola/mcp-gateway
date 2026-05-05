@@ -15,6 +15,15 @@ server:
 auth:
   enabled: true
 
+  # Optional dispatch-layer circuit breaker keyed by authenticated client name.
+  # Identity is resolved from bearer/API-key auth; forwarded headers are not trusted.
+  # Per-client rate_limit below still enforces request throttling.
+  client_circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    success_threshold: 2
+    reset_timeout: "30s"
+
   # API keys with different tool access levels
   api_keys:
     # Frontend app: Only search and read operations

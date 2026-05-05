@@ -40,6 +40,7 @@ use std::sync::Arc;
 
 use crate::config::KeyServerConfig;
 use crate::gateway::auth::AuthenticatedClient;
+use oidc::VerifiedIdentity;
 
 pub use audit::AuditEvent;
 pub use oidc::{JwksCache, OidcVerifier};
@@ -89,7 +90,7 @@ impl KeyServer {
         let temp = self.store.get(token).await?;
 
         let client = AuthenticatedClient {
-            name: temp.identity.email.clone(),
+            name: oidc_client_identity_key(&temp.identity),
             rate_limit: temp.scopes.rate_limit,
             backends: temp.scopes.backends.clone(),
             allowed_tools: if temp.scopes.tools.is_empty() {
@@ -105,5 +106,52 @@ impl KeyServer {
         audit::emit(&ev);
 
         Some((client, temp))
+    }
+}
+
+fn oidc_client_identity_key(identity: &VerifiedIdentity) -> String {
+    format!("oidc:{}:{}", identity.issuer, identity.subject)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(subject: &str, email: &str, issuer: &str) -> VerifiedIdentity {
+        VerifiedIdentity {
+            subject: subject.to_string(),
+            email: email.to_string(),
+            name: None,
+            groups: vec![],
+            issuer: issuer.to_string(),
+        }
+    }
+
+    #[test]
+    fn oidc_client_identity_key_uses_issuer_and_subject_not_email() {
+        let first = identity(
+            "same-subject",
+            "shared@example.com",
+            "https://issuer-a.example",
+        );
+        let second = identity(
+            "same-subject",
+            "shared@example.com",
+            "https://issuer-b.example",
+        );
+        let missing_email = identity("subject-without-email", "", "https://issuer-a.example");
+
+        assert_eq!(
+            oidc_client_identity_key(&first),
+            "oidc:https://issuer-a.example:same-subject"
+        );
+        assert_ne!(
+            oidc_client_identity_key(&first),
+            oidc_client_identity_key(&second)
+        );
+        assert_eq!(
+            oidc_client_identity_key(&missing_email),
+            "oidc:https://issuer-a.example:subject-without-email"
+        );
     }
 }

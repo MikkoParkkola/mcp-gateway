@@ -398,7 +398,7 @@ Embedded web UI at `/ui` -- live status, searchable tools, server health, config
 
 | Feature | Description | Docs |
 |---------|-------------|------|
-| **Authentication** | Bearer tokens, API keys, explicit admin keys, per-client rate limits | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
+| **Authentication** | Bearer tokens, API keys, explicit admin keys, per-client rate limits and opt-in per-client circuit breakers | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
 | **Per-Client Tool Scopes** | Allowlist/denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
 | **Security Firewall** | Credential redaction, prompt injection detection, shell/SQL/path traversal scanning | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Cost Governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
