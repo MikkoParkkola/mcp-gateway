@@ -103,6 +103,7 @@ rand = "0.10"
 dirs = "6.0"
 hmac = "0.13"
 hex = "0.4"
+ring = "0.17"
 # Key Server: OIDC JWT verification
 # aws_lc_rs backend avoids the rsa crate (RUSTSEC-2023-0071 Marvin Attack)
 jsonwebtoken = { version = "10.3", features = ["use_pem", "aws_lc_rs"] }

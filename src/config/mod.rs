@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
+use crate::security::verify_remote_server_provenance;
 use crate::{Error, Result};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
@@ -30,8 +31,8 @@ pub use features::{
     CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, FailsafeConfig,
     HealthCheckConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
     KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
-    RateLimitConfig, ResponseContractConfig, RetryConfig, SecurityConfig, StreamingConfig,
-    ToolContractConfig, WebhookConfig,
+    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
+    SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -288,6 +289,7 @@ impl Config {
         }
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
+        self.validate_remote_backend_provenance()?;
         self.validate_secret_env_refs()?;
         Ok(())
     }
@@ -306,6 +308,31 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
+
+    fn validate_remote_backend_provenance(&self) -> Result<()> {
+        let policy = &self.security.remote_server_signing;
+
+        for (name, backend) in &self.backends {
+            if !backend.enabled {
+                continue;
+            }
+            let Some((transport, url)) = remote_transport_identity(&backend.transport) else {
+                continue;
+            };
+
+            let metadata = policy.backends.get(name);
+            if policy.require_for_remote_backends || metadata.is_some() {
+                let metadata = metadata.ok_or_else(|| {
+                    Error::ConfigValidation(format!(
+                        "remote backend '{name}' requires signed provenance metadata"
+                    ))
+                })?;
+                verify_remote_server_provenance(name, transport, url, metadata, policy)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -388,6 +415,15 @@ impl Config {
         })?;
 
         Ok(())
+    }
+}
+
+fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static str, &str)> {
+    match transport {
+        TransportConfig::Http { http_url, .. } => Some((transport.transport_type(), http_url)),
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { a2a_url, .. } => Some((transport.transport_type(), a2a_url)),
+        TransportConfig::Stdio { .. } => None,
     }
 }
 

@@ -14,7 +14,7 @@
 | ASI01 | **Agent Behaviour Hijack** — Adversary overrides agent goals via injected instructions (prompt injection, indirect instruction embedding, tool description poisoning) | COVERED | `src/validator/rules/tool_poisoning.rs`: high-severity pattern detection for `instruction-embed`, `exfiltration`, `filesystem-path` in all tool description fields; unicode-control and whitespace-padding medium patterns; `src/security/firewall/input_scanner.rs`: shell-injection RegexSet on every argument; `src/security/firewall/anomaly.rs`: transition-probability anomaly scoring flags unusual call sequences | `src/botnaut/security/constitution_enforcer.py`: Ed25519-signed `CONSTITUTION.md` verified at startup; `src/botnaut/security/constitutional_firewall.py` + `constitution_guard.py`: runtime rule enforcement; `src/botnaut/security/prompt_injection/` (PROMPT_INJECTION_DEFENSE.md documented) | No runtime prompt-injection detection on LLM *outputs* in mcp-gateway (response scanning is present but pattern-limited) |
 | ASI02 | **Tool Misuse and Exploitation** — Attacker chains authorized tools in unintended sequences, or exploits dynamic tool invocation to cause privilege escalation or destructive side-effects | COVERED | `src/security/policy.rs`: `DEFAULT_DENIED_PATTERNS` (write_file, delete_file, shell_exec, eval, drop_table, kill_process, etc.) with configurable allow/deny lists; `src/session_sandbox.rs`: `denied_tools` denylist + `allowed_backends` allowlist per session profile; `src/security/scope_collision.rs`: scope conflict detection; `src/security/firewall/anomaly.rs`: tool-sequence anomaly detection | `src/botnaut/security/capability.py`: unforgeable capability tokens with BFS revocation (#968); `src/botnaut/governance/delegation/chain.py`: `ResponsibilityChain` traces actions back to human grantor (max 3 hops); `src/botnaut/governance/autonomy_limits.py`: agent autonomy constraints | No automated graph-level tool-chaining analysis in mcp-gateway; anomaly detector is statistical, not structural |
 | ASI03 | **Identity and Privilege Abuse** — Agent impersonates another agent or user, exploits implicit trust between agents, or escalates privileges through delegation chains | COVERED | `src/mtls/cert_manager.rs`: mutual TLS with `rustls` client-certificate verification; `src/gateway/server/support.rs`: extracts the verified TLS peer certificate after handshake and injects `CertIdentity` into request extensions; `src/mtls/identity.rs`: extracts SPIFFE URI SANs from SVID-style X.509 certificates; `src/mtls/access_control/mod.rs`: fail-closed SPIFFE/SVID SAN policy matching at tool dispatch, including deny when policy rules exist but no verified certificate identity is present; `src/oauth/`: OAuth 2.0 + PKCE (RFC 7636) for backend auth; `src/gateway/auth.rs`: bearer token enforcement | `src/botnaut/security/constitution_enforcer.py`: Ed25519 owner key embedded — only owner can rotate constitution; `src/botnaut/governance/delegation/`: `DelegationGrant` model with `parent_grant_id` lineage; `src/botnaut/security/compliance/audit_trails.py`: `CAPABILITY_TOKEN_ISSUED/REVOKED/VALIDATED` events | Hardened profile requires `mtls.enabled` plus a trusted CA/SPIFFE issuer and explicit `match.san_uri` policies. Token-only deployments remain outside the ASI03 hardened profile rather than a coverage claim. |
-| ASI04 | **Agentic Supply Chain Vulnerabilities** — Malicious or compromised tool servers, capability files, or MCP backends silently alter tool behaviour after initial approval ("rug pull") | PARTIAL | `src/capability/hash.rs`: SHA-256 capability file pinning — hash computed over raw file bytes excluding the pin line itself; `mcp-gateway cap pin` CLI rewrites pins; `src/capability/watcher.rs`: file-watch hot-reload rejects hash mismatches; `src/capability/backend.rs` (detect_rug_pulls implied via loader validation); `src/validator/rules/tool_poisoning.rs`: oversized-description detection blocks post-approval description bloat | `docs/architecture/FULL_STACK_SOVEREIGNTY.md` (ADR-001): full-stack ownership doctrine prohibits weaponizable external deps; `src/botnaut/security/ml_dsa_signatures.py`: ML-DSA (post-quantum) signing for artifact integrity | No SBOM or third-party MCP server signing verification; hash pinning covers capability YAMLs but not live remote MCP servers. Tracked by MIK-3361 |
+| ASI04 | **Agentic Supply Chain Vulnerabilities** — Malicious or compromised tool servers, capability files, or MCP backends silently alter tool behaviour after initial approval ("rug pull") | PARTIAL | `src/capability/hash.rs`: SHA-256 capability file pinning — hash computed over raw file bytes excluding the pin line itself; `mcp-gateway cap pin` CLI rewrites pins; `src/capability/watcher.rs`: file-watch hot-reload rejects hash mismatches; `src/security/remote_provenance.rs`: opt-in Ed25519 verification for signed remote MCP backend provenance; `src/config/mod.rs`: fail-closed config validation when remote signing is required or configured; `src/validator/rules/tool_poisoning.rs`: oversized-description detection blocks post-approval description bloat | `docs/architecture/FULL_STACK_SOVEREIGNTY.md` (ADR-001): full-stack ownership doctrine prohibits weaponizable external deps; `src/botnaut/security/ml_dsa_signatures.py`: ML-DSA (post-quantum) signing for artifact integrity | Config-time remote provenance is implemented, but release workflow still publishes SHA-256 checksums without a generated SBOM artifact or Sigstore/cosign signature, and the gateway does not yet fetch a live MCP server attestation document. Tracked by MIK-3361 |
 | ASI05 | **Unexpected Code Execution / RCE** — Agent-triggered tool invocations result in arbitrary code execution through shell injection, path traversal, eval patterns, or unsafe deserialization | PARTIAL | `src/security/firewall/input_scanner.rs`: `SHELL_PATTERNS` RegexSet (6 patterns: command substitution, backtick exec, pipe-to-shell, chained destructive cmds, system-path redirect, semicolon chains); `PATH_TRAVERSAL_PATTERNS` (6 patterns inc. URL-encoded variants); `src/security/policy.rs`: `run_command`, `execute_command`, `shell_exec`, `eval`, `run_script` in `DEFAULT_DENIED_PATTERNS`; `src/security/ssrf.rs`: all RFC 5735/6890 private/loopback IPv4+IPv6 ranges blocked | `src/botnaut/security/coding_security_ctx.py`; `docs/security/COMMAND_INJECTION_FIX_REPORT.md`; `docs/security/SUBPROCESS_TIMEOUT.md`: subprocess timeout controls | SQL injection detection is medium-severity warn-only (not block) in mcp-gateway; no sandboxed execution environment for tool results. Tracked by MIK-3364 |
 | ASI06 | **Memory and Context Poisoning** — Attacker injects malicious content into agent short- or long-term memory (vector stores, external knowledge bases, session context), which then influences future agent decisions | PARTIAL | `src/security/firewall/input_scanner.rs`: scans tool arguments including memory-write arguments; `src/security/firewall/redactor.rs`: PII/sensitive data redaction before logging; `src/context_compression.rs`: context management; no dedicated memory-store integrity layer | `src/botnaut/security/adversarial/`: adversarial input detection; `src/botnaut/security/poison_resilience/` (POISON_RESILIENCE_PLAN.md); `src/botnaut/security/constitution_guard.py`: runtime guard against goal drift; Botnaut uses DeltaNet TTT state with CRDT merge semantics — state is append-only and versioned | mcp-gateway has no vector-store or long-term memory protection (it is stateless by design); Botnaut's memory poisoning defence is planned (POISON_RESILIENCE_PLAN) but not fully shipped |
 | ASI07 | **Insecure Inter-Agent Communication** — Agent-to-agent messages lack authentication, integrity protection, or confidentiality, enabling MITM, message injection, or replay attacks between agents | PARTIAL | `src/security/message_signing.rs`: HMAC-SHA256 `gateway_invoke` response signing (ADR-001); `_signature` block with `alg`, `sig`, `nonce`, `ts`, `key_id` in every signed response; `NonceStore` (DashMap + TTL eviction) rejects replayed request nonces within configurable replay window (default 5 min); opt-in via `security.message_signing.enabled`; key rotation via `previous_secret`; `src/mtls/`: mutual TLS for transport-layer channel auth; `src/tracing_context/`: per-request trace propagation | `src/botnaut/swarm/quantum_safe_consensus.py`: ML-KEM post-quantum consensus with Ed25519 receipts; `src/botnaut/swarm/federation/invitation.py`: federated agent invitation with Ed25519 signatures; `src/botnaut/security/pq_audit.py`: PQC audit; `docs/security/HYBRID_PQ_RATCHET_DESIGN.md` | Application-layer signing covers gateway→client leg; multi-gateway signature chaining (JWS-style) is out of scope per ADR-001 and tracked by MIK-3362. Agent identity attestation remains ASI03 and MIK-3363 |
@@ -38,10 +38,39 @@
 
 | Risk | Tracking issue | Scope |
 |------|----------------|-------|
-| ASI04 | MIK-3361 | SBOM completeness and remote MCP server signing verification |
+| ASI04 | MIK-3361 | SBOM artifact/release signing and live remote MCP server attestation discovery after config-time provenance |
 | ASI05 | MIK-3364 | Sandboxed tool-result handling plus SQL-injection block behavior |
 | ASI07 | MIK-3362 | Multi-gateway JWS-style signature chaining |
 | ASI10 | MIK-3360 | Multi-agent collusion detection |
+
+---
+
+## ASI04 Remote MCP Server Provenance Boundary (MIK-3361)
+
+### Current SBOM and signing coverage
+
+- Local capability integrity is covered by `src/capability/hash.rs` and the `mcp-gateway cap pin` flow: the loader verifies a SHA-256 hash over raw capability YAML content with the top-level `sha256:` line excluded.
+- Release artifacts currently get `SHA256SUMS.txt` in `.github/workflows/release.yml`; that is checksum evidence, not an SBOM and not a publisher signature.
+- CI runs dependency audit in `.github/workflows/ci.yml`; no repository workflow currently emits CycloneDX/SPDX SBOM artifacts or signs release assets with Sigstore/cosign.
+- Remote MCP server trust is now separate from local dependency metadata: `security.remote_server_signing` verifies signed backend provenance at config validation time before the gateway starts with the configured backend set.
+
+### Accepted remote provenance inputs
+
+`security.remote_server_signing` accepts:
+
+- `require_for_remote_backends`: when `true`, every enabled HTTP/A2A backend must have signed provenance metadata.
+- `trusted_keys`: map of `key_id` to `{ algorithm: ed25519, public_key: <base64 raw 32-byte Ed25519 key> }`.
+- `backends`: map of backend name to `{ subject, issuer, issued_at, key_id, signature }`.
+
+The signature covers canonical JSON with `backend`, `transport`, `url`, `subject`, `issuer`, and `issued_at`. Binding the transport and URL means a copied signature fails if an operator or attacker changes the remote endpoint.
+
+### Fail-closed behavior and evidence
+
+- If `require_for_remote_backends` is `true`, missing metadata for an enabled HTTP/A2A backend is a `ConfigValidation` error.
+- If metadata is present, unknown `key_id`, malformed base64, wrong key length, wrong signature length, or invalid Ed25519 signature is a `ConfigValidation` error, even when the global requirement is disabled.
+- CI-safe tests cover accepted signed metadata, rejected unsigned metadata, and rejected tampered URL metadata in `src/config/tests.rs` (`validate_accepts_signed_remote_backend_provenance`, `validate_rejects_required_remote_backend_without_provenance`, `validate_rejects_tampered_remote_backend_provenance_signature`).
+
+Residual boundary: this does not yet define a network discovery protocol for fetching remote attestation documents; operators must provision signed metadata in gateway config. SBOM artifact generation and release asset signing remain separate follow-up hardening.
 
 ---
 
@@ -63,11 +92,11 @@
 
 6. **ASI10 — Rogue Agent Detection (MIK-3360)**: Promote the anomaly detector from retrospective logging to prospective blocking for sessions that exceed a configurable anomaly score threshold. Add multi-agent coordination detection.
 
+7. **ASI04 — Remote MCP Server Signing (MIK-3361)**: Config-time signed provenance verification is implemented for HTTP/A2A backends via `security.remote_server_signing`. Remaining hardening should add SBOM artifact generation, release asset signing, and a remote attestation discovery protocol before ASI04 can be marked covered.
+
 ### P2 — Extend Coverage
 
-7. **ASI01 — Output Scanning**: Extend `response_scanner.rs` / `response_inspect.rs` to detect prompt-injection payloads in LLM tool *responses*, not just in incoming arguments.
-
-8. **ASI04 — Remote MCP Server Signing (MIK-3361)**: SHA-256 pinning covers local capability YAMLs but not live remote MCP backends. Add a server-identity pin, SBOM/provenance proof, or signature verification path to capability definitions.
+8. **ASI01 — Output Scanning**: Extend `response_scanner.rs` / `response_inspect.rs` to detect prompt-injection payloads in LLM tool *responses*, not just in incoming arguments.
 
 ---
 
@@ -83,6 +112,7 @@
 | `src/security/ssrf.rs` | ASI05 |
 | `src/capability/hash.rs` | ASI04 |
 | `src/capability/watcher.rs` | ASI04 |
+| `src/security/remote_provenance.rs` | ASI04 |
 | `src/session_sandbox.rs` | ASI02, ASI08, ASI10 |
 | `src/cost_accounting/enforcer.rs` | ASI08, ASI09, ASI10 |
 | `src/failsafe/circuit_breaker.rs` | ASI08 |
