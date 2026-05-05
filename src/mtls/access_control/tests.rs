@@ -103,6 +103,25 @@ fn no_matching_rule_denies_by_default() {
     );
 }
 
+#[test]
+fn enabled_policy_denies_when_identity_is_missing() {
+    let policy = policy_with_rules(vec![rule(
+        None,
+        None,
+        None,
+        Some(true),
+        &["*"],
+        &["*"],
+        &[],
+        &[],
+    )]);
+
+    assert_eq!(
+        policy.evaluate(None, "brave", "search"),
+        PolicyDecision::Deny
+    );
+}
+
 // ── CN matching ───────────────────────────────────────────────────────────
 
 #[test]
@@ -401,11 +420,10 @@ fn backend_exact_in_allow_scope_blocks_others() {
     );
 }
 
-// ── identity absent (no client cert + optional mode) ─────────────────────
+// ── identity absent (no verified client cert) ────────────────────────────
 
 #[test]
-fn none_identity_matches_any_rule() {
-    // GIVEN: catch-all rule that allows
+fn none_identity_denies_even_with_any_rule() {
     let policy = policy_with_rules(vec![rule(
         None,
         None,
@@ -418,7 +436,7 @@ fn none_identity_matches_any_rule() {
     )]);
     assert_eq!(
         policy.evaluate(None, "brave", "search"),
-        PolicyDecision::Allow
+        PolicyDecision::Deny
     );
 }
 
