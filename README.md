@@ -77,7 +77,7 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
-- **OWASP Agentic AI Top 10.** Controls are mapped across all 10 risks, with explicitly tracked partial/out-of-scope gaps for agent attestation, multi-gateway signing, per-client resilience, tool-result sandboxing, collusion detection, and remote-server provenance. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
+- **OWASP Agentic AI Top 10.** Controls are mapped across all 10 risks, with explicitly tracked partial/out-of-scope gaps for multi-gateway signing, tool-result sandboxing, collusion detection, and remote-server provenance. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
 
 ### Recent additions
 

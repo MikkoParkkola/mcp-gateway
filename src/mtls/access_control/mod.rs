@@ -78,9 +78,11 @@ impl MtlsPolicy {
 
     /// Evaluate whether `(identity, backend, tool)` is permitted.
     ///
-    /// When mTLS is disabled or no client certificate is present and
-    /// `require_client_cert` is `false`, returns [`PolicyDecision::Allow`]
-    /// to preserve backward compatibility.
+    /// When mTLS is disabled, returns [`PolicyDecision::Allow`] to preserve
+    /// backward compatibility.
+    ///
+    /// When mTLS policy rules are configured but no verified client
+    /// certificate identity is present, returns [`PolicyDecision::Deny`].
     #[must_use]
     pub fn evaluate(
         &self,
@@ -92,9 +94,9 @@ impl MtlsPolicy {
             return PolicyDecision::Allow;
         }
 
-        // Build an effective identity; unauthenticated connections use default.
-        let default_id = CertIdentity::default();
-        let id = identity.unwrap_or(&default_id);
+        let Some(id) = identity else {
+            return PolicyDecision::Deny;
+        };
 
         for rule in &self.rules {
             if rule.matches(id) {

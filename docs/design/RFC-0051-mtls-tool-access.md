@@ -212,31 +212,50 @@ TCP connection
   -> [mTLS policy check on tool invocation]
 ```
 
-The `CertIdentity` is extracted during the TLS handshake and injected into Axum's request extensions, making it available to downstream handlers:
+The `CertIdentity` is extracted by the Rustls acceptor after the TLS
+handshake completes. `rustls` has already validated the peer certificate chain
+against the configured client verifier before `peer_certificates()` is trusted.
+The gateway parses the verified leaf certificate, injects the resulting
+`CertIdentity` into Axum request extensions for every request on that TLS
+connection, and fails the accepted connection if a presented certificate cannot
+be parsed into policy fields.
 
-```rust
-/// Middleware to extract client certificate identity.
-pub async fn mtls_identity_middleware(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    mut request: Request<Body>,
-    next: Next,
-) -> Response {
-    // rustls provides peer certificates via connection info
-    if let Some(certs) = request.extensions().get::<Vec<CertificateDer>>() {
-        if let Some(cert) = certs.first() {
-            match extract_cert_identity(cert) {
-                Ok(identity) => {
-                    request.extensions_mut().insert(identity);
-                }
-                Err(e) => {
-                    warn!("Failed to extract cert identity: {}", e);
-                }
-            }
-        }
-    }
-    next.run(request).await
-}
-```
+### SPIFFE / SVID Trust Model
+
+SPIFFE/SVID support is a hardened-profile workload identity control, not a
+replacement for application tokens in every deployment.
+
+The trust boundary is:
+
+1. The operator configures `mtls.enabled: true` and a CA bundle that represents
+   the trusted SPIFFE/SVID issuer for this gateway.
+2. `rustls` validates the client certificate chain during the TLS handshake.
+   Invalid, expired, or untrusted certificates fail before HTTP request
+   handling.
+3. The gateway extracts the verified leaf certificate's URI SAN values. SPIFFE
+   IDs are ordinary URI SAN entries with the `spiffe://` scheme.
+4. mTLS policy rules bind workloads to tool scope by matching `match.san_uri`.
+   A rule such as `spiffe://example.org/ns/prod/sa/*` is a workload-binding
+   statement controlled by the operator's issuer and policy.
+5. If mTLS policy rules exist but no verified certificate identity is present,
+   authorization denies before any rule, including `any: true`, can match.
+
+Token or JWT authentication alone is insufficient for ASI03 agent attestation
+because a bearer credential proves possession of a shared secret or delegated
+session token, not the workload identity of the connecting process. SPIFFE/SVID
+adds transport-bound workload identity: the caller must present a certificate
+issued by the trusted workload identity authority, and the gateway binds the
+verified SAN identity to the tool policy decision.
+
+Failure behavior is intentionally fail-closed for the hardened profile:
+
+| Condition | Behavior |
+|-----------|----------|
+| `require_client_cert: true` and no/invalid client cert | TLS handshake rejected by `rustls` |
+| Client cert chain validates but leaf certificate cannot be parsed | connection acceptance fails with invalid certificate data |
+| `require_client_cert: false`, no client cert, no mTLS policy rules | existing optional-client-cert behavior is preserved |
+| `require_client_cert: false`, no client cert, policy rules configured | tool authorization denies because no verified identity exists |
+| SPIFFE SAN does not match any policy rule | tool authorization denies |
 
 ### How Auth Layers Combine
 
