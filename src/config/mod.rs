@@ -290,7 +290,7 @@ impl Config {
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
-        self.validate_secret_env_refs()?;
+        self.validate_sensitive_env_references()?;
         Ok(())
     }
 
@@ -370,20 +370,20 @@ impl Config {
         Ok(())
     }
 
-    fn validate_secret_env_refs(&self) -> Result<()> {
+    fn validate_sensitive_env_references(&self) -> Result<()> {
         if self.auth.enabled {
             if let Some(token) = self.auth.bearer_token.as_deref() {
-                Self::validate_env_secret_ref("auth.bearer_token", token)?;
+                Self::validate_env_reference("auth.bearer_token", token)?;
             }
             for key in &self.auth.api_keys {
-                Self::validate_env_secret_ref("auth.api_keys[].key", &key.key)?;
+                Self::validate_env_reference("auth.api_keys[].key", &key.key)?;
             }
         }
 
         if self.agent_auth.enabled {
             for agent in &self.agent_auth.agents {
                 if let Some(secret) = agent.hs256_secret.as_deref() {
-                    Self::validate_env_secret_ref("agent_auth.agents[].hs256_secret", secret)?;
+                    Self::validate_env_reference("agent_auth.agents[].hs256_secret", secret)?;
                 }
             }
         }
@@ -391,13 +391,13 @@ impl Config {
         if self.key_server.enabled
             && let Some(token) = self.key_server.admin_token.as_deref()
         {
-            Self::validate_env_secret_ref("key_server.admin_token", token)?;
+            Self::validate_env_reference("key_server.admin_token", token)?;
         }
 
         Ok(())
     }
 
-    fn validate_env_secret_ref(field: &str, value: &str) -> Result<()> {
+    fn validate_env_reference(field: &str, value: &str) -> Result<()> {
         let Some(var_name) = value.strip_prefix("env:") else {
             return Ok(());
         };
