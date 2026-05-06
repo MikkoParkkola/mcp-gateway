@@ -245,7 +245,7 @@ fn configure_ai_clients(config_path: &Path, config: &Config) {
         &gateway_url,
     );
 
-    println!("  Gateway URL: {gateway_url}");
+    println!("  Gateway endpoint: configured from server.host/server.port");
     println!("  Config: {}", config_path.display());
 }
 
@@ -297,7 +297,7 @@ fn write_client_entry_if_exists(path: &Path, client: &str, name: &str, url: &str
     };
 
     match std::fs::write(path, updated) {
-        Ok(()) => println!("  {client}: added gateway entry ({url})"),
+        Ok(()) => println!("  {client}: added gateway entry"),
         Err(e) => eprintln!("  Warning: Cannot write {}: {e}", path.display()),
     }
 }
