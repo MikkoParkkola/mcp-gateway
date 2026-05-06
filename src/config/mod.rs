@@ -290,7 +290,7 @@ impl Config {
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
-        self.validate_sensitive_env_references()?;
+        self.validate_required_env_references()?;
         Ok(())
     }
 
@@ -370,7 +370,7 @@ impl Config {
         Ok(())
     }
 
-    fn validate_sensitive_env_references(&self) -> Result<()> {
+    fn validate_required_env_references(&self) -> Result<()> {
         if self.auth.enabled {
             if let Some(token) = self.auth.bearer_token.as_deref() {
                 Self::validate_env_reference("auth.bearer_token", token)?;
@@ -404,15 +404,21 @@ impl Config {
 
         if var_name.is_empty() {
             return Err(Error::ConfigValidation(format!(
-                "{field} uses an empty env: secret reference"
+                "{field} uses an empty env: reference"
             )));
         }
 
-        env::var(var_name).map_err(|_| {
-            Error::ConfigValidation(format!(
+        let Some(value) = env::var_os(var_name) else {
+            return Err(Error::ConfigValidation(format!(
                 "{field} references missing environment variable '{var_name}'"
-            ))
-        })?;
+            )));
+        };
+
+        if value.to_str().is_none() {
+            return Err(Error::ConfigValidation(format!(
+                "{field} references environment variable '{var_name}' with non-UTF-8 contents"
+            )));
+        }
 
         Ok(())
     }
