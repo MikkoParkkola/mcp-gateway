@@ -390,9 +390,7 @@ pub async fn run_config_export(
     }
     println!();
     println!("Entry name: \"{name}\"");
-    let host = &config.server.host;
-    let port = config.server.port;
-    println!("Gateway URL: http://{host}:{port}/mcp");
+    println!("Gateway endpoint: configured from server.host/server.port");
 
     if watch {
         watch::run_watch_loop(target, mode, name, config_path).await;

@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
+use crate::security::verify_remote_server_provenance;
 use crate::{Error, Result};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
@@ -30,8 +31,8 @@ pub use features::{
     CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, FailsafeConfig,
     HealthCheckConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
     KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
-    RateLimitConfig, ResponseContractConfig, RetryConfig, SecurityConfig, StreamingConfig,
-    ToolContractConfig, WebhookConfig,
+    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
+    SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -288,7 +289,8 @@ impl Config {
         }
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
-        self.validate_secret_env_refs()?;
+        self.validate_remote_backend_provenance()?;
+        self.validate_required_env_references()?;
         Ok(())
     }
 
@@ -306,6 +308,31 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
+
+    fn validate_remote_backend_provenance(&self) -> Result<()> {
+        let policy = &self.security.remote_server_signing;
+
+        for (name, backend) in &self.backends {
+            if !backend.enabled {
+                continue;
+            }
+            let Some((transport, url)) = remote_transport_identity(&backend.transport) else {
+                continue;
+            };
+
+            let metadata = policy.backends.get(name);
+            if policy.require_for_remote_backends || metadata.is_some() {
+                let metadata = metadata.ok_or_else(|| {
+                    Error::ConfigValidation(format!(
+                        "remote backend '{name}' requires signed provenance metadata"
+                    ))
+                })?;
+                verify_remote_server_provenance(name, transport, url, metadata, policy)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -343,20 +370,20 @@ impl Config {
         Ok(())
     }
 
-    fn validate_secret_env_refs(&self) -> Result<()> {
+    fn validate_required_env_references(&self) -> Result<()> {
         if self.auth.enabled {
             if let Some(token) = self.auth.bearer_token.as_deref() {
-                Self::validate_env_secret_ref("auth.bearer_token", token)?;
+                Self::validate_env_reference("auth.bearer_token", token)?;
             }
             for key in &self.auth.api_keys {
-                Self::validate_env_secret_ref("auth.api_keys[].key", &key.key)?;
+                Self::validate_env_reference("auth.api_keys[].key", &key.key)?;
             }
         }
 
         if self.agent_auth.enabled {
             for agent in &self.agent_auth.agents {
                 if let Some(secret) = agent.hs256_secret.as_deref() {
-                    Self::validate_env_secret_ref("agent_auth.agents[].hs256_secret", secret)?;
+                    Self::validate_env_reference("agent_auth.agents[].hs256_secret", secret)?;
                 }
             }
         }
@@ -364,30 +391,45 @@ impl Config {
         if self.key_server.enabled
             && let Some(token) = self.key_server.admin_token.as_deref()
         {
-            Self::validate_env_secret_ref("key_server.admin_token", token)?;
+            Self::validate_env_reference("key_server.admin_token", token)?;
         }
 
         Ok(())
     }
 
-    fn validate_env_secret_ref(field: &str, value: &str) -> Result<()> {
+    fn validate_env_reference(field: &str, value: &str) -> Result<()> {
         let Some(var_name) = value.strip_prefix("env:") else {
             return Ok(());
         };
 
         if var_name.is_empty() {
             return Err(Error::ConfigValidation(format!(
-                "{field} uses an empty env: secret reference"
+                "{field} uses an empty env: reference"
             )));
         }
 
-        env::var(var_name).map_err(|_| {
-            Error::ConfigValidation(format!(
+        let Some(value) = env::var_os(var_name) else {
+            return Err(Error::ConfigValidation(format!(
                 "{field} references missing environment variable '{var_name}'"
-            ))
-        })?;
+            )));
+        };
+
+        if value.to_str().is_none() {
+            return Err(Error::ConfigValidation(format!(
+                "{field} references environment variable '{var_name}' with non-UTF-8 contents"
+            )));
+        }
 
         Ok(())
+    }
+}
+
+fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static str, &str)> {
+    match transport {
+        TransportConfig::Http { http_url, .. } => Some((transport.transport_type(), http_url)),
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { a2a_url, .. } => Some((transport.transport_type(), a2a_url)),
+        TransportConfig::Stdio { .. } => None,
     }
 }
 

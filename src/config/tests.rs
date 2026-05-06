@@ -314,3 +314,79 @@ backends:
 
     assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
 }
+
+fn signed_remote_provenance_yaml() -> String {
+    r#"
+security:
+  remote_server_signing:
+    require_for_remote_backends: true
+    trusted_keys:
+      unit-test-key:
+        algorithm: ed25519
+        public_key: A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=
+    backends:
+      signed_remote:
+        subject: spiffe://example.test/mcp/signed
+        issuer: unit-test
+        issued_at: "2026-05-06T00:00:00Z"
+        key_id: unit-test-key
+        signature: st40TAeoj8K682cMoCIvE8Rr6C0HkvMVWJbZQvFWK2aNENh088ucj9smNr1WV0s7RgUuQFkePsiWKMjsYYhNCQ==
+backends:
+  signed_remote:
+    http_url: https://signed.example.com/mcp
+    streamable_http: true
+"#
+    .to_string()
+}
+
+#[test]
+fn validate_accepts_signed_remote_backend_provenance() {
+    let config: Config = serde_yaml::from_str(&signed_remote_provenance_yaml()).unwrap();
+
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn validate_rejects_required_remote_backend_without_provenance() {
+    let yaml = r"
+security:
+  remote_server_signing:
+    require_for_remote_backends: true
+    trusted_keys:
+      unit-test-key:
+        algorithm: ed25519
+        public_key: A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=
+backends:
+  unsigned_remote:
+    http_url: https://unsigned.example.com/mcp
+    streamable_http: true
+";
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+    let result = config.validate();
+
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("unsigned_remote") && msg.contains("provenance"),
+        "error should name the backend and provenance boundary: {msg}"
+    );
+}
+
+#[test]
+fn validate_rejects_tampered_remote_backend_provenance_signature() {
+    let yaml = signed_remote_provenance_yaml().replace(
+        "https://signed.example.com/mcp",
+        "https://tampered.example.com/mcp",
+    );
+    let config: Config = serde_yaml::from_str(&yaml).unwrap();
+
+    let result = config.validate();
+
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("signed_remote") && msg.contains("signature"),
+        "error should name the backend and invalid signature: {msg}"
+    );
+}

@@ -18,6 +18,7 @@ pub mod data_flow;
 pub mod firewall;
 pub mod message_signing;
 pub mod policy;
+pub mod remote_provenance;
 pub mod response_contract;
 pub mod response_inspect;
 pub mod response_scanner;
@@ -36,6 +37,10 @@ pub use data_flow::{
     hash_argument,
 };
 pub use policy::{ToolPolicy, ToolPolicyConfig};
+pub use remote_provenance::{
+    RemoteServerProvenanceConfig, RemoteServerSignatureAlgorithm, RemoteServerSigningConfig,
+    TrustedRemoteServerKeyConfig, verify_remote_server_provenance,
+};
 pub use response_scanner::ResponseScanner;
 pub use sanitize::{
     SanitizedResourceMeta, sanitize_json_value, sanitize_optional_json, sanitize_resource_metadata,
