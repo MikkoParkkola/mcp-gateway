@@ -37,6 +37,8 @@ RUN touch src/main.rs && cargo build --release
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim
 
+LABEL io.modelcontextprotocol.server.name="io.github.MikkoParkkola/mcp-gateway"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     wget \
