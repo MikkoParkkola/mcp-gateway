@@ -193,11 +193,15 @@ impl Default for InputScanner {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..max])
-    } else {
-        s.to_string()
+    if s.len() <= max {
+        return s.to_string();
     }
+
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -471,6 +475,18 @@ mod tests {
                 .any(|f| f.scan_type == ScanType::ShellInjection),
             "shell-injection on command field must still block; got: {findings:?}"
         );
+    }
+
+    #[test]
+    fn unicode_fragment_truncation_does_not_panic() {
+        let value = format!("{}{}; rm -rf / ", "a".repeat(199), "—");
+        let findings = scan(&json!({ "command": value }));
+
+        let finding = findings
+            .iter()
+            .find(|f| f.scan_type == ScanType::ShellInjection)
+            .expect("expected shell injection finding");
+        assert!(finding.matched.ends_with("..."));
     }
 
     #[test]
