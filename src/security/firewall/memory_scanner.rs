@@ -265,11 +265,15 @@ impl MemoryScanner {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..max])
-    } else {
-        s.to_string()
+    if s.len() <= max {
+        return s.to_string();
     }
+
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -353,6 +357,18 @@ mod tests {
                 .any(|f| f.scan_type == ScanType::MemoryPoisoning && f.severity == Severity::High),
             "Expected High MemoryPoisoning finding for <|im_start|>"
         );
+    }
+
+    #[test]
+    fn unicode_fragment_truncation_does_not_panic() {
+        let value = format!("{}{}<|im_start|>system", "a".repeat(199), "—");
+        let findings = scan_tool("remember", &json!({ "content": value }));
+
+        let finding = findings
+            .iter()
+            .find(|f| f.scan_type == ScanType::MemoryPoisoning)
+            .expect("expected memory poisoning finding");
+        assert!(finding.matched.ends_with("..."));
     }
 
     #[test]

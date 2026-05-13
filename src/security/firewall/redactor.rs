@@ -166,11 +166,15 @@ impl Default for Redactor {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..max])
-    } else {
-        s.to_string()
+    if s.len() <= max {
+        return s.to_string();
     }
+
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -207,6 +211,21 @@ mod tests {
                 .iter()
                 .any(|f| f.description.contains("GitHub Personal"))
         );
+    }
+
+    #[test]
+    fn unicode_fragment_truncation_does_not_panic() {
+        let fake_credential = format!("{}{}", "ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
+        let mut v = json!({
+            "token": format!("{}{} {fake_credential}", "a".repeat(39), "—")
+        });
+        let findings = redactor().scan_and_redact(&mut v);
+
+        let finding = findings
+            .iter()
+            .find(|f| f.scan_type == ScanType::Credentials)
+            .expect("expected credential finding");
+        assert!(finding.matched.ends_with("..."));
     }
 
     #[test]
