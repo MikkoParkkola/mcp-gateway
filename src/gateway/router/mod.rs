@@ -31,7 +31,7 @@ mod tests;
 
 /// Shared application state
 #[allow(clippy::struct_excessive_bools)] // Independent feature flags; grouping into a substruct
-                                         // would force churn across every call site for no gain.
+// would force churn across every call site for no gain.
 pub struct AppState {
     /// Backend registry
     pub backends: Arc<BackendRegistry>,
