@@ -171,7 +171,18 @@ pub(super) fn authorize_tool_target(
             .map_err(|e| AuthorizationError::forbidden(-32600, e))?;
     }
 
+    // SSRF check at proxy time.
+    //
+    // Backends in `state.backends` come exclusively from the on-disk config
+    // (servers.yaml / `gateway config` writes) — the operator has already
+    // declared these URLs as trusted boundaries. When `trust_configured_backends`
+    // is enabled (default), we skip the re-validation here: it caused friction
+    // with legitimate same-host backends (e.g. local daemons on `127.0.0.1`)
+    // without adding real security — the URL was already accepted at config
+    // load. Untrusted-input SSRF surfaces (capability fetch, UI config-import)
+    // continue to call `validate_url_not_ssrf` directly. See MIK-3529.
     if state.ssrf_protection
+        && !state.trust_configured_backends
         && let Some(backend) = state.backends.get(target.server)
         && let Some(url) = backend.transport_url()
     {

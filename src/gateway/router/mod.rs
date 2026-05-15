@@ -30,6 +30,8 @@ pub(crate) mod helpers;
 mod tests;
 
 /// Shared application state
+#[allow(clippy::struct_excessive_bools)] // Independent feature flags; grouping into a substruct
+// would force churn across every call site for no gain.
 pub struct AppState {
     /// Backend registry
     pub backends: Arc<BackendRegistry>,
@@ -55,6 +57,9 @@ pub struct AppState {
     pub sanitize_input: bool,
     /// Whether SSRF protection is enabled for outbound URLs
     pub ssrf_protection: bool,
+    /// Whether URLs declared in `backends:` config are pre-authorised
+    /// (skip runtime SSRF check at proxy time). MIK-3529.
+    pub trust_configured_backends: bool,
     /// In-flight request tracker for graceful drain.
     /// Each in-flight request holds a permit; shutdown waits for all permits
     /// to be returned.

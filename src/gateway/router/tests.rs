@@ -55,6 +55,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         sanitize_input: false,
         ssrf_protection: false,
+        trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
         agent_auth,
         gateway_key_pair,
@@ -96,6 +97,7 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         sanitize_input: false,
         ssrf_protection: false,
+        trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
         agent_auth,
         gateway_key_pair,
@@ -133,6 +135,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         sanitize_input: false,
         ssrf_protection: false,
+        trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
         agent_auth,
         gateway_key_pair,
@@ -148,6 +151,64 @@ fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
     let state = test_router_app_state();
     state.backends.register(backend);
     state
+}
+
+fn test_router_app_state_with_ssrf(
+    ssrf_protection: bool,
+    trust_configured_backends: bool,
+) -> Arc<AppState> {
+    let backends = Arc::new(BackendRegistry::new());
+    let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
+    let streaming_config = StreamingConfig::default();
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        streaming_config.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
+
+    Arc::new(AppState {
+        backends,
+        meta_mcp,
+        meta_mcp_enabled: true,
+        multiplexer,
+        proxy_manager,
+        streaming_config,
+        auth_config,
+        key_server: None,
+        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+        sanitize_input: false,
+        ssrf_protection,
+        trust_configured_backends,
+        inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+        agent_auth,
+        gateway_key_pair,
+        capability_dirs: Vec::new(),
+        config_path: None,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
+    })
+}
+
+fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
+    Arc::new(Backend::new(
+        name,
+        BackendConfig {
+            transport: crate::config::TransportConfig::Http {
+                http_url: http_url.to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            enabled: true,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
 }
 
 fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
@@ -176,6 +237,7 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         sanitize_input: false,
         ssrf_protection: false,
+        trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
         agent_auth,
         gateway_key_pair,
@@ -1003,6 +1065,88 @@ fn surfaced_tool_calls_resolve_to_backend_authorization_target() {
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].server, "demo");
     assert_eq!(targets[0].tool, "pinned_tool");
+}
+
+#[test]
+fn authorize_tool_target_blocks_ssrf_when_protection_enabled() {
+    let state = test_router_app_state_with_ssrf(true, false);
+    state
+        .backends
+        .register(http_backend_at("loopback", "http://127.0.0.1:9000/mcp"));
+    let args = json!({});
+
+    let result = authorize_tool_target(
+        state.as_ref(),
+        None,
+        None,
+        None,
+        ToolTarget {
+            server: "loopback",
+            tool: "echo",
+            arguments: &args,
+        },
+    );
+
+    let err = result.expect_err("loopback backend must be blocked when SSRF protection is on");
+    assert!(
+        err.message.contains("SSRF blocked"),
+        "error should reference SSRF, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled() {
+    let state = test_router_app_state_with_ssrf(true, false);
+    state
+        .backends
+        .register(http_backend_at("public", "https://gateway-public.test/mcp"));
+    let args = json!({});
+
+    let result = authorize_tool_target(
+        state.as_ref(),
+        None,
+        None,
+        None,
+        ToolTarget {
+            server: "public",
+            tool: "echo",
+            arguments: &args,
+        },
+    );
+
+    assert!(
+        result.is_ok(),
+        "public hostname must pass SSRF gate, got: {}",
+        result.err().map(|e| e.message).unwrap_or_default()
+    );
+}
+
+#[test]
+fn authorize_tool_target_skips_ssrf_when_trust_configured_backends_enabled() {
+    let state = test_router_app_state_with_ssrf(true, true);
+    state
+        .backends
+        .register(http_backend_at("loopback", "http://127.0.0.1:9000/mcp"));
+    let args = json!({});
+
+    let result = authorize_tool_target(
+        state.as_ref(),
+        None,
+        None,
+        None,
+        ToolTarget {
+            server: "loopback",
+            tool: "echo",
+            arguments: &args,
+        },
+    );
+
+    assert!(
+        result.is_ok(),
+        "trust_configured_backends must bypass SSRF re-check at proxy time, got: {}",
+        result.err().map(|e| e.message).unwrap_or_default()
+    );
 }
 
 #[tokio::test]

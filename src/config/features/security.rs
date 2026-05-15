@@ -201,6 +201,21 @@ pub struct SecurityConfig {
     pub sanitize_input: bool,
     /// Enable SSRF protection for outbound URLs.
     pub ssrf_protection: bool,
+    /// Treat URLs declared in `backends:` (servers.yaml / on-disk config) as
+    /// pre-authorised: skip the runtime SSRF check at proxy time for them.
+    ///
+    /// Rationale: a URL that the operator put into the on-disk config is a
+    /// declared trust boundary; re-validating it at every proxy hop is
+    /// friendly fire that blocks legitimate same-host backends (e.g. a local
+    /// `hebb` daemon on `127.0.0.1`). See MIK-3529.
+    ///
+    /// Tool-argument URLs (LLM-supplied, capability fetch tools, UI imports of
+    /// *new* backend specs) keep going through `validate_url_not_ssrf` —
+    /// those are untrusted input and are unaffected by this flag.
+    ///
+    /// Default: `true`. Set `false` to restore strict pre-MIK-3529 behaviour.
+    #[serde(default = "default_trust_configured_backends")]
+    pub trust_configured_backends: bool,
     /// Tool allow/deny policy.
     pub tool_policy: ToolPolicyConfig,
     /// Security firewall — bidirectional request/response scanning (RFC-0071).
@@ -227,11 +242,16 @@ pub struct SecurityConfig {
     pub remote_server_signing: RemoteServerSigningConfig,
 }
 
+const fn default_trust_configured_backends() -> bool {
+    true
+}
+
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
             sanitize_input: true,
             ssrf_protection: true,
+            trust_configured_backends: default_trust_configured_backends(),
             tool_policy: ToolPolicyConfig::default(),
             #[cfg(feature = "firewall")]
             firewall: crate::security::firewall::FirewallConfig::default(),

@@ -100,6 +100,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         mtls_policy,
         sanitize_input: false,
         ssrf_protection: false,
+        trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(10_000)),
         agent_auth,
         gateway_key_pair,
