@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Windows path regressions**: added coverage proving Windows-style path separators do not bypass tool-poisoning detection and do not destabilize capability hash pinning.
 
+### Fixed
+
+- **Proxy-time SSRF check trusts configured backends** (MIK-3529): the guest-side SSRF re-check in `authorize_destination` no longer rejects operator-declared backend URLs that resolve to loopback or private IP ranges. A new `security.trust_configured_backends` flag (default `true`) exempts URLs matching a configured backend host from the proxy-time guard; set to `false` to restore strict re-checking. Dynamic/unconfigured destinations continue to be SSRF-validated. Resolves the regression where the gateway blocked traffic to its own configured `127.0.0.1` MCP backends.
+
 ## [2.11.0] - 2026-04-25
 
 ### Changed
