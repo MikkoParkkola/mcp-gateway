@@ -55,6 +55,9 @@ pub struct AppState {
     pub sanitize_input: bool,
     /// Whether SSRF protection is enabled for outbound URLs
     pub ssrf_protection: bool,
+    /// Whether URLs declared in `backends:` config are pre-authorised
+    /// (skip runtime SSRF check at proxy time). MIK-3529.
+    pub trust_configured_backends: bool,
     /// In-flight request tracker for graceful drain.
     /// Each in-flight request holds a permit; shutdown waits for all permits
     /// to be returned.

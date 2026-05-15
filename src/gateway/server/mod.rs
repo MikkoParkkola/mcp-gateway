@@ -619,6 +619,7 @@ impl Gateway {
             mtls_policy,
             sanitize_input: self.config.security.sanitize_input,
             ssrf_protection: self.config.security.ssrf_protection,
+            trust_configured_backends: self.config.security.trust_configured_backends,
             inflight: Arc::clone(&inflight),
             agent_auth,
             gateway_key_pair,
