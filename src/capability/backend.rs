@@ -201,6 +201,25 @@ impl CapabilityBackend {
         self.rug_pull_state.read().values().cloned().collect()
     }
 
+    /// Pre-register watched directories without loading any capability YAMLs.
+    ///
+    /// Used at startup so the file watcher (`CapabilityWatcher::start`) can
+    /// see the configured directory list synchronously, before the async
+    /// `load_from_directory` task has had a chance to push paths via
+    /// the loader path. Without this, the watcher races the loader and
+    /// logs "No capability directories to watch" because the spawned
+    /// loader has not yet populated `self.directories`.
+    ///
+    /// Duplicates are skipped; safe to call repeatedly.
+    pub fn register_directories(&self, paths: &[String]) {
+        let mut dirs = self.directories.write();
+        for path in paths {
+            if !dirs.contains(path) {
+                dirs.push(path.clone());
+            }
+        }
+    }
+
     /// Load capabilities from a directory
     ///
     /// # Errors
