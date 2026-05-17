@@ -11,12 +11,16 @@
 //! - `10.0.0.0/8` — private (RFC 1918)
 //! - `100.64.0.0/10` — shared address space / CGNAT (RFC 6598)
 //! - `127.0.0.0/8` — loopback (RFC 1122)
+//! - `168.63.129.16/32` — Azure Wireserver
 //! - `169.254.0.0/16` — link-local (RFC 3927)
 //! - `172.16.0.0/12` — private (RFC 1918)
 //! - `192.0.0.0/24` — IETF protocol assignments (RFC 5736)
 //! - `192.0.2.0/24` — TEST-NET-1 (RFC 5737)
+//! - `192.31.196.0/24` — AS112
+//! - `192.52.193.0/24` — Automatic Multicast Tunneling
 //! - `192.88.99.0/24` — 6to4 relay anycast (RFC 3068, deprecated)
 //! - `192.168.0.0/16` — private (RFC 1918)
+//! - `192.175.48.0/24` — AS112
 //! - `198.18.0.0/15` — benchmarking (RFC 2544)
 //! - `198.51.100.0/24` — TEST-NET-2 (RFC 5737)
 //! - `203.0.113.0/24` — TEST-NET-3 (RFC 5737)
@@ -31,12 +35,18 @@
 //! - `fe80::/10` — link-local (RFC 4291)
 //! - `::ffff:0:0/96` — IPv4-mapped (RFC 4291)
 //! - `2001:db8::/32` — documentation (RFC 3849)
+//! - `3fff::/20` — documentation
+//! - `64:ff9b::/96`, `64:ff9b:1::/48` — IPv4/IPv6 translation
+//! - `100::/64`, `100:0:0:1::/64` — discard-only / dummy
+//! - `2001::/23` — IETF protocol assignments
+//! - `2620:4f:8000::/48` — AS112
+//! - `5f00::/16` — SRv6 SIDs
 //! - `ff00::/8` — multicast (RFC 4291)
 //!
 //! Encoded-IPv4 vectors:
 //! - `::x.x.x.x` — IPv4-compatible (deprecated, still parseable)
-//! - `2002::/16` — 6to4 with embedded IPv4
-//! - `2001:0000::/32` — Teredo with obfuscated IPv4
+//! - `2002::/16` — 6to4, blocked as a translation range
+//! - `2001:0000::/32` — Teredo, blocked by `2001::/23`
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -57,18 +67,26 @@ use crate::{Error, Result};
 /// reserved, and broadcast.
 fn is_private_ipv4(addr: Ipv4Addr) -> bool {
     let o = addr.octets();
-    addr.is_loopback()          // 127.0.0.0/8
+    is_this_network(o)          // 0.0.0.0/8
+    || addr.is_loopback()       // 127.0.0.0/8
     || addr.is_private()        // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
     || addr.is_link_local()     // 169.254.0.0/16
     || addr.is_broadcast()      // 255.255.255.255/32
-    || addr.is_unspecified()    // 0.0.0.0/8
     || addr.is_multicast()      // 224.0.0.0/4
     || is_shared_address(addr)  // 100.64.0.0/10
     || is_ietf_protocol(o)      // 192.0.0.0/24
     || is_documentation(o)      // 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24
     || is_6to4_relay(o)         // 192.88.99.0/24
+    || is_wireserver(o)         // 168.63.129.16/32
+    || is_amt(o)                // 192.52.193.0/24
+    || is_as112(o)              // 192.31.196.0/24, 192.175.48.0/24
     || is_benchmarking(o)       // 198.18.0.0/15
     || is_reserved(addr) // 240.0.0.0/4
+}
+
+/// `0.0.0.0/8` — "this" network.
+fn is_this_network(o: [u8; 4]) -> bool {
+    o[0] == 0
 }
 
 /// `100.64.0.0/10` — Carrier-Grade NAT / shared address space (RFC 6598).
@@ -93,6 +111,21 @@ fn is_documentation(o: [u8; 4]) -> bool {
 /// `192.88.99.0/24` — 6to4 relay anycast (RFC 3068, deprecated but still routed).
 fn is_6to4_relay(o: [u8; 4]) -> bool {
     o[0] == 192 && o[1] == 88 && o[2] == 99
+}
+
+/// `168.63.129.16/32` — Azure Wireserver.
+fn is_wireserver(o: [u8; 4]) -> bool {
+    o == [168, 63, 129, 16]
+}
+
+/// `192.52.193.0/24` — Automatic Multicast Tunneling.
+fn is_amt(o: [u8; 4]) -> bool {
+    o[0] == 192 && o[1] == 52 && o[2] == 193
+}
+
+/// AS112 anycast service ranges.
+fn is_as112(o: [u8; 4]) -> bool {
+    (o[0] == 192 && o[1] == 31 && o[2] == 196) || (o[0] == 192 && o[1] == 175 && o[2] == 48)
 }
 
 /// `198.18.0.0/15` — benchmarking (RFC 2544).
@@ -143,8 +176,8 @@ fn is_private_ipv6(addr: Ipv6Addr) -> bool {
         return true;
     }
 
-    // Documentation (2001:db8::/32) — not routable, used in examples/RFCs
-    if seg[0] == 0x2001 && seg[1] == 0x0DB8 {
+    // Documentation (2001:db8::/32, 3fff::/20) — not routable, used in examples/RFCs
+    if (seg[0] == 0x2001 && seg[1] == 0x0DB8) || (seg[0] & 0xFFF0) == 0x3FF0 {
         return true;
     }
 
@@ -158,26 +191,35 @@ fn is_private_ipv6(addr: Ipv6Addr) -> bool {
         return is_private_ipv4(v4);
     }
 
-    // 6to4 (2002::/16) — embeds a public or private IPv4 in seg[1..2]
-    if seg[0] == 0x2002 {
-        let embedded = Ipv4Addr::new(
-            (seg[1] >> 8) as u8,
-            seg[1] as u8,
-            (seg[2] >> 8) as u8,
-            seg[2] as u8,
-        );
-        return is_private_ipv4(embedded);
+    // IPv4/IPv6 translation prefixes (64:ff9b::/96, 64:ff9b:1::/48)
+    if seg[0] == 0x0064 && seg[1] == 0xFF9B && (seg[2..6] == [0, 0, 0, 0] || seg[2] == 0x0001) {
+        return true;
     }
 
-    // Teredo (2001:0000::/32) — client IPv4 is XOR-obfuscated in seg[6..7]
-    if seg[0] == 0x2001 && seg[1] == 0x0000 {
-        let client = Ipv4Addr::new(
-            (seg[6] >> 8) as u8 ^ 0xFF,
-            seg[6] as u8 ^ 0xFF,
-            (seg[7] >> 8) as u8 ^ 0xFF,
-            seg[7] as u8 ^ 0xFF,
-        );
-        return is_private_ipv4(client);
+    // Discard-only and dummy prefixes (100::/64, 100:0:0:1::/64)
+    if seg[0] == 0x0100 && (seg[1..4] == [0, 0, 0] || seg[1..4] == [0, 0, 1]) {
+        return true;
+    }
+
+    // IETF Protocol Assignments (2001::/23), including Teredo, benchmarking,
+    // AMT, AS112, deprecated ORCHID, ORCHIDv2, and DET prefixes.
+    if seg[0] == 0x2001 && (seg[1] & 0xFE00) == 0x0000 {
+        return true;
+    }
+
+    // 6to4 (2002::/16) — deprecated translation prefix.
+    if seg[0] == 0x2002 {
+        return true;
+    }
+
+    // AS112 (2620:4f:8000::/48)
+    if seg[0] == 0x2620 && seg[1] == 0x004F && seg[2] == 0x8000 {
+        return true;
+    }
+
+    // Segment Routing SIDs (5f00::/16)
+    if seg[0] == 0x5F00 {
+        return true;
     }
 
     false
@@ -425,6 +467,16 @@ mod tests {
     fn ipv4_broadcast_and_unspecified_blocked() {
         assert!(is_private_ipv4(Ipv4Addr::BROADCAST));
         assert!(is_private_ipv4(Ipv4Addr::UNSPECIFIED));
+        assert!(is_private_ipv4(Ipv4Addr::new(0, 1, 2, 3)));
+        assert!(is_private_ipv4(Ipv4Addr::new(0, 255, 255, 255)));
+    }
+
+    #[test]
+    fn ipv4_antissrf_cloud_and_infra_ranges_blocked() {
+        assert!(is_private_ipv4(Ipv4Addr::new(168, 63, 129, 16)));
+        assert!(is_private_ipv4(Ipv4Addr::new(192, 31, 196, 1)));
+        assert!(is_private_ipv4(Ipv4Addr::new(192, 52, 193, 1)));
+        assert!(is_private_ipv4(Ipv4Addr::new(192, 175, 48, 1)));
     }
 
     // ── IPv4: public addresses pass ───────────────────────────────────────────
@@ -524,10 +576,29 @@ mod tests {
     }
 
     #[test]
-    fn ipv6_6to4_public_passes() {
-        // 2002:0808:0808:: embeds 8.8.8.8
+    fn ipv6_6to4_public_is_blocked_as_translation_prefix() {
         let addr: Ipv6Addr = "2002:0808:0808::".parse().unwrap();
-        assert!(!is_private_ipv6(addr));
+        assert!(is_private_ipv6(addr));
+    }
+
+    #[test]
+    fn ipv6_antissrf_recommended_ranges_blocked() {
+        let samples = [
+            "64:ff9b::8.8.8.8", // NAT64 well-known
+            "64:ff9b:1::1",     // NAT64 local-use
+            "100::1",           // discard-only
+            "100:0:0:1::1",     // dummy
+            "2001:2::1",        // benchmarking under IETF protocol assignments
+            "2001:3::1",        // AMT under IETF protocol assignments
+            "2001:4:112::1",    // AS112 under IETF protocol assignments
+            "3fff::1",          // documentation
+            "5f00::1",          // SRv6 SIDs
+            "2620:4f:8000::1",  // AS112
+        ];
+        for sample in samples {
+            let addr: Ipv6Addr = sample.parse().unwrap();
+            assert!(is_private_ipv6(addr), "{sample} should be blocked");
+        }
     }
 
     // ── IPv6: public passes ───────────────────────────────────────────────────
@@ -610,6 +681,14 @@ mod tests {
     #[test]
     fn url_blocks_unspecified() {
         assert!(validate_url_not_ssrf("http://0.0.0.0/api").is_err());
+        assert!(validate_url_not_ssrf("http://0.1.2.3/api").is_err());
+    }
+
+    #[test]
+    fn url_blocks_antissrf_cloud_and_translation_ranges() {
+        assert!(validate_url_not_ssrf("http://168.63.129.16/api").is_err());
+        assert!(validate_url_not_ssrf("http://[64:ff9b::8.8.8.8]/api").is_err());
+        assert!(validate_url_not_ssrf("http://[2002:0808:0808::]/api").is_err());
     }
 
     #[test]
