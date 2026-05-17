@@ -210,21 +210,20 @@ pub(crate) fn build_discovery_preamble(tool_count: usize, server_count: usize) -
 
 /// Build dynamic routing instructions from capability metadata.
 ///
-/// Groups capabilities by `metadata.category`, listing representative tools
-/// and the union of their tags as search keywords. Returns an empty string
-/// when no capabilities are provided.
+/// Groups capabilities by `metadata.category` and lists representative tools.
+/// Returns an empty string when no capabilities are provided.
 pub(crate) fn build_routing_instructions(
     capabilities: &[crate::capability::CapabilityDefinition],
     capability_backend_name: &str,
 ) -> String {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     if capabilities.is_empty() {
         return String::new();
     }
 
     // Group tools by category, preserving insertion order via BTreeMap
-    let mut by_category: BTreeMap<String, (Vec<String>, BTreeSet<String>)> = BTreeMap::new();
+    let mut by_category: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for cap in capabilities {
         let category = if cap.metadata.category.is_empty() {
@@ -233,13 +232,10 @@ pub(crate) fn build_routing_instructions(
             cap.metadata.category.clone()
         };
 
-        let entry = by_category.entry(category).or_default();
-        entry
-            .0
+        by_category
+            .entry(category)
+            .or_default()
             .push(format!("{}/{}", capability_backend_name, cap.name));
-        for tag in &cap.metadata.tags {
-            entry.1.insert(tag.clone());
-        }
     }
 
     // Also track chains_with hints per category: source_tool -> [downstream_tools]
@@ -252,19 +248,14 @@ pub(crate) fn build_routing_instructions(
 
     let mut lines = vec!["\nRouting Guide (by task type):".to_string()];
 
-    for (category, (tools, tags)) in &by_category {
-        let tool_sample = tools.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
-        let suffix = if tools.len() > 3 {
-            format!(" (+{})", tools.len() - 3)
+    for (category, tools) in &by_category {
+        let tool_sample = tools.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+        let suffix = if tools.len() > 2 {
+            format!(" (+{})", tools.len() - 2)
         } else {
             String::new()
         };
         lines.push(format!("- {category}: {tool_sample}{suffix}"));
-
-        if !tags.is_empty() {
-            let tag_list = tags.iter().cloned().collect::<Vec<_>>().join(", ");
-            lines.push(format!("  Search keywords: {tag_list}"));
-        }
     }
 
     if !chains.is_empty() {
