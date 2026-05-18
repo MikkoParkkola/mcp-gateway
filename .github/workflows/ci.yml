@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@ba0a524d6e51744d9d4e306bc57ac5d6ca5173ea # main
+      - uses: trufflesecurity/trufflehog@0fa069c12f0c7baf431041cd1e564a9c5058846c # main
         with:
           extra_args: --only-verified
 
