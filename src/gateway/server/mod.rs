@@ -394,6 +394,15 @@ impl Gateway {
             let capability_dirs = self.config.capabilities.directories.clone();
             let capability_name = self.config.capabilities.name.clone();
 
+            // Register watched directories synchronously BEFORE spawning the
+            // async loader. The capability file watcher (started below at
+            // CapabilityWatcher::start) reads `backend.watched_directories()`
+            // at startup; if the spawned loader has not yet populated them,
+            // the watcher logs "No capability directories to watch" and gives
+            // up. Pre-registering closes that race so hot-reload works from
+            // boot regardless of loader scheduling.
+            cap_backend.register_directories(&capability_dirs);
+
             let cap_backend_for_load = Arc::clone(&cap_backend);
             let webhook_registry_for_load = Arc::clone(&webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
