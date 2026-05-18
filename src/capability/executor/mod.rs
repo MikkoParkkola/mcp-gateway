@@ -37,6 +37,7 @@ use super::response_cache::ResponseCache;
 use super::{CapabilityDefinition, ProviderConfig, RestConfig};
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
+use crate::security::ssrf::{PinningResolver, SystemResolver};
 use crate::security::validate_url_not_ssrf;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
@@ -64,11 +65,15 @@ impl CapabilityExecutor {
     ///
     /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
     fn build_http_client() -> Client {
+        // PinningResolver: resolves each domain name once, validates all returned
+        // IPs against the SSRF deny list, and hands the checked SocketAddrs to
+        // reqwest. This eliminates the DNS-rebinding TOCTOU window (MIK-4019).
         Client::builder()
             .timeout(Duration::from_secs(60))
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(30))
+            .dns_resolver(PinningResolver::new(SystemResolver))
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= 5 {
                     return attempt.stop();

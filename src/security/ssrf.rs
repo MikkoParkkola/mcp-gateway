@@ -1,8 +1,40 @@
-//! SSRF protection: comprehensive RFC special-use IP range blocking.
+//! SSRF protection: comprehensive RFC special-use IP range blocking, with
+//! DNS-rebinding prevention via resolve-and-pin.
 //!
 //! When the gateway proxies requests on behalf of tools, we must prevent
 //! Server-Side Request Forgery (SSRF) attacks where a malicious tool
 //! target resolves to internal infrastructure.
+//!
+//! # DNS-Rebinding TOCTOU Gap (MIK-4019)
+//!
+//! Checking the URL host at call-time and then resolving it later (inside
+//! `reqwest`) is a Time-Of-Check / Time-Of-Use (TOCTOU) race: an attacker
+//! whose DNS record TTL is 0 can return a public IP during the check and a
+//! private IP during the actual TCP connect.  This is the classic DNS-rebinding
+//! SSRF vector (see also: Microsoft `AntiSSRF`, CVE-2021-21311 family).
+//!
+//! The fix is resolve-and-pin: resolve the domain name **once**, validate
+//! **all** returned IPs against the deny list, then hand those concrete
+//! `SocketAddr`s to `reqwest` via a custom `dns::Resolve` implementation so
+//! that reqwest connects to the already-checked addresses.  A second DNS
+//! lookup can never occur for that connection.
+//!
+//! Use [`PinningResolver`] with `ClientBuilder::dns_resolver` on every HTTP
+//! client that follows tool-supplied or capability-supplied URLs.
+//!
+//! # Trusted configured-backend exception
+//!
+//! URLs coming from **operator-authored config** (servers.yaml / `gateway
+//! config` writes) are already trusted: the operator declared those endpoints
+//! as valid at deployment time.  When `trust_configured_backends = true`
+//! (default), the proxy-time `validate_url_not_ssrf` call in
+//! `gateway/router/authorization.rs` is skipped for those backends.  This
+//! exemption is intentional and documented in MIK-3529.
+//!
+//! **Tool-argument URLs** — capability `endpoint` fields, GraphQL/JSON-RPC
+//! endpoints injected at call time, UI import URLs, and any URL that flows
+//! from untrusted input — are **always** pinned through [`PinningResolver`].
+//! They never receive the configured-backend trust exemption.
 //!
 //! # Covered ranges
 //!
@@ -40,7 +72,7 @@
 //! - `100::/64`, `100:0:0:1::/64` — discard-only / dummy
 //! - `2001::/23` — IETF protocol assignments
 //! - `2620:4f:8000::/48` — AS112
-//! - `5f00::/16` — SRv6 SIDs
+//! - `5f00::/16` — `SRv6` SIDs
 //! - `ff00::/8` — multicast (RFC 4291)
 //!
 //! Encoded-IPv4 vectors:
@@ -48,7 +80,9 @@
 //! - `2002::/16` — 6to4, blocked as a translation range
 //! - `2001:0000::/32` — Teredo, blocked by `2001::/23`
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::pin::Pin;
 
 use crate::{Error, Result};
 
@@ -266,14 +300,146 @@ fn extract_ipv4_compatible(addr: &Ipv6Addr) -> Option<Ipv4Addr> {
 }
 
 // ============================================================================
+// DNS-pinning resolver (MIK-4019: anti-rebinding)
+// ============================================================================
+
+/// Trait for DNS name resolution used by [`PinningResolver`].
+///
+/// Abstracting this enables deterministic unit tests without touching the
+/// real OS resolver — use [`SystemResolver`] in production or a mock in tests.
+pub trait HostResolver: Send + Sync {
+    /// Resolve `host` to a list of IP addresses.
+    ///
+    /// Implementations MUST NOT perform a second lookup after this call
+    /// returns; the addresses returned here are what [`PinningResolver`]
+    /// checks and what reqwest will connect to.
+    fn lookup(&self, host: &str) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>>> + Send + '_>>;
+}
+
+/// Production resolver: delegates to `tokio::net::lookup_host`.
+///
+/// Uses the OS/libc resolver. A port of `0` is appended so `lookup_host`
+/// accepts a bare hostname.
+#[derive(Debug, Clone, Default)]
+pub struct SystemResolver;
+
+impl HostResolver for SystemResolver {
+    fn lookup(&self, host: &str) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>>> + Send + '_>> {
+        let host_owned = host.to_owned();
+        Box::pin(async move {
+            let with_port = format!("{host_owned}:0");
+            let addrs = tokio::net::lookup_host(with_port).await.map_err(|e| {
+                Error::Protocol(format!("DNS resolution failed for '{host_owned}': {e}"))
+            })?;
+            let ips: Vec<IpAddr> = addrs.map(|sa| sa.ip()).collect();
+            if ips.is_empty() {
+                return Err(Error::Protocol(format!(
+                    "DNS resolution returned no addresses for '{host_owned}'"
+                )));
+            }
+            Ok(ips)
+        })
+    }
+}
+
+/// A reqwest-compatible DNS resolver that pins resolution to validated IPs.
+///
+/// On every new connection reqwest calls [`reqwest::dns::Resolve::resolve`].
+/// This implementation:
+/// 1. Resolves the name **once** via the inner [`HostResolver`].
+/// 2. Validates **every** returned IP against the full deny list.
+/// 3. Returns validated [`SocketAddr`]s to reqwest — no second lookup occurs.
+///
+/// This eliminates the DNS-rebinding TOCTOU window (MIK-4019, closes MIK-3621
+/// gap; mirrors Microsoft `AntiSSRF` pattern).
+///
+/// # Trusted configured-backend exception
+///
+/// URLs from **operator-authored config** (servers.yaml) are trusted at
+/// deployment time. When `trust_configured_backends = true` (default), the
+/// proxy-time SSRF check in `gateway/router/authorization.rs` is skipped
+/// for those backends (MIK-3529). **Tool-argument URLs** (capability endpoints,
+/// GraphQL/JSON-RPC, UI import) are always pinned and never receive the
+/// configured-backend exemption.
+pub struct PinningResolver<R = SystemResolver> {
+    inner: std::sync::Arc<R>,
+}
+
+impl<R: HostResolver> PinningResolver<R> {
+    /// Wrap `inner` in a pinning resolver.
+    pub fn new(inner: R) -> Self {
+        Self {
+            inner: std::sync::Arc::new(inner),
+        }
+    }
+}
+
+impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_owned();
+        // Clone the Arc so the future is 'static (no borrow of self).
+        let inner = std::sync::Arc::clone(&self.inner);
+        Box::pin(async move {
+            type BoxErr = Box<dyn std::error::Error + Send + Sync>;
+            let ips = inner
+                .lookup(&host)
+                .await
+                .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as BoxErr)?;
+
+            for ip in &ips {
+                if is_private_or_reserved(*ip) {
+                    let msg =
+                        format!("SSRF blocked: '{host}' resolves to private/reserved address {ip}");
+                    return Err(Box::new(std::io::Error::other(msg)) as BoxErr);
+                }
+            }
+
+            // Port 0 is replaced by reqwest with the scheme-default port.
+            let addrs: reqwest::dns::Addrs =
+                Box::new(ips.into_iter().map(|ip| SocketAddr::new(ip, 0)));
+            Ok(addrs)
+        })
+    }
+}
+
+/// Resolve a domain name and validate all returned IPs against SSRF deny lists.
+///
+/// Async counterpart to [`check_host_not_ssrf`] for domain names.  Call this
+/// before any outbound request to a tool-supplied hostname to detect
+/// DNS-rebinding attempts.
+///
+/// Returns the validated `Vec<IpAddr>` so the caller can connect to a specific
+/// address.
+///
+/// # Errors
+///
+/// Returns `Error::Protocol` if resolution fails, no addresses are returned,
+/// or any returned address falls in a blocked range.
+pub async fn resolve_and_validate_host<R: HostResolver>(
+    host: &str,
+    resolver: &R,
+) -> Result<Vec<IpAddr>> {
+    let ips = resolver.lookup(host).await?;
+    for ip in &ips {
+        if is_private_or_reserved(*ip) {
+            return Err(Error::Protocol(format!(
+                "SSRF blocked: '{host}' resolves to private/reserved address {ip}"
+            )));
+        }
+    }
+    Ok(ips)
+}
+
+// ============================================================================
 // Public API
 // ============================================================================
 
 /// Validate that a URL does not target a private/internal/reserved IP address.
 ///
-/// Parses the host from the URL and checks it against all RFC special-use
-/// ranges for both IPv4 and IPv6.  Domain names pass through unchanged —
-/// DNS resolution happens downstream and is outside the scope of this check.
+/// IP-literal hosts are blocked immediately. Domain names pass through this
+/// synchronous check — to close the DNS-rebinding TOCTOU window, wire
+/// [`PinningResolver`] as the `dns_resolver` on the reqwest client (MIK-4019),
+/// or call [`resolve_and_validate_host`] before the request.
 ///
 /// # Errors
 ///
@@ -778,5 +944,131 @@ mod tests {
     #[test]
     fn check_host_allows_public_ipv4() {
         assert!(check_host_not_ssrf("8.8.8.8").is_ok());
+    }
+
+    // ── DNS pinning: resolve_and_validate_host / PinningResolver (MIK-4019) ──
+
+    /// Minimal mock resolver for unit tests: returns a fixed IP list.
+    struct MockResolver {
+        ips: Vec<IpAddr>,
+    }
+
+    impl MockResolver {
+        fn returning(ips: Vec<IpAddr>) -> Self {
+            Self { ips }
+        }
+    }
+
+    impl HostResolver for MockResolver {
+        fn lookup(
+            &self,
+            _host: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>>> + Send + '_>> {
+            let ips = self.ips.clone();
+            Box::pin(async move { Ok(ips) })
+        }
+    }
+
+    /// AC2: allowed public domain: mock returns a public IP, passes.
+    #[tokio::test]
+    async fn pinning_public_domain_passes() {
+        let resolver = MockResolver::returning(vec!["8.8.8.8".parse().unwrap()]);
+        let result = resolve_and_validate_host("public.test.invalid", &resolver).await;
+        assert!(result.is_ok(), "public domain should pass: {result:?}");
+        assert_eq!(result.unwrap(), vec!["8.8.8.8".parse::<IpAddr>().unwrap()]);
+    }
+
+    /// AC2: private-rebinding: mock returns 127.0.0.1, blocked.
+    #[tokio::test]
+    async fn pinning_loopback_rebinding_blocked() {
+        let resolver = MockResolver::returning(vec!["127.0.0.1".parse().unwrap()]);
+        let err = resolve_and_validate_host("evil.test.invalid", &resolver)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("127.0.0.1"),
+            "error must name the blocked IP: {msg}"
+        );
+        assert!(
+            msg.contains("SSRF blocked"),
+            "error must say SSRF blocked: {msg}"
+        );
+    }
+
+    /// AC2: metadata-IP rebinding: mock returns 169.254.169.254, blocked.
+    #[tokio::test]
+    async fn pinning_metadata_rebinding_blocked() {
+        let resolver = MockResolver::returning(vec!["169.254.169.254".parse().unwrap()]);
+        let err = resolve_and_validate_host("metadata.test.invalid", &resolver)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("169.254.169.254"),
+            "error must name the metadata IP: {msg}"
+        );
+    }
+
+    /// AC2: private RFC-1918 rebinding: mock returns 10.0.0.1, blocked.
+    #[tokio::test]
+    async fn pinning_private_rfc1918_rebinding_blocked() {
+        let resolver = MockResolver::returning(vec!["10.0.0.1".parse().unwrap()]);
+        let err = resolve_and_validate_host("corp.test.invalid", &resolver)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("SSRF blocked"));
+    }
+
+    /// AC2: `PinningResolver` blocks private IP via `reqwest::dns::Resolve`.
+    #[tokio::test]
+    async fn pinning_resolver_blocks_private_via_reqwest_trait() {
+        use reqwest::dns::{Name, Resolve};
+        let resolver =
+            PinningResolver::new(MockResolver::returning(vec!["127.0.0.1".parse().unwrap()]));
+        let name: Name = "evil.test.invalid".parse().unwrap();
+        let result = resolver.resolve(name).await;
+        assert!(
+            result.is_err(),
+            "PinningResolver must reject private IP via reqwest Resolve trait"
+        );
+        let err_msg = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => String::new(),
+        };
+        assert!(err_msg.contains("SSRF blocked"), "error: {err_msg}");
+    }
+
+    /// AC2: `PinningResolver` allows public IP via `reqwest::dns::Resolve`.
+    #[tokio::test]
+    async fn pinning_resolver_allows_public_via_reqwest_trait() {
+        use reqwest::dns::{Name, Resolve};
+        let resolver =
+            PinningResolver::new(MockResolver::returning(vec!["8.8.8.8".parse().unwrap()]));
+        let name: Name = "dns.google".parse().unwrap();
+        let result = resolver.resolve(name).await;
+        assert!(result.is_ok(), "PinningResolver must allow public IP");
+    }
+
+    /// AC2: redirect handling: `validate_redirect_chain` blocks loopback redirect hop.
+    #[test]
+    fn redirect_to_loopback_is_blocked() {
+        let chain = &[
+            "https://api.test.invalid/step1",
+            "http://127.0.0.1/internal",
+        ];
+        let err = validate_redirect_chain(chain).unwrap_err();
+        assert!(err.to_string().contains("hop 1"));
+    }
+
+    /// AC2: redirect handling: `validate_redirect_chain` blocks metadata IP redirect.
+    #[test]
+    fn redirect_to_metadata_ip_is_blocked() {
+        let chain = &[
+            "https://public.test.invalid/redirect",
+            "http://169.254.169.254/latest/meta-data/",
+        ];
+        let err = validate_redirect_chain(chain).unwrap_err();
+        assert!(err.to_string().contains("hop 1"));
     }
 }
