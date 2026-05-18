@@ -90,7 +90,7 @@ regex = "1.11"
 url = "2.5"
 uuid = { version = "1.23", features = ["v4", "fast-rng"] }
 chrono = { version = "0.4.20", features = ["serde"] }
-dashmap = "6.1"
+dashmap = "6.2"
 parking_lot = "0.12"
 bytes = "1.11.1"
 pin-project-lite = "0.2"
