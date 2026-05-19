@@ -1,0 +1,94 @@
+sha256: 954dd55587bbf274e84144cc7abdf9917442eb70e6707c500cb1ef76d4fb4ff6
+fulcrum: "1.0"
+name: wolfram_llm_query
+description: >
+  Query Wolfram|Alpha LLM API for authoritative factual, numerical, and computational
+  answers. Purpose-built for LLM grounding: resolves unit conversions, arithmetic,
+  physics constants, astronomical data, mathematical operations, and named-entity
+  attributes. Returns short, structured, prompt-ready answers.
+  [keywords: wolfram, computation, math, facts, grounding, units, constants, science]
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: The computational or factual question to evaluate (e.g. "17 factorial", "mass of Mars in kg")
+        examples:
+          - "17 factorial"
+          - "mass of Mars in kg"
+          - "distance from Earth to Moon"
+          - "speed of light in m/s"
+      units:
+        type: string
+        description: "Preferred unit system: 'metric' or 'imperial' (default: metric)"
+        enum: [metric, imperial]
+        default: metric
+    required:
+      - query
+  output:
+    type: object
+    description: >
+      Authoritative answer from Wolfram|Alpha. The raw API response is plain text
+      mapped to 'answer'. source_url and confidence are advisory fields.
+    properties:
+      answer:
+        type: string
+        description: Short, authoritative answer from Wolfram|Alpha LLM API
+      source_url:
+        type: string
+        description: Direct Wolfram|Alpha URL for this query (for citation and verification)
+      confidence:
+        type: string
+        description: Answer confidence level (Wolfram answers are deterministic; always 'high')
+        enum: [high, medium, low]
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://www.wolframalpha.com
+      path: /api/v1/llm-api
+      method: GET
+      headers:
+        Accept: "text/plain"
+      params:
+        input: "{query}"
+        units: "{units}"
+        appid: "{env.WOLFRAM_APPID}"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: true
+  type: api_key
+  key: WOLFRAM_APPID
+  description: >
+    Obtain a free AppID at https://developer.wolframalpha.com/access.
+    Set WOLFRAM_APPID environment variable to the AppID value.
+    Free tier: 2000 API calls/month. Rotation runbook: revoke at
+    developer.wolframalpha.com and update the secret — zero shared state.
+  param: appid
+
+metadata:
+  category: knowledge
+  tags:
+    - wolfram
+    - computation
+    - math
+    - facts
+    - grounding
+    - units
+    - constants
+    - science
+    - numerical
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 2000 req/month (free tier)
+  docs: https://developer.wolframalpha.com/llm-api/documentation/
