@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Docs
 
 - **README Windows install path**: install table and direct-download section now include the Windows MSVC release binary.
+- **`docs/always-load-pins.md`** (MIK-3639): client-side pin-set rationale for Claude Code v2.1.121 `alwaysLoad` flag — recommends `hebb`, `linear`, `gateway-core`, `apple-calendar` as hot-path always-loaded MCP servers with rollback procedure.
 
 ### Tests
 
