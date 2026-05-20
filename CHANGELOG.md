@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OAuth cancellation-survival** (MIK-4486): the interactive browser handshake for OAuth-enabled backends now runs on a detached `tokio::spawn` task. When the calling MCP request future is cancelled (e.g. the client times out before the user finishes browser auth), the OAuth task continues to completion and persists the token to `~/.mcp-gateway/oauth/`. The next call from the client finds the cached token and skips re-authorization. Previously, request cancellation killed the callback server and any browser auth that landed afterwards went nowhere. Docs: `docs/OAUTH_CONFIG.md § First-time interactive authorization`.
+- **OAuth discovery progress at INFO level** (MIK-4486): `Discovering …` and `Discovered …` log lines in `src/oauth/metadata.rs` promoted from DEBUG to INFO so operators can see the full handshake progression in the default log without flipping `RUST_LOG`.
+- **OAuth cancellation-survival regression test** (MIK-4486): new `tests/oauth_cancellation.rs` pins the `tokio::spawn`-survives-outer-drop semantics the fix relies on.
 - **Windows x86_64 release artifact**: release workflow now builds and publishes `mcp-gateway-windows-x86_64.exe` for `x86_64-pc-windows-msvc`.
 - **MCP tool annotation policy** (MIK-2985): ADR-003 documents the hybrid pass-through/fill policy; gateway meta-tools now carry annotation titles plus all four MCP 2025-11-25 behavior hints.
 
