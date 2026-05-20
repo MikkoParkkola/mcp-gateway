@@ -5,7 +5,7 @@
 
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
-use tracing::debug;
+use tracing::info;
 use url::Url;
 
 use crate::{Error, Result};
@@ -104,7 +104,7 @@ impl AuthorizationServerMetadata {
             "{}/.well-known/oauth-authorization-server",
             base_url.trim_end_matches('/')
         );
-        debug!(url = %url, "Discovering OAuth authorization server metadata");
+        info!(url = %url, "Discovering OAuth authorization server metadata");
 
         let response = client
             .get(&url)
@@ -124,7 +124,7 @@ impl AuthorizationServerMetadata {
             .await
             .map_err(|e| Error::OAuth(format!("Failed to parse OAuth metadata: {e}")))?;
 
-        debug!(issuer = %metadata.issuer, "Discovered authorization server");
+        info!(issuer = %metadata.issuer, "Discovered authorization server");
         Ok(metadata)
     }
 
@@ -147,7 +147,7 @@ impl ProtectedResourceMetadata {
             "{}/.well-known/oauth-protected-resource",
             base_url.trim_end_matches('/')
         );
-        debug!(url = %url, "Discovering OAuth protected resource metadata");
+        info!(url = %url, "Discovering OAuth protected resource metadata");
 
         let response = client.get(&url).send().await.map_err(|e| {
             Error::OAuth(format!("Failed to fetch protected resource metadata: {e}"))
@@ -164,7 +164,7 @@ impl ProtectedResourceMetadata {
             Error::OAuth(format!("Failed to parse protected resource metadata: {e}"))
         })?;
 
-        debug!(resource = %metadata.resource, "Discovered protected resource");
+        info!(resource = %metadata.resource, "Discovered protected resource");
         Ok(metadata)
     }
 

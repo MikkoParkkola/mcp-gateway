@@ -127,3 +127,24 @@ backends:
 See [`examples/gateway-full.yaml`](../examples/gateway-full.yaml) for the full
 set of backend fields, including timeouts, idle hibernation, secret injection,
 and `passthrough` mode.
+
+## First-time OAuth interactive authorization
+
+The first time an OAuth backend is exercised, the gateway opens a browser tab
+for the user. As of v2.12.0 this handshake runs on a detached `tokio::spawn`
+task that survives MCP-client request cancellation — the token persists to
+`~/.mcp-gateway/oauth/<sha8>_tokens.json` even if the calling `tools/call`
+times out. The second call from the client then proceeds with the cached
+token.
+
+For first-call success, add the backend to `meta_mcp.warm_start` so the
+OAuth handshake runs at gateway boot (not inside a request future):
+
+```yaml
+meta_mcp:
+  warm_start:
+    - my_oauth_backend
+```
+
+See [OAUTH_CONFIG.md § First-time interactive authorization](OAUTH_CONFIG.md#first-time-interactive-authorization-mik-4486)
+for details and tracked under MIK-4486.

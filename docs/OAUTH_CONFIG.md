@@ -165,6 +165,39 @@ See the [Deployment Guide](DEPLOYMENT.md) for mTLS and secret injection options.
 
 ---
 
+## First-time interactive authorization (MIK-4486)
+
+The OAuth Authorization Code flow is interactive — the user has to click
+through their browser before the gateway can finalize the token exchange.
+This routinely takes 10-30 s, which can exceed the per-request timeout of
+an MCP client driving the gateway.
+
+As of v2.12.0 the OAuth handshake runs on a detached `tokio::spawn` task that
+**survives outer-request cancellation**: the callback server stays bound,
+the user completes the browser auth, the token is exchanged, and the result
+is persisted to disk under `~/.mcp-gateway/oauth/<sha8>_tokens.json`. The
+next call from the MCP client finds the cached token and skips
+re-authorization.
+
+The first call from the client that triggered the handshake will still see
+its `tools/list` / `tools/call` time out — only the second call sees the
+fully authenticated backend. For operators who want first-call success on
+OAuth backends, add the backend name to `meta_mcp.warm_start` so the
+handshake runs at gateway boot before any client request is in flight:
+
+```yaml
+meta_mcp:
+  warm_start:
+    - my_oauth_backend   # triggers OAuth handshake at startup
+```
+
+Set `RUST_LOG=info` (the default) to see the full discovery + callback-server
++ browser-open progression in the gateway log; the first-time auth URL is
+now emitted at INFO level so operators can complete the browser flow even
+when the gateway is running detached.
+
+---
+
 ## See Also
 
 - [QUICKSTART.md](QUICKSTART.md) — zero-to-running walkthrough

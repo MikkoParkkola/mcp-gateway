@@ -145,20 +145,41 @@ impl HttpTransport {
     ///
     /// Returns an error if OAuth authorization fails, SSE handshake fails,
     /// or protocol version negotiation is unsuccessful.
+    #[allow(clippy::too_many_lines)] // MIK-4486 OAuth detach adds ~2 lines
     pub async fn initialize(&self) -> Result<()> {
         // Initialize OAuth client if configured
         if let Some(ref oauth_arc) = self.oauth_client {
-            let backend_name = {
-                let mut oauth = oauth_arc.lock().await;
+            // MIK-4486: Detach the OAuth handshake from the calling request
+            // future. The interactive browser flow can take 10-30s, and most
+            // MCP clients time out at 15-30s. Without `tokio::spawn`, dropping
+            // the outer future would also drop the callback server, discarding
+            // any browser auth that completes after the cancel. By spawning,
+            // the task continues to completion and persists the token to disk
+            // even when the original request is gone — so a follow-up call
+            // finds a valid token and skips re-authorization.
+            let oauth_arc_for_task = Arc::clone(oauth_arc);
+            let base_url_for_task = self.base_url.clone();
+            let oauth_task = tokio::spawn(async move {
+                let mut oauth = oauth_arc_for_task.lock().await;
                 oauth.initialize().await?;
 
                 // If we don't have a valid token, trigger authorization flow
                 if !oauth.has_valid_token() {
-                    info!(url = %self.base_url, "OAuth required - initiating authorization flow");
+                    info!(url = %base_url_for_task, "OAuth required - initiating authorization flow");
                     oauth.authorize().await?;
                 }
 
-                oauth.backend_name().to_string()
+                Ok::<String, crate::Error>(oauth.backend_name().to_string())
+            });
+
+            let backend_name = match oauth_task.await {
+                Ok(Ok(name)) => name,
+                Ok(Err(e)) => return Err(e),
+                Err(join_err) => {
+                    return Err(crate::Error::OAuth(format!(
+                        "OAuth task failed to join: {join_err}"
+                    )));
+                }
             };
 
             // Spawn background refresh task now that we have a valid token
