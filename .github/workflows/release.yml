@@ -218,12 +218,10 @@ jobs:
 
       - name: Publish to npm (OIDC trusted publishing + provenance)
         working-directory: npm
-        # npm CLI auto-detects OIDC when id-token:write is granted and a trusted
-        # publisher is configured on npmjs.com for @mikkoparkkola/mcp-gateway.
-        # NODE_AUTH_TOKEN remains as fallback until trusted publishing is enabled.
+        # Trusted publisher is configured on npmjs.com for
+        # @mikkoparkkola/mcp-gateway against this workflow. npm CLI auto-detects
+        # OIDC via id-token:write — no NODE_AUTH_TOKEN required.
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   homebrew-update:
     needs: release
