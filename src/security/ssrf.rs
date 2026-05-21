@@ -40,7 +40,7 @@
 //! - `100::/64`, `100:0:0:1::/64` — discard-only / dummy
 //! - `2001::/23` — IETF protocol assignments
 //! - `2620:4f:8000::/48` — AS112
-//! - `5f00::/16` — SRv6 SIDs
+//! - `5f00::/16` — `SRv6` SIDs
 //! - `ff00::/8` — multicast (RFC 4291)
 //!
 //! Encoded-IPv4 vectors:
