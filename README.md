@@ -64,6 +64,20 @@ The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gatew
 | **Kong / Portkey** | General API gateways | Not MCP-aware. No meta-tool discovery, no tool search, no capability YAML system. |
 | **Building fewer MCP servers** | Reduce tool count manually | You lose capabilities. Gateway lets you keep everything and pay the token cost of the compact Meta-MCP surface. |
 
+## vs Anthropic MCP Tunnels
+
+On 2026-05-19 Anthropic shipped [Claude Managed Agents](https://claude.com/blog/claude-managed-agents-updates) with self-hosted sandboxes (public beta) and [MCP tunnels](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview) (research preview). MCP tunnels let a Claude agent reach a single MCP server inside a private network through one outbound connection from a lightweight gateway -- no inbound firewall rules, no public endpoint, encrypted end-to-end.
+
+mcp-gateway and Anthropic's MCP tunnel sit at **different layers** and **compose**. The tunnel is reachability plumbing for **one** private MCP server. mcp-gateway is the aggregation, routing, capability-namespacing and observability layer across many MCP and REST backends. When both are deployed, **mcp-gateway becomes the private MCP server that Anthropic's tunnel exposes** -- one tunnel, one outbound connection, every backend behind it.
+
+| Concern | Anthropic MCP tunnel | mcp-gateway | Boundary |
+|---|---|---|---|
+| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 110+ REST capabilities + multiple MCP backends behind a compact 14-16 tool Meta-MCP surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
+| **Tool routing** | Opaque pass-through; the agent sees whatever tool list the tunneled server publishes | Capability namespacing + dynamic `gateway_search_tools` / `gateway_invoke` discovery (`src/gateway/`); SHA-256 pinning per capability (`src/capability/hash.rs`) | Different layer: transport reachability vs tool-surface curation and integrity |
+| **Observability** | Per-tunnel session telemetry from Anthropic's side | Unified `trace_id` and cost-accounting across every backend invocation (`src/cost_accounting/`, `src/gateway/`) | Scope distinction: per-tunnel session vs cross-backend trace correlation |
+
+**Complementary, not a replacement.** A team that wants Claude Managed Agents to reach a private-network deployment of mcp-gateway uses the tunnel for reachability and mcp-gateway for fan-out, capability hygiene, OWASP Agentic AI controls ([docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)), and unified cost / trace telemetry. The two solve adjacent problems.
+
 ## Security
 
 Connecting N MCP servers to an agent means accepting N attack surfaces. Tool poisoning, rug pulls, and exfiltration via hidden instructions in tool descriptions are demonstrated attacks, not hypotheticals. Invariant Labs' writeup ([MCP Security Notification: Tool Poisoning Attacks](https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks)) and Simon Willison's summary ([MCP has prompt injection security problems](https://simonwillison.net/2025/Apr/9/mcp-prompt-injection/)) lay out the threat model.
@@ -536,6 +550,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
+| [vs Anthropic MCP Tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose (different layers, complementary) |
 
 ## Troubleshooting
 
