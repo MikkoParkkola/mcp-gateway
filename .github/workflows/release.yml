@@ -191,3 +191,156 @@ jobs:
         run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  npm-publish:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Sync npm package version to git tag
+        working-directory: npm
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "Setting npm version to ${VERSION}"
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        working-directory: npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  homebrew-update:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Compute version and download checksums
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          curl --fail --location --silent --show-error \
+            "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/SHA256SUMS.txt" \
+            -o SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          extract_sha() {
+            grep " $1$" SHA256SUMS.txt | awk '{print $1}'
+          }
+          {
+            echo "sha_darwin_arm64=$(extract_sha mcp-gateway-darwin-arm64)"
+            echo "sha_darwin_x86_64=$(extract_sha mcp-gateway-darwin-x86_64)"
+            echo "sha_linux_aarch64=$(extract_sha mcp-gateway-linux-aarch64)"
+            echo "sha_linux_x86_64=$(extract_sha mcp-gateway-linux-x86_64)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: MikkoParkkola/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: homebrew-tap
+
+      - name: Rewrite formula
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          SHA_DARWIN_ARM64: ${{ steps.meta.outputs.sha_darwin_arm64 }}
+          SHA_DARWIN_X86_64: ${{ steps.meta.outputs.sha_darwin_x86_64 }}
+          SHA_LINUX_AARCH64: ${{ steps.meta.outputs.sha_linux_aarch64 }}
+          SHA_LINUX_X86_64: ${{ steps.meta.outputs.sha_linux_x86_64 }}
+        run: |
+          for sha in "$SHA_DARWIN_ARM64" "$SHA_DARWIN_X86_64" "$SHA_LINUX_AARCH64" "$SHA_LINUX_X86_64"; do
+            if [ -z "$sha" ]; then
+              echo "Missing SHA256 for one of the release assets" >&2
+              exit 1
+            fi
+          done
+
+          cat > homebrew-tap/Formula/mcp-gateway.rb <<EOF
+          class McpGateway < Formula
+            desc "Universal MCP gateway — single port for all your MCP servers, ~95% token savings"
+            homepage "https://github.com/MikkoParkkola/mcp-gateway"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/mcp-gateway-darwin-arm64"
+                sha256 "${SHA_DARWIN_ARM64}"
+              end
+              on_intel do
+                url "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/mcp-gateway-darwin-x86_64"
+                sha256 "${SHA_DARWIN_X86_64}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/mcp-gateway-linux-aarch64"
+                sha256 "${SHA_LINUX_AARCH64}"
+              end
+              on_intel do
+                url "https://github.com/MikkoParkkola/mcp-gateway/releases/download/${TAG}/mcp-gateway-linux-x86_64"
+                sha256 "${SHA_LINUX_X86_64}"
+              end
+            end
+
+            def install
+              if OS.mac?
+                if Hardware::CPU.arm?
+                  bin.install "mcp-gateway-darwin-arm64" => "mcp-gateway"
+                else
+                  bin.install "mcp-gateway-darwin-x86_64" => "mcp-gateway"
+                end
+              elsif OS.linux?
+                if Hardware::CPU.arm?
+                  bin.install "mcp-gateway-linux-aarch64" => "mcp-gateway"
+                else
+                  bin.install "mcp-gateway-linux-x86_64" => "mcp-gateway"
+                end
+              end
+            end
+
+            def post_install
+              system "xattr", "-dr", "com.apple.quarantine", "#{bin}/mcp-gateway" if OS.mac?
+            rescue
+              nil
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin/"mcp-gateway"} --version")
+            end
+          end
+          EOF
+
+          echo "--- Updated formula ---"
+          cat homebrew-tap/Formula/mcp-gateway.rb
+
+      - name: Commit and push formula bump
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- Formula/mcp-gateway.rb; then
+            echo "Formula already up to date at v${VERSION}"
+            exit 0
+          fi
+          git add Formula/mcp-gateway.rb
+          git commit -m "mcp-gateway ${VERSION}"
+          git push

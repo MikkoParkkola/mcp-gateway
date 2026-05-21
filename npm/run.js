@@ -7,7 +7,7 @@ const { join } = require("path");
 const https = require("https");
 const os = require("os");
 
-const VERSION = "2.7.3";
+const { version: VERSION } = require("./package.json");
 const REPO = "MikkoParkkola/mcp-gateway";
 const BIN_DIR = join(__dirname, ".bin");
 const BIN_NAME = "mcp-gateway";
