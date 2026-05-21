@@ -195,6 +195,9 @@ jobs:
   npm-publish:
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write     # OIDC for npm trusted publishing + provenance attestation
+      contents: read
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -213,9 +216,12 @@ jobs:
           echo "Setting npm version to ${VERSION}"
           npm version "${VERSION}" --no-git-tag-version --allow-same-version
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC trusted publishing + provenance)
         working-directory: npm
-        run: npm publish --access public
+        # npm CLI auto-detects OIDC when id-token:write is granted and a trusted
+        # publisher is configured on npmjs.com for @mikkoparkkola/mcp-gateway.
+        # NODE_AUTH_TOKEN remains as fallback until trusted publishing is enabled.
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
