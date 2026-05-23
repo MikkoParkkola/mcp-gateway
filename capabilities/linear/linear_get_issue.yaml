@@ -79,7 +79,11 @@ providers:
 
 cache:
   strategy: exact
-  ttl: 30
+  # ttl: 0 — Symphony+ claim protocol (symphony-plus#111) re-fetches the
+  # issue immediately after posting a claim marker to verify it won.
+  # A non-zero cache returns the stale pre-post state and breaks every
+  # paired/pool dispatch with 'claim marker not visible after post'.
+  ttl: 0
 
 metadata:
   category: productivity
