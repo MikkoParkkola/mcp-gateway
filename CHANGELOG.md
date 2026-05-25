@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.1] - 2026-05-25
+
+### Fixed
+
+- **`linear_get_issue` cache TTL** (#205): set TTL to 0 to fix claim-protocol read-after-write failures where `verify_claim` returned `Missing` immediately after `linear_create_comment` due to stale cached issue JSON.
+- **Capability hot-reload watcher race at startup** (#188): watcher exited early with "No capability directories to watch" because it read `backend.watched_directories()` before the async loader had registered paths. Fix: synchronous `register_directories` call before the async loader spawns, so the watcher always sees populated paths from boot.
+- **Capability count drift** (#199): synced `capability_count` 112→113 across `benchmarks/public_claims.json`, `capabilities/README.md`, `docs/COMMUNITY_REGISTRY.md`, and `docs/BENCHMARKS.md`; restores `public_claims_validation` test suite to 7/7.
+
+### CI / Build
+
+- **npm trusted publishing + provenance attestation** (#203): replaced `NPM_TOKEN` secret with OIDC trusted publishing; npm packages now carry provenance attestation.
+- **Automated package + formula publish** (#201): release workflow now publishes the npm package and Homebrew formula automatically on tag push.
+- **Dropped NPM_TOKEN fallback** (#202): removed the legacy secret fallback after trusted publishing was confirmed live.
+- **Least-privilege CI workflow permissions** (#214): top-level `permissions: contents: read` added to `ci.yml`, resolving CodeQL `actions/missing-workflow-permissions` findings.
+- **Dependabot bumps**: `serde_json` 1.0.149→1.0.150, `jsonwebtoken` 10.3.0→10.4.0, `tower-http` 0.6.10→0.6.11, `rcgen` 0.14.7→0.14.8; CI actions: `docker/build-push-action` 7.1→7.2, `docker/setup-buildx-action` 4.0→4.1, `actions/setup-node` 5.0→6.4, `docker/metadata-action` 6.0→6.1, `trufflesecurity/trufflehog`.
+
+### Docs
+
+- **README "vs Anthropic MCP Tunnels" section** (#204, MIK-4696): added comparison section for users evaluating the official Anthropic tunneling offering.
+
+## [2.12.0] - 2026-05-20
+
 ### Added
 
 - **OAuth cancellation-survival** (MIK-4486): the interactive browser handshake for OAuth-enabled backends now runs on a detached `tokio::spawn` task. When the calling MCP request future is cancelled (e.g. the client times out before the user finishes browser auth), the OAuth task continues to completion and persists the token to `~/.mcp-gateway/oauth/`. The next call from the client finds the cached token and skips re-authorization. Previously, request cancellation killed the callback server and any browser auth that landed afterwards went nowhere. Docs: `docs/OAUTH_CONFIG.md § First-time interactive authorization`.
