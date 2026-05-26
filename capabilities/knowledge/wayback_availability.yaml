@@ -1,0 +1,67 @@
+fulcrum: "1.0"
+name: wayback_availability
+description: |
+  Check whether a URL is archived in the Internet Archive Wayback Machine and
+  return the closest snapshot. Wraps the anonymous Wayback Availability JSON
+  API. Returns archived_snapshots.closest with the snapshot url, timestamp,
+  and HTTP status when a capture exists, or an empty archived_snapshots object
+  when the URL has never been archived.
+
+  Use this to confirm a durable, court-admissible evidence snapshot exists for
+  a source URL (link-rot prophylaxis, patent/prior-art evidence locking). Pair
+  with wayback_save to capture-then-confirm.
+
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+        description: The URL to look up in the Wayback Machine
+        examples: ["https://arxiv.org/abs/2401.00001", "https://example.com"]
+      timestamp:
+        type: string
+        description: >
+          Optional 1-14 digit timestamp (YYYYMMDDhhmmss, any prefix). The API
+          returns the snapshot closest to this time. Omit for the latest.
+        examples: ["20260522", "20260101120000"]
+    required:
+      - url
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://archive.org
+      path: /wayback/available
+      method: GET
+      headers:
+        Accept: "application/json"
+        User-Agent: "mcp-gateway-knowledge/1.0"
+      params:
+        url: "{url}"
+        timestamp: "{timestamp}"
+
+cache:
+  strategy: exact
+  ttl: 300  # 5 min — a freshly saved snapshot should become visible quickly
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [wayback, internet-archive, archive, snapshot, evidence, link-rot, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [url, timestamp]
+  produces: [wayback_url, snapshot_timestamp, archived_snapshots]
+  docs: "https://archive.org/help/wayback_api.php"
+  license: "Public (Internet Archive anonymous API)"
+  rate_limit: "Anonymous; subject to Internet Archive fair-use throttling"
