@@ -208,6 +208,10 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      # Node 20 bundles npm 10.x; OIDC trusted publishing requires npm >= 11.5.1.
+      - name: Upgrade npm CLI for OIDC trusted publishing
+        run: npm install -g npm@latest
+
       - name: Sync npm package version to git tag
         working-directory: npm
         run: |
