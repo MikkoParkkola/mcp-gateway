@@ -417,8 +417,15 @@ impl MetaMcp {
                         .and_then(|arr| arr.first())
                         .and_then(|item| item.get("text"))
                         .and_then(serde_json::Value::as_str);
+                    // A tool-level `isError` body is not always a schema
+                    // violation — capability backends surface upstream HTTP
+                    // failures (429 rate limit, 5xx, timeouts) here too.
+                    // Read the detail text for status signals so the LLM gets
+                    // the right recovery class (e.g. RATE_LIMITED, retryable)
+                    // instead of a misleading "fix your params" INVALID_PARAM.
+                    let category = classify_from_detail(detail);
                     let hint = recovery_for(
-                        ErrorCategory::Validation,
+                        category,
                         RecoveryContext {
                             tool: Some(tool),
                             backend: Some(server),
@@ -1172,9 +1179,155 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
         Error::BackendUnavailable(msg) | Error::Transport(msg) => {
             (ErrorCategory::BackendError, msg.clone())
         }
-        Error::Protocol(msg) => (ErrorCategory::Validation, msg.clone()),
+        // Protocol errors carry upstream HTTP failures as their message
+        // (e.g. "API returned 429 Too Many Requests"). Inspect the text so a
+        // rate limit or transient 5xx is not mislabelled as a param error.
+        Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone()),
         Error::JsonRpc { message, .. } => (ErrorCategory::BackendError, message.clone()),
         _ => (ErrorCategory::BackendError, error.to_string()),
+    }
+}
+
+/// Infer an [`ErrorCategory`] from a backend error/detail string by scanning
+/// for HTTP-status signals.
+///
+/// Capability backends (and the `Error::Protocol` variant) surface upstream
+/// HTTP failures as free-text messages rather than typed errors. Without this,
+/// a `429 Too Many Requests` is reported as `INVALID_PARAM` with a
+/// "fix your parameters" hint — wrong and unactionable, since the call is
+/// correct and merely needs a retry after backoff.
+///
+/// Matching is case-insensitive and conservative: anything that does not match
+/// a known signal falls back to [`ErrorCategory::Validation`], preserving the
+/// prior behaviour for genuine schema violations.
+fn classify_from_detail(detail: Option<&str>) -> ErrorCategory {
+    let Some(text) = detail else {
+        return ErrorCategory::Validation;
+    };
+    let lower = text.to_ascii_lowercase();
+
+    // Rate limiting — retryable after backoff, NOT a param error.
+    if lower.contains("429")
+        || lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("rate-limit")
+        || lower.contains("ratelimit")
+        || lower.contains("throttl")
+    {
+        return ErrorCategory::RateLimited;
+    }
+
+    // Timeouts / gateway-timeout — backend was reachable but slow.
+    if lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("408")
+        || lower.contains("504")
+        || lower.contains("gateway timeout")
+    {
+        return ErrorCategory::Timeout;
+    }
+
+    // Transient server-side failures — safe to retry once.
+    if lower.contains("500")
+        || lower.contains("502")
+        || lower.contains("503")
+        || lower.contains("internal server error")
+        || lower.contains("bad gateway")
+        || lower.contains("service unavailable")
+    {
+        return ErrorCategory::BackendError;
+    }
+
+    ErrorCategory::Validation
+}
+
+// ============================================================================
+// Tests — error classification
+// ============================================================================
+
+#[cfg(test)]
+mod error_classification_tests {
+    use super::classify_from_detail;
+    use crate::gateway::recovery::{ErrorCategory, RecoveryContext, recovery_for};
+
+    #[test]
+    fn rate_limit_429_classified_as_rate_limited() {
+        // The exact shape returned by archive.org through the REST provider.
+        let detail = "Protocol error: API returned 429 Too Many Requests: \
+                      <html><body><h1>429 Too Many Requests</h1></body></html>";
+        let cat = classify_from_detail(Some(detail));
+        assert!(matches!(cat, ErrorCategory::RateLimited));
+
+        // And the resulting hint must be RATE_LIMITED + retryable, NOT
+        // INVALID_PARAM with a "fix your params" suggestion.
+        let hint = recovery_for(cat, RecoveryContext::default());
+        assert_eq!(hint.error_code, "RATE_LIMITED");
+        assert!(hint.retry, "rate-limited calls are retryable after backoff");
+    }
+
+    #[test]
+    fn rate_limit_phrasings_all_match() {
+        for s in [
+            "rate limit exceeded",
+            "Rate-Limit hit",
+            "ratelimit reached",
+            "request throttled by upstream",
+            "HTTP 429",
+        ] {
+            assert!(
+                matches!(classify_from_detail(Some(s)), ErrorCategory::RateLimited),
+                "expected RateLimited for {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn timeout_signals_classified_as_timeout() {
+        for s in [
+            "request timeout",
+            "connection timed out",
+            "HTTP 504",
+            "504 Gateway Timeout",
+        ] {
+            assert!(
+                matches!(classify_from_detail(Some(s)), ErrorCategory::Timeout),
+                "expected Timeout for {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn server_errors_classified_as_backend_error() {
+        for s in [
+            "500 Internal Server Error",
+            "502 Bad Gateway",
+            "503 Service Unavailable",
+        ] {
+            assert!(
+                matches!(classify_from_detail(Some(s)), ErrorCategory::BackendError),
+                "expected BackendError for {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn genuine_validation_errors_default_to_validation() {
+        // Schema/param errors must keep the prior behaviour.
+        for s in [
+            "missing required field 'url'",
+            "invalid enum value for 'output'",
+            "expected string, got integer",
+        ] {
+            assert!(
+                matches!(classify_from_detail(Some(s)), ErrorCategory::Validation),
+                "expected Validation for {s:?}"
+            );
+        }
+        // No detail at all also defaults to Validation.
+        assert!(matches!(
+            classify_from_detail(None),
+            ErrorCategory::Validation
+        ));
     }
 }
 
