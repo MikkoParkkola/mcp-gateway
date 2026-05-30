@@ -28,6 +28,7 @@
 
 #[cfg(feature = "a2a")]
 pub mod a2a;
+pub mod acp_server_mode;
 pub mod autotag;
 pub mod backend;
 pub mod cache;
