@@ -40,13 +40,19 @@ Full license text reference: see polyformproject.org for the canonical license d
 
 ## Commercial licensing
 
-For commercial use of EE-designated files, contact: mikko.parkkola@iki.fi
+For commercial use of EE-designated files, companies can buy a standard commercial-use license through GitHub Sponsors:
 
-A pricing page will be published alongside the v2.11 release. Provisional tiers under consideration:
+- EUR 500/month per named project.
+- Covers one company or organization using `mcp-gateway` Enterprise Edition code while sponsorship remains active.
+- Covers routine internal business use, private forks, wrappers, private integrations, and shared internal services for that organization.
+- Requires the sponsoring company to identify the licensed project, such as `mcp-gateway`, in the sponsor note or by email.
+- Does not include support, SLA, custom development, indemnity, trademark rights, sublicensing, resale, or the right to offer `mcp-gateway` as a hosted or managed service to third parties unless separately agreed in writing.
 
-- Per-seat developer license
-- Per-organization annual license
-- Bundled with managed-service hosting
+The standard license is not a blanket license for all Mikko Parkkola projects. Custom terms are available for multi-project, portfolio-wide, external-facing, resale, managed-service, high-scale, support, SLA, indemnity, or procurement-specific needs.
+
+Sponsor link: https://github.com/sponsors/MikkoParkkola
+
+Annual invoicing, procurement terms, custom terms, or resale rights can be agreed by email: mikko.parkkola@iki.fi
 
 ## Existing MIT-licensed releases
 
