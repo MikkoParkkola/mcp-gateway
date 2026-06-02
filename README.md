@@ -603,7 +603,9 @@ EE-designated paths (every file carries `// SPDX-License-Identifier: PolyForm-No
 
 **What this means in practice**:
 - Free for noncommercial use, modification, redistribution.
-- Commercial use of EE modules requires a separate commercial license — contact `mikko.parkkola@iki.fi`.
+- Commercial use of EE modules requires a separate commercial license.
+- Companies can buy a standard commercial-use license via [GitHub Sponsors](https://github.com/sponsors/MikkoParkkola) at EUR 500/month per named project.
+- See [COMMERCIAL.md](COMMERCIAL.md) for business use, forks, wrappers, shared services, and managed-service deployments.
 - All releases prior to v2.11.0 remain entirely MIT and stay MIT forever.
 
 ## Credits
