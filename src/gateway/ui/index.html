@@ -479,7 +479,9 @@ tr:hover td { background: var(--bg3); }
 
 <script>
 // Auth
-let apiKey = localStorage.getItem('mcpgw_key') || '';
+let apiKey = ''; // held in memory only for this session; never persisted to
+                 // web storage (a Bearer token in localStorage is readable by
+                 // any XSS and survives on disk — re-enter on reload instead).
 const authDot = document.getElementById('auth-dot');
 const authLabel = document.getElementById('auth-label');
 const authBtn = document.getElementById('auth-btn');
@@ -507,8 +509,6 @@ authBtn.addEventListener('click', (e) => {
   const key = prompt('Enter API key (Bearer token):');
   if (key !== null) {
     apiKey = key.trim();
-    if (apiKey) localStorage.setItem('mcpgw_key', apiKey);
-    else localStorage.removeItem('mcpgw_key');
     updateAuthUI();
     refreshAll();
   }

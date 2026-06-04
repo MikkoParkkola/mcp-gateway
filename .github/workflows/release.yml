@@ -10,6 +10,11 @@ on:
         description: 'Version tag (e.g., v2.0.1)'
         required: true
 
+# Least-privilege default for all jobs (CodeQL actions/missing-workflow-permissions).
+# Jobs needing more (release, publish, npm-publish) override locally.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
