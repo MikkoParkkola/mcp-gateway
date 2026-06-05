@@ -1,0 +1,36 @@
+# osv-scanner allowlist — the pressure valve for the CI security gate.
+#
+# The gate fails the build on ANY known, fixable vulnerability in the
+# dependency tree. It runs in two places:
+#   - release.yml `security-gate` job -> blocks the crates.io publish (and the
+#     transitively-`needs:`-ed binary/npm/Homebrew jobs) if a vuln is present
+#   - docker.yml  `security-gate` job -> blocks the GHCR image build/push
+#
+# Scope (verified by local run 2026-06-05): Rust crates — osv-scanner reads
+# Cargo.lock and checks every dependency against OSV. The OSV data for Rust is
+# sourced from the RustSec advisory DB, so this overlaps the existing
+# `cargo audit` job in ci.yml; the value here is gating the RELEASE/PUBLISH
+# paths (crates.io publish, GHCR image) that cargo audit does not currently
+# block, not replacing the PR-time cargo audit gate. NOT covered:
+# github-actions advisories (our actions are SHA-pinned, which is itself the
+# mitigation) and Docker base-image OS-layer CVEs (osv-scanner reads lockfiles,
+# not image layers — that is what the trivy image scan in docker.yml covers).
+#
+# Failing on any fixable vuln is intentional: a new build must include the
+# security fixes that are available. Dependabot's `cargo` updater PROPOSES the
+# bump PR; this gate DISPOSES — it refuses to ship until the fix is merged.
+#
+# When a vulnerability has NO upstream fix yet, or is verified unreachable, it
+# would otherwise block every release indefinitely. Add a time-boxed exception
+# here instead of weakening the gate. Each entry MUST carry a reason and an
+# ignoreUntil review date — expired entries re-trigger the gate automatically.
+#
+# Format (https://google.github.io/osv-scanner/configuration/):
+#
+#   [[IgnoredVulns]]
+#   id = "RUSTSEC-2024-0001"
+#   ignoreUntil = 2026-07-01   # review by this date; after it the gate fires again
+#   reason = "No patched release upstream yet; unreachable. Reviewed 2026-06-05 by <who>."
+#
+# Keep this list EMPTY unless a vuln genuinely has no fix. The right fix for a
+# fixable vuln is to bump the dependency, not to ignore it.
