@@ -74,14 +74,18 @@ jobs:
         with:
           context: .
           load: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          # IMAGE_NAME = github.repository carries the original-case owner
+          # (MikkoParkkola); Docker tags must be lowercase, so use a lowercase
+          # literal for the ephemeral local scan tag (the pushed image uses the
+          # metadata-action's already-lowercased tags).
+          tags: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          image-ref: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
           format: table
           exit-code: "1"
           severity: HIGH,CRITICAL
