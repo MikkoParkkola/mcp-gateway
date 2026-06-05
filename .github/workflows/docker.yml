@@ -12,7 +12,27 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Dependency-vulnerability gate for the image build. ci.yml runs `cargo audit`
+  # on every PR/push; this re-scans the Cargo.lock against OSV so the published
+  # image's Rust deps are gated. Pairs with the trivy step below, which gates the
+  # base-image OS/library CVEs (osv-scanner reads lockfiles, not image layers).
+  # Exceptions are time-boxed in .github/osv-scanner.toml.
+  security-gate:
+    name: Security gate (block image on known vulns)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Scan Rust dependencies against OSV
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --config=.github/osv-scanner.toml
+            --recursive
+            ./
+
   build:
+    needs: security-gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,6 +63,34 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
+
+      # Build the image once and load it into the local daemon so trivy can scan
+      # the actual artifact's layers BEFORE anything is pushed. This is the
+      # image half of the vulnerability gate — osv-scanner (above) gates the Rust
+      # deps; trivy gates the base-image OS/library CVEs. The push step reuses the
+      # gha build cache, so the second build is a cache hit, not a rebuild.
+      - name: Build image for vulnerability scan (load locally, no push)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          load: true
+          # IMAGE_NAME = github.repository carries the original-case owner
+          # (MikkoParkkola); Docker tags must be lowercase, so use a lowercase
+          # literal for the ephemeral local scan tag (the pushed image uses the
+          # metadata-action's already-lowercased tags).
+          tags: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan (block push on fixable HIGH/CRITICAL CVEs)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
 
       - name: Build and push
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
