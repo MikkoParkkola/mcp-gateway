@@ -1,0 +1,63 @@
+# Slack App Manifest for MIK-5031 - Inbound Control Plane
+# AC.1: SLACKCTL.SCOPE.1 - Socket Mode enabled, read scopes, app-level token
+#
+# Install instructions:
+# 1. Create app at https://api.slack.com/apps
+# 2. Enable Socket Mode under Settings > Socket Mode
+# 3. Generate app-level token (xapp-) with connections:write scope
+# 4. Add OAuth scopes below, install to workspace
+# 5. Subscribe to events below
+# 6. Store tokens in ~/.claude/secrets.env:
+#    SLACK_APP_TOKEN=xapp-...
+#    SLACK_BOT_TOKEN=xoxb-...
+
+app_manifest:
+  display_information:
+    name: mcp-gateway-controller
+    description: Slack-controlled agent command interface for mcp-gateway
+    background_color: "#1a1a1a"
+  
+  features:
+    bot_user:
+      display_name: Gateway Controller
+      always_online: true
+  
+  oauth_config:
+    scopes:
+      bot:
+        # AC.1: Read scopes for inbound messages
+        - channels:history      # Read messages in channels bot is added to
+        - app_mentions:read     # Receive app mention events
+        # Existing outbound scope (from slack_post_message)
+        - chat:write            # Post messages (reply in threads)
+  
+  settings:
+    socket_mode_enabled: true
+    
+    event_subscriptions:
+      request_url: https://slack.com/api/apps.connections.open
+      bot_events:
+        - message.channels       # Messages in channels bot is member of
+        - app_mention            # @mentions directed at the bot
+    
+    org_deploy_enabled: false
+    is_hosted: false
+
+# Runtime configuration (loaded from ~/.claude/secrets.env)
+secrets:
+  - name: SLACK_APP_TOKEN
+    description: App-level token (xapp-) for Socket Mode connections
+    pattern: "^xapp-"
+  - name: SLACK_BOT_TOKEN
+    description: Bot User OAuth Token (xoxb-) for API calls
+    pattern: "^xoxb-"
+
+# AC.2: Allowlisted channels for command processing
+allowed_channels:
+  - C0B54FR20SU  # Primary control channel (from ticket context)
+
+# AC.3: Allowlisted user IDs authorized to issue commands
+allowed_users:
+  # Configure per-deployment; example:
+  # - U0123456789  # Operator Slack ID
+  placeholder_configure_me: true

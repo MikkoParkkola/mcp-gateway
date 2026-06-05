@@ -1,0 +1,2 @@
+#!/bin/bash
+exec "/home/mikko/github/symphony-plus-prod/target/release/symphony-plus" worker-cargo-governor --real-cargo "/home/mikko/.cargo/bin/cargo" -- "$@"

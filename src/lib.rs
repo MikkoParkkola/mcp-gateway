@@ -59,6 +59,7 @@ pub mod registry;
 pub mod routing_profile;
 pub mod scheduler;
 pub mod secret_injection;
+pub mod slack;
 pub mod secrets;
 pub mod security;
 #[cfg(feature = "semantic-search")]
