@@ -1337,3 +1337,121 @@ fn linear_capability_payload_shapes_match_declared_output_schemas() {
         }),
     );
 }
+
+// ── MIK-5877: capability projection specs validate against realistic payloads ──
+
+#[test]
+fn linear_get_issue_projection_spec_maps_canonical_fields() {
+    let cap = load_repo_capability("capabilities/linear/linear_get_issue.yaml");
+    let spec = cap
+        .projection
+        .as_ref()
+        .expect("linear_get_issue must declare a projection spec");
+
+    // Realistic payload AFTER the capability's transform (project nodes[0] ->
+    // rename to `issue`) — that is what the projection engine sees at dispatch.
+    let payload = serde_json::json!({
+        "issue": {
+            "id": "uuid-1",
+            "identifier": "ENG-123",
+            "title": "Fix the bug",
+            "assignee": {
+                "id": "user-1",
+                "name": "alice",
+                "displayName": "Alice Example",
+                "email": "alice@iki.fi"
+            },
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-02T00:00:00Z",
+            "url": "https://linear.app/x/issue/ENG-123"
+        }
+    });
+
+    let out = crate::projection::project(&payload, spec);
+
+    assert_eq!(out["subject"]["id"], serde_json::json!("ENG-123"));
+    assert_eq!(out["subject"]["title"], serde_json::json!("Fix the bug"));
+    assert_eq!(out["actor"]["id"], serde_json::json!("user-1"));
+    assert_eq!(out["actor"]["handle"], serde_json::json!("alice"));
+    assert_eq!(
+        out["actor"]["display_name"],
+        serde_json::json!("Alice Example")
+    );
+    assert_eq!(out["actor"]["email"], serde_json::json!("alice@iki.fi"));
+    assert_eq!(
+        out["env_time"]["created"],
+        serde_json::json!("2026-01-01T00:00:00Z")
+    );
+    assert_eq!(
+        out["env_time"]["updated"],
+        serde_json::json!("2026-01-02T00:00:00Z")
+    );
+    assert_eq!(
+        out["url"]["href"],
+        serde_json::json!("https://linear.app/x/issue/ENG-123")
+    );
+    // _raw always preserves the original payload verbatim.
+    assert_eq!(out["_raw"], payload);
+}
+
+#[test]
+fn github_get_repo_projection_spec_maps_canonical_fields() {
+    let cap = load_repo_capability("capabilities/knowledge/github_get_repo.yaml");
+    let spec = cap
+        .projection
+        .as_ref()
+        .expect("github_get_repo must declare a projection spec");
+
+    // Realistic GitHub REST /repos/{owner}/{repo} response (no transform block,
+    // so fields are top-level).
+    let payload = serde_json::json!({
+        "id": 123_456,
+        "name": "mcp-gateway",
+        "full_name": "MikkoParkkola/mcp-gateway",
+        "owner": {
+            "login": "MikkoParkkola",
+            "id": 999,
+            "html_url": "https://github.com/MikkoParkkola"
+        },
+        "description": "Universal MCP Gateway",
+        "html_url": "https://github.com/MikkoParkkola/mcp-gateway",
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "stargazers_count": 42
+    });
+
+    let out = crate::projection::project(&payload, spec);
+
+    assert_eq!(out["subject"]["id"], serde_json::json!("123456"));
+    assert_eq!(
+        out["subject"]["title"],
+        serde_json::json!("MikkoParkkola/mcp-gateway")
+    );
+    assert_eq!(out["actor"]["id"], serde_json::json!("999"));
+    assert_eq!(out["actor"]["handle"], serde_json::json!("MikkoParkkola"));
+    assert_eq!(
+        out["actor"]["display_name"],
+        serde_json::json!("MikkoParkkola")
+    );
+    assert_eq!(
+        out["url"]["href"],
+        serde_json::json!("https://github.com/MikkoParkkola/mcp-gateway")
+    );
+    assert_eq!(
+        out["url"]["label"],
+        serde_json::json!("MikkoParkkola/mcp-gateway")
+    );
+    assert_eq!(
+        out["env_time"]["created"],
+        serde_json::json!("2025-01-01T00:00:00Z")
+    );
+    assert_eq!(
+        out["env_time"]["updated"],
+        serde_json::json!("2026-01-01T00:00:00Z")
+    );
+    assert_eq!(
+        out["body"]["text"],
+        serde_json::json!("Universal MCP Gateway")
+    );
+    assert_eq!(out["_raw"], payload);
+}

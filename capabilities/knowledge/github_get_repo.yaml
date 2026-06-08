@@ -46,6 +46,29 @@ cache:
   strategy: exact
   ttl: 1800  # 30 min — stars/issues update frequently
 
+# Canonical projection (MIK-5877). Maps the GitHub repo payload onto the
+# gateway's canonical schema (actor = owner, subject = repo, url, env_time,
+# body = description). Paths are relative to the raw REST response (no transform
+# block, so fields are top-level). DORMANT unless the gateway runs with
+# meta_mcp.projection_mode = on | experimental; at the default `off` this block
+# changes no response. The untouched payload is always preserved under _raw.
+projection:
+  subject:
+    id: id
+    title: full_name
+  actor:
+    id: owner.id
+    display_name: owner.login
+    handle: owner.login
+  url:
+    href: html_url
+    label: full_name
+  env_time:
+    created: created_at
+    updated: updated_at
+  body:
+    text: description
+
 auth:
   required: false
   type: none
