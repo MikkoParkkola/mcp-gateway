@@ -119,9 +119,7 @@ fn evidence_from_error(source: SourceId, error: &Error) -> EvidenceState {
         | Error::Config(_)
         | Error::ConfigValidation(_)
         | Error::ConfigWatcher(_)
-        | Error::CapabilityHashMismatch { .. } => {
-            EvidenceState::NotConfigured { source, detail }
-        }
+        | Error::CapabilityHashMismatch { .. } => EvidenceState::NotConfigured { source, detail },
 
         // Everything else is an unavailability / transport / protocol failure:
         // the source could not produce an authoritative answer.
@@ -166,7 +164,10 @@ mod tests {
     fn ok_with_tool_level_error_is_failed_not_no_hit() {
         let r = Ok(json!({"content": [], "isError": true}));
         assert!(
-            matches!(evidence_from_result(src(), &r), EvidenceState::Failed { .. }),
+            matches!(
+                evidence_from_result(src(), &r),
+                EvidenceState::Failed { .. }
+            ),
             "isError=true must be Failed, never CheckedNoHit"
         );
     }
