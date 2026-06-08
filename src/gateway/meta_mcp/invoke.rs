@@ -108,6 +108,18 @@ fn apply_validated_output(result: &Value, validated: Value) -> Value {
     Value::Object(obj)
 }
 
+/// Whether a JSON value carries meaningful content. Used by the response
+/// projection fail-fast guard: an empty object/array or null means projection
+/// dropped everything, so the caller should get the unprojected response.
+fn json_is_populated(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Object(map) => !map.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        _ => true,
+    }
+}
+
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
 /// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
@@ -146,7 +158,19 @@ impl MetaMcp {
     ) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
-        let arguments = parse_tool_arguments(args)?;
+        let mut arguments = parse_tool_arguments(args)?;
+        // `_full` is a gateway directive (opt out of response projection), not
+        // an upstream parameter. Capture and strip it BEFORE the argument hash
+        // and idempotency key are computed, so toggling it cannot bypass
+        // idempotency or pollute the cache key, and it never reaches a backend
+        // (MIK-3533).
+        let want_full = arguments
+            .get("_full")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if let Some(obj) = arguments.as_object_mut() {
+            obj.remove("_full");
+        }
 
         // === PRE-INVOKE: Compute request hash for transparency log ============
         //
@@ -341,7 +365,13 @@ impl MetaMcp {
 
         let dispatch_start = Instant::now();
         let dispatch_result = self
-            .dispatch_to_backend(server, tool, arguments.clone(), prompt_cache_key.as_deref())
+            .dispatch_to_backend(
+                server,
+                tool,
+                arguments.clone(),
+                prompt_cache_key.as_deref(),
+                want_full,
+            )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
         telemetry_metrics::counter!(
@@ -800,6 +830,7 @@ impl MetaMcp {
         tool: &str,
         arguments: Value,
         prompt_cache_key: Option<&str>,
+        want_full: bool,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -819,13 +850,32 @@ impl MetaMcp {
             // search for an "issue" key at the top of `{content, structuredContent,
             // isError}`, find nothing, and silently return `{}`. See bug report:
             // https://github.com/MikkoParkkola/mcp-gateway/issues/167.
-            if let Some(cap_def) = cap.get(tool)
+            //
+            // `_full: true` (stripped earlier in invoke_tool_traced) bypasses
+            // projection entirely.
+            if !want_full
+                && let Some(cap_def) = cap.get(tool)
                 && !cap_def.response_transform.is_empty()
             {
                 let t = ResponseTransform::new(&cap_def.response_transform);
                 let inner =
                     extract_output_validation_target(&response).unwrap_or_else(|| response.clone());
+                let inner_populated = json_is_populated(&inner);
                 let transformed = t.transform_result(tool, inner).await?;
+                if inner_populated && !json_is_populated(&transformed) {
+                    // Fail-fast (observability): projection emptied a populated
+                    // payload — the spec likely names fields absent from this
+                    // response. We still apply the projection (it may be a
+                    // privacy/allowlist boundary, so we must NOT fall back to
+                    // the full response and risk leaking dropped fields). The
+                    // warning surfaces the misconfiguration; callers who want
+                    // the unprojected payload pass `_full: true`.
+                    tracing::warn!(
+                        server = server,
+                        tool = tool,
+                        "response_transform produced an empty payload; returning projected result (pass _full:true to bypass projection)"
+                    );
+                }
                 response = apply_validated_output(&response, transformed);
             }
 
@@ -1614,5 +1664,61 @@ mod response_transform_tests {
             }
             .is_empty()
         );
+    }
+
+    /// `json_is_populated` truth table — the basis of the fail-fast guard.
+    #[test]
+    fn json_is_populated_truth_table() {
+        use super::json_is_populated;
+        assert!(!json_is_populated(&json!(null)));
+        assert!(!json_is_populated(&json!({})));
+        assert!(!json_is_populated(&json!([])));
+        assert!(json_is_populated(&json!({"id": 1})));
+        assert!(json_is_populated(&json!([1])));
+        assert!(json_is_populated(&json!("x")));
+        assert!(json_is_populated(&json!(0)));
+        assert!(json_is_populated(&json!(false)));
+    }
+
+    /// Fail-fast trigger: projecting to a field absent from the response
+    /// empties it. `json_is_populated` returns false, so `dispatch_to_backend`
+    /// falls back to the unprojected response instead of returning `{}`
+    /// (MIK-3533).
+    #[tokio::test]
+    async fn projection_to_absent_field_empties_payload_and_triggers_failsafe() {
+        use super::json_is_populated;
+        let config = TransformConfig {
+            project: vec!["nonexistent_field".to_string()],
+            ..Default::default()
+        };
+        let transform = ResponseTransform::new(&config);
+        let raw = json!({ "id": "abc", "name": "Alice" });
+
+        assert!(json_is_populated(&raw), "raw payload is populated");
+        let transformed = transform.transform_result("tool", raw).await.unwrap();
+        assert!(
+            !json_is_populated(&transformed),
+            "projecting to an absent field empties the payload -> fail-fast fallback"
+        );
+    }
+
+    /// Healthy projection keeps real fields populated, so the fail-fast guard
+    /// does NOT fire and the projected response is used.
+    #[tokio::test]
+    async fn projection_to_present_field_stays_populated() {
+        use super::json_is_populated;
+        let config = TransformConfig {
+            project: vec!["id".to_string()],
+            ..Default::default()
+        };
+        let transform = ResponseTransform::new(&config);
+        let raw = json!({ "id": "abc", "name": "Alice", "secret": "x" });
+
+        let transformed = transform.transform_result("tool", raw).await.unwrap();
+        assert!(
+            json_is_populated(&transformed),
+            "a projection that keeps a present field stays populated"
+        );
+        assert_eq!(transformed.get("id"), Some(&json!("abc")));
     }
 }

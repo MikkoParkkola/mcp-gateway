@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-06-08
+
+### Added
+
+- **Response-projection safety: `_full` opt-out + fail-fast fallback** (MIK-3533): the gateway already supports per-capability `response_transform.project` (trimming proxied responses to listed fields). This release makes it safe to rely on:
+  - **`_full: true`** — passing `_full: true` in a tool call's arguments bypasses response projection entirely and returns the unprojected payload. The flag is a gateway directive and is stripped before the request reaches any backend.
+  - **Fail-fast fallback** — if a projection would empty a previously-populated payload (e.g. the spec names fields absent from this particular response), the gateway logs a warning and returns the **unprojected** response instead of handing the caller broken/empty data.
+
+  Together these guarantee response projection can never silently drop a caller's data: either the projection keeps content, or the full response is returned. Covered by deterministic tests (`json_is_populated` truth table, projection-to-absent-field fail-fast, healthy-projection passthrough).
+
 ## [2.13.0] - 2026-06-08
 
 ### Added
