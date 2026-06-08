@@ -1696,8 +1696,9 @@ mod response_transform_tests {
 
     /// Fail-fast trigger: projecting to a field absent from the response
     /// empties it. `json_is_populated` returns false, so `dispatch_to_backend`
-    /// falls back to the unprojected response instead of returning `{}`
-    /// (MIK-3533).
+    /// logs a warning (and still applies the projection — it never falls back
+    /// to the unprojected payload, which could leak dropped fields). Callers
+    /// pass `_full: true` to bypass projection (MIK-3533).
     #[tokio::test]
     async fn projection_to_absent_field_empties_payload_and_triggers_failsafe() {
         use super::json_is_populated;
@@ -1712,7 +1713,7 @@ mod response_transform_tests {
         let transformed = transform.transform_result("tool", raw).await.unwrap();
         assert!(
             !json_is_populated(&transformed),
-            "projecting to an absent field empties the payload -> fail-fast fallback"
+            "projecting to an absent field empties the payload -> warning logged"
         );
     }
 
