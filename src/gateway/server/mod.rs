@@ -221,6 +221,7 @@ impl Gateway {
         )
         .with_profile_registry(profile_registry)
         .with_code_mode(self.config.code_mode.enabled)
+        .with_projection_mode(self.config.meta_mcp.projection_mode)
         .with_secret_injector(secret_injector)
         .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone());
 

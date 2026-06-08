@@ -229,6 +229,16 @@ impl MetaMcp {
             obj.remove("_full");
         }
 
+        // MIK-5877: in `experimental` mode the projected (treatment) and raw
+        // (control) arms must NOT share response-cache / idempotency entries, or
+        // one arm's shape would be served to the other (the key is otherwise
+        // just server:tool:hash(args)). Suffix both keys with the arm so each
+        // arm is isolated while still deduping within itself — preserving
+        // idempotency's double-execution protection per arm. `off`/`on` add no
+        // suffix, so their keys are byte-identical to before.
+        let projection_key_suffix =
+            crate::projection::projection_key_suffix(self.projection_mode, session_id);
+
         // === PRE-INVOKE: Compute request hash for transparency log ============
         //
         // Computed eagerly here so the hash covers the raw arguments before any
@@ -317,6 +327,13 @@ impl MetaMcp {
                 &arguments,
                 self.idempotency_cache.as_ref(),
             )
+            .map(|k| {
+                if projection_key_suffix.is_empty() {
+                    k
+                } else {
+                    format!("{k}{projection_key_suffix}")
+                }
+            })
         };
 
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
@@ -348,7 +365,14 @@ impl MetaMcp {
         }
 
         if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = ResponseCache::build_key(server, tool, &arguments);
+            let cache_key = {
+                let base = ResponseCache::build_key(server, tool, &arguments);
+                if projection_key_suffix.is_empty() {
+                    base
+                } else {
+                    format!("{base}{projection_key_suffix}")
+                }
+            };
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
                 if let Some(ref stats) = self.stats {
@@ -438,6 +462,7 @@ impl MetaMcp {
                 arguments.clone(),
                 prompt_cache_key.as_deref(),
                 want_full,
+                session_id,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -762,7 +787,14 @@ impl MetaMcp {
         }
 
         if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = ResponseCache::build_key(server, tool, &arguments);
+            let cache_key = {
+                let base = ResponseCache::build_key(server, tool, &arguments);
+                if projection_key_suffix.is_empty() {
+                    base
+                } else {
+                    format!("{base}{projection_key_suffix}")
+                }
+            };
             cache.set(&cache_key, result.clone(), self.default_cache_ttl);
             debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
         }
@@ -898,6 +930,7 @@ impl MetaMcp {
         arguments: Value,
         prompt_cache_key: Option<&str>,
         want_full: bool,
+        session_id: Option<&str>,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -960,7 +993,14 @@ impl MetaMcp {
             // `!want_full` gate as response_transform, so the response cache and
             // idempotency layers inherit correctness: a non-`_full` caller
             // caches the projected shape, a `_full` caller bypasses both.
-            if let Some(cap_def) = cap_def.as_ref()
+            //
+            // The rollout gate (MIK-5877) decides whether projection runs at
+            // all: `off` (default) never projects — a declared spec changes no
+            // contract; `on` always projects; `experimental` projects only the
+            // treatment arm of a sticky per-session A/B split.
+            let decision = crate::projection::projection_decision(self.projection_mode, session_id);
+            if decision.project
+                && let Some(cap_def) = cap_def.as_ref()
                 && let Some(spec) = cap_def.projection.as_ref()
             {
                 return Ok(apply_capability_projection(validated, spec, want_full));
