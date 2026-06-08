@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.0] - 2026-06-08
+
+### Added
+
+- **Projection engine** (MIK-3533): `projection::project(response, spec)` maps a backend response onto the canonical schema (`Actor`/`Subject`/`EnvTime`/`Url`/`Body`) using a `ProjectionSpec`'s per-field dotted source paths (e.g. `assignee.email` → `Actor.email`). The original payload is always preserved under `_raw`. **Fail-fast:** if a spec resolves no canonical fields against a response, the original response is returned unchanged rather than an empty projection — a projection never silently drops data. Pure, no behavior change yet (not wired into the dispatch path; that is the per-backend-mappings step, MIK-3534). Covered by tests for leaf projection, fail-fast, empty spec, partial resolution, and scalar stringification.
+
 ## [2.17.0] - 2026-06-08
 
 ### Added

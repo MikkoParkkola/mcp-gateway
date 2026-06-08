@@ -15,9 +15,11 @@
 //! descriptor) and the projection logic that consumes a [`ProjectionSpec`] land
 //! in subsequent PRs (MIK-3532 / MIK-3533 / MIK-3534).
 
+pub mod engine;
 pub mod role;
 pub mod schema;
 
+pub use engine::project;
 pub use role::Role;
 pub use schema::{
     Actor, ActorSpec, Body, BodySpec, EnvTime, EnvTimeSpec, Projected, ProjectionSpec, Subject,
