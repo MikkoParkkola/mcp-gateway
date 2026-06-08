@@ -547,11 +547,15 @@ pub enum ToolCommand {
         format: OutputFormat,
     },
 
-    /// List all available tools with descriptions
+    /// List tools from a local capability catalogue
     ///
-    /// Scans the capabilities directory and prints each tool with its
-    /// description and authentication requirement.
-    #[command(about = "List all available tools")]
+    /// Scans a local directory of capability YAML files (default
+    /// `./capabilities`, or `MCP_GATEWAY_CAPABILITIES`) and prints each tool
+    /// with its description and authentication requirement. This is a local
+    /// catalogue scan and is independent of your server config: it does not
+    /// reflect `-c gateway.yaml` or `capabilities.enabled`. A configured
+    /// gateway exposes its tools over MCP at runtime, not via this command.
+    #[command(about = "List tools from a local capability catalogue")]
     List {
         /// Directory containing capability YAML definitions
         #[arg(
