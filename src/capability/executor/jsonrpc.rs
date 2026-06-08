@@ -186,6 +186,8 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
                 .json(&body)
                 .timeout(timeout),
             "JSON-RPC request",
+            false,
+            &self.executor.health,
         )
         .await?;
 

@@ -131,11 +131,6 @@ pub struct CapabilityBackend {
     /// until the operator clears the state (e.g. by re-running
     /// `mcp-gateway cap pin` after reviewing the diff).
     rug_pull_state: RwLock<HashMap<String, RugPullRecord>>,
-    /// Health tracker for outbound capability execution. Flips unhealthy after
-    /// consecutive failures (e.g. upstream timeouts under load) so `/health`
-    /// can report the in-process capability backend as degraded instead of
-    /// silently reporting healthy (MIK-5080).
-    health: crate::failsafe::HealthTracker,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -160,15 +155,14 @@ impl CapabilityBackend {
             capabilities: RwLock::new(IndexedCapabilities::default()),
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
-            health: crate::failsafe::HealthTracker::new(name),
         }
     }
 
     /// Whether the capability backend is currently considered healthy by its
-    /// execution health tracker.
+    /// outbound-transport health tracker (owned by the executor).
     #[must_use]
     pub fn is_healthy(&self) -> bool {
-        self.health.is_healthy()
+        self.executor.is_healthy()
     }
 
     /// Remove a capability from the live tool set.
@@ -390,16 +384,13 @@ impl CapabilityBackend {
         }
 
         // Use the coerced arguments (e.g., "123" → 123 for integer fields).
-        // Record execution outcome on the health tracker so `/health` reflects
-        // upstream failures (e.g. transient timeouts under load) for the
-        // in-process capability backend (MIK-5080).
-        let started = std::time::Instant::now();
-        let result = self.executor.execute(&capability, validation.coerced).await;
-        match &result {
-            Ok(_) => self.health.record_success(started.elapsed()),
-            Err(_) => self.health.record_failure(),
-        }
-        let result = result?;
+        // The executor records transport health (success/failure) at the HTTP
+        // boundary, so cache hits and application-level errors do not skew
+        // backend liveness (MIK-5080).
+        let result = self
+            .executor
+            .execute(&capability, validation.coerced)
+            .await?;
 
         Ok(build_success_tool_result(&capability, result))
     }
@@ -422,7 +413,7 @@ impl CapabilityBackend {
     /// Get backend status.
     pub fn status(&self) -> CapabilityBackendStatus {
         let caps = self.capabilities.read();
-        let health = self.health.metrics();
+        let health = self.executor.health_metrics();
         CapabilityBackendStatus {
             name: self.name.clone(),
             capabilities_count: caps.len(),
@@ -941,41 +932,30 @@ providers:
         assert!(backend.has_capability("unpinned_cap"));
     }
 
-    #[tokio::test]
-    async fn capability_backend_health_flips_unhealthy_after_failures() {
-        // GIVEN: a capability whose upstream is unreachable (connection refused).
+    #[test]
+    fn capability_backend_status_surfaces_executor_health() {
+        // The backend delegates health to its executor and surfaces it in
+        // status() (MIK-5080). Transport-failure flipping is covered by the
+        // executor-level tests (send_with_retry_records_transport_failures);
+        // here we verify the delegation path and the status shape so the
+        // /health payload exposes the new fields.
         let backend = make_backend();
-        let yaml = r"
-name: failing_cap
-description: points at an unreachable upstream
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: http://127.0.0.1:1
-      path: /
-";
-        let cap = crate::capability::parse_capability(yaml).unwrap();
-        backend.capabilities.write().upsert(cap);
 
-        // Sanity: healthy on a fresh backend.
-        assert!(backend.is_healthy(), "fresh backend should be healthy");
+        // A fresh backend is healthy and reports zero failures.
+        assert!(backend.is_healthy(), "fresh backend is healthy");
 
-        // WHEN: the capability is called repeatedly and every call fails.
-        for _ in 0..3 {
-            let _ = backend
-                .call_tool("failing_cap", serde_json::json!({}))
-                .await;
-        }
-
-        // THEN: the health tracker has flipped the backend unhealthy and the
-        // failure is surfaced in status() (MIK-5080).
-        assert!(
-            !backend.is_healthy(),
-            "backend should be unhealthy after consecutive execution failures"
-        );
         let status = backend.status();
-        assert!(!status.healthy);
-        assert!(status.consecutive_failures >= 3);
+        assert!(status.healthy, "status mirrors executor health");
+        assert_eq!(status.consecutive_failures, 0);
+        assert!(
+            status.latency_p95_ms.is_none(),
+            "no samples yet -> no p95 latency"
+        );
+
+        // The new health fields must serialize (they feed the admin /health
+        // payload as the capability_backend sibling object).
+        let json = serde_json::to_value(&status).expect("status serializes");
+        assert_eq!(json["healthy"], serde_json::json!(true));
+        assert_eq!(json["consecutive_failures"], serde_json::json!(0));
     }
 }

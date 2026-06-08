@@ -242,6 +242,8 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 .json(&body)
                 .timeout(timeout),
             "GraphQL request",
+            false,
+            &self.executor.health,
         )
         .await?;
 
