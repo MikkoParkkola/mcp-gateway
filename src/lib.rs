@@ -41,6 +41,11 @@ pub mod context_compression;
 pub mod cost_accounting;
 pub mod discovery;
 pub mod error;
+/// Evidence-typed render guard apparatus (spike MIK-5854).
+///
+/// Standalone, additive measurement code — **not** wired into any production
+/// routing, invoke, or result-proxy path.
+pub mod evidence;
 pub mod failsafe;
 pub mod gateway;
 mod hashing;
