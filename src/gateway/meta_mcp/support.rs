@@ -142,14 +142,38 @@ pub(super) struct MetaMcpInvoker<'a> {
 #[async_trait::async_trait]
 impl ToolInvoker for MetaMcpInvoker<'_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
-        let args = json!({
-            "server": server,
-            "tool": tool,
-            "arguments": arguments
-        });
+        let args = internal_invoke_args(server, tool, arguments);
         // Playbook steps are internal invocations with no caller agent.
         self.meta.invoke_tool(&args, None, None, None).await
     }
+}
+
+/// Build the `invoke_tool` argument envelope for an internal (chain / playbook)
+/// invocation.
+///
+/// Internal orchestration consumes the raw backend payload: steps reference
+/// prior outputs by their original field paths (`$step.issue.id`). Canonical
+/// projection (MIK-3534) is a client-presentation layer that would move those
+/// fields under `_raw` and silently break interpolation, so internal calls opt
+/// out via `_full`.
+///
+/// The directive is read (and stripped) from INSIDE the `arguments` map by
+/// `invoke_tool_traced`, so it MUST be injected there — placing it as an outer
+/// sibling of `arguments` leaves it invisible to `want_full`. Non-object
+/// arguments are passed through unchanged (no data loss).
+fn internal_invoke_args(server: &str, tool: &str, arguments: Value) -> Value {
+    let arguments = match arguments {
+        Value::Object(mut map) => {
+            map.insert("_full".to_string(), Value::Bool(true));
+            Value::Object(map)
+        }
+        other => other,
+    };
+    json!({
+        "server": server,
+        "tool": tool,
+        "arguments": arguments
+    })
 }
 
 // ============================================================================
@@ -180,4 +204,43 @@ pub(super) fn augment_with_trace(mut result: Value, trace_id: &str) -> Value {
         map.insert("trace_id".to_string(), json!(trace_id));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::internal_invoke_args;
+    use serde_json::json;
+
+    /// The projection opt-out (`_full`) for internal chain/playbook invocations
+    /// MUST live INSIDE `arguments` — that is where `invoke_tool_traced` reads
+    /// `want_full`. Placing it as an outer sibling (the original bug) left it
+    /// invisible and projection still ran on chain step outputs, breaking
+    /// `$step.field` interpolation. This guards that nesting.
+    #[test]
+    fn internal_invoke_args_injects_full_inside_arguments() {
+        let args = internal_invoke_args("linear", "create_issue", json!({"title": "x"}));
+        assert_eq!(
+            args["arguments"]["_full"],
+            json!(true),
+            "_full must be inside arguments where want_full is read"
+        );
+        assert_eq!(
+            args["arguments"]["title"],
+            json!("x"),
+            "caller args preserved"
+        );
+        assert_eq!(args["server"], json!("linear"));
+        assert_eq!(args["tool"], json!("create_issue"));
+        assert!(
+            args.get("_full").is_none(),
+            "_full must NOT be an outer sibling (would be ignored by want_full)"
+        );
+    }
+
+    /// Non-object arguments pass through unchanged — no data loss, no panic.
+    #[test]
+    fn internal_invoke_args_preserves_non_object_arguments() {
+        let args = internal_invoke_args("s", "t", json!("scalar"));
+        assert_eq!(args["arguments"], json!("scalar"));
+    }
 }

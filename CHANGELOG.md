@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.19.0] - 2026-06-08
+
+### Added
+
+- **Capability response projection applied at dispatch** (MIK-3534, closes the MIK-3530 epic): a capability may now declare a canonical `projection: ProjectionSpec`, and `gateway_invoke` applies it to the dispatched response — mapping backend fields onto the canonical schema (`actor`/`subject`/`env_time`/`url`/`body`) while preserving the untouched payload under `_raw`. The descriptor field added in MIK-3531 (`Tool.projection`) is now surfaced from the capability via `to_mcp_tool`, and the projection engine from MIK-3533 is now wired into the live path. Projection is applied **last** — after `response_transform` and output-schema validation — so it is leak-safe by construction: `_raw` is built from the already-redacted, already-validated payload, so a field redacted by `response_transform` can never reappear. It rides the same `_full` opt-out as `response_transform` (so the response cache and idempotency layers inherit correctness), operates on the inner capability payload rather than the MCP envelope (avoiding bug #167), never projects error envelopes, and passes the response through untouched when the spec resolves no fields (fail-fast). Internal orchestration (chain / playbook steps) requests the unprojected payload so step-output interpolation is unaffected. Covered by tests for the redaction-leak guard, `_full` bypass, text-envelope fail-fast, error-envelope skip, and inner-payload targeting.
+
 ## [2.18.0] - 2026-06-08
 
 ### Added
