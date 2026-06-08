@@ -70,7 +70,11 @@ pub struct GroundTruthCase {
 impl GroundTruthCase {
     /// Construct a labelled case.
     pub fn new(name: impl Into<String>, claim: RawClaim, truth: GroundTruth) -> Self {
-        Self { name: name.into(), claim, truth }
+        Self {
+            name: name.into(),
+            claim,
+            truth,
+        }
     }
 }
 
@@ -127,9 +131,9 @@ impl Strategy for RenderGuardStrategy {
 
     fn decide(&self, case: &GroundTruthCase) -> StrategyOutput {
         let emitted = render_guard(vec![case.claim.clone()]);
-        emitted
-            .first()
-            .map_or(StrategyOutput::Suppressed, |claim| StrategyOutput::Emitted(claim.verdict()))
+        emitted.first().map_or(StrategyOutput::Suppressed, |claim| {
+            StrategyOutput::Emitted(claim.verdict())
+        })
     }
 }
 
@@ -151,12 +155,18 @@ impl ReliabilityWeightedVote {
     /// sources.
     #[must_use]
     pub fn new(weights: HashMap<SourceId, f64>, default_weight: f64) -> Self {
-        Self { weights, default_weight }
+        Self {
+            weights,
+            default_weight,
+        }
     }
 
     /// The reliability weight for a source, falling back to the default.
     fn weight_for(&self, source: &SourceId) -> f64 {
-        self.weights.get(source).copied().unwrap_or(self.default_weight)
+        self.weights
+            .get(source)
+            .copied()
+            .unwrap_or(self.default_weight)
     }
 
     /// The verdict a single evidence-state would imply on its own.
@@ -199,9 +209,13 @@ impl Strategy for ReliabilityWeightedVote {
         tally
             .into_iter()
             .max_by(|(va, wa), (vb, wb)| {
-                wa.partial_cmp(wb).unwrap_or(std::cmp::Ordering::Equal).then(vb.cmp(va))
+                wa.partial_cmp(wb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(vb.cmp(va))
             })
-            .map_or(StrategyOutput::Suppressed, |(verdict, _)| StrategyOutput::Emitted(verdict))
+            .map_or(StrategyOutput::Suppressed, |(verdict, _)| {
+                StrategyOutput::Emitted(verdict)
+            })
     }
 }
 

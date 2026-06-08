@@ -8,16 +8,28 @@ fn sid(id: &str) -> SourceId {
     SourceId::new(id)
 }
 fn hit(id: &str) -> EvidenceState {
-    EvidenceState::CheckedHit { source: sid(id), detail: None }
+    EvidenceState::CheckedHit {
+        source: sid(id),
+        detail: None,
+    }
 }
 fn no_hit(id: &str) -> EvidenceState {
-    EvidenceState::CheckedNoHit { source: sid(id), detail: None }
+    EvidenceState::CheckedNoHit {
+        source: sid(id),
+        detail: None,
+    }
 }
 fn failed(id: &str) -> EvidenceState {
-    EvidenceState::Failed { source: sid(id), detail: None }
+    EvidenceState::Failed {
+        source: sid(id),
+        detail: None,
+    }
 }
 fn stale(id: &str) -> EvidenceState {
-    EvidenceState::Stale { source: sid(id), detail: None }
+    EvidenceState::Stale {
+        source: sid(id),
+        detail: None,
+    }
 }
 
 /// The canonical four discriminating cases.
@@ -25,7 +37,10 @@ fn discriminating_cases() -> Vec<GroundTruthCase> {
     vec![
         GroundTruthCase::new(
             "should-abstain",
-            RawClaim::new("status of X unknown", vec![failed("primary"), failed("secondary")]),
+            RawClaim::new(
+                "status of X unknown",
+                vec![failed("primary"), failed("secondary")],
+            ),
             GroundTruth::ShouldAbstain,
         ),
         GroundTruthCase::new(
@@ -48,13 +63,22 @@ fn discriminating_cases() -> Vec<GroundTruthCase> {
 
 #[test]
 fn ground_truth_maps_to_expected_verdicts() {
-    assert_eq!(GroundTruth::ShouldAbstain.expected_verdict(), Verdict::Disclaimer);
-    assert_eq!(GroundTruth::SourceUnavailableFailed.expected_verdict(), Verdict::Disclaimer);
+    assert_eq!(
+        GroundTruth::ShouldAbstain.expected_verdict(),
+        Verdict::Disclaimer
+    );
+    assert_eq!(
+        GroundTruth::SourceUnavailableFailed.expected_verdict(),
+        Verdict::Disclaimer
+    );
     assert_eq!(
         GroundTruth::SourceAuthoritativelyEmpty.expected_verdict(),
         Verdict::Adverse
     );
-    assert_eq!(GroundTruth::SourceStale.expected_verdict(), Verdict::Qualified);
+    assert_eq!(
+        GroundTruth::SourceStale.expected_verdict(),
+        Verdict::Qualified
+    );
 }
 
 // --- No-partial-credit scorer ----------------------------------------------
@@ -69,7 +93,10 @@ fn scorer_gives_no_credit_for_wrong_verdict() {
         RawClaim::new("x", vec![no_hit("l")]),
         GroundTruth::SourceAuthoritativelyEmpty,
     );
-    assert_eq!(score_strategy(&RawPassthrough, std::slice::from_ref(&case)), 0);
+    assert_eq!(
+        score_strategy(&RawPassthrough, std::slice::from_ref(&case)),
+        0
+    );
 }
 
 #[test]
@@ -106,7 +133,10 @@ fn scorer_gives_no_partial_credit_for_close_verdict() {
         RawClaim::new("x", vec![no_hit("l")]),
         GroundTruth::SourceAuthoritativelyEmpty,
     );
-    assert_eq!(score_strategy(&AlwaysQualified, std::slice::from_ref(&case)), 0);
+    assert_eq!(
+        score_strategy(&AlwaysQualified, std::slice::from_ref(&case)),
+        0
+    );
 }
 
 // --- Strategy behavior over the discriminating set --------------------------
@@ -143,8 +173,14 @@ fn reliability_weighted_vote_distinguishes_adverse_from_disclaimer() {
         GroundTruth::SourceUnavailableFailed,
     );
 
-    assert_eq!(voter.decide(&empty), StrategyOutput::Emitted(Verdict::Adverse));
-    assert_eq!(voter.decide(&failed_case), StrategyOutput::Emitted(Verdict::Disclaimer));
+    assert_eq!(
+        voter.decide(&empty),
+        StrategyOutput::Emitted(Verdict::Adverse)
+    );
+    assert_eq!(
+        voter.decide(&failed_case),
+        StrategyOutput::Emitted(Verdict::Disclaimer)
+    );
 }
 
 #[test]
@@ -158,7 +194,10 @@ fn reliability_weighting_lets_trusted_source_win() {
         RawClaim::new("x", vec![no_hit("trusted"), failed("flaky")]),
         GroundTruth::SourceAuthoritativelyEmpty,
     );
-    assert_eq!(voter.decide(&case), StrategyOutput::Emitted(Verdict::Adverse));
+    assert_eq!(
+        voter.decide(&case),
+        StrategyOutput::Emitted(Verdict::Adverse)
+    );
 }
 
 #[test]
@@ -177,10 +216,13 @@ fn reliability_vote_with_no_relevant_evidence_is_suppressed() {
 #[test]
 fn compare_strategies_produces_one_row_per_strategy_in_order() {
     let cases = discriminating_cases();
-    let weights = HashMap::from([(sid("list"), 1.0), (sid("primary"), 1.0), (sid("secondary"), 1.0)]);
+    let weights = HashMap::from([
+        (sid("list"), 1.0),
+        (sid("primary"), 1.0),
+        (sid("secondary"), 1.0),
+    ]);
     let voter = ReliabilityWeightedVote::new(weights, 1.0);
-    let strategies: Vec<&dyn Strategy> =
-        vec![&RawPassthrough, &RenderGuardStrategy, &voter];
+    let strategies: Vec<&dyn Strategy> = vec![&RawPassthrough, &RenderGuardStrategy, &voter];
 
     let rows = compare_strategies(&strategies, &cases);
 

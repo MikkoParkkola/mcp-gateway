@@ -41,7 +41,10 @@ pub struct RawClaim {
 impl RawClaim {
     /// Construct a raw candidate claim.
     pub fn new(text: impl Into<String>, evidence: Vec<EvidenceState>) -> Self {
-        Self { text: text.into(), evidence }
+        Self {
+            text: text.into(),
+            evidence,
+        }
     }
 }
 
@@ -134,7 +137,11 @@ pub fn render_guard(claims: Vec<RawClaim>) -> Vec<EmittableClaim> {
                 return None;
             }
 
-            Some(EmittableClaim { text: claim.text, verdict, citations })
+            Some(EmittableClaim {
+                text: claim.text,
+                verdict,
+                citations,
+            })
         })
         .collect()
 }

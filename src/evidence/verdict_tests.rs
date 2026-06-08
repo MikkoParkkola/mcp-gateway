@@ -9,28 +9,52 @@ fn src(id: &str) -> SourceId {
 }
 
 fn hit(id: &str) -> EvidenceState {
-    EvidenceState::CheckedHit { source: src(id), detail: None }
+    EvidenceState::CheckedHit {
+        source: src(id),
+        detail: None,
+    }
 }
 fn no_hit(id: &str) -> EvidenceState {
-    EvidenceState::CheckedNoHit { source: src(id), detail: None }
+    EvidenceState::CheckedNoHit {
+        source: src(id),
+        detail: None,
+    }
 }
 fn failed(id: &str) -> EvidenceState {
-    EvidenceState::Failed { source: src(id), detail: None }
+    EvidenceState::Failed {
+        source: src(id),
+        detail: None,
+    }
 }
 fn timeout(id: &str) -> EvidenceState {
-    EvidenceState::Timeout { source: src(id), detail: None }
+    EvidenceState::Timeout {
+        source: src(id),
+        detail: None,
+    }
 }
 fn not_configured(id: &str) -> EvidenceState {
-    EvidenceState::NotConfigured { source: src(id), detail: None }
+    EvidenceState::NotConfigured {
+        source: src(id),
+        detail: None,
+    }
 }
 fn not_authorized(id: &str) -> EvidenceState {
-    EvidenceState::NotAuthorized { source: src(id), detail: None }
+    EvidenceState::NotAuthorized {
+        source: src(id),
+        detail: None,
+    }
 }
 fn stale(id: &str) -> EvidenceState {
-    EvidenceState::Stale { source: src(id), detail: None }
+    EvidenceState::Stale {
+        source: src(id),
+        detail: None,
+    }
 }
 fn skipped(id: &str) -> EvidenceState {
-    EvidenceState::SkippedNotApplicable { source: src(id), detail: None }
+    EvidenceState::SkippedNotApplicable {
+        source: src(id),
+        detail: None,
+    }
 }
 
 // --- Clean -----------------------------------------------------------------
@@ -79,7 +103,12 @@ fn failed_only_is_disclaimer_not_adverse() {
 
 #[test]
 fn each_could_not_check_variant_alone_is_disclaimer() {
-    for state in [failed("s"), timeout("s"), not_configured("s"), not_authorized("s")] {
+    for state in [
+        failed("s"),
+        timeout("s"),
+        not_configured("s"),
+        not_authorized("s"),
+    ] {
         assert_eq!(
             classify(&[state.clone()]),
             Verdict::Disclaimer,
@@ -91,7 +120,12 @@ fn each_could_not_check_variant_alone_is_disclaimer() {
 #[test]
 fn any_mix_of_could_not_check_is_disclaimer() {
     // GIVEN only could-not-check states (no conclusive evidence).
-    let v = classify(&[failed("a"), timeout("b"), not_configured("c"), not_authorized("d")]);
+    let v = classify(&[
+        failed("a"),
+        timeout("b"),
+        not_configured("c"),
+        not_authorized("d"),
+    ]);
     assert_eq!(v, Verdict::Disclaimer);
     assert_ne!(v, Verdict::Adverse);
 }

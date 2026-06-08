@@ -6,14 +6,38 @@ use super::*;
 fn source_accessor_returns_id_for_every_variant() {
     let s = SourceId::new("src");
     let variants = [
-        EvidenceState::CheckedHit { source: s.clone(), detail: None },
-        EvidenceState::CheckedNoHit { source: s.clone(), detail: None },
-        EvidenceState::Failed { source: s.clone(), detail: None },
-        EvidenceState::Timeout { source: s.clone(), detail: None },
-        EvidenceState::NotConfigured { source: s.clone(), detail: None },
-        EvidenceState::NotAuthorized { source: s.clone(), detail: None },
-        EvidenceState::Stale { source: s.clone(), detail: None },
-        EvidenceState::SkippedNotApplicable { source: s.clone(), detail: None },
+        EvidenceState::CheckedHit {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::CheckedNoHit {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::Failed {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::Timeout {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::NotConfigured {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::NotAuthorized {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::Stale {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::SkippedNotApplicable {
+            source: s.clone(),
+            detail: None,
+        },
     ];
     for v in &variants {
         assert_eq!(v.source(), &s);
@@ -28,7 +52,10 @@ fn detail_accessor_round_trips() {
     };
     assert_eq!(with.detail(), Some("matched row 7"));
 
-    let without = EvidenceState::CheckedHit { source: SourceId::new("s"), detail: None };
+    let without = EvidenceState::CheckedHit {
+        source: SourceId::new("s"),
+        detail: None,
+    };
     assert_eq!(without.detail(), None);
 }
 
@@ -36,27 +63,55 @@ fn detail_accessor_round_trips() {
 fn class_taxonomy_is_correct() {
     let s = SourceId::new("s");
     assert_eq!(
-        EvidenceState::CheckedHit { source: s.clone(), detail: None }.class(),
+        EvidenceState::CheckedHit {
+            source: s.clone(),
+            detail: None
+        }
+        .class(),
         EvidenceClass::ConclusivePositive
     );
     assert_eq!(
-        EvidenceState::CheckedNoHit { source: s.clone(), detail: None }.class(),
+        EvidenceState::CheckedNoHit {
+            source: s.clone(),
+            detail: None
+        }
+        .class(),
         EvidenceClass::ConclusiveNegative
     );
     for cnc in [
-        EvidenceState::Failed { source: s.clone(), detail: None },
-        EvidenceState::Timeout { source: s.clone(), detail: None },
-        EvidenceState::NotConfigured { source: s.clone(), detail: None },
-        EvidenceState::NotAuthorized { source: s.clone(), detail: None },
+        EvidenceState::Failed {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::Timeout {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::NotConfigured {
+            source: s.clone(),
+            detail: None,
+        },
+        EvidenceState::NotAuthorized {
+            source: s.clone(),
+            detail: None,
+        },
     ] {
         assert_eq!(cnc.class(), EvidenceClass::CouldNotCheck);
     }
     assert_eq!(
-        EvidenceState::Stale { source: s.clone(), detail: None }.class(),
+        EvidenceState::Stale {
+            source: s.clone(),
+            detail: None
+        }
+        .class(),
         EvidenceClass::Stale
     );
     assert_eq!(
-        EvidenceState::SkippedNotApplicable { source: s, detail: None }.class(),
+        EvidenceState::SkippedNotApplicable {
+            source: s,
+            detail: None
+        }
+        .class(),
         EvidenceClass::NotApplicable
     );
 }

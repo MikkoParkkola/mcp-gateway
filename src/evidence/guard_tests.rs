@@ -4,16 +4,28 @@
 use super::*;
 
 fn hit(id: &str) -> EvidenceState {
-    EvidenceState::CheckedHit { source: SourceId::new(id), detail: None }
+    EvidenceState::CheckedHit {
+        source: SourceId::new(id),
+        detail: None,
+    }
 }
 fn no_hit(id: &str) -> EvidenceState {
-    EvidenceState::CheckedNoHit { source: SourceId::new(id), detail: None }
+    EvidenceState::CheckedNoHit {
+        source: SourceId::new(id),
+        detail: None,
+    }
 }
 fn failed(id: &str) -> EvidenceState {
-    EvidenceState::Failed { source: SourceId::new(id), detail: None }
+    EvidenceState::Failed {
+        source: SourceId::new(id),
+        detail: None,
+    }
 }
 fn skipped(id: &str) -> EvidenceState {
-    EvidenceState::SkippedNotApplicable { source: SourceId::new(id), detail: None }
+    EvidenceState::SkippedNotApplicable {
+        source: SourceId::new(id),
+        detail: None,
+    }
 }
 
 #[test]
@@ -46,7 +58,10 @@ fn only_not_applicable_backing_is_dropped() {
 fn adverse_claim_is_emitted_not_dropped() {
     // An authoritative negative is a finding, not an absence — it is emitted
     // (tagged Adverse), not suppressed.
-    let out = render_guard(vec![RawClaim::new("X not on list", vec![no_hit("registry")])]);
+    let out = render_guard(vec![RawClaim::new(
+        "X not on list",
+        vec![no_hit("registry")],
+    )]);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].verdict(), Verdict::Adverse);
 }
@@ -55,7 +70,10 @@ fn adverse_claim_is_emitted_not_dropped() {
 fn disclaimer_claim_is_emitted_with_tag_not_dropped() {
     // A could-not-check claim is downgraded via its verdict tag (Disclaimer),
     // NOT dropped — so the experiment can observe abstention.
-    let out = render_guard(vec![RawClaim::new("X status unknown", vec![failed("registry")])]);
+    let out = render_guard(vec![RawClaim::new(
+        "X status unknown",
+        vec![failed("registry")],
+    )]);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].verdict(), Verdict::Disclaimer);
     // Still self-citing: the could-not-check source is named.
@@ -84,7 +102,10 @@ fn every_emitted_claim_carries_nonempty_citations() {
 fn not_applicable_states_are_excluded_from_citations() {
     // GIVEN a claim backed by a real hit plus a not-applicable state.
     // THEN only the relevant source appears in citations.
-    let out = render_guard(vec![RawClaim::new("x", vec![hit("real"), skipped("noise")])]);
+    let out = render_guard(vec![RawClaim::new(
+        "x",
+        vec![hit("real"), skipped("noise")],
+    )]);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].citations(), &[SourceId::new("real")]);
     assert_eq!(out[0].verdict(), Verdict::Clean);
