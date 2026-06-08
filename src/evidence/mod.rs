@@ -40,11 +40,13 @@
 //! fusion, no subjective logic, no isotonic calibration). Reliability-weighted
 //! majority voting is the only weighting scheme, and it is deliberately simple.
 
+pub mod adapter;
 pub mod guard;
 pub mod harness;
 pub mod state;
 pub mod verdict;
 
+pub use adapter::evidence_from_result;
 pub use guard::{EmittableClaim, RawClaim, render_guard};
 pub use state::{EvidenceState, SourceId};
 pub use verdict::{Verdict, classify};

@@ -110,7 +110,7 @@ fn each_could_not_check_variant_alone_is_disclaimer() {
         not_authorized("s"),
     ] {
         assert_eq!(
-            classify(&[state.clone()]),
+            classify(std::slice::from_ref(&state)),
             Verdict::Disclaimer,
             "could-not-check state {state:?} must map to Disclaimer",
         );
