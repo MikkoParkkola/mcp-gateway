@@ -108,9 +108,13 @@ fn apply_validated_output(result: &Value, validated: Value) -> Value {
     Value::Object(obj)
 }
 
-/// Whether a JSON value carries meaningful content. Used by the response
-/// projection fail-fast guard: an empty object/array or null means projection
-/// dropped everything, so the caller should get the unprojected response.
+/// Whether a JSON value is non-empty at the top level: `null`, `{}`, and `[]`
+/// are considered empty; any scalar (including `0`, `false`, `""`) and any
+/// non-empty object/array are non-empty. This is a deliberately shallow check
+/// used by the projection fail-fast guard — when a projection reduces a
+/// populated payload to one of the empty forms, the guard logs a warning. It
+/// intentionally treats a present-but-empty scalar as non-empty so legitimate
+/// values are preserved.
 fn json_is_populated(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -244,13 +248,23 @@ impl MetaMcp {
 
         let tool_key = format!("{server}:{tool}");
 
-        let idem_key = resolve_idempotency_key(
-            args,
-            server,
-            tool,
-            &arguments,
-            self.idempotency_cache.as_ref(),
-        );
+        // `_full` requests bypass idempotency and response caching entirely.
+        // A `_full` call returns a different (unprojected) payload than the
+        // cached/projected result, so sharing a key would let one shape leak
+        // into the other (a non-`_full` caller could hit a cached full payload
+        // and receive fields the projection was meant to drop). A `_full` call
+        // is therefore always a fresh, uncached dispatch.
+        let idem_key = if want_full {
+            None
+        } else {
+            resolve_idempotency_key(
+                args,
+                server,
+                tool,
+                &arguments,
+                self.idempotency_cache.as_ref(),
+            )
+        };
 
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
             match enforce(idem_cache, key)? {
@@ -280,7 +294,7 @@ impl MetaMcp {
             }
         }
 
-        if let Some(ref cache) = self.cache {
+        if !want_full && let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
@@ -694,7 +708,7 @@ impl MetaMcp {
             }
         }
 
-        if let Some(ref cache) = self.cache {
+        if !want_full && let Some(ref cache) = self.cache {
             let cache_key = ResponseCache::build_key(server, tool, &arguments);
             cache.set(&cache_key, result.clone(), self.default_cache_ttl);
             debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
