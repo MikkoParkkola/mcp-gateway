@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.1] - 2026-06-08
+
+### Fixed
+
+- **Stdio-mode warm-start never prefetched backend tools** (MIK-4649): in `serve --stdio` mode (how Claude Code / Codex connect), warm-start started each backend but **skipped tool prefetch** — that step was gated on HTTP mode only. Subprocess MCP backends (e.g. `codex`) were therefore left with an empty tool cache, and since discovery skips empty-cache backends, their tools never appeared in `gateway_search` / `tools/list`. Tool prefetch now runs in both transport modes. Root-caused empirically against the live gateway: `codex mcp-server` serves `tools/list` fine, but the gateway logged only pings for it and never a tool fetch. Regression test asserts prefetch occurs in both modes.
+
 ## [2.15.0] - 2026-06-08
 
 ### Added
