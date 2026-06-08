@@ -182,13 +182,12 @@ pub(super) async fn health_handler(
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
     let statuses = state.backends.statuses();
-    // Overall health must reflect more than the circuit breaker. A backend that
-    // is timing out under load records consecutive failures and the health
-    // tracker flips it unhealthy *before* the breaker trips Open; deriving
-    // health from circuit state alone reports "healthy" while backends are
-    // silently failing (MIK-5080). Require both: breaker not Open AND the
-    // health tracker still considers the backend live.
-    let healthy = backends_overall_healthy(&statuses);
+    // The in-process capability backend is not in the registry; pull its health
+    // separately so a degraded capability backend (e.g. upstream timeouts under
+    // load) is reflected in `/health` too (MIK-5080).
+    let capability_status = state.meta_mcp.get_capabilities().map(|c| c.status());
+    let capability_healthy = capability_status.as_ref().is_none_or(|s| s.healthy);
+    let healthy = backends_overall_healthy(&statuses) && capability_healthy;
 
     // Check if the caller is an authenticated (non-public) client
     let is_admin = request
@@ -207,10 +206,21 @@ pub(super) async fn health_handler(
         })
     };
 
+    // Capability-backend health surfaced as a sibling field (admin only) so the
+    // existing `backends` shape stays backward-compatible.
+    let capability_json = if is_admin {
+        capability_status
+            .as_ref()
+            .map(|s| serde_json::to_value(s).unwrap_or(json!({})))
+    } else {
+        None
+    };
+
     let response = json!({
         "status": if healthy { "healthy" } else { "degraded" },
         "version": env!("CARGO_PKG_VERSION"),
-        "backends": backends_json
+        "backends": backends_json,
+        "capability_backend": capability_json
     });
 
     if healthy {
