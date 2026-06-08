@@ -118,6 +118,48 @@ pub fn projection_key_suffix(mode: ProjectionMode, session_id: Option<&str>) -> 
     }
 }
 
+/// A/B telemetry classification of a single invocation (MIK-5877, PROJ-ROLLOUT.3).
+///
+/// Captures which arm the call landed in and whether projection was *attempted*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AbRecord {
+    /// Arm label: `"treatment"` or `"control"`.
+    pub arm: &'static str,
+    /// Whether projection was **attempted** — treatment arm AND not a `_full`
+    /// bypass. NOTE: this does not guarantee the shape actually changed:
+    /// `apply_capability_projection` still returns the payload raw for an
+    /// `isError` envelope or when the spec resolves no fields (fail-fast). For a
+    /// clean treatment-vs-control shape comparison, filter the emitted events to
+    /// `is_error = false` (and treat zero-size-delta treatment rows as no-op
+    /// specs).
+    pub projected: bool,
+}
+
+/// Classify an invocation for A/B telemetry, or `None` when it is not part of
+/// the experiment.
+///
+/// Only `experimental` mode with a projection-capable tool (`spec_present`) is
+/// in the experiment — `off`/`on` and spec-less tools return `None` so no event
+/// is emitted for them. `projected` is true only for the treatment arm of a
+/// non-`_full` call (a `_full` call bypasses projection even in treatment, so it
+/// records `projected = false` while keeping its arm label).
+#[must_use]
+pub fn ab_classification(
+    mode: ProjectionMode,
+    session_id: Option<&str>,
+    want_full: bool,
+    spec_present: bool,
+) -> Option<AbRecord> {
+    if mode != ProjectionMode::Experimental || !spec_present {
+        return None;
+    }
+    let decision = projection_decision(mode, session_id);
+    Some(AbRecord {
+        arm: decision.arm,
+        projected: decision.project && !want_full,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +302,49 @@ mod tests {
             treatment.expect("a treatment session"),
             control.expect("a control session")
         );
+    }
+
+    #[test]
+    fn ab_classification_none_outside_experiment() {
+        // off/on are not the experiment; spec-less tools are not eligible.
+        assert!(ab_classification(ProjectionMode::Off, Some("s"), false, true).is_none());
+        assert!(ab_classification(ProjectionMode::On, Some("s"), false, true).is_none());
+        assert!(ab_classification(ProjectionMode::Experimental, Some("s"), false, false).is_none());
+    }
+
+    #[test]
+    fn ab_classification_treatment_projects_unless_full() {
+        // Find a treatment-arm session id.
+        let sid = (0..1000)
+            .map(|i| format!("t{i}"))
+            .find(|s| projection_decision(ProjectionMode::Experimental, Some(s)).arm == "treatment")
+            .expect("a treatment session exists");
+
+        let rec = ab_classification(ProjectionMode::Experimental, Some(&sid), false, true).unwrap();
+        assert_eq!(rec.arm, "treatment");
+        assert!(
+            rec.projected,
+            "treatment + non-full must record projected=true"
+        );
+
+        // `_full` bypasses projection even in treatment; arm label is retained.
+        let rec_full =
+            ab_classification(ProjectionMode::Experimental, Some(&sid), true, true).unwrap();
+        assert_eq!(rec_full.arm, "treatment");
+        assert!(
+            !rec_full.projected,
+            "a _full call must record projected=false"
+        );
+    }
+
+    #[test]
+    fn ab_classification_control_never_projects() {
+        let sid = (0..1000)
+            .map(|i| format!("c{i}"))
+            .find(|s| projection_decision(ProjectionMode::Experimental, Some(s)).arm == "control")
+            .expect("a control session exists");
+        let rec = ab_classification(ProjectionMode::Experimental, Some(&sid), false, true).unwrap();
+        assert_eq!(rec.arm, "control");
+        assert!(!rec.projected, "control arm must record projected=false");
     }
 }
