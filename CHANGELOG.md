@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.2] - 2026-06-08
+
+### Fixed
+
+- **stdio logs corrupted the JSON-RPC stream** (#224): `serve --stdio` wrote tracing output to stdout, interleaving log lines (with ANSI escapes) among the newline-delimited JSON-RPC frames and breaking MCP clients such as Claude Desktop. `setup_tracing` now writes all log output to stderr regardless of mode, so stdout carries protocol only. Added a regression test that spawns `serve --stdio` and asserts every stdout line is valid JSON. Thanks to @robn for the report and the `strace` diagnosis.
+- **`tool list` hard-failed on a missing capability directory** (#225): the command errored with "Capabilities directory does not exist" when its local capability-YAML directory was absent, and its naming implied it reflected the running gateway's config (it does not — it ignores `-c gateway.yaml` and `capabilities.enabled`). `tool list` now degrades gracefully (empty catalogue, exit 0) with a one-line note clarifying it scans a local catalogue independent of server config; the `--help` text and command description were corrected to match. Thanks to @robn for the report.
+
 ## [2.12.1] - 2026-05-25
 
 ### Fixed

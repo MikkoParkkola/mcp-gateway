@@ -444,3 +444,125 @@ async fn test_stdio_notification_cancelled_has_no_id_and_would_be_skipped() {
         "Method must match the notification prefix"
     );
 }
+
+// ============================================================================
+// Regression test for issue #224
+//
+// In `serve --stdio` mode, stdout is reserved exclusively for newline-delimited
+// JSON-RPC frames. Log output must go to stderr. Before the fix, `setup_tracing`
+// used `fmt::layer()` whose default writer is stdout, so startup log lines
+// (e.g. "Starting MCP Gateway (stdio mode)", with ANSI escapes) were
+// interleaved with protocol frames and broke MCP clients.
+//
+// This test spawns the real binary, sends one `initialize` request, and asserts
+// that every non-empty line on stdout parses as JSON. A leaked log line would
+// fail that parse.
+// ============================================================================
+
+#[test]
+fn test_stdio_stdout_carries_only_jsonrpc() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    // Minimal, hermetic config: no backends, so the spawn does not touch the
+    // network or any well-known fallback config location.
+    let mut cfg = tempfile::Builder::new()
+        .suffix(".yaml")
+        .tempfile()
+        .expect("create temp config");
+    std::io::Write::write_all(&mut cfg, b"backends: {}\n").expect("write temp config");
+    let cfg_path = cfg.path().to_path_buf();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .args(["serve", "--stdio", "-c"])
+        .arg(&cfg_path)
+        .env("RUST_LOG", "info") // guarantee startup logs are emitted
+        .env("NO_COLOR", "1") // determinism; logs must still land on stderr
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        // Discard stderr: the gateway emits hundreds of startup log lines there.
+        // If we piped stderr without draining it, the OS pipe buffer would fill
+        // and the child would block on the log write before replying on stdout.
+        // Discarding it is also exactly what we want to assert: logs go to
+        // stderr (here, /dev/null), and stdout carries only JSON-RPC.
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mcp-gateway serve --stdio");
+
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "regression-224", "version": "1.0"}
+        }
+    });
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin handle");
+        writeln!(stdin, "{request}").expect("write initialize request");
+        stdin.flush().ok();
+        // Keep `stdin` open until the response is read: dropping it here would
+        // send EOF and can race the server's read loop shut before it flushes
+        // the (large) initialize response. We hold it, then drop after reading.
+
+        // Read stdout on a worker thread so the main thread can enforce a timeout.
+        let stdout = child.stdout.take().expect("stdout handle");
+        let (tx, rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                match line {
+                    Ok(l) => {
+                        if tx.send(l).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let mut lines: Vec<String> = Vec::new();
+        let deadline = Duration::from_secs(15);
+        let start = Instant::now();
+        while start.elapsed() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(l) => lines.push(l),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if !lines.is_empty() {
+                        break; // got the response; no need to keep waiting
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        drop(stdin);
+
+        let mut saw_response = false;
+        for line in &lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let parsed: std::result::Result<serde_json::Value, _> = serde_json::from_str(trimmed);
+            assert!(
+                parsed.is_ok(),
+                "stdout in stdio mode must contain only JSON-RPC frames; found a non-JSON line \
+                 (issue #224 regression): {trimmed:?}"
+            );
+            saw_response = true;
+        }
+        assert!(
+            saw_response,
+            "expected at least one JSON-RPC response line on stdout"
+        );
+    }
+}

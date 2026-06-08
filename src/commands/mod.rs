@@ -360,6 +360,22 @@ pub async fn run_tool_command(cmd: ToolCommand) -> ExitCode {
 
 async fn tool_list(capabilities: std::path::PathBuf, format: OutputFormat) -> ExitCode {
     let dir = capabilities.to_string_lossy();
+    // `tool list` scans a *local* capability-YAML directory. It is independent
+    // of the running gateway's `-c gateway.yaml` config (including
+    // `capabilities.enabled`), which controls the server, not this CLI scan.
+    // When the directory is absent, report an empty catalogue with a one-line
+    // explanation rather than hard-failing (see issue #225); the `discover`
+    // path already degrades this way for the same condition.
+    if !capabilities.exists() {
+        eprintln!(
+            "No capability catalogue at '{dir}'. `tool list` scans a local directory of \
+             capability YAML files (set -C/--capabilities or MCP_GATEWAY_CAPABILITIES) and is \
+             independent of your server config. A configured gateway exposes its tools over MCP \
+             at runtime, not via this command."
+        );
+        print_tool_list(&[], format);
+        return ExitCode::SUCCESS;
+    }
     match ToolCatalogue::load(&dir).await {
         Ok(cat) => {
             print_tool_list(&cat.list_entries(), format);

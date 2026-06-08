@@ -86,6 +86,12 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Setup tracing/logging
 ///
+/// All log output is written to **stderr**. In stdio transport mode
+/// (`serve --stdio`) stdout is reserved exclusively for newline-delimited
+/// JSON-RPC frames; emitting logs there corrupts the stream and breaks MCP
+/// clients (see issue #224). Writing to stderr is also correct for the HTTP
+/// server mode, where supervisors (systemd, Docker) capture stderr normally.
+///
 /// # Errors
 ///
 /// This function currently always succeeds but returns `Result` for
@@ -97,10 +103,14 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
 
     match format {
         Some("json") => {
-            subscriber.with(fmt::layer().json()).init();
+            subscriber
+                .with(fmt::layer().json().with_writer(std::io::stderr))
+                .init();
         }
         _ => {
-            subscriber.with(fmt::layer()).init();
+            subscriber
+                .with(fmt::layer().with_writer(std::io::stderr))
+                .init();
         }
     }
 
