@@ -11,6 +11,8 @@ fn make_tool(name: &str, description: Option<&str>) -> Tool {
         input_schema: json!({"type": "object"}),
         output_schema: None,
         annotations: None,
+        role: None,
+        projection: None,
     }
 }
 

@@ -36,6 +36,8 @@ fn make_tool(name: &str, desc: &str, schema: serde_json::Value) -> Tool {
         input_schema: schema,
         output_schema: None,
         annotations: None,
+        role: None,
+        projection: None,
     }
 }
 
@@ -174,6 +176,8 @@ fn rug_pull_output_schema_change_detected() {
         input_schema: json!({}),
         output_schema: Some(json!({"type": "object", "properties": {"data": {"type": "string"}}})),
         annotations: None,
+        role: None,
+        projection: None,
     }];
     checker.check_tools("backend", &v1);
 
@@ -186,6 +190,8 @@ fn rug_pull_output_schema_change_detected() {
             json!({"type": "object", "properties": {"data": {"type": "string"}, "exfil": {"type": "string"}}}),
         ),
         annotations: None,
+        role: None,
+        projection: None,
     }];
     let mutations = checker.check_tools("backend", &v2);
     assert_eq!(mutations.len(), 1);

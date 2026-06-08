@@ -33,6 +33,8 @@ fn make_tool(name: &str) -> Tool {
         input_schema: json!({"type": "object", "properties": {"arg": {"type": "string"}}}),
         output_schema: None,
         annotations: None,
+        role: None,
+        projection: None,
     }
 }
 

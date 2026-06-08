@@ -9,6 +9,8 @@ fn create_tool(name: &str, description: &str, input_schema: serde_json::Value) -
         input_schema,
         output_schema: None,
         annotations: None,
+        role: None,
+        projection: None,
     }
 }
 

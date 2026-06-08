@@ -30,11 +30,13 @@ fn build_list_servers_tool(server_count: usize) -> Tool {
         title: Some("List Servers".to_string()),
         description: Some(format!(
             "List all {server_count} connected MCP backend servers with their status, \
-             tool count, and circuit-breaker state."
+         tool count, and circuit-breaker state."
         )),
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         output_schema: None,
         annotations: Some(read_only_annotations("List Servers")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -45,8 +47,8 @@ fn build_list_tools_tool(tool_count: usize, server_count: usize) -> Tool {
         title: Some("List Tools".to_string()),
         description: Some(format!(
             "List tools from a specific backend, or omit server to list all {tool_count} tools \
-             across {server_count} backends. Returns names and descriptions — use \
-             gateway_search_tools for ranked results with full schemas."
+         across {server_count} backends. Returns names and descriptions — use \
+         gateway_search_tools for ranked results with full schemas."
         )),
         input_schema: json!({
             "type": "object",
@@ -60,6 +62,8 @@ fn build_list_tools_tool(tool_count: usize, server_count: usize) -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("List Tools")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -94,8 +98,8 @@ fn build_search_tools_tool(tool_count: usize, server_count: usize) -> Tool {
         title: Some("Search Tools".to_string()),
         description: Some(format!(
             "Search {tool_count} tools across {server_count} servers by keyword. Returns ranked \
-             matches with full schemas while avoiding the prompt bloat of loading every tool \
-             definition upfront. Supports multi-word queries and synonym expansion."
+         matches with full schemas while avoiding the prompt bloat of loading every tool \
+         definition upfront. Supports multi-word queries and synonym expansion."
         )),
         input_schema: json!({
             "type": "object",
@@ -107,6 +111,8 @@ fn build_search_tools_tool(tool_count: usize, server_count: usize) -> Tool {
         }),
         output_schema: Some(search_tools_output_schema()),
         annotations: Some(read_only_annotations("Search Tools")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -117,8 +123,8 @@ fn build_invoke_tool() -> Tool {
         title: Some("Invoke Tool".to_string()),
         description: Some(
             "Invoke any tool on any backend server. Routes through the gateway's auth, \
-             rate-limit, caching, and failsafe middleware. Use gateway_search_tools first \
-             to discover the right tool and server."
+         rate-limit, caching, and failsafe middleware. Use gateway_search_tools first \
+         to discover the right tool and server."
                 .to_string(),
         ),
         input_schema: json!({
@@ -138,6 +144,8 @@ fn build_invoke_tool() -> Tool {
             idempotent_hint: Some(false),
             open_world_hint: Some(true),
         }),
+        role: None,
+        projection: None,
     }
 }
 
@@ -163,7 +171,7 @@ pub(crate) fn build_stats_tool() -> Tool {
         title: Some("Get Gateway Statistics".to_string()),
         description: Some(
             "Get usage statistics including invocations, cache hits, \
-             token savings, and top tools"
+         token savings, and top tools"
                 .to_string(),
         ),
         input_schema: json!({
@@ -179,6 +187,8 @@ pub(crate) fn build_stats_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("Get Gateway Statistics")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -208,6 +218,8 @@ pub(crate) fn build_playbook_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(write_non_idempotent_open_world_annotations("Run Playbook")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -218,7 +230,7 @@ pub(crate) fn build_webhook_status_tool() -> Tool {
         title: Some("Webhook Status".to_string()),
         description: Some(
             "List registered webhook endpoints and their delivery statistics \
-             (received, delivered, failures, last event)"
+         (received, delivered, failures, last event)"
                 .to_string(),
         ),
         input_schema: json!({
@@ -228,6 +240,8 @@ pub(crate) fn build_webhook_status_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("Webhook Status")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -272,7 +286,7 @@ pub(crate) fn build_kill_server_tool() -> Tool {
         title: Some("Kill Server".to_string()),
         description: Some(
             "Immediately disable routing to a backend server (operator kill switch). \
-             The server's tools remain visible in search/list but are marked as disabled."
+         The server's tools remain visible in search/list but are marked as disabled."
                 .to_string(),
         ),
         input_schema: json!({
@@ -287,6 +301,8 @@ pub(crate) fn build_kill_server_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(destructive_idempotent_annotations("Kill Server")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -297,7 +313,7 @@ pub(crate) fn build_revive_server_tool() -> Tool {
         title: Some("Revive Server".to_string()),
         description: Some(
             "Re-enable routing to a previously disabled backend server. \
-             Also resets the error budget so the server gets a clean slate."
+         Also resets the error budget so the server gets a clean slate."
                 .to_string(),
         ),
         input_schema: json!({
@@ -312,6 +328,8 @@ pub(crate) fn build_revive_server_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(write_idempotent_annotations("Revive Server")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -322,7 +340,7 @@ pub(crate) fn build_set_profile_tool() -> Tool {
         title: Some("Set Routing Profile".to_string()),
         description: Some(
             "Switch the active routing profile for this session. \
-             A routing profile restricts which tools and backends are available."
+         A routing profile restricts which tools and backends are available."
                 .to_string(),
         ),
         input_schema: json!({
@@ -337,6 +355,8 @@ pub(crate) fn build_set_profile_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(write_idempotent_annotations("Set Routing Profile")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -356,6 +376,8 @@ pub(crate) fn build_get_profile_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("Get Routing Profile")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -370,9 +392,9 @@ pub(crate) fn build_list_disabled_capabilities_tool() -> Tool {
         title: Some("List Disabled Capabilities".to_string()),
         description: Some(
             "List capabilities that have been automatically disabled due to a high error rate. \
-             Each entry shows the backend, capability name, and how long it has been suspended. \
-             Disabled capabilities auto-recover after the configured cooldown period (default 5 min). \
-             Use gateway_revive_server to manually re-enable an entire backend immediately."
+         Each entry shows the backend, capability name, and how long it has been suspended. \
+         Disabled capabilities auto-recover after the configured cooldown period (default 5 min). \
+         Use gateway_revive_server to manually re-enable an entire backend immediately."
                 .to_string(),
         ),
         input_schema: json!({
@@ -382,6 +404,8 @@ pub(crate) fn build_list_disabled_capabilities_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("List Disabled Capabilities")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -392,8 +416,8 @@ pub(crate) fn build_list_profiles_tool() -> Tool {
         title: Some("List Tool Profiles".to_string()),
         description: Some(
             "List all available routing profiles with their descriptions. \
-             Use gateway_set_profile to switch to a profile that narrows \
-             the visible toolset to the current task (e.g. \"coding\", \"research\")."
+         Use gateway_set_profile to switch to a profile that narrows \
+         the visible toolset to the current task (e.g. \"coding\", \"research\")."
                 .to_string(),
         ),
         input_schema: json!({
@@ -403,6 +427,8 @@ pub(crate) fn build_list_profiles_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("List Tool Profiles")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -418,10 +444,10 @@ pub(crate) fn build_set_state_tool() -> Tool {
         title: Some("Set Workflow State".to_string()),
         description: Some(
             "Transition the session to a new workflow state. \
-             Capabilities with a non-empty `visible_in_states` list will only appear in \
-             tools/list when the session is in a matching state. \
-             Tools without `visible_in_states` are always visible. \
-             Returns the previous state, new state, and visible tool count."
+         Capabilities with a non-empty `visible_in_states` list will only appear in \
+         tools/list when the session is in a matching state. \
+         Tools without `visible_in_states` are always visible. \
+         Returns the previous state, new state, and visible tool count."
                 .to_string(),
         ),
         input_schema: json!({
@@ -436,6 +462,8 @@ pub(crate) fn build_set_state_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(write_idempotent_annotations("Set Workflow State")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -446,8 +474,8 @@ pub(crate) fn build_reload_config_tool() -> Tool {
         title: Some("Reload Config".to_string()),
         description: Some(
             "Trigger an immediate reload of config.yaml from disk without restarting the gateway. \
-             Returns a summary plus explicit restart-required fields when some changes stay pending. \
-             Server host/port changes require a restart and are reported but not applied."
+         Returns a summary plus explicit restart-required fields when some changes stay pending. \
+         Server host/port changes require a restart and are reported but not applied."
                 .to_string(),
         ),
         input_schema: json!({
@@ -457,6 +485,8 @@ pub(crate) fn build_reload_config_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(write_idempotent_annotations("Reload Config")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -467,8 +497,8 @@ pub(crate) fn build_cost_report_tool() -> Tool {
         title: Some("Cost Report".to_string()),
         description: Some(
             "Return current session and API-key spend. Includes total cost, call count, \
-             and breakdown by backend and tool. \
-             Per-key totals are shown for 24 h / 7 d / 30 d rolling windows."
+         and breakdown by backend and tool. \
+         Per-key totals are shown for 24 h / 7 d / 30 d rolling windows."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -493,6 +523,8 @@ pub(crate) fn build_cost_report_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("Cost Report")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -548,10 +580,10 @@ pub(crate) fn build_reload_capabilities_tool() -> Tool {
         title: Some("Reload Capabilities".to_string()),
         description: Some(
             "Re-read all YAML capability files from disk and rebuild the capability \
-             backend's tool surface. Returns the new total. Useful when an agent has \
-             just written a new capability YAML and wants it usable without restarting \
-             the gateway. Clients should re-list capability tools to see additions; \
-             `tools/list_changed` notification is a follow-up."
+         backend's tool surface. Returns the new total. Useful when an agent has \
+         just written a new capability YAML and wants it usable without restarting \
+         the gateway. Clients should re-list capability tools to see additions; \
+         `tools/list_changed` notification is a follow-up."
                 .to_string(),
         ),
         input_schema: json!({
@@ -561,6 +593,8 @@ pub(crate) fn build_reload_capabilities_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(write_idempotent_annotations("Reload Capabilities")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -578,9 +612,9 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
         title: Some("Search Tools".to_string()),
         description: Some(
             "Search the gateway tool registry by name, description, or tag. \
-             Returns matching tools with their full schemas. \
-             Supports keyword queries, multi-word queries (any word matches), \
-             and glob-style patterns (e.g. \"file_*\", \"*search*\")."
+         Returns matching tools with their full schemas. \
+         Supports keyword queries, multi-word queries (any word matches), \
+         and glob-style patterns (e.g. \"file_*\", \"*search*\")."
                 .to_string(),
         ),
         input_schema: json!({
@@ -605,6 +639,8 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("Search Tools")),
+        role: None,
+        projection: None,
     }
 }
 
@@ -617,9 +653,9 @@ pub(crate) fn build_code_mode_execute_tool() -> Tool {
         title: Some("Execute Tool".to_string()),
         description: Some(
             "Execute a gateway tool by name with arguments. \
-             Use `tool` + `arguments` for a single call. \
-             Use `chain` for sequential execution where each step can \
-             reference the previous result."
+         Use `tool` + `arguments` for a single call. \
+         Use `chain` for sequential execution where each step can \
+         reference the previous result."
                 .to_string(),
         ),
         input_schema: json!({
@@ -650,6 +686,8 @@ pub(crate) fn build_code_mode_execute_tool() -> Tool {
         }),
         output_schema: None,
         annotations: Some(write_non_idempotent_open_world_annotations("Execute Tool")),
+        role: None,
+        projection: None,
     }
 }
 

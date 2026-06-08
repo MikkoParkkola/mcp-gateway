@@ -278,6 +278,8 @@ mod tests {
             input_schema: json!({}),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         };
         // WHEN: query is a substring of the name
         // THEN: match
@@ -294,6 +296,8 @@ mod tests {
             input_schema: json!({}),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         };
         // WHEN: query matches description word
         // THEN: match
@@ -310,6 +314,8 @@ mod tests {
             input_schema: json!({}),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         };
         // WHEN: query doesn't match anything
         // THEN: no match
@@ -326,6 +332,8 @@ mod tests {
             input_schema: json!({}),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         };
         // WHEN: query is lowercase
         // THEN: case-insensitive match

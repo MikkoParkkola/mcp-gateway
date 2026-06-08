@@ -371,6 +371,8 @@ mod tests {
             }),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         }
     }
 
@@ -390,6 +392,8 @@ mod tests {
             }),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         }
     }
 

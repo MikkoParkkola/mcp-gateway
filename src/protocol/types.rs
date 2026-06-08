@@ -25,6 +25,15 @@ pub struct Tool {
     /// Tool annotations (hints about behavior)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
+    /// Tool role for discovery filtering (projection layer, MIK-3531/3532).
+    /// `None` (the default) is treated as [`crate::projection::Role::Action`],
+    /// preserving backward compatibility for untagged tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<crate::projection::Role>,
+    /// Canonical projection spec for this tool's responses, if declared.
+    /// `None` means the response is not projected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<crate::projection::ProjectionSpec>,
 }
 
 /// Tool annotations (hints about tool behavior)
@@ -535,6 +544,69 @@ pub enum ToolChoice {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ── Tool descriptor: role + projection (MIK-3531) ─────────────────
+
+    fn bare_tool() -> Tool {
+        Tool {
+            name: "t".to_string(),
+            title: None,
+            description: None,
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            annotations: None,
+            role: None,
+            projection: None,
+        }
+    }
+
+    #[test]
+    fn untagged_tool_omits_role_and_projection_on_the_wire() {
+        // Backward compatibility: an untagged tool must serialize exactly as
+        // before — no `role` / `projection` keys (skip_serializing_if).
+        let v = serde_json::to_value(bare_tool()).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("role"), "untagged tool must omit role");
+        assert!(
+            !obj.contains_key("projection"),
+            "untagged tool must omit projection"
+        );
+    }
+
+    #[test]
+    fn untagged_tool_deserializes_from_pre_existing_json() {
+        // Old payloads with no role/projection keys must still parse, defaulting
+        // both to None.
+        let t: Tool = serde_json::from_value(json!({
+            "name": "legacy", "inputSchema": {"type": "object"}
+        }))
+        .unwrap();
+        assert!(t.role.is_none());
+        assert!(t.projection.is_none());
+    }
+
+    #[test]
+    fn tagged_tool_round_trips_role_and_projection() {
+        use crate::projection::{ActorSpec, ProjectionSpec, Role};
+        let mut t = bare_tool();
+        t.role = Some(Role::Selector);
+        t.projection = Some(ProjectionSpec {
+            actor: Some(ActorSpec {
+                email: Some("assignee.email".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let v = serde_json::to_value(&t).unwrap();
+        assert_eq!(v["role"], json!("selector"));
+        assert_eq!(v["projection"]["actor"]["email"], json!("assignee.email"));
+        let back: Tool = serde_json::from_value(v).unwrap();
+        assert_eq!(back.role, Some(Role::Selector));
+        assert_eq!(
+            back.projection.unwrap().actor.unwrap().email.as_deref(),
+            Some("assignee.email")
+        );
+    }
 
     // ── ResourceTemplate ──────────────────────────────────────────────
 
