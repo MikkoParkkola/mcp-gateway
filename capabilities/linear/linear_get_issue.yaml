@@ -25,6 +25,29 @@ transform:
   rename:
     nodes[0]: issue
 
+# Canonical projection (MIK-5877). Maps the issue payload onto the gateway's
+# canonical schema (actor/subject/env_time/url). Paths are relative to the
+# transformed payload above ({issue: {...}}). DORMANT unless the gateway runs
+# with meta_mcp.projection_mode = on | experimental; at the default `off` this
+# block changes no response. The untouched payload is always preserved under
+# _raw. NOTE: enabling experimental projects this tool for ~50% of sessions —
+# any consumer that reads issue.* directly (e.g. a claim-verify protocol) must
+# pass _full:true or run outside the experiment window.
+projection:
+  subject:
+    id: issue.identifier
+    title: issue.title
+  actor:
+    id: issue.assignee.id
+    display_name: issue.assignee.displayName
+    email: issue.assignee.email
+    handle: issue.assignee.name
+  env_time:
+    created: issue.createdAt
+    updated: issue.updatedAt
+  url:
+    href: issue.url
+
 auth:
   required: true
   type: api_key
