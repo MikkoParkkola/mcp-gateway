@@ -1,14 +1,17 @@
+sha256: 08dc28061c5e8a31793f1b8cde6c54cb1a004fbb7bacf24d4dc151dffdbcaa8b
 fulcrum: "1.0"
 name: wayback_save
 description: |
-  Capture a URL into the Internet Archive Wayback Machine via the anonymous
-  "Save Page Now" endpoint (https://web.archive.org/save/{url}). Triggers a
-  fresh archival crawl of the target and returns the resulting capture. Use at
-  URL-triage time for link-rot prophylaxis and to lock durable, timestamped
-  evidence of a source before it changes or disappears.
+  Capture a URL into the Internet Archive Wayback Machine via the authenticated
+  "Save Page Now" (SPN2) endpoint (POST https://web.archive.org/save/{url}).
+  Triggers a fresh archival crawl of the target. Use at URL-triage time for
+  link-rot prophylaxis and to lock durable, timestamped evidence of a source
+  before it changes or disappears.
 
-  Anonymous calls are rate-limited (~5/min) and synchronous. After saving,
-  confirm the durable snapshot URL + timestamp with wayback_availability.
+  Requires an IA S3 credential (IA_S3_AUTH env var) — IA retired anonymous
+  saving in 2024. Calls are rate-limited (~30/min with keys) and the save is
+  async; HTTP 200 means accepted. After saving, confirm the durable snapshot
+  URL + timestamp with wayback_availability.
 
   Note: the target URL is appended to the path verbatim. The "Content-Location"
   / "Link" response headers carry the archived snapshot path.
@@ -34,17 +37,26 @@ providers:
     config:
       base_url: https://web.archive.org
       path: /save/{url}
-      method: GET
+      method: POST
       headers:
-        Accept: "text/html,application/json"
+        Accept: "application/json"
         User-Agent: "mcp-gateway-knowledge/1.0"
 
 cache:
   strategy: none  # each save is a fresh capture; never cache
 
 auth:
-  required: false
-  type: none
+  required: true
+  type: api_key
+  key: "env:IA_S3_AUTH"
+  header: Authorization
+  description: >
+    Internet Archive locked anonymous Save Page Now in 2024 — GET /save/<url>
+    now 404s and unauthenticated POST returns 401. SPN2 requires an S3-style
+    credential. Set IA_S3_AUTH to the literal Authorization value
+    "LOW <accesskey>:<secret>". Keys: 1Password "Claude Elite" ->
+    "Internet Archive S3 Keys" (username=accesskey, credential=secret).
+    Provisioned into ~/.claude/secrets.env (the gateway env_file).
 
 metadata:
   category: knowledge

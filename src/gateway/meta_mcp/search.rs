@@ -10,6 +10,7 @@ use tracing::debug;
 
 use crate::autotag;
 use crate::backend::Backend;
+use crate::projection::Role;
 use crate::protocol::Tool;
 use crate::ranking::json_to_search_result;
 use crate::routing_profile::RoutingProfile;
@@ -33,6 +34,66 @@ use super::support::{
 struct CodeModeSearchOptions {
     include_schema: bool,
     use_glob: bool,
+}
+
+/// Infer a tool's role from its name and annotations when it carries no explicit
+/// `role` tag (MIK-3532). Conservative: only read-only tools whose name clearly
+/// signals selection or extraction are tagged as such; everything else defaults
+/// to [`Role::Action`] (the safe assumption — a tool may have side effects).
+fn infer_role(tool: &Tool) -> Role {
+    let read_only = tool
+        .annotations
+        .as_ref()
+        .and_then(|a| a.read_only_hint)
+        .unwrap_or(false);
+    if !read_only {
+        return Role::Action;
+    }
+    let name = tool.name.to_ascii_lowercase();
+    let is = |needles: &[&str]| needles.iter().any(|n| name.contains(n));
+    if is(&["search", "list", "find", "query", "discover", "browse"]) {
+        Role::Selector
+    } else if is(&[
+        "get", "read", "fetch", "show", "describe", "inspect", "view",
+    ]) {
+        Role::Extractor
+    } else {
+        // Read-only but not obviously selector/extractor: treat as an extractor
+        // rather than an action.
+        Role::Extractor
+    }
+}
+
+/// A tool's effective role: its explicit tag if present, otherwise inferred.
+fn effective_role(tool: &Tool) -> Role {
+    tool.role.unwrap_or_else(|| infer_role(tool))
+}
+
+/// Whether `tool` matches the optionally-requested role. `None` matches every
+/// tool (no filter).
+fn tool_matches_role(tool: &Tool, want: Option<Role>) -> bool {
+    want.is_none_or(|r| effective_role(tool) == r)
+}
+
+/// Parse a role filter argument (case-insensitive). Absent / null means no
+/// filter; a typo or a non-string value is rejected so it fails fast rather
+/// than silently returning everything.
+fn parse_role_filter(args: &Value) -> Result<Option<Role>> {
+    match args.get("role") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => match s.to_ascii_lowercase().as_str() {
+            "selector" => Ok(Some(Role::Selector)),
+            "extractor" => Ok(Some(Role::Extractor)),
+            "enricher" => Ok(Some(Role::Enricher)),
+            "action" => Ok(Some(Role::Action)),
+            bad => Err(Error::Protocol(format!(
+                "Invalid role filter '{bad}' (expected selector|extractor|enricher|action)"
+            ))),
+        },
+        Some(_) => Err(Error::Protocol(
+            "role filter must be a string (selector|extractor|enricher|action)".to_string(),
+        )),
+    }
 }
 
 impl MetaMcp {
@@ -464,6 +525,9 @@ impl MetaMcp {
     /// Results are filtered by the session's active routing profile.
     pub(super) async fn list_tools(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
         let profile = self.active_profile(session_id);
+        // Optional role filter (MIK-3532): None = all tools; Some(role) keeps
+        // only tools whose effective role (explicit tag, else inferred) matches.
+        let role_filter = parse_role_filter(args)?;
 
         // If server is specified, return tools from that single backend (existing behavior)
         if let Some(server) = extract_optional_str(args, "server") {
@@ -488,7 +552,7 @@ impl MetaMcp {
                 let tools: Vec<_> = cap
                     .get_tools_for_state(&current_state)
                     .into_iter()
-                    .filter(|t| profile.tool_allowed(&t.name))
+                    .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
                     .collect();
                 return Ok(json!({
                     "server": server,
@@ -507,7 +571,7 @@ impl MetaMcp {
                 .get_tools()
                 .await?
                 .into_iter()
-                .filter(|t| profile.tool_allowed(&t.name))
+                .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
                 .collect();
 
             return Ok(json!({
@@ -530,7 +594,7 @@ impl MetaMcp {
             );
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for tool in cap.get_tools_for_state(&current_state) {
-                if !profile.tool_allowed(&tool.name) {
+                if !profile.tool_allowed(&tool.name) || !tool_matches_role(&tool, role_filter) {
                     continue;
                 }
                 let mut entry = json!({
@@ -554,7 +618,7 @@ impl MetaMcp {
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Some(tools) = Self::backend_tools_for_discovery(&backend, false).await {
                 for tool in tools.iter() {
-                    if !profile.tool_allowed(&tool.name) {
+                    if !profile.tool_allowed(&tool.name) || !tool_matches_role(tool, role_filter) {
                         continue;
                     }
                     let desc =
@@ -652,5 +716,100 @@ impl MetaMcp {
             total_found,
             &suggestions,
         ))
+    }
+}
+
+#[cfg(test)]
+mod role_filter_tests {
+    use super::{effective_role, infer_role, parse_role_filter, tool_matches_role};
+    use crate::projection::Role;
+    use crate::protocol::{Tool, ToolAnnotations};
+    use serde_json::json;
+
+    fn tool(name: &str, read_only: Option<bool>, role: Option<Role>) -> Tool {
+        Tool {
+            name: name.to_string(),
+            title: None,
+            description: None,
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            annotations: read_only.map(|ro| ToolAnnotations {
+                read_only_hint: Some(ro),
+                ..Default::default()
+            }),
+            role,
+            projection: None,
+        }
+    }
+
+    #[test]
+    fn infer_role_from_name_and_readonly() {
+        assert_eq!(
+            infer_role(&tool("search_issues", Some(true), None)),
+            Role::Selector
+        );
+        assert_eq!(
+            infer_role(&tool("list_repos", Some(true), None)),
+            Role::Selector
+        );
+        assert_eq!(
+            infer_role(&tool("get_issue", Some(true), None)),
+            Role::Extractor
+        );
+        assert_eq!(
+            infer_role(&tool("read_file", Some(true), None)),
+            Role::Extractor
+        );
+        // read-only but unclear name -> extractor (still not an action)
+        assert_eq!(
+            infer_role(&tool("weather", Some(true), None)),
+            Role::Extractor
+        );
+        // not read-only -> action regardless of name
+        assert_eq!(
+            infer_role(&tool("search_and_delete", Some(false), None)),
+            Role::Action
+        );
+        // no annotations -> action (safe default)
+        assert_eq!(infer_role(&tool("mystery", None, None)), Role::Action);
+    }
+
+    #[test]
+    fn effective_role_prefers_explicit_tag_over_inference() {
+        // A tool named "search" but explicitly tagged Action stays Action.
+        let t = tool("search_x", Some(true), Some(Role::Action));
+        assert_eq!(effective_role(&t), Role::Action);
+    }
+
+    #[test]
+    fn tool_matches_role_filter() {
+        let selector = tool("search_x", Some(true), None);
+        let action = tool("create_x", Some(false), None);
+        // None = no filter, matches everything
+        assert!(tool_matches_role(&selector, None));
+        assert!(tool_matches_role(&action, None));
+        // Some filters by effective role
+        assert!(tool_matches_role(&selector, Some(Role::Selector)));
+        assert!(!tool_matches_role(&selector, Some(Role::Action)));
+        assert!(tool_matches_role(&action, Some(Role::Action)));
+        assert!(!tool_matches_role(&action, Some(Role::Selector)));
+    }
+
+    #[test]
+    fn parse_role_filter_handles_case_missing_and_invalid() {
+        assert_eq!(parse_role_filter(&json!({})).unwrap(), None);
+        assert_eq!(
+            parse_role_filter(&json!({"role": "Selector"})).unwrap(),
+            Some(Role::Selector)
+        );
+        assert_eq!(
+            parse_role_filter(&json!({"role": "action"})).unwrap(),
+            Some(Role::Action)
+        );
+        assert!(parse_role_filter(&json!({"role": "bogus"})).is_err());
+        // Absent / null = no filter; present-but-non-string must fail fast.
+        assert_eq!(parse_role_filter(&json!({"role": null})).unwrap(), None);
+        assert!(parse_role_filter(&json!({"role": 123})).is_err());
+        assert!(parse_role_filter(&json!({"role": ["selector"]})).is_err());
     }
 }
