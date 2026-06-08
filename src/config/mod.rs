@@ -539,6 +539,14 @@ pub struct MetaMcpConfig {
     /// collide with any meta-tool name.
     #[serde(default)]
     pub surfaced_tools: Vec<SurfacedToolConfig>,
+    /// Canonical response-projection rollout mode (MIK-5877).
+    ///
+    /// `off` (default) — projection never runs, even for a capability that
+    /// declares a spec (no contract change for live users). `on` — project
+    /// whenever a spec is present. `experimental` — sticky per-session A/B
+    /// split between projected (treatment) and raw (control).
+    #[serde(default)]
+    pub projection_mode: crate::projection::ProjectionMode,
 }
 
 impl Default for MetaMcpConfig {
@@ -549,6 +557,7 @@ impl Default for MetaMcpConfig {
             cache_ttl: Duration::from_secs(300),
             warm_start: Vec::new(),
             surfaced_tools: Vec::new(),
+            projection_mode: crate::projection::ProjectionMode::default(),
         }
     }
 }

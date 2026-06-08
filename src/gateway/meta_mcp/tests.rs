@@ -133,6 +133,26 @@ fn new_matches_featureless_constructor_defaults() {
     assert!(from_with_features.surfaced_tools.is_empty());
     assert!(from_new.surfaced_tools_map.is_empty());
     assert!(from_with_features.surfaced_tools_map.is_empty());
+    // Projection rollout defaults to Off — dormant until an operator opts in.
+    assert_eq!(
+        from_new.projection_mode,
+        crate::projection::ProjectionMode::Off
+    );
+    assert_eq!(
+        from_with_features.projection_mode,
+        crate::projection::ProjectionMode::Off
+    );
+}
+
+#[test]
+fn with_projection_mode_sets_the_rollout_gate() {
+    use crate::projection::ProjectionMode;
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_projection_mode(ProjectionMode::Experimental);
+    assert_eq!(mm.projection_mode, ProjectionMode::Experimental);
+    let mm_on =
+        MetaMcp::new(Arc::new(BackendRegistry::new())).with_projection_mode(ProjectionMode::On);
+    assert_eq!(mm_on.projection_mode, ProjectionMode::On);
 }
 
 #[test]

@@ -98,6 +98,12 @@ pub struct MetaMcp {
     pub(super) session_profiles: Arc<SessionProfileStore>,
     pub(super) reload_context: RwLock<Option<Arc<ReloadContext>>>,
     pub(super) code_mode_enabled: bool,
+    /// Canonical response-projection rollout mode (MIK-5877).
+    ///
+    /// Defaults to [`ProjectionMode::Off`] so projection is dormant — a
+    /// capability carrying a `projection` spec changes no response contract
+    /// until an operator opts in. `experimental` drives the A/B split.
+    pub(super) projection_mode: crate::projection::ProjectionMode,
     pub(super) secret_injector: crate::secret_injection::SecretInjector,
     /// Cost tracker — per-session and per-API-key spend accounting.
     pub(super) cost_tracker: Arc<CostTracker>,
@@ -208,6 +214,7 @@ impl MetaMcp {
             session_profiles: Arc::new(SessionProfileStore::new()),
             reload_context: RwLock::new(None),
             code_mode_enabled: false,
+            projection_mode: crate::projection::ProjectionMode::default(),
             secret_injector: crate::secret_injection::SecretInjector::empty(),
             cost_tracker: Arc::new(CostTracker::new()),
             tool_registry: None,
@@ -290,6 +297,17 @@ impl MetaMcp {
     #[must_use]
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode_enabled = enabled;
+        self
+    }
+
+    /// Set the canonical response-projection rollout mode (MIK-5877).
+    ///
+    /// Defaults to [`crate::projection::ProjectionMode::Off`]. Set `on` to
+    /// project whenever a capability declares a spec, or `experimental` to run
+    /// the sticky-per-session A/B split.
+    #[must_use]
+    pub fn with_projection_mode(mut self, mode: crate::projection::ProjectionMode) -> Self {
+        self.projection_mode = mode;
         self
     }
 
