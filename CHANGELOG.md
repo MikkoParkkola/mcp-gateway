@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-06-08
+
+### Added
+
+- **`list_tools` role filter** (MIK-3532): `gateway_list_tools` accepts an optional `role` argument (`selector` / `extractor` / `enricher` / `action`) and returns only tools of that role, in both the single-backend and aggregate paths. A tool's effective role is its explicit `role` tag (MIK-3531) if present, otherwise inferred conservatively from its name + `readOnlyHint` (read-only `search`/`list`/… → selector, `get`/`read`/… → extractor, everything else → action — the safe default). So the filter is useful immediately without every tool being hand-tagged. An invalid `role` value is rejected (fail-fast) rather than silently returning everything. The `gateway_list_tools` meta-tool is itself tagged `selector`. Covered by unit tests for inference, explicit-tag precedence, matching, and argument parsing.
+
 ## [2.16.0] - 2026-06-08
 
 ### Added

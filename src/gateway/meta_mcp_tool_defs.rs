@@ -56,13 +56,18 @@ fn build_list_tools_tool(tool_count: usize, server_count: usize) -> Tool {
                 "server": {
                     "type": "string",
                     "description": "Name of backend server. Omit to list ALL tools across all backends."
+                },
+                "role": {
+                    "type": "string",
+                    "enum": ["selector", "extractor", "enricher", "action"],
+                    "description": "Optional: only return tools of this role. selector=search/list, extractor=get/read, enricher=adds context, action=mutates state. Untagged tools are classified by name + read-only hint."
                 }
             },
             "required": []
         }),
         output_schema: None,
         annotations: Some(read_only_annotations("List Tools")),
-        role: None,
+        role: Some(crate::projection::Role::Selector),
         projection: None,
     }
 }
