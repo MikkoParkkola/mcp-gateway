@@ -52,6 +52,7 @@ pub mod metrics;
 pub mod mtls;
 pub mod oauth;
 pub mod playbook;
+pub mod projection;
 pub mod protocol;
 pub mod provider;
 pub mod ranking;

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-06-08
+
+### Added
+
+- **Projection layer foundation** (MIK-3531, part of the MIK-3530 epic): new `src/projection/` module with the canonical projection vocabulary — `Actor`, `Subject`, `EnvTime`, `Url`, `Body`, a `Projected<T>` wrapper that always preserves the untouched backend payload under `_raw`, a `ProjectionSpec` (declarative canonical-field → source-path mapping), and a `Role` enum (`selector` / `extractor` / `enricher` / `action`, defaulting to `action`). Types and serialization contract only — no behavior change. Subsequent PRs wire `role`/`projection` onto the tool descriptor and add the projection logic that consumes a `ProjectionSpec` (MIK-3532 / MIK-3533 / MIK-3534). Covered by round-trip serialization tests.
+
 ## [2.14.0] - 2026-06-08
 
 ### Added
