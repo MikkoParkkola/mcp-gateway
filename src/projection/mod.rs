@@ -21,7 +21,10 @@ pub mod role;
 pub mod schema;
 
 pub use engine::project;
-pub use mode::{ProjectionDecision, ProjectionMode, projection_decision, projection_key_suffix};
+pub use mode::{
+    AbRecord, ProjectionDecision, ProjectionMode, ab_classification, projection_decision,
+    projection_key_suffix,
+};
 pub use role::Role;
 pub use schema::{
     Actor, ActorSpec, Body, BodySpec, EnvTime, EnvTimeSpec, Projected, ProjectionSpec, Subject,

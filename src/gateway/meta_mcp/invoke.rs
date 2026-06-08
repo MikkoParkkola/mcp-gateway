@@ -161,6 +161,56 @@ fn apply_capability_projection(
     apply_validated_output(&response, projected)
 }
 
+/// Emit one A/B telemetry record for an eligible (experimental-mode,
+/// projection-capable) invocation (MIK-5877, PROJ-ROLLOUT.3).
+///
+/// Emits both metrics (a labelled counter + a response-size histogram, for
+/// dashboards) and a structured `target: "projection_ab"` tracing event keyed by
+/// `session_id` (so an offline analysis can join arm → task outcome). Called
+/// only when [`crate::projection::ab_classification`] returns `Some`, so it is
+/// zero-cost outside the experiment.
+fn emit_projection_ab_event(
+    session_id: Option<&str>,
+    server: &str,
+    tool: &str,
+    rec: crate::projection::AbRecord,
+    result: &Value,
+) {
+    let response_bytes = serde_json::to_string(result).map_or(0, |s| s.len());
+    let is_error = result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let projected = if rec.projected { "true" } else { "false" };
+
+    telemetry_metrics::counter!(
+        "projection_ab_invocations_total",
+        "arm" => rec.arm,
+        "projected" => projected
+    )
+    .increment(1);
+    telemetry_metrics::histogram!(
+        "projection_ab_response_bytes",
+        "arm" => rec.arm
+    )
+    // u32->f64 is lossless; clamp the (absurd) >4 GiB case rather than risk a
+    // precision-losing usize->f64 cast.
+    .record(f64::from(u32::try_from(response_bytes).unwrap_or(u32::MAX)));
+    tracing::info!(
+        target: "projection_ab",
+        // Un-sessioned calls log "none" and are always control (see
+        // projection_decision); exclude them when joining arm -> task outcome.
+        session_id = session_id.unwrap_or("none"),
+        server = server,
+        tool = tool,
+        arm = rec.arm,
+        projected = rec.projected,
+        response_bytes = response_bytes,
+        is_error = is_error,
+        "projection A/B invocation"
+    );
+}
+
 /// Whether a JSON value is non-empty at the top level: `null`, `{}`, and `[]`
 /// are considered empty; any scalar (including `0`, `false`, `""`) and any
 /// non-empty object/array are non-empty. This is a deliberately shallow check
@@ -999,13 +1049,28 @@ impl MetaMcp {
             // contract; `on` always projects; `experimental` projects only the
             // treatment arm of a sticky per-session A/B split.
             let decision = crate::projection::projection_decision(self.projection_mode, session_id);
-            if decision.project
+            let spec_present = cap_def.as_ref().is_some_and(|c| c.projection.is_some());
+            let final_result = if decision.project
                 && let Some(cap_def) = cap_def.as_ref()
                 && let Some(spec) = cap_def.projection.as_ref()
             {
-                return Ok(apply_capability_projection(validated, spec, want_full));
+                apply_capability_projection(validated, spec, want_full)
+            } else {
+                validated
+            };
+
+            // A/B telemetry (MIK-5877, PROJ-ROLLOUT.3): one structured event per
+            // eligible invocation so the experiment is measurable. No-op outside
+            // `experimental` mode / spec-less tools.
+            if let Some(rec) = crate::projection::ab_classification(
+                self.projection_mode,
+                session_id,
+                want_full,
+                spec_present,
+            ) {
+                emit_projection_ab_event(session_id, server, tool, rec, &final_result);
             }
-            return Ok(validated);
+            return Ok(final_result);
         }
 
         let backend = self
