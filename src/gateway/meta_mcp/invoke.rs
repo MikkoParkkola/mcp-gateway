@@ -108,6 +108,59 @@ fn apply_validated_output(result: &Value, validated: Value) -> Value {
     Value::Object(obj)
 }
 
+/// Apply a capability's canonical [`ProjectionSpec`](crate::projection::schema::ProjectionSpec)
+/// to a dispatched response (MIK-3534).
+///
+/// Invoked *last* in `dispatch_to_backend` — after `response_transform` and
+/// `enforce_output_schema` — for two load-bearing reasons:
+///
+/// 1. **No leak.** Because it runs after `response_transform`, the canonical
+///    view and the preserved `_raw` are built from the already-redacted
+///    payload; a field that `response_transform` redacted cannot reappear under
+///    `_raw`. Projection is a presentation layer, never redaction.
+/// 2. **Shape.** The projected `{actor, …, _raw}` value would not satisfy a
+///    backend output schema, so projection must follow schema validation.
+///
+/// It operates on the inner capability payload (unwrapping the MCP envelope via
+/// [`extract_output_validation_target`]) and re-wraps via
+/// [`apply_validated_output`] — projecting the outer envelope is bug #167.
+/// `want_full` (the `_full: true` directive) bypasses projection, mirroring
+/// `response_transform`. Error envelopes are never projected. When the spec
+/// resolves no fields, [`project`](crate::projection::project) returns the
+/// payload unchanged (fail-fast) and the original response passes through
+/// untouched — re-wrapping it would clobber a non-JSON `content` text.
+fn apply_capability_projection(
+    response: Value,
+    spec: &crate::projection::schema::ProjectionSpec,
+    want_full: bool,
+) -> Value {
+    // `_full` opts out of projection (and, upstream, out of the response cache
+    // and idempotency), mirroring `response_transform`.
+    if want_full {
+        return response;
+    }
+    // Never project an error envelope: its `content` text must stay legible for
+    // the caller and for the recovery-hint classifier. Mirrors the `isError`
+    // skip in `enforce_output_schema`.
+    if response
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return response;
+    }
+    let inner = extract_output_validation_target(&response).unwrap_or_else(|| response.clone());
+    let projected = crate::projection::project(&inner, spec);
+    // Fail-fast: `project` resolved no fields and returned `inner` verbatim
+    // (a successful projection always adds `_raw`, so it never equals `inner`).
+    // Re-wrapping here would replace a non-JSON `content` text with a JSON dump
+    // of the envelope, so pass the original response through untouched.
+    if projected == inner {
+        return response;
+    }
+    apply_validated_output(&response, projected)
+}
+
 /// Whether a JSON value is non-empty at the top level: `null`, `{}`, and `[]`
 /// are considered empty; any scalar (including `0`, `false`, `""`) and any
 /// non-empty object/array are non-empty. This is a deliberately shallow check
@@ -893,11 +946,26 @@ impl MetaMcp {
                 response = apply_validated_output(&response, transformed);
             }
 
-            let output_schema = cap.get(tool).and_then(|cap_def| {
-                (!cap_def.schema.output.is_null()).then(|| cap_def.schema.output.clone())
-            });
+            let cap_def = cap.get(tool);
+            let output_schema = cap_def
+                .as_ref()
+                .and_then(|c| (!c.schema.output.is_null()).then(|| c.schema.output.clone()));
 
-            return enforce_output_schema(server, tool, response, output_schema.as_ref());
+            let validated = enforce_output_schema(server, tool, response, output_schema.as_ref())?;
+
+            // Canonical projection (MIK-3534), applied last — after
+            // response_transform (so `_raw` cannot re-expose a redacted field)
+            // and after schema validation (the projected `{actor, …, _raw}`
+            // shape would not satisfy a backend output schema). Rides the same
+            // `!want_full` gate as response_transform, so the response cache and
+            // idempotency layers inherit correctness: a non-`_full` caller
+            // caches the projected shape, a `_full` caller bypasses both.
+            if let Some(cap_def) = cap_def.as_ref()
+                && let Some(spec) = cap_def.projection.as_ref()
+            {
+                return Ok(apply_capability_projection(validated, spec, want_full));
+            }
+            return Ok(validated);
         }
 
         let backend = self
@@ -1403,11 +1471,12 @@ mod error_classification_tests {
 mod response_transform_tests {
     use serde_json::json;
 
+    use crate::projection::schema::{ActorSpec, ProjectionSpec, SubjectSpec};
     use crate::provider::Transform as _;
     use crate::provider::transforms::ResponseTransform;
     use crate::transform::{RedactRule, TransformConfig};
 
-    use super::enforce_output_schema;
+    use super::{apply_capability_projection, enforce_output_schema};
 
     /// Prove the component used by `dispatch_to_backend`: given a non-empty
     /// `response_transform` in a capability definition, `ResponseTransform`
@@ -1504,6 +1573,164 @@ mod response_transform_tests {
         assert_eq!(card_val, "[CC_REDACTED]");
         // Non-sensitive fields are untouched
         assert_eq!(result["user"], json!("Alice"));
+    }
+
+    // ------------------------------------------------------------------
+    // MIK-3534: canonical projection wiring (apply_capability_projection)
+    // ------------------------------------------------------------------
+
+    /// LEAK GUARD: projection runs *after* `response_transform`, so the
+    /// preserved `_raw` is built from the already-redacted payload. A field
+    /// redacted by `response_transform` must not reappear anywhere — including
+    /// under `_raw`. This is the assertion that closes the prior concern about
+    /// projection re-exposing redacted data.
+    #[tokio::test]
+    async fn projection_after_redaction_keeps_raw_redacted() {
+        // GIVEN: response_transform redacts a card number...
+        let rt = ResponseTransform::new(&TransformConfig {
+            redact: vec![RedactRule {
+                pattern: r"\b\d{4}-\d{4}-\d{4}-\d{4}\b".to_string(),
+                replacement: "[CC_REDACTED]".to_string(),
+            }],
+            ..Default::default()
+        });
+        // ...AND the capability also declares a projection spec.
+        let spec = ProjectionSpec {
+            subject: Some(SubjectSpec {
+                title: Some("user".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let inner = json!({"user": "Alice", "card": "1234-5678-9012-3456"});
+
+        // WHEN: dispatch applies response_transform FIRST...
+        let transformed = rt.transform_result("billing", inner).await.unwrap();
+        // ...THEN canonical projection (bare value — no MCP envelope here).
+        let out = apply_capability_projection(transformed, &spec, false);
+
+        // THEN: the canonical bucket is built from the redacted payload
+        assert_eq!(out["subject"]["title"], json!("Alice"));
+        // AND: _raw preserves the payload with the card already redacted
+        assert_eq!(out["_raw"]["card"], json!("[CC_REDACTED]"));
+        // AND: the sensitive value appears NOWHERE in the output
+        let serialized = serde_json::to_string(&out).unwrap();
+        assert!(
+            !serialized.contains("1234-5678"),
+            "redacted value leaked through projection: {serialized}"
+        );
+    }
+
+    /// `_full: true` bypasses projection entirely (the same gate that
+    /// `response_transform` rides), returning the unprojected payload.
+    #[test]
+    fn projection_want_full_bypasses() {
+        let spec = ProjectionSpec {
+            subject: Some(SubjectSpec {
+                title: Some("user".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let raw = json!({"user": "Alice", "extra": 1});
+        let out = apply_capability_projection(raw.clone(), &spec, true);
+        assert_eq!(
+            out, raw,
+            "_full must return the unprojected payload unchanged"
+        );
+    }
+
+    /// Fail-fast: a spec that resolves no fields leaves the payload untouched
+    /// (no `_raw` wrapper), inheriting `engine::project`'s contract.
+    #[test]
+    fn projection_fail_fast_passthrough_when_nothing_maps() {
+        let spec = ProjectionSpec {
+            actor: Some(ActorSpec {
+                email: Some("nonexistent.path".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let raw = json!({"id": "x", "name": "y"});
+        let out = apply_capability_projection(raw.clone(), &spec, false);
+        assert_eq!(out, raw);
+        assert!(
+            out.get("_raw").is_none(),
+            "no projection wrapper when nothing maps"
+        );
+    }
+
+    /// Projection targets the INNER capability payload inside an MCP envelope
+    /// (`structuredContent`), not the outer envelope — guards bug #167.
+    #[test]
+    fn projection_targets_inner_payload_inside_mcp_envelope() {
+        let spec = ProjectionSpec {
+            subject: Some(SubjectSpec {
+                title: Some("issue.title".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let envelope = json!({
+            "content": [{"type": "text", "text": "{\"issue\":{\"title\":\"Fix bug\"}}"}],
+            "structuredContent": {"issue": {"title": "Fix bug"}},
+            "isError": false
+        });
+        let out = apply_capability_projection(envelope, &spec, false);
+        // The projected canonical view lives in structuredContent, not the
+        // outer envelope.
+        assert_eq!(
+            out["structuredContent"]["subject"]["title"],
+            json!("Fix bug")
+        );
+        assert_eq!(
+            out["structuredContent"]["_raw"]["issue"]["title"],
+            json!("Fix bug")
+        );
+    }
+
+    /// Fail-fast on a single-text-content MCP envelope whose text is NOT JSON:
+    /// projection resolves nothing, so the envelope must pass through unchanged.
+    /// Re-wrapping would clobber the human-readable text with a JSON dump of the
+    /// envelope — this is the regression guard for that path.
+    #[test]
+    fn projection_fail_fast_leaves_text_envelope_untouched() {
+        let spec = ProjectionSpec {
+            subject: Some(SubjectSpec {
+                id: Some("issue.id".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let envelope = json!({
+            "content": [{"type": "text", "text": "Issue ISS-1 created"}],
+            "isError": false
+        });
+        let out = apply_capability_projection(envelope.clone(), &spec, false);
+        assert_eq!(
+            out, envelope,
+            "non-matching spec must pass the text envelope through untouched"
+        );
+    }
+
+    /// An error envelope is never projected — even when the spec would match the
+    /// inner payload — so error text stays legible for the recovery classifier.
+    #[test]
+    fn projection_skips_error_envelopes() {
+        let spec = ProjectionSpec {
+            subject: Some(SubjectSpec {
+                title: Some("issue.title".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let envelope = json!({
+            "structuredContent": {"issue": {"title": "boom"}},
+            "content": [{"type": "text", "text": "error: boom"}],
+            "isError": true
+        });
+        let out = apply_capability_projection(envelope.clone(), &spec, false);
+        assert_eq!(out, envelope, "error envelopes must not be projected");
     }
 
     #[test]

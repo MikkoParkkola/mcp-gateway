@@ -65,6 +65,20 @@ pub struct CapabilityDefinition {
     #[serde(default, skip_serializing_if = "TransformConfig::is_empty")]
     pub response_transform: TransformConfig,
 
+    /// Canonical projection spec (MIK-3534) applied by `gateway_invoke` after
+    /// `response_transform` and output-schema validation.
+    ///
+    /// When set, the dispatched response is mapped onto the canonical schema
+    /// ([`crate::projection::schema::ProjectionSpec`]) — `actor` / `subject` /
+    /// `env_time` / `url` / `body` buckets — while the untouched (already
+    /// redacted/validated) payload is preserved under `_raw`. Projection is a
+    /// presentation layer, never redaction: redact via `response_transform`.
+    ///
+    /// `_full: true` bypasses projection entirely. When the spec resolves no
+    /// fields the response passes through unchanged (fail-fast).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<crate::projection::schema::ProjectionSpec>,
+
     /// Webhook endpoint definitions for inbound events
     #[serde(default)]
     pub webhooks: HashMap<String, WebhookDefinition>,
@@ -923,7 +937,7 @@ impl CapabilityDefinition {
             },
             annotations: Some(self.tool_annotations()),
             role: None,
-            projection: None,
+            projection: self.projection.clone(),
         }
     }
 

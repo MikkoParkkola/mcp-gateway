@@ -380,6 +380,7 @@ fn make_capability_def(
         },
         transform: TransformConfig::default(),
         response_transform: TransformConfig::default(),
+        projection: None,
         visible_in_states: vec![],
         webhooks: std::collections::HashMap::new(),
         sha256: None,
