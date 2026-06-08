@@ -922,6 +922,8 @@ impl CapabilityDefinition {
                 Some(self.schema.output.clone())
             },
             annotations: Some(self.tool_annotations()),
+            role: None,
+            projection: None,
         }
     }
 

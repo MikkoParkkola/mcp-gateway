@@ -116,6 +116,8 @@ mod tests {
             input_schema: json!({}),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         }];
 
         // WHEN: transforming tools

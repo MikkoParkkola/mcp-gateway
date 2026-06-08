@@ -81,6 +81,8 @@ pub fn skill_to_tool(skill: &Skill, namespace: &str) -> Tool {
         input_schema: a2a_input_schema(),
         output_schema: None,
         annotations: Some(annotations),
+        role: None,
+        projection: None,
     }
 }
 

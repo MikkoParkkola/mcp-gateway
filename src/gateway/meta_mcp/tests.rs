@@ -398,6 +398,8 @@ fn search_test_tool(name: &str) -> crate::protocol::Tool {
         input_schema: json!({"type": "object"}),
         output_schema: None,
         annotations: None,
+        role: None,
+        projection: None,
     }
 }
 

@@ -349,6 +349,8 @@ mod tests {
             input_schema,
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         }
     }
 

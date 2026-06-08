@@ -24,8 +24,8 @@ fn main() {
         title: Some("GitHub Issue Search".to_string()),
         description: Some(
             "Search and analyze GitHub issues using semantic search with filters. \
-             Use this when you need to find relevant issues, bugs, or feature requests. \
-             Returns a curated list of issues with relevance scores and key metadata."
+         Use this when you need to find relevant issues, bugs, or feature requests. \
+         Returns a curated list of issues with relevance scores and key metadata."
                 .to_string(),
         ),
         input_schema: json!({
@@ -69,6 +69,8 @@ fn main() {
             }
         })),
         annotations: None,
+        role: None,
+        projection: None,
     };
 
     // Example 2: Bad tool design (CRUD operation)
@@ -89,6 +91,8 @@ fn main() {
         }),
         output_schema: None,
         annotations: None,
+        role: None,
+        projection: None,
     };
 
     // Example 3: Short description
@@ -104,6 +108,8 @@ fn main() {
         }),
         output_schema: None,
         annotations: None,
+        role: None,
+        projection: None,
     };
 
     // Validate all tools

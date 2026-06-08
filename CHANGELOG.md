@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-06-08
+
+### Added
+
+- **Tool descriptor carries `role` + `projection`** (MIK-3531, completes the foundation): the MCP `Tool` descriptor now has two optional fields — `role` (`selector`/`extractor`/`enricher`/`action`) and `projection` (a `ProjectionSpec`). Both default to `None` and are omitted from the wire for untagged tools, so existing payloads serialize and deserialize byte-for-byte as before. This is the descriptor surface the projection epic consumes: `list_tools` role filtering (MIK-3532) and response projection (MIK-3533/3534) build on it. No behavior change. Serialization-contract tests assert untagged tools omit the fields and pre-existing JSON still parses, and that tagged tools round-trip role + projection.
+
 ## [2.15.1] - 2026-06-08
 
 ### Fixed

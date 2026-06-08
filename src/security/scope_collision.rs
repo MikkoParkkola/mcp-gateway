@@ -60,6 +60,8 @@ pub struct ScopeCollision {
 ///     input_schema: json!({}),
 ///     output_schema: None,
 ///     annotations: None,
+///     role: None,
+///     projection: None,
 /// }];
 /// let tools_b = vec![Tool {
 ///     name: "search".to_string(),
@@ -68,6 +70,8 @@ pub struct ScopeCollision {
 ///     input_schema: json!({}),
 ///     output_schema: None,
 ///     annotations: None,
+///     role: None,
+///     projection: None,
 /// }];
 ///
 /// let backends = vec![
@@ -186,6 +190,8 @@ mod tests {
             input_schema: json!({}),
             output_schema: None,
             annotations: None,
+            role: None,
+            projection: None,
         }
     }
 
