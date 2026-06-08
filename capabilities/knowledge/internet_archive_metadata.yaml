@@ -1,0 +1,59 @@
+sha256: 0eb0a3c8cd69c58d2c4230e0fc84ad649b873df7214f8363e23606803d6b4862
+fulcrum: "1.0"
+name: internet_archive_metadata
+description: |
+  Fetch the full metadata of an Internet Archive item by its identifier via
+  the public Metadata API (https://archive.org/metadata/{identifier}). Returns
+  the item's files, server locations, and the descriptive metadata block
+  (title, creator, date, mediatype, collection, licenses, etc.).
+
+  Use to inspect a specific IA item discovered via internet_archive_search,
+  to list an item's downloadable files, or to verify an item's provenance.
+  No auth.
+
+schema:
+  input:
+    type: object
+    properties:
+      identifier:
+        type: string
+        description: The Internet Archive item identifier (the slug after archive.org/details/)
+        examples: ["nasa", "goody", "ARCHIVEIT-21834-2025081916-00000"]
+    required:
+      - identifier
+  output:
+    type: object
+    description: Item metadata, files[], and server locations.
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 20
+    config:
+      base_url: https://archive.org
+      path: /metadata/{identifier}
+      method: GET
+      headers:
+        Accept: "application/json"
+        User-Agent: "mcp-gateway-knowledge/1.0"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [internet-archive, metadata, item, files, provenance, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [identifier]
+  produces: [metadata, files, server]
+  docs: "https://archive.org/developers/metadata-schema/"
+  license: "Public (Internet Archive Metadata API)"
+  rate_limit: "Anonymous; subject to Internet Archive fair-use throttling"

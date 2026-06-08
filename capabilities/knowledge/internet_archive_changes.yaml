@@ -1,0 +1,75 @@
+sha256: 961a9b4fe01480f59f5ce80b0cba6c0d82767807d959f5c5204ce7b158159174
+fulcrum: "1.0"
+name: internet_archive_changes
+description: |
+  Find Internet Archive items newly added to a collection or query scope since
+  a given date — "what new items appeared?". Implemented over the public
+  advancedsearch API as an addeddate-ranged, addeddate-sorted query (the
+  internal be.archive.org Changes API was retired; this is the supported public
+  equivalent and returns the same "newly-surfaced items" signal).
+
+  Pass a scope query (e.g. a collection or creator) plus a since date; results
+  come back newest-first with their addeddate so you can see exactly what was
+  ingested in the window. No auth.
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Scope to watch (collection / creator / keyword), Lucene syntax
+        examples: ["collection:nasa", "creator:NASA", "subject:climate"]
+      since:
+        type: string
+        description: Lower-bound add date (YYYY-MM-DD). Returns items added on/after this date.
+        examples: ["2026-06-01", "2026-05-20"]
+      rows:
+        type: string
+        description: Max items to return (default 25)
+        examples: ["25", "100"]
+    required:
+      - query
+      - since
+  output:
+    type: object
+    description: advancedsearch response; response.docs[] are the newly-added items, newest first.
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 25
+    config:
+      base_url: https://archive.org
+      path: /advancedsearch.php
+      method: GET
+      headers:
+        Accept: "application/json"
+        User-Agent: "mcp-gateway-knowledge/1.0"
+      params:
+        q: "{query} AND addeddate:[{since} TO null]"
+        sort: "addeddate desc"
+        rows: "{rows}"
+        fl: "identifier,title,addeddate,mediatype,creator"
+        output: "json"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [internet-archive, changes, new-items, monitoring, addeddate, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [query, since, rows]
+  produces: [docs, numFound]
+  docs: "https://archive.org/advancedsearch.php"
+  license: "Public (Internet Archive advancedsearch API)"
+  rate_limit: "Anonymous; subject to Internet Archive fair-use throttling"

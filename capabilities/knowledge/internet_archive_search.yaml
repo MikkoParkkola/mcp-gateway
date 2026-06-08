@@ -1,0 +1,77 @@
+sha256: 3a9b9beb1ea1159ec7fb07ce59408ccb2cad2ffa41c697d26e1235f7bda878b3
+fulcrum: "1.0"
+name: internet_archive_search
+description: |
+  Search the Internet Archive catalog via the public advancedsearch API
+  (https://archive.org/advancedsearch.php). Returns matching items with
+  identifier, title, creator, date, mediatype and download counts. Use to
+  discover IA items by keyword, creator, collection, or mediatype before
+  fetching details with internet_archive_metadata.
+
+  Query supports Lucene syntax: plain keywords, or fielded terms like
+  'collection:nasa', 'mediatype:texts', 'creator:"Mark Twain"'. No auth.
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Lucene query (keywords or fielded, e.g. 'collection:nasa AND mediatype:movies')
+        examples: ["apollo 11", "collection:nasa", 'creator:"Mark Twain"']
+      rows:
+        type: string
+        description: Number of results to return (default 10)
+        examples: ["10", "50"]
+      fl:
+        type: string
+        description: Comma-separated fields to return (omit for a sensible default set)
+        examples: ["identifier,title,creator,date,mediatype,downloads"]
+      sort:
+        type: string
+        description: 'Sort spec, e.g. "downloads desc", "addeddate desc", "publicdate asc"'
+        examples: ["downloads desc", "publicdate desc"]
+    required:
+      - query
+  output:
+    type: object
+    description: advancedsearch response with response.docs[] of matching items.
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 25
+    config:
+      base_url: https://archive.org
+      path: /advancedsearch.php
+      method: GET
+      headers:
+        Accept: "application/json"
+        User-Agent: "mcp-gateway-knowledge/1.0"
+      params:
+        q: "{query}"
+        rows: "{rows}"
+        fl: "{fl}"
+        sort: "{sort}"
+        output: "json"
+
+cache:
+  strategy: exact
+  ttl: 600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [internet-archive, search, catalog, discovery, lucene, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [query, rows, fl, sort]
+  produces: [docs, numFound]
+  docs: "https://archive.org/advancedsearch.php"
+  license: "Public (Internet Archive advancedsearch API)"
+  rate_limit: "Anonymous; subject to Internet Archive fair-use throttling"

@@ -1,0 +1,96 @@
+sha256: a9664b4072f92561c2f3be4064e1f995a1044922ea04981840100ef8a9e2b9d3
+fulcrum: "1.0"
+name: wayback_cdx
+description: |
+  Query the Internet Archive Wayback Machine CDX index for the full capture
+  history of a URL (or host). Returns one row per snapshot with timestamp,
+  original URL, MIME type, HTTP status code, content digest, and length —
+  the primary tool for "show me every snapshot of X over time" and, with
+  collapse=digest, "has this page actually changed between captures?".
+
+  Wraps the public CDX Server API (https://web.archive.org/cdx/search/cdx).
+  No auth. Use matchType=host + collapse=timestamp:8 for a forensic per-day
+  domain timeline; use collapse=digest to detect real content changes
+  (consecutive identical digests are folded into one row).
+
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+        description: URL or host to query (matchType controls exact vs prefix vs host vs domain)
+        examples: ["https://arxiv.org/abs/2401.00001", "competitor.com"]
+      limit:
+        type: string
+        description: Max rows to return (use a negative value for the most-recent N)
+        examples: ["100", "-10"]
+      collapse:
+        type: string
+        description: >
+          Fold adjacent rows that share a field value. "digest" = one row per
+          unique content hash (change detection); "timestamp:8" = one per day.
+        examples: ["digest", "timestamp:8"]
+      matchType:
+        type: string
+        description: 'exact (default) | prefix | host | domain'
+        examples: ["exact", "host", "domain"]
+      from:
+        type: string
+        description: Lower-bound timestamp (1-14 digit YYYYMMDDhhmmss prefix)
+        examples: ["2026", "20260101"]
+      to:
+        type: string
+        description: Upper-bound timestamp (1-14 digit YYYYMMDDhhmmss prefix)
+        examples: ["20260601"]
+      filter:
+        type: string
+        description: 'Field filter, e.g. "statuscode:200" or "mimetype:text/html"'
+        examples: ["statuscode:200", "mimetype:text/html"]
+    required:
+      - url
+  output:
+    type: array
+    description: Array of capture rows; first row is the column header.
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://web.archive.org
+      path: /cdx/search/cdx
+      method: GET
+      headers:
+        Accept: "application/json"
+        User-Agent: "mcp-gateway-knowledge/1.0"
+      params:
+        url: "{url}"
+        output: "json"
+        limit: "{limit}"
+        collapse: "{collapse}"
+        matchType: "{matchType}"
+        from: "{from}"
+        to: "{to}"
+        filter: "{filter}"
+
+cache:
+  strategy: exact
+  ttl: 600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags: [wayback, internet-archive, cdx, snapshot-history, change-detection, evidence, free]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  consumes: [url, limit, collapse, matchType, from, to, filter]
+  produces: [capture_rows]
+  docs: "https://github.com/internetarchive/wayback/tree/master/wayback-cdx-server"
+  license: "Public (Internet Archive CDX Server API)"
+  rate_limit: "Anonymous; subject to Internet Archive fair-use throttling"

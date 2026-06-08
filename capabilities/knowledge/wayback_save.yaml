@@ -1,20 +1,18 @@
-sha256: 08dc28061c5e8a31793f1b8cde6c54cb1a004fbb7bacf24d4dc151dffdbcaa8b
+sha256: 2decc01b588a91aca68dd53095ab5b686824ed49c26406a979eb9958125c50e8
 fulcrum: "1.0"
 name: wayback_save
 description: |
   Capture a URL into the Internet Archive Wayback Machine via the authenticated
   "Save Page Now" (SPN2) endpoint (POST https://web.archive.org/save/{url}).
-  Triggers a fresh archival crawl of the target. Use at URL-triage time for
-  link-rot prophylaxis and to lock durable, timestamped evidence of a source
-  before it changes or disappears.
+  Triggers a fresh archival crawl. Use at URL-triage time for link-rot
+  prophylaxis and to lock durable, timestamped evidence of a source before it
+  changes or disappears.
 
   Requires an IA S3 credential (IA_S3_AUTH env var) — IA retired anonymous
-  saving in 2024. Calls are rate-limited (~30/min with keys) and the save is
-  async; HTTP 200 means accepted. After saving, confirm the durable snapshot
-  URL + timestamp with wayback_availability.
-
-  Note: the target URL is appended to the path verbatim. The "Content-Location"
-  / "Link" response headers carry the archived snapshot path.
+  saving in 2024 (GET /save/<url> now 404s, unauthenticated POST returns 401).
+  The save is asynchronous: a 200 (isError=false) means the crawl was queued.
+  Confirm the durable snapshot URL + timestamp with wayback_availability
+  (allow ~1-2 min for the capture to register).
 
 schema:
   input:
@@ -23,11 +21,15 @@ schema:
       url:
         type: string
         description: The fully-qualified URL to capture (include the scheme)
-        examples: ["https://example.com", "https://news.ycombinator.com/item?id=1"]
+        examples: ["https://arxiv.org/abs/2401.00001", "https://news.ycombinator.com/item?id=1"]
     required:
       - url
   output:
     type: object
+    description: >
+      Empty object on a 200 (the path-style SPN2 endpoint accepts the capture
+      without a JSON body). isError=false means the crawl was queued; confirm
+      the snapshot with wayback_availability.
 
 providers:
   primary:
@@ -51,21 +53,20 @@ auth:
   key: "env:IA_S3_AUTH"
   header: Authorization
   description: >
-    Internet Archive locked anonymous Save Page Now in 2024 — GET /save/<url>
-    now 404s and unauthenticated POST returns 401. SPN2 requires an S3-style
-    credential. Set IA_S3_AUTH to the literal Authorization value
+    Internet Archive locked anonymous Save Page Now in 2024. SPN2 requires an
+    S3-style credential. Set IA_S3_AUTH to the literal Authorization value
     "LOW <accesskey>:<secret>". Keys: 1Password "Claude Elite" ->
     "Internet Archive S3 Keys" (username=accesskey, credential=secret).
-    Provisioned into ~/.claude/secrets.env (the gateway env_file).
+    Provisioned (export-prefixed) into ~/.claude/secrets.env, the gateway env_file.
 
 metadata:
   category: knowledge
-  tags: [wayback, internet-archive, archive, save-page-now, evidence, link-rot, free]
+  tags: [wayback, internet-archive, archive, save-page-now, spn2, evidence, link-rot]
   cost_category: free
   execution_time: slow
   read_only: false
   consumes: [url]
-  produces: [wayback_url, capture_timestamp]
+  produces: [capture_accepted]
   docs: "https://archive.org/help/wayback_api.php"
-  license: "Public (Internet Archive anonymous Save Page Now)"
-  rate_limit: "Anonymous ~5/min; higher with IA S3 keys (not used here)"
+  license: "Public API; SPN2 save requires an IA S3 credential"
+  rate_limit: "~30/min with IA S3 keys"
