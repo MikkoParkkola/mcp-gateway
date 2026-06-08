@@ -593,3 +593,129 @@ body: "SELECT * FROM bus_msg LIMIT 10"
         "SELECT * FROM bus_msg LIMIT 10"
     );
 }
+
+#[tokio::test]
+async fn send_with_retry_recovers_from_transient_timeouts() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Local server: the first two connections hang past the client's per-attempt
+    // timeout (a transient timeout -> retry); the third responds 200 at once.
+    // Verifies MIK-5081: transient outbound failures are retried with backoff
+    // instead of surfacing as an immediate BACKEND_ERROR.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_srv = Arc::clone(&counter);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let n = counter_srv.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                if n < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                } else {
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+                    let _ = stream.flush();
+                }
+            });
+        }
+    });
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{addr}/");
+    let req = client
+        .get(&url)
+        .timeout(std::time::Duration::from_millis(120));
+
+    // Idempotent (retry_timeouts = true): timeouts are retried.
+    let health = crate::failsafe::HealthTracker::new("test");
+    let resp = send_with_retry(req, "test", true, &health).await;
+    assert!(
+        resp.is_ok(),
+        "retry should recover from transient timeouts, got {resp:?}"
+    );
+    assert_eq!(resp.unwrap().status(), 200);
+    assert!(
+        health.is_healthy(),
+        "a recovered call records transport success"
+    );
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        3,
+        "should have taken exactly 3 attempts (2 transient + 1 success)"
+    );
+}
+
+#[tokio::test]
+async fn send_with_retry_records_transport_failures() {
+    // A refused port (listener bound then dropped) yields connection errors,
+    // which are always retried and recorded as transport failures. After
+    // enough consecutive failures the health tracker flips unhealthy (MIK-5080).
+    let addr = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().unwrap()
+        // listener dropped here -> port now refuses connections
+    };
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{addr}/");
+    let health = crate::failsafe::HealthTracker::new("test");
+
+    assert!(health.is_healthy(), "fresh tracker is healthy");
+    for _ in 0..3 {
+        let req = client
+            .get(&url)
+            .timeout(std::time::Duration::from_millis(200));
+        let resp = send_with_retry(req, "test", false, &health).await;
+        assert!(resp.is_err(), "connect to a refused port must fail");
+    }
+    assert!(
+        !health.is_healthy(),
+        "consecutive transport failures should flip the tracker unhealthy"
+    );
+}
+
+#[tokio::test]
+async fn send_with_retry_does_not_retry_timeouts_when_not_idempotent() {
+    // A server that always hangs past the client timeout. With retry_timeouts
+    // = false (non-idempotent), the timeout is NOT retried: exactly one
+    // connection attempt is made. Protects against duplicate side effects.
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_srv = Arc::clone(&counter);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            counter_srv.fetch_add(1, Ordering::SeqCst);
+            // Hold the connection open and never respond.
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                drop(stream);
+            });
+        }
+    });
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{addr}/");
+    let health = crate::failsafe::HealthTracker::new("test");
+    let req = client
+        .post(&url)
+        .timeout(std::time::Duration::from_millis(120));
+
+    let resp = send_with_retry(req, "test", false, &health).await;
+    assert!(resp.is_err(), "the hung request should time out");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "a non-idempotent timeout must NOT be retried (single attempt)"
+    );
+}

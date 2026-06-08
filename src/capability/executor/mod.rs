@@ -52,6 +52,87 @@ pub struct CapabilityExecutor {
     pub(super) oauth_tokens: RwLock<DashMap<String, TokenInfo>>,
     /// Secret resolver for keychain integration
     pub(super) secret_resolver: Arc<SecretResolver>,
+    /// Health tracker for outbound transport. Recorded at the transport
+    /// boundary (in `send_with_retry`) so it reflects upstream liveness only:
+    /// cache hits never touch it, and an HTTP error *status* (4xx/5xx) still
+    /// counts as a live backend. Surfaced via the capability backend in
+    /// `/health` (MIK-5080).
+    pub(super) health: crate::failsafe::HealthTracker,
+}
+
+/// Maximum number of send attempts (1 initial + 2 retries) for transient
+/// outbound transport failures.
+pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
+
+/// Send an outbound HTTP request, retrying transient transport failures with
+/// exponential backoff, and recording the transport outcome on `health`.
+///
+/// Capability calls run inside the gateway's own tokio runtime, so a transient
+/// connect failure reaching an upstream (e.g. a momentary blip reaching
+/// `api.linear.app` under host load) otherwise surfaces directly as a
+/// `BACKEND_ERROR` to the caller (MIK-5081).
+///
+/// Retry policy:
+/// - **Connection** failures are always retried — no request bytes were sent,
+///   so a retry is side-effect-free.
+/// - **Timeout** failures are retried only when `retry_timeouts` is true (i.e.
+///   the request is idempotent). A timeout on a non-idempotent POST may mean
+///   the upstream already processed it, so blindly replaying it could duplicate
+///   a side effect.
+/// - HTTP error *statuses* (4xx/5xx) are returned unchanged (never retried) and
+///   count as a live backend for health purposes.
+///
+/// Health: a transport success (any HTTP status) records success; exhausting
+/// retries records a failure. The request is cloned per attempt; a
+/// non-cloneable body is sent once.
+pub(super) async fn send_with_retry(
+    request: reqwest::RequestBuilder,
+    label: &str,
+    retry_timeouts: bool,
+    health: &crate::failsafe::HealthTracker,
+) -> Result<reqwest::Response> {
+    let started = std::time::Instant::now();
+    let mut backoff_ms: u64 = 100;
+    for attempt in 1..=MAX_SEND_ATTEMPTS {
+        let Some(attempt_req) = request.try_clone() else {
+            // Non-cloneable body: a single attempt is the best we can do.
+            return match request.send().await {
+                Ok(resp) => {
+                    health.record_success(started.elapsed());
+                    Ok(resp)
+                }
+                Err(e) => {
+                    health.record_failure();
+                    Err(Error::Transport(format!("{label} failed: {e}")))
+                }
+            };
+        };
+        match attempt_req.send().await {
+            Ok(resp) => {
+                health.record_success(started.elapsed());
+                return Ok(resp);
+            }
+            Err(e) => {
+                let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+                if transient && attempt < MAX_SEND_ATTEMPTS {
+                    tracing::warn!(
+                        label = label,
+                        attempt = attempt,
+                        backoff_ms = backoff_ms,
+                        error = %e,
+                        "transient outbound transport error; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms *= 2;
+                    continue;
+                }
+                health.record_failure();
+                return Err(Error::Transport(format!("{label} failed: {e}")));
+            }
+        }
+    }
+    // The final attempt always returns above; the loop cannot fall through.
+    unreachable!("send_with_retry exhausted attempts without returning")
 }
 
 impl CapabilityExecutor {
@@ -101,7 +182,20 @@ impl CapabilityExecutor {
             token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
+            health: crate::failsafe::HealthTracker::new("capabilities"),
         }
+    }
+
+    /// Whether outbound transport is currently considered healthy.
+    #[must_use]
+    pub fn is_healthy(&self) -> bool {
+        self.health.is_healthy()
+    }
+
+    /// Snapshot of outbound transport health metrics.
+    #[must_use]
+    pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
+        self.health.metrics()
     }
 
     /// Create an executor with a custom OAuth token storage.
@@ -117,6 +211,7 @@ impl CapabilityExecutor {
             token_storage: Some(token_storage),
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
+            health: crate::failsafe::HealthTracker::new("capabilities"),
         }
     }
 
@@ -317,11 +412,16 @@ impl CapabilityExecutor {
         }
 
         let timeout = Duration::from_secs(provider.timeout);
-        let response = request
-            .timeout(timeout)
-            .send()
-            .await
-            .map_err(|e| Error::Transport(format!("Request failed: {e}")))?;
+        // Retry timeouts only for idempotent HTTP methods; a timeout on a
+        // mutating method may have already been processed upstream.
+        let idempotent = matches!(method_upper.as_str(), "GET" | "HEAD" | "OPTIONS" | "TRACE");
+        let response = send_with_retry(
+            request.timeout(timeout),
+            "Request",
+            idempotent,
+            &self.health,
+        )
+        .await?;
 
         self.handle_response(response, config).await
     }

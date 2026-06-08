@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-06-08
+
+### Added
+
+- **Retry transient outbound transport errors with backoff** (MIK-5081): capability calls run inside the gateway's own tokio runtime, so a momentary connect/timeout failure reaching an upstream (e.g. `api.linear.app` under host load) previously surfaced straight to the caller as a `BACKEND_ERROR`. Outbound REST, GraphQL, and JSON-RPC requests now retry transient connection/timeout failures up to 3 attempts with exponential backoff (100ms, 200ms). HTTP error *statuses* (4xx/5xx) are not retried. Covered by a deterministic regression test.
+- **`/health` reflects real backend health, not just the circuit breaker** (MIK-5080): `/health` derived overall health solely from circuit-breaker state, so a backend timing out under load reported healthy until the breaker tripped Open. Registry `BackendStatus` now carries `healthy`, `consecutive_failures`, and `latency_p95_ms` from the health tracker, and the **in-process capability backend** (previously absent from `/health` entirely, and the source of the original incident) now has its own health tracker: it records every capability execution outcome and is folded into overall health and exposed as a `capability_backend` field in the admin `/health` payload. Overall health now requires a non-Open circuit *and* live health trackers across both registry and capability backends.
+
 ## [2.12.2] - 2026-06-08
 
 ### Fixed

@@ -367,6 +367,7 @@ mod tests {
             token_storage: Some(storage),
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
+            health: crate::failsafe::HealthTracker::new("test"),
         }
     }
 
@@ -377,6 +378,7 @@ mod tests {
             token_storage: None,
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
+            health: crate::failsafe::HealthTracker::new("test"),
         }
     }
 

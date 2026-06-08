@@ -158,6 +158,13 @@ impl CapabilityBackend {
         }
     }
 
+    /// Whether the capability backend is currently considered healthy by its
+    /// outbound-transport health tracker (owned by the executor).
+    #[must_use]
+    pub fn is_healthy(&self) -> bool {
+        self.executor.is_healthy()
+    }
+
     /// Remove a capability from the live tool set.
     ///
     /// Used by the file watcher when a rug-pull is detected so that the
@@ -377,6 +384,9 @@ impl CapabilityBackend {
         }
 
         // Use the coerced arguments (e.g., "123" → 123 for integer fields).
+        // The executor records transport health (success/failure) at the HTTP
+        // boundary, so cache hits and application-level errors do not skew
+        // backend liveness (MIK-5080).
         let result = self
             .executor
             .execute(&capability, validation.coerced)
@@ -403,10 +413,14 @@ impl CapabilityBackend {
     /// Get backend status.
     pub fn status(&self) -> CapabilityBackendStatus {
         let caps = self.capabilities.read();
+        let health = self.executor.health_metrics();
         CapabilityBackendStatus {
             name: self.name.clone(),
             capabilities_count: caps.len(),
             capabilities: caps.entries.iter().map(|c| c.name.clone()).collect(),
+            healthy: health.healthy,
+            consecutive_failures: health.consecutive_failures,
+            latency_p95_ms: health.latency_p95_ms,
         }
     }
 
@@ -529,6 +543,13 @@ pub struct CapabilityBackendStatus {
     pub capabilities_count: usize,
     /// List of capability names
     pub capabilities: Vec<String>,
+    /// Health-tracker liveness for outbound execution (MIK-5080). Flips false
+    /// after consecutive execution failures (e.g. upstream timeouts).
+    pub healthy: bool,
+    /// Consecutive execution failures recorded by the health tracker.
+    pub consecutive_failures: u64,
+    /// 95th percentile execution latency in milliseconds, if any samples exist.
+    pub latency_p95_ms: Option<u64>,
 }
 
 // ============================================================================
@@ -909,5 +930,32 @@ providers:
         // THEN: nothing is flagged (unpinned = operator hasn't opted in)
         assert!(detected.is_empty());
         assert!(backend.has_capability("unpinned_cap"));
+    }
+
+    #[test]
+    fn capability_backend_status_surfaces_executor_health() {
+        // The backend delegates health to its executor and surfaces it in
+        // status() (MIK-5080). Transport-failure flipping is covered by the
+        // executor-level tests (send_with_retry_records_transport_failures);
+        // here we verify the delegation path and the status shape so the
+        // /health payload exposes the new fields.
+        let backend = make_backend();
+
+        // A fresh backend is healthy and reports zero failures.
+        assert!(backend.is_healthy(), "fresh backend is healthy");
+
+        let status = backend.status();
+        assert!(status.healthy, "status mirrors executor health");
+        assert_eq!(status.consecutive_failures, 0);
+        assert!(
+            status.latency_p95_ms.is_none(),
+            "no samples yet -> no p95 latency"
+        );
+
+        // The new health fields must serialize (they feed the admin /health
+        // payload as the capability_backend sibling object).
+        let json = serde_json::to_value(&status).expect("status serializes");
+        assert_eq!(json["healthy"], serde_json::json!(true));
+        assert_eq!(json["consecutive_failures"], serde_json::json!(0));
     }
 }

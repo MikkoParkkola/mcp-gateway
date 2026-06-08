@@ -806,6 +806,7 @@ impl Backend {
 
     /// Get backend status
     pub fn status(&self) -> BackendStatus {
+        let health = self.failsafe.health_metrics();
         BackendStatus {
             name: self.name.clone(),
             running: self.is_running(),
@@ -813,6 +814,9 @@ impl Backend {
             tools_cached: self.cached_tools_count(),
             circuit_state: self.failsafe.circuit_breaker.state().as_str().to_string(),
             request_count: self.request_count.load(Ordering::Relaxed),
+            healthy: health.healthy,
+            consecutive_failures: health.consecutive_failures,
+            latency_p95_ms: health.latency_p95_ms,
         }
     }
 
@@ -842,6 +846,15 @@ pub struct BackendStatus {
     pub circuit_state: String,
     /// Total request count
     pub request_count: u64,
+    /// Health-tracker liveness (flips false after consecutive failures, e.g.
+    /// timeouts under load, *before* the circuit breaker trips Open). `/health`
+    /// must consider this so it does not report healthy while a backend is
+    /// silently timing out (see issue #5080 / MIK-5080).
+    pub healthy: bool,
+    /// Consecutive failures recorded by the health tracker.
+    pub consecutive_failures: u64,
+    /// 95th percentile latency in milliseconds, if any samples exist.
+    pub latency_p95_ms: Option<u64>,
 }
 
 /// Backend registry - manages all backends
