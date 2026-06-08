@@ -54,6 +54,60 @@ pub struct CapabilityExecutor {
     pub(super) secret_resolver: Arc<SecretResolver>,
 }
 
+/// Maximum number of send attempts (1 initial + 2 retries) for transient
+/// outbound transport failures.
+pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
+
+/// Send an outbound HTTP request, retrying transient transport failures with
+/// exponential backoff.
+///
+/// Capability calls run inside the gateway's own tokio runtime, so a transient
+/// connect/timeout error reaching an upstream (e.g. a momentary blip reaching
+/// `api.linear.app` under host load) otherwise surfaces directly as a
+/// `BACKEND_ERROR` to the caller. A single transient failure should not fail
+/// the tool call when a quick retry would succeed (MIK-5081).
+///
+/// Only connection and timeout errors are retried. HTTP error *statuses*
+/// (4xx/5xx) are returned to the caller unchanged — they are not
+/// transport-transient and may not be safe to replay blindly. The request is
+/// cloned per attempt; a non-cloneable body (e.g. a stream) is sent once.
+pub(super) async fn send_with_retry(
+    request: reqwest::RequestBuilder,
+    label: &str,
+) -> Result<reqwest::Response> {
+    let mut backoff_ms: u64 = 100;
+    for attempt in 1..=MAX_SEND_ATTEMPTS {
+        let Some(attempt_req) = request.try_clone() else {
+            // Non-cloneable body: a single attempt is the best we can do.
+            return request
+                .send()
+                .await
+                .map_err(|e| Error::Transport(format!("{label} failed: {e}")));
+        };
+        match attempt_req.send().await {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                let transient = e.is_timeout() || e.is_connect();
+                if transient && attempt < MAX_SEND_ATTEMPTS {
+                    tracing::warn!(
+                        label = label,
+                        attempt = attempt,
+                        backoff_ms = backoff_ms,
+                        error = %e,
+                        "transient outbound transport error; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms *= 2;
+                    continue;
+                }
+                return Err(Error::Transport(format!("{label} failed: {e}")));
+            }
+        }
+    }
+    // The final attempt always returns above; the loop cannot fall through.
+    unreachable!("send_with_retry exhausted attempts without returning")
+}
+
 impl CapabilityExecutor {
     /// Build a pooled HTTP client suitable for capability execution.
     ///
@@ -317,11 +371,7 @@ impl CapabilityExecutor {
         }
 
         let timeout = Duration::from_secs(provider.timeout);
-        let response = request
-            .timeout(timeout)
-            .send()
-            .await
-            .map_err(|e| Error::Transport(format!("Request failed: {e}")))?;
+        let response = send_with_retry(request.timeout(timeout), "Request").await?;
 
         self.handle_response(response, config).await
     }

@@ -178,16 +178,16 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
         );
 
         let timeout = Duration::from_secs(ctx.timeout_secs);
-        let response = self
-            .executor
-            .client
-            .post(&jsonrpc_config.endpoint)
-            .headers(headers)
-            .json(&body)
-            .timeout(timeout)
-            .send()
-            .await
-            .map_err(|e| Error::Transport(format!("JSON-RPC request failed: {e}")))?;
+        let response = super::send_with_retry(
+            self.executor
+                .client
+                .post(&jsonrpc_config.endpoint)
+                .headers(headers)
+                .json(&body)
+                .timeout(timeout),
+            "JSON-RPC request",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {

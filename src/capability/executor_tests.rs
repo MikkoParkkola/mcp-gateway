@@ -593,3 +593,54 @@ body: "SELECT * FROM bus_msg LIMIT 10"
         "SELECT * FROM bus_msg LIMIT 10"
     );
 }
+
+#[tokio::test]
+async fn send_with_retry_recovers_from_transient_timeouts() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Local server: the first two connections hang past the client's per-attempt
+    // timeout (a transient timeout -> retry); the third responds 200 at once.
+    // Verifies MIK-5081: transient outbound failures are retried with backoff
+    // instead of surfacing as an immediate BACKEND_ERROR.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_srv = Arc::clone(&counter);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let n = counter_srv.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                if n < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                } else {
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+                    let _ = stream.flush();
+                }
+            });
+        }
+    });
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{addr}/");
+    let req = client
+        .get(&url)
+        .timeout(std::time::Duration::from_millis(120));
+
+    let resp = send_with_retry(req, "test").await;
+    assert!(
+        resp.is_ok(),
+        "retry should recover from transient timeouts, got {resp:?}"
+    );
+    assert_eq!(resp.unwrap().status(), 200);
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        3,
+        "should have taken exactly 3 attempts (2 transient + 1 success)"
+    );
+}

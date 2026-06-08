@@ -156,6 +156,22 @@ pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
     )
 }
 
+/// Decide overall gateway health from per-backend status.
+///
+/// Overall health must reflect more than the circuit breaker. A backend that is
+/// timing out under load records consecutive failures and the health tracker
+/// flips it unhealthy *before* the breaker trips Open; deriving health from
+/// circuit state alone reports "healthy" while backends are silently failing
+/// (MIK-5080). A backend is considered healthy only when its breaker is not
+/// Open AND the health tracker still considers it live.
+fn backends_overall_healthy(
+    statuses: &std::collections::HashMap<String, crate::backend::BackendStatus>,
+) -> bool {
+    statuses
+        .values()
+        .all(|s| s.circuit_state != "Open" && s.healthy)
+}
+
 /// Health check handler
 ///
 /// For unauthenticated (public) clients, backend details are redacted
@@ -166,7 +182,13 @@ pub(super) async fn health_handler(
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
     let statuses = state.backends.statuses();
-    let healthy = statuses.values().all(|s| s.circuit_state != "Open");
+    // Overall health must reflect more than the circuit breaker. A backend that
+    // is timing out under load records consecutive failures and the health
+    // tracker flips it unhealthy *before* the breaker trips Open; deriving
+    // health from circuit state alone reports "healthy" while backends are
+    // silently failing (MIK-5080). Require both: breaker not Open AND the
+    // health tracker still considers the backend live.
+    let healthy = backends_overall_healthy(&statuses);
 
     // Check if the caller is an authenticated (non-public) client
     let is_admin = request
@@ -675,4 +697,55 @@ pub(super) async fn metrics_handler() -> impl IntoResponse {
         )],
         body,
     )
+}
+
+#[cfg(test)]
+mod health_predicate_tests {
+    use super::backends_overall_healthy;
+    use crate::backend::BackendStatus;
+    use std::collections::HashMap;
+
+    fn status(name: &str, circuit: &str, healthy: bool) -> BackendStatus {
+        BackendStatus {
+            name: name.to_string(),
+            running: true,
+            transport: "http".to_string(),
+            tools_cached: 0,
+            circuit_state: circuit.to_string(),
+            request_count: 0,
+            healthy,
+            consecutive_failures: if healthy { 0 } else { 3 },
+            latency_p95_ms: None,
+        }
+    }
+
+    fn map(items: Vec<BackendStatus>) -> HashMap<String, BackendStatus> {
+        items.into_iter().map(|s| (s.name.clone(), s)).collect()
+    }
+
+    #[test]
+    fn all_healthy_is_healthy() {
+        let m = map(vec![
+            status("a", "Closed", true),
+            status("b", "Closed", true),
+        ]);
+        assert!(backends_overall_healthy(&m));
+    }
+
+    #[test]
+    fn open_circuit_is_unhealthy() {
+        let m = map(vec![status("a", "Closed", true), status("b", "Open", true)]);
+        assert!(!backends_overall_healthy(&m));
+    }
+
+    #[test]
+    fn tracker_unhealthy_with_closed_circuit_is_unhealthy() {
+        // MIK-5080: a backend timing out under load flips the health tracker
+        // unhealthy before the circuit breaker trips Open. /health must catch it.
+        let m = map(vec![
+            status("a", "Closed", true),
+            status("b", "Closed", false),
+        ]);
+        assert!(!backends_overall_healthy(&m));
+    }
 }

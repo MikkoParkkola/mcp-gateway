@@ -234,16 +234,16 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
         );
 
         let timeout = Duration::from_secs(ctx.timeout_secs);
-        let response = self
-            .executor
-            .client
-            .post(&graphql_config.endpoint)
-            .headers(headers)
-            .json(&body)
-            .timeout(timeout)
-            .send()
-            .await
-            .map_err(|e| Error::Transport(format!("GraphQL request failed: {e}")))?;
+        let response = super::send_with_retry(
+            self.executor
+                .client
+                .post(&graphql_config.endpoint)
+                .headers(headers)
+                .json(&body)
+                .timeout(timeout),
+            "GraphQL request",
+        )
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
