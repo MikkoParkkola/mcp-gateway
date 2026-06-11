@@ -32,7 +32,7 @@ pub use features::{
     HealthCheckConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
     KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
     RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
-    SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
+    SecurityConfig, SlackControlConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -93,6 +93,9 @@ pub struct Config {
     #[cfg(feature = "cost-governance")]
     #[serde(default)]
     pub cost_governance: crate::cost_accounting::config::CostGovernanceConfig,
+    /// Slack control plane — bidirectional agent control via Slack Socket Mode.
+    #[serde(default)]
+    pub slack_control: SlackControlConfig,
 }
 
 fn default_routing_profile() -> String {

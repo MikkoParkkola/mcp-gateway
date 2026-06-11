@@ -1,0 +1,32 @@
+# Slack App Manifest for mcp-gateway Control Plane (MIK-5031)
+#
+# This manifest declares the Slack app configuration for the bidirectional
+# agent control plane. Socket Mode enables a persistent WebSocket connection
+# from the gateway to Slack for real-time event delivery.
+#
+# CRITICAL: Token values are env-var references, NEVER literal secrets.
+# - SLACK_APP_TOKEN (xapp-...) loaded from ~/.claude/secrets.env
+# - SLACK_BOT_TOKEN (xoxb-...) loaded from ~/.claude/secrets.env
+
+display_name: mcp-gateway-control
+
+socket_mode:
+  enabled: true
+  app_token_env: SLACK_APP_TOKEN
+
+oauth_scopes:
+  bot:
+    - channels:history
+    - app_mentions:read
+    - chat:write
+
+event_subscriptions:
+  enabled: true
+  bot_events:
+    - message.channels
+    - app_mention
+
+features:
+  bot_user:
+    display_name: mcp-gateway
+    always_online: true

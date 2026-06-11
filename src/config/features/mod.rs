@@ -11,6 +11,7 @@ mod failsafe;
 mod key_server;
 mod playbooks;
 mod security;
+mod slack_control;
 mod streaming;
 mod webhooks;
 
@@ -30,5 +31,6 @@ pub use security::{
     AgentIdentityConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
     ToolContractConfig,
 };
+pub use slack_control::SlackControlConfig;
 pub use streaming::StreamingConfig;
 pub use webhooks::WebhookConfig;
