@@ -58,6 +58,7 @@ pub mod provider;
 pub mod ranking;
 pub mod registry;
 pub mod routing_profile;
+pub mod runtime;
 pub mod scheduler;
 pub mod secret_injection;
 pub mod secrets;
