@@ -31,6 +31,22 @@ use crate::protocol::{
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
+/// Detect the session-expiry signature in a transport error (MIK-5982).
+///
+/// Matches three observed shapes:
+/// - JSON-RPC `-32015` session errors (rust-mcp-sdk servers, e.g. hebb-serve:
+///   `HTTP 400 Bad Request: {"code":-32015,...,"message":"Bad Request: Session not found"}`)
+/// - any body containing "session not found" (case-insensitive)
+/// - bare `HTTP 404` responses, which the MCP Streamable HTTP spec defines as
+///   "session terminated or expired" (callers gate this on having had a session)
+fn is_session_expired_error(err: &Error) -> bool {
+    let Error::Transport(msg) = err else {
+        return false;
+    };
+    let lower = msg.to_lowercase();
+    lower.contains("session not found") || msg.contains("-32015") || lower.starts_with("http 404")
+}
+
 /// HTTP transport for MCP servers using SSE or Streamable HTTP protocol
 pub struct HttpTransport {
     /// HTTP client
@@ -606,7 +622,31 @@ impl Transport for HttpTransport {
             params,
         };
 
-        self.send_request(&request).await
+        let result = self.send_request(&request).await;
+
+        // MIK-5982: when the backend daemon restarts, our stored session ID is
+        // dead and every request — including circuit-breaker half-open probes —
+        // fails with `Session not found` forever (observed live 2026-06-11:
+        // hebb unreachable 6.5h while healthy). On the session-expiry
+        // signature, drop the session, re-run the initialize handshake, and
+        // retry the original request exactly once. `initialize()` calls
+        // `send_request` directly (not `request`), so this cannot recurse.
+        let had_session = self.session_id.read().is_some();
+        if let Err(ref err) = result
+            && had_session
+            && is_session_expired_error(err)
+        {
+            warn!(
+                url = %self.base_url,
+                method = %method,
+                "Backend session expired; re-initializing and retrying once"
+            );
+            *self.session_id.write() = None;
+            self.initialize().await?;
+            return self.send_request(&request).await;
+        }
+
+        result
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {

@@ -478,3 +478,169 @@ async fn build_headers_trace_flag_gates_trace_header() {
         "trace:true must emit x-trace-id"
     );
 }
+
+// =========================================================================
+// Session expiry → re-initialize → retry (MIK-5982)
+// =========================================================================
+
+/// When the backend daemon restarts, the stored session ID is dead and the
+/// backend answers `-32015 Session not found`. The transport must drop the
+/// session, re-run the initialize handshake, and retry the original request
+/// once. Regression test for the 2026-06-11 incident (hebb unreachable 6.5h
+/// behind a permanently re-opening circuit breaker).
+#[tokio::test]
+async fn request_reinitializes_session_and_retries_on_session_not_found() {
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::post,
+    };
+    use serde_json::json;
+
+    const FRESH_SESSION: &str = "fresh-session-after-restart";
+
+    async fn mcp_handler(
+        State(hits): State<Arc<std::sync::atomic::AtomicU32>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> axum::response::Response {
+        hits.fetch_add(1, Ordering::Relaxed);
+        let session = headers
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let method = body["method"].as_str().unwrap_or("");
+
+        // Notifications (no id) are acknowledged unconditionally.
+        if body.get("id").is_none() {
+            return StatusCode::ACCEPTED.into_response();
+        }
+
+        if method == "initialize" {
+            // Restarted daemon: hands out a fresh session on initialize.
+            let mut resp_headers = HeaderMap::new();
+            resp_headers.insert("mcp-session-id", FRESH_SESSION.parse().unwrap());
+            return (
+                StatusCode::OK,
+                resp_headers,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "serverInfo": {"name": "mock", "version": "0"}
+                    }
+                })),
+            )
+                .into_response();
+        }
+
+        if session == FRESH_SESSION {
+            // Post-restart session: requests succeed.
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {"ok": true}
+                })),
+            )
+                .into_response()
+        } else {
+            // Stale (pre-restart) session: the rust-mcp-sdk signature.
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "code": -32015,
+                    "data": null,
+                    "message": "Bad Request: Session not found"
+                })),
+            )
+                .into_response()
+        }
+    }
+
+    // GIVEN: a mock backend that rejects the stale session
+    let hits = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(Arc::clone(&hits));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    *transport.session_id.write() = Some("stale-session-from-before-restart".to_string());
+
+    // WHEN: a request rides the dead session
+    let response = transport.request("tools/list", None).await.unwrap();
+
+    // THEN: the transport re-initialized and the retry succeeded
+    assert!(response.error.is_none(), "retried request must succeed");
+    assert_eq!(
+        transport.session_id.read().as_deref(),
+        Some(FRESH_SESSION),
+        "fresh session ID must replace the stale one"
+    );
+
+    server.abort();
+}
+
+/// A request without any session that fails with a non-session error must NOT
+/// trigger the re-initialize path (no retry storm on genuinely broken backends).
+#[tokio::test]
+async fn request_does_not_reinitialize_without_a_session() {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use serde_json::json;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/mcp",
+        post(|| async {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"message": "Bad Request: Session not found"})),
+            )
+        }),
+    );
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    // No session_id set: the expiry signature without a prior session must
+    // surface as a plain error (nothing to re-initialize).
+
+    let err = transport.request("tools/list", None).await.unwrap_err();
+    assert!(err.to_string().contains("Session not found"));
+
+    server.abort();
+}
+
+#[test]
+fn session_expired_detection_matches_known_signatures() {
+    // rust-mcp-sdk shape (hebb-serve, observed live 2026-06-11)
+    assert!(is_session_expired_error(&Error::Transport(
+        "HTTP 400 Bad Request: {\"code\":-32015,\"data\":null,\"message\":\"Bad Request: Session not found\"}".to_string()
+    )));
+    // MCP spec: 404 = session terminated/expired
+    assert!(is_session_expired_error(&Error::Transport(
+        "HTTP 404 Not Found: ".to_string()
+    )));
+    // Plain transport failure must not match
+    assert!(!is_session_expired_error(&Error::Transport(
+        "Request failed: connection refused".to_string()
+    )));
+    // Non-transport errors must not match
+    assert!(!is_session_expired_error(&Error::Protocol(
+        "Session not found".to_string()
+    )));
+}

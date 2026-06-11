@@ -196,6 +196,30 @@ impl CircuitBreaker {
         }
     }
 
+    /// Force the breaker back to `Closed` and clear all failure/success counters.
+    ///
+    /// This is the manual recovery lever behind the `gateway_revive_server`
+    /// meta-tool (MIK-5983): the `CIRCUIT_OPEN` error message directs operators
+    /// to that tool, so reviving a backend must also close a tripped breaker.
+    /// Without this, the documented recovery path was a no-op for breaker trips
+    /// (observed live 2026-06-11: hebb breaker wedged open 6.5h).
+    #[tracing::instrument(skip(self), fields(backend = %self.name))]
+    pub fn reset(&self) {
+        if !self.enabled {
+            return;
+        }
+        let state = *self.state.read();
+        if state == CircuitState::Closed {
+            // transition_to() early-returns on same-state transitions; still
+            // clear the failure window so a half-accumulated count does not
+            // survive the revive.
+            self.failures.store(0, Ordering::Relaxed);
+            self.successes.store(0, Ordering::Relaxed);
+        } else {
+            self.transition_to(CircuitState::Closed);
+        }
+    }
+
     /// Record a failed request
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn record_failure(&self) {
@@ -431,6 +455,50 @@ mod tests {
     }
 
     // ── stats snapshot ────────────────────────────────────────────────────
+
+    #[test]
+    fn reset_closes_an_open_breaker_and_allows_requests() {
+        // GIVEN: a breaker tripped open by hitting the failure threshold
+        let cb = CircuitBreaker::new("test", &make_config(true, 3));
+        for _ in 0..3 {
+            cb.record_failure();
+        }
+        assert_eq!(cb.state(), CircuitState::Open);
+        assert!(!cb.can_proceed());
+
+        // WHEN: the operator resets it (gateway_revive_server path, MIK-5983)
+        cb.reset();
+
+        // THEN: closed, counters cleared, requests flow again
+        let s = cb.stats();
+        assert_eq!(s.state, CircuitState::Closed);
+        assert_eq!(s.current_failures, 0);
+        assert!(cb.can_proceed());
+    }
+
+    #[test]
+    fn reset_in_closed_state_clears_accumulated_failures() {
+        // GIVEN: a closed breaker with a half-accumulated failure window
+        let cb = CircuitBreaker::new("test", &make_config(true, 5));
+        cb.record_failure();
+        cb.record_failure();
+        assert_eq!(cb.stats().current_failures, 2);
+
+        // WHEN
+        cb.reset();
+
+        // THEN: window cleared, still closed
+        assert_eq!(cb.stats().current_failures, 0);
+        assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn reset_on_disabled_breaker_is_a_noop() {
+        let cb = CircuitBreaker::new("test", &make_config(false, 3));
+        cb.reset();
+        assert_eq!(cb.state(), CircuitState::Closed);
+        assert!(cb.can_proceed());
+    }
 
     #[test]
     fn stats_initial_state_is_closed_with_zero_trips() {

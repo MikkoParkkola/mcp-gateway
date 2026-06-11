@@ -1188,3 +1188,57 @@ fn resolve_surfaced_tool_excluded_by_deny_all_profile() {
         "Denied backend's surfaced tool should be absent; names: {names:?}"
     );
 }
+
+// =========================================================================
+// gateway_revive_server — circuit-breaker reset (MIK-5983)
+// =========================================================================
+
+/// Reviving a backend with a tripped circuit breaker must close the breaker,
+/// not just the kill switch. Regression test for the 2026-06-11 incident where
+/// the documented recovery path was a no-op for breaker trips.
+#[test]
+fn revive_server_resets_a_tripped_circuit_breaker() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::failsafe::CircuitState;
+    use std::time::Duration;
+
+    // GIVEN: a registered backend whose breaker has tripped open
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "wedged_backend",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::ZERO,
+    ));
+    backend.trip_circuit_breaker_for_test();
+    assert_eq!(
+        backend.circuit_breaker_stats().state,
+        CircuitState::Open,
+        "precondition: breaker must be open"
+    );
+    registry.register(Arc::clone(&backend));
+    let mm = MetaMcp::new(registry);
+
+    // WHEN: the operator runs gateway_revive_server
+    let result = mm
+        .revive_server(&serde_json::json!({"server": "wedged_backend"}))
+        .unwrap();
+
+    // THEN: breaker is closed and the response reports the prior open state
+    assert_eq!(backend.circuit_breaker_stats().state, CircuitState::Closed);
+    assert_eq!(result["breaker_was_open"], true);
+    assert_eq!(result["status"], "active");
+}
+
+/// Reviving a backend that is not registered still succeeds
+/// (kill-switch-only semantics) and reports `breaker_was_open: false`.
+#[test]
+fn revive_server_unregistered_backend_reports_breaker_not_open() {
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let result = mm
+        .revive_server(&serde_json::json!({"server": "ghost"}))
+        .unwrap();
+    assert_eq!(result["breaker_was_open"], false);
+    assert_eq!(result["status"], "active");
+}
