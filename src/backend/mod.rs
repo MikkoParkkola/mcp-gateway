@@ -781,6 +781,16 @@ impl Backend {
         *self.transport.write() = Some(transport);
     }
 
+    /// Test-only: trip this backend's circuit breaker open by recording
+    /// `failure_threshold` consecutive failures.
+    #[cfg(test)]
+    pub(crate) fn trip_circuit_breaker_for_test(&self) {
+        let threshold = self.failsafe.circuit_breaker.stats().failure_threshold;
+        for _ in 0..threshold {
+            self.failsafe.circuit_breaker.record_failure();
+        }
+    }
+
     /// Return `true` if this backend is configured for pass-through mode.
     ///
     /// When `true`, the direct `/mcp/{name}` endpoint skips tool policy
@@ -823,6 +833,14 @@ impl Backend {
     /// Get circuit breaker stats for this backend.
     pub fn circuit_breaker_stats(&self) -> crate::failsafe::CircuitBreakerStats {
         self.failsafe.circuit_breaker.stats()
+    }
+
+    /// Force this backend's circuit breaker back to `Closed` (MIK-5983).
+    ///
+    /// Called by `gateway_revive_server` so the documented manual recovery
+    /// path also clears a tripped breaker, not just the kill switch.
+    pub fn reset_circuit_breaker(&self) {
+        self.failsafe.circuit_breaker.reset();
     }
 
     /// Get health metrics for this backend.

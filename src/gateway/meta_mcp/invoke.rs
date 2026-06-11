@@ -1259,16 +1259,28 @@ impl MetaMcp {
 
     /// `gateway_revive_server` — re-enable a previously killed backend.
     ///
-    /// Also resets the error-budget window so the backend starts with a clean slate.
+    /// Resets the error-budget window AND closes a tripped circuit breaker so
+    /// the backend starts with a clean slate. The breaker reset is load-bearing
+    /// (MIK-5983): the `CIRCUIT_OPEN` error message directs operators to this
+    /// tool, so it must actually recover a breaker-tripped backend.
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn revive_server(&self, args: &Value) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
         let was_killed = self.kill_switch.is_killed(server);
         self.kill_switch.revive(server);
+
+        let mut breaker_was_open = false;
+        if let Some(backend) = self.backends.get(server) {
+            breaker_was_open =
+                backend.circuit_breaker_stats().state != crate::failsafe::CircuitState::Closed;
+            backend.reset_circuit_breaker();
+        }
+
         Ok(json!({
             "server": server,
             "status": "active",
             "was_killed": was_killed,
+            "breaker_was_open": breaker_was_open,
             "message": format!("Server '{server}' has been re-enabled")
         }))
     }
