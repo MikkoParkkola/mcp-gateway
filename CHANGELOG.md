@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Sandbox attestation at creation** (MIK-5223, RUNTIME-A / B1-IDENT): every sandbox boot now requires a signed symphony+ attestation token issued by bnaut-attestation (`attestation` module). Tokens carry agent identity, task UUID, capability allow-list, and RFC-3339 expiration, signed with HMAC-SHA256 (same RustCrypto primitives as message signing — no bespoke crypto). The gateway is the validation authority: `AttestationValidator::validate_boundary_call` checks every cross-boundary call and records each rejection (with measured detection latency) in a fixed-capacity audit ring buffer, emitted as `attestation_audit` tracing events distinct from the existing `agent_tool_audit` stream. `AttestedSandboxLauncher::boot` fails closed — no token, no start — and injects the token at the OCI `createRuntime` hook through one shared code path, so gVisor (Ubuntu) and Apple containerization (macOS) exercise the identical token flow. Long-running tasks rotate tokens without disrupting in-flight syscalls (predecessor stays valid in a grace window), and rotation state serializes to a `RotationCheckpoint` that survives checkpoint/restore (B3-DURABLE). Rollback: `SYMPHONY_PLUS_ATTESTATION=0` boots without a token (still isolated, loses identity attribution). Covered by unit tests plus AC-mapped integration tests including a 110-case forgery battery with <100ms detection asserted per case.
+
 ## [2.19.0] - 2026-06-08
 
 ### Added
