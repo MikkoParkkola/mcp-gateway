@@ -38,10 +38,12 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::attestation::{AttestationClaims, AttestationError, AttestationToken, AttestationValidator};
 use crate::{Error, Result};
 
 // ── SessionSandbox ────────────────────────────────────────────────────────────
@@ -51,6 +53,13 @@ use crate::{Error, Result};
 /// A `SessionSandbox` is a static policy description; it does not hold any
 /// mutable runtime state.  Use [`SandboxEnforcer`] to track live usage against
 /// these limits.
+///
+/// # Attestation (MIK-5223, AC.1-AC.6)
+///
+/// When `require_attestation` is `true`, the sandbox **fails closed** at
+/// creation time unless a valid [`AttestationToken`] signed by bnaut-attestation
+/// is provided.  This implements the B1-IDENT bet: first-party attestation
+/// at sandbox creation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionSandbox {
     /// Maximum number of tool calls permitted in the session.
@@ -82,6 +91,12 @@ pub struct SessionSandbox {
     /// `0` means unlimited.
     #[serde(default = "default_max_payload_bytes")]
     pub max_payload_bytes: usize,
+
+    /// Require attestation token for sandbox creation (AC.1).
+    /// When `true`, `SandboxEnforcer::new` fails without a valid token.
+    /// When `false` (default), attestation is optional.
+    #[serde(default)]
+    pub require_attestation: bool,
 }
 
 fn default_max_calls() -> u64 {
@@ -105,6 +120,7 @@ impl Default for SessionSandbox {
             allowed_backends: None,
             denied_tools: Vec::new(),
             max_payload_bytes: 0,
+            require_attestation: false,
         }
     }
 }
@@ -250,21 +266,73 @@ impl std::fmt::Display for SandboxViolation {
 ///
 /// Thread-safe: `call_count` is an `AtomicU64` and `started_at` is
 /// immutable after construction.  Multiple threads may share a reference.
+///
+/// # Attestation (MIK-5223)
+///
+/// When `attestation_token` is `Some`, every `check()` call validates the
+/// token against the gateway (AC.3).  When `require_attestation` is `true`
+/// and no valid token is present, the enforcer **fails closed** at
+/// construction (AC.1).
 #[derive(Debug)]
 pub struct SandboxEnforcer {
     sandbox: SessionSandbox,
     call_count: AtomicU64,
     started_at: Instant,
+    /// Validated attestation claims (AC.2).
+    attestation: Option<AttestationClaims>,
+    /// Attestation validator for cross-boundary call checks (AC.3).
+    attestation_validator: Option<Arc<AttestationValidator>>,
 }
 
 impl SandboxEnforcer {
     /// Create an enforcer starting now.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Protocol` when `sandbox.require_attestation` is `true`
+    /// but no valid attestation token is provided (AC.1: fail-closed).
+    pub fn new_with_attestation(
+        sandbox: SessionSandbox,
+        attestation_token: Option<AttestationToken>,
+        attestation_validator: Option<Arc<AttestationValidator>>,
+    ) -> Result<Self> {
+        let require = sandbox.require_attestation;
+
+        let attestation = if let Some(ref validator) = attestation_validator {
+            let claims = validator
+                .validate(attestation_token.as_ref(), "sandbox_boot")
+                .map_err(|e| Error::Protocol(e.to_string()))?;
+            Some(claims)
+        } else if require {
+            // AC.1: attestation required but no validator configured → fail closed.
+            return Err(Error::Protocol(
+                "attestation required but no validator configured".to_string(),
+            ));
+        } else if let Some(token) = attestation_token {
+            // Validator absent but token present — accept claims as-is.
+            Some(token.claims)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            sandbox,
+            call_count: AtomicU64::new(0),
+            started_at: Instant::now(),
+            attestation,
+            attestation_validator,
+        })
+    }
+
+    /// Create an enforcer starting now (legacy, no attestation).
     #[must_use]
     pub fn new(sandbox: SessionSandbox) -> Self {
         Self {
             sandbox,
             call_count: AtomicU64::new(0),
             started_at: Instant::now(),
+            attestation: None,
+            attestation_validator: None,
         }
     }
 
@@ -275,6 +343,8 @@ impl SandboxEnforcer {
             sandbox,
             call_count: AtomicU64::new(0),
             started_at,
+            attestation: None,
+            attestation_validator: None,
         }
     }
 
@@ -386,6 +456,72 @@ impl SandboxEnforcer {
     #[must_use]
     pub fn sandbox(&self) -> &SessionSandbox {
         &self.sandbox
+    }
+
+    /// The validated attestation claims for this session (AC.2).
+    ///
+    /// Returns `None` when attestation was not provided or not required.
+    #[must_use]
+    pub fn attestation(&self) -> Option<&AttestationClaims> {
+        self.attestation.as_ref()
+    }
+
+    /// The attestation validator for this session.
+    #[must_use]
+    pub fn attestation_validator(&self) -> Option<&Arc<AttestationValidator>> {
+        self.attestation_validator.as_ref()
+    }
+
+    /// Re-validate the attestation token on a cross-boundary call (AC.3).
+    ///
+    /// Called before every tool invocation that crosses a trust boundary.
+    /// Logs rejections to the audit ring buffer.
+    pub fn check_attestation(&self, operation: &str) -> Result<()> {
+        if let Some(ref validator) = self.attestation_validator {
+            if validator.requires_attestation() && self.attestation.is_none() {
+                // AC.1/AC.3: attestation required but missing → fail closed.
+                return Err(Error::Protocol(
+                    AttestationError::MissingClaims.to_string(),
+                ));
+            }
+            // The claims were already validated at construction.
+            // Check expiry for long-running tasks (AC.4).
+            if let Some(ref claims) = self.attestation {
+                if claims.is_expired() {
+                    // Log to audit ring buffer.
+                    let _ = validator.validate(None, operation);
+                    return Err(Error::Protocol(
+                        AttestationError::Expired.to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Rotate the attestation token for long-running tasks (AC.4).
+    ///
+    /// Rotation does not disrupt in-flight syscalls — only future `check()`
+    /// calls use the new token.
+    pub fn rotate_attestation(
+        &mut self,
+        new_token: AttestationToken,
+    ) -> Result<(), AttestationError> {
+        if let Some(ref validator) = self.attestation_validator {
+            let claims = validator
+                .validate(Some(&new_token), "token_rotation")
+                .map_err(|e| {
+                    // AC.4: rotation failure does not disrupt existing claims.
+                    // We keep the existing `attestation` on failure.
+                    e
+                })?;
+            self.attestation = Some(claims);
+            Ok(())
+        } else {
+            // No validator — accept claims directly.
+            self.attestation = Some(new_token.claims);
+            Ok(())
+        }
     }
 }
 

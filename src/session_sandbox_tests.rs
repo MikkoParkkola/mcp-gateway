@@ -447,3 +447,110 @@ fn all_limits_combined_rejects_when_tool_denied() {
     let err = e.check("search", "exec", 100).unwrap_err();
     assert!(err.to_string().contains("tool denied"));
 }
+
+// ── Attestation tests (MIK-5223) ─────────────────────────────────────────
+
+#[test]
+fn attestation_enforcer_fails_closed_without_token_when_required_ac1() {
+    // AC.1: Sandbox boot fails closed without a valid attestation token
+    // (no token = no start)
+    let signer = crate::attestation::AttestationSigner::new_always(b"test-secret-32-bytes-long!!".to_vec());
+    let validator = std::sync::Arc::new(
+        crate::attestation::AttestationValidator::new(Some(signer), true),
+    );
+    let sandbox = SessionSandbox {
+        require_attestation: true,
+        ..Default::default()
+    };
+    // No token provided → must fail.
+    let result = SandboxEnforcer::new_with_attestation(sandbox, None, Some(validator));
+    assert!(result.is_err(), "AC.1: must fail closed without attestation token");
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("attestation") || err.contains("token"), "error should mention attestation: {err}");
+}
+
+#[test]
+fn attestation_enforcer_succeeds_with_valid_token_ac2() {
+    // AC.2: Token carries agent identity, task UUID, capability allow-list,
+    // RFC-3339 expiration; signed by bnaut-attestation
+    let signer = crate::attestation::AttestationSigner::new_always(b"test-secret-32-bytes-long!!".to_vec());
+    let claims = crate::attestation::AttestationClaims::new(
+        "agent-42".to_string(),
+        "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        vec!["search".to_string(), "db".to_string()],
+        std::time::Duration::from_secs(3600),
+    );
+    let token = signer.sign(claims);
+    let validator = std::sync::Arc::new(
+        crate::attestation::AttestationValidator::new(Some(signer.clone()), true),
+    );
+    let sandbox = SessionSandbox {
+        require_attestation: true,
+        ..Default::default()
+    };
+    let enforcer = SandboxEnforcer::new_with_attestation(
+        sandbox,
+        Some(token),
+        Some(validator),
+    )
+    .unwrap();
+    let att = enforcer.attestation().unwrap();
+    assert_eq!(att.agent_id, "agent-42", "AC.2: agent identity must be present");
+    assert_eq!(att.task_uuid, "550e8400-e29b-41d4-a716-446655440000", "AC.2: task UUID must be present");
+    assert_eq!(att.capability_allowlist, vec!["search", "db"], "AC.2: capability allow-list must be present");
+    assert!(!att.exp.is_empty(), "AC.2: RFC-3339 expiration must be present");
+}
+
+#[test]
+fn attestation_check_attestation_rejects_expired_ac3_ac4() {
+    // AC.3: Token validates against gateway on every cross-boundary call;
+    // rejection logs to audit ring buffer.
+    // AC.4: Rotation does not disrupt in-flight syscalls.
+    let signer = crate::attestation::AttestationSigner::new_always(b"test-secret-32-bytes-long!!".to_vec());
+    let validator = std::sync::Arc::new(
+        crate::attestation::AttestationValidator::new(Some(signer.clone()), false),
+    );
+    // Create a token that is already expired.
+    let expired_claims = crate::attestation::AttestationClaims {
+        agent_id: "agent-1".to_string(),
+        task_uuid: "e1e1e1e1-e1e1-e1e1-e1e1-e1e1e1e1e1e1".to_string(),
+        capability_allowlist: vec!["search".to_string()],
+        exp: "2020-01-01T00:00:00+00:00".to_string(),
+        iat: "2020-01-01T00:00:00+00:00".to_string(),
+    };
+    let expired_token = signer.sign(expired_claims);
+
+    // Build enforcer with the expired token.
+    let mut sandbox = SessionSandbox::default();
+    sandbox.require_attestation = true;
+    let mut enforcer = SandboxEnforcer::new_with_attestation(
+        sandbox,
+        Some(expired_token),
+        Some(validator.clone()),
+    )
+    .unwrap();
+
+    // AC.3: cross-boundary check should detect expiry and log to audit.
+    let result = enforcer.check_attestation("cross_boundary_call");
+    assert!(result.is_err(), "AC.3: cross-boundary call must reject expired token");
+    assert!(result.unwrap_err().to_string().contains("expired"));
+
+    // AC.3: audit ring buffer must have a record of the rejection.
+    let audit_entries = validator.audit().entries();
+    assert!(!audit_entries.is_empty(), "AC.3: audit ring buffer must log rejections");
+
+    // AC.4: rotation does not disrupt existing claims on failure.
+    let bogus_token = crate::attestation::AttestationToken {
+        claims: crate::attestation::AttestationClaims::new(
+            "evil".to_string(),
+            "bad-bad-bad-bad-bad-bad-bad-bad".to_string(),
+            vec!["admin".to_string()],
+            std::time::Duration::from_secs(3600),
+        ),
+        sig: "invalid_signature".to_string(),
+    };
+    let old_agent = enforcer.attestation().unwrap().agent_id.clone();
+    let rot_result = enforcer.rotate_attestation(bogus_token);
+    assert!(rot_result.is_err(), "AC.4: invalid rotation must be rejected");
+    assert_eq!(enforcer.attestation().unwrap().agent_id, old_agent, "AC.4: existing claims preserved on rotation failure");
+}

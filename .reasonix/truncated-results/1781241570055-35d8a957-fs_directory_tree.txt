@@ -1,0 +1,1516 @@
+[
+  {
+    "name": ".dockerignore",
+    "type": "file"
+  },
+  {
+    "name": ".git",
+    "type": "file"
+  },
+  {
+    "name": ".github",
+    "type": "directory",
+    "children": [
+      {
+        "name": "CODEOWNERS",
+        "type": "file"
+      },
+      {
+        "name": "FUNDING.yml",
+        "type": "file"
+      },
+      {
+        "name": "ISSUE_TEMPLATE",
+        "type": "directory",
+        "children": [
+          {
+            "name": "bug_report.md",
+            "type": "file"
+          },
+          {
+            "name": "capability_request.md",
+            "type": "file"
+          },
+          {
+            "name": "config.yml",
+            "type": "file"
+          },
+          {
+            "name": "feature_request.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "PULL_REQUEST_TEMPLATE.md",
+        "type": "file"
+      },
+      {
+        "name": "dependabot.yml",
+        "type": "file"
+      },
+      {
+        "name": "osv-scanner.toml",
+        "type": "file"
+      },
+      {
+        "name": "workflows",
+        "type": "directory",
+        "children": [
+          {
+            "name": "ci.yml",
+            "type": "file"
+          },
+          {
+            "name": "docker.yml",
+            "type": "file"
+          },
+          {
+            "name": "release.yml",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": ".gitignore",
+    "type": "file"
+  },
+  {
+    "name": ".gitleaksignore",
+    "type": "file"
+  },
+  {
+    "name": ".trivyignore",
+    "type": "file"
+  },
+  {
+    "name": ".worker-lease.json",
+    "type": "file"
+  },
+  {
+    "name": "ARCHITECTURE.md",
+    "type": "file"
+  },
+  {
+    "name": "CHANGELOG.md",
+    "type": "file"
+  },
+  {
+    "name": "CIRCUIT_BREAKER_IMPLEMENTATION.md",
+    "type": "file"
+  },
+  {
+    "name": "CLAUDE.md",
+    "type": "file"
+  },
+  {
+    "name": "CLI_INTEGRATION_VALIDATOR.md",
+    "type": "file"
+  },
+  {
+    "name": "CODE_OF_CONDUCT.md",
+    "type": "file"
+  },
+  {
+    "name": "COMMERCIAL.md",
+    "type": "file"
+  },
+  {
+    "name": "CONTRIBUTING.md",
+    "type": "file"
+  },
+  {
+    "name": "Cargo.lock",
+    "type": "file"
+  },
+  {
+    "name": "Cargo.toml",
+    "type": "file"
+  },
+  {
+    "name": "Dockerfile",
+    "type": "file"
+  },
+  {
+    "name": "LICENSE",
+    "type": "file"
+  },
+  {
+    "name": "LICENSE-EE.md",
+    "type": "file"
+  },
+  {
+    "name": "Makefile",
+    "type": "file"
+  },
+  {
+    "name": "README.md",
+    "type": "file"
+  },
+  {
+    "name": "SECURITY.md",
+    "type": "file"
+  },
+  {
+    "name": "benches",
+    "type": "directory",
+    "children": [
+      {
+        "name": "gateway_benchmarks.rs",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "benchmarks",
+    "type": "directory",
+    "children": [
+      {
+        "name": "public_claims.json",
+        "type": "file"
+      },
+      {
+        "name": "token_savings.py",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "capabilities",
+    "type": "directory",
+    "children": [
+      {
+        "name": "README.md",
+        "type": "file"
+      },
+      {
+        "name": "automation",
+        "type": "directory",
+        "children": [
+          {
+            "name": "agent_bus_schema.surql",
+            "type": "file"
+          },
+          {
+            "name": "agent_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "bus_announce.yaml",
+            "type": "file"
+          },
+          {
+            "name": "bus_publish.yaml",
+            "type": "file"
+          },
+          {
+            "name": "bus_pull.yaml",
+            "type": "file"
+          },
+          {
+            "name": "bus_subscribe.yaml",
+            "type": "file"
+          },
+          {
+            "name": "desktop_event_bus.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "communication",
+        "type": "directory",
+        "children": [
+          {
+            "name": "gmail_send_email.yaml",
+            "type": "file"
+          },
+          {
+            "name": "slack_post_message.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "entertainment",
+        "type": "directory",
+        "children": [
+          {
+            "name": "musicbrainz_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "random_joke.yaml",
+            "type": "file"
+          },
+          {
+            "name": "random_quote.yaml",
+            "type": "file"
+          },
+          {
+            "name": "trivia_question.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "examples",
+        "type": "directory",
+        "children": [
+          {
+            "name": "check_weather.yaml",
+            "type": "file"
+          },
+          {
+            "name": "github_graphql.yaml",
+            "type": "file"
+          },
+          {
+            "name": "github_integration.yaml",
+            "type": "file"
+          },
+          {
+            "name": "github_user.yaml",
+            "type": "file"
+          },
+          {
+            "name": "jsonrpc_example.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_integration.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "finance",
+        "type": "directory",
+        "children": [
+          {
+            "name": "ecb_exchange_rates.yaml",
+            "type": "file"
+          },
+          {
+            "name": "prh_company.yaml",
+            "type": "file"
+          },
+          {
+            "name": "stripe_charges.yaml",
+            "type": "file"
+          },
+          {
+            "name": "stripe_create_payment_intent.yaml",
+            "type": "file"
+          },
+          {
+            "name": "stripe_list_charges.yaml",
+            "type": "file"
+          },
+          {
+            "name": "yahoo_stock_quote.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "food",
+        "type": "directory",
+        "children": [
+          {
+            "name": "openfoodfacts_product.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "google",
+        "type": "directory",
+        "children": [
+          {
+            "name": "calendar_create_event.yaml",
+            "type": "file"
+          },
+          {
+            "name": "calendar_free_slots.yaml",
+            "type": "file"
+          },
+          {
+            "name": "calendar_get_attachment.yaml",
+            "type": "file"
+          },
+          {
+            "name": "calendar_list_events.yaml",
+            "type": "file"
+          },
+          {
+            "name": "contacts_list.yaml",
+            "type": "file"
+          },
+          {
+            "name": "contacts_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "drive_download.yaml",
+            "type": "file"
+          },
+          {
+            "name": "drive_list.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_batch_modify.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_get_attachment.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_get_message.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_labels.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_modify.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_profile.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_save_attachment.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gmail_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "tasks_list.yaml",
+            "type": "file"
+          },
+          {
+            "name": "youtube_history.yaml",
+            "type": "file"
+          },
+          {
+            "name": "youtube_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "youtube_subscription_videos.yaml",
+            "type": "file"
+          },
+          {
+            "name": "youtube_subscriptions.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "infrastructure",
+        "type": "directory",
+        "children": [
+          {
+            "name": "cloudflare_manage.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "knowledge",
+        "type": "directory",
+        "children": [
+          {
+            "name": "country_info.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gemini_embedding.yaml",
+            "type": "file"
+          },
+          {
+            "name": "github_get_release.yaml",
+            "type": "file"
+          },
+          {
+            "name": "github_get_repo.yaml",
+            "type": "file"
+          },
+          {
+            "name": "github_search_repos.yaml",
+            "type": "file"
+          },
+          {
+            "name": "hackernews_ask.yaml",
+            "type": "file"
+          },
+          {
+            "name": "hackernews_get_item.yaml",
+            "type": "file"
+          },
+          {
+            "name": "hackernews_show.yaml",
+            "type": "file"
+          },
+          {
+            "name": "hackernews_top.yaml",
+            "type": "file"
+          },
+          {
+            "name": "hackernews_user.yaml",
+            "type": "file"
+          },
+          {
+            "name": "internet_archive_changes.yaml",
+            "type": "file"
+          },
+          {
+            "name": "internet_archive_metadata.yaml",
+            "type": "file"
+          },
+          {
+            "name": "internet_archive_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "number_facts.yaml",
+            "type": "file"
+          },
+          {
+            "name": "public_holidays.yaml",
+            "type": "file"
+          },
+          {
+            "name": "semantic_scholar.yaml",
+            "type": "file"
+          },
+          {
+            "name": "wayback_availability.yaml",
+            "type": "file"
+          },
+          {
+            "name": "wayback_cdx.yaml",
+            "type": "file"
+          },
+          {
+            "name": "wayback_save.yaml",
+            "type": "file"
+          },
+          {
+            "name": "weather.yaml",
+            "type": "file"
+          },
+          {
+            "name": "weather_current.yaml",
+            "type": "file"
+          },
+          {
+            "name": "wolfram_llm.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "linear",
+        "type": "directory",
+        "children": [
+          {
+            "name": "linear_add_comment.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_attach_url.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_comment_integration.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_create_issue.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_create_project.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_create_webhook.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_get_issue.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_get_teams.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_list_issues.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_list_projects.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_search_issues.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_update_issue.yaml",
+            "type": "file"
+          },
+          {
+            "name": "linear_viewer.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "media",
+        "type": "directory",
+        "children": [
+          {
+            "name": "audio_transcribe.yaml",
+            "type": "file"
+          },
+          {
+            "name": "audio_tts.yaml",
+            "type": "file"
+          },
+          {
+            "name": "avatar_list.yaml",
+            "type": "file"
+          },
+          {
+            "name": "image_to_text.yaml",
+            "type": "file"
+          },
+          {
+            "name": "screenshot_url.yaml",
+            "type": "file"
+          },
+          {
+            "name": "video_agent_create.yaml",
+            "type": "file"
+          },
+          {
+            "name": "video_create.yaml",
+            "type": "file"
+          },
+          {
+            "name": "video_download.yaml",
+            "type": "file"
+          },
+          {
+            "name": "video_get.yaml",
+            "type": "file"
+          },
+          {
+            "name": "voice_list.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "productivity",
+        "type": "directory",
+        "children": [
+          {
+            "name": "box_extract.yaml",
+            "type": "file"
+          },
+          {
+            "name": "confluence_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "github_create_pr.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_calendar_events.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_calendar_insert.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_chat_send.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_docs_read.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_docs_write.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_drive_list.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_drive_upload.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_gmail_forward.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_gmail_reply.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_gmail_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_gmail_send.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_gmail_triage.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_gmail_watch.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_sheets_append.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_sheets_read.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_tasks_create.yaml",
+            "type": "file"
+          },
+          {
+            "name": "gws_tasks_list.yaml",
+            "type": "file"
+          },
+          {
+            "name": "jira_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "notion_create_page.yaml",
+            "type": "file"
+          },
+          {
+            "name": "notion_search.yaml",
+            "type": "file"
+          },
+          {
+            "name": "openpencil_design.yaml",
+            "type": "file"
+          },
+          {
+            "name": "salesforce_query.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "search",
+        "type": "directory",
+        "children": [
+          {
+            "name": "trawl_extract.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "security",
+        "type": "directory",
+        "children": [
+          {
+            "name": "cisco_scanner.yaml",
+            "type": "file"
+          },
+          {
+            "name": "pyghidra_reverse.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "utility",
+        "type": "directory",
+        "children": [
+          {
+            "name": "github_create_issue.yaml",
+            "type": "file"
+          },
+          {
+            "name": "random_user.yaml",
+            "type": "file"
+          },
+          {
+            "name": "uuid_generate.yaml",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "verification",
+        "type": "directory",
+        "children": [
+          {
+            "name": "metacognition_verify.yaml",
+            "type": "file"
+          },
+          {
+            "name": "pact_contracts.yaml",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "crates",
+    "type": "directory",
+    "children": [
+      {
+        "name": "gateway-core",
+        "type": "directory",
+        "children": [
+          {
+            "name": "Cargo.toml",
+            "type": "file"
+          },
+          {
+            "name": "src",
+            "type": "directory",
+            "children": [
+              {
+                "name": "lib.rs",
+                "type": "file"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "demo.gif",
+    "type": "file"
+  },
+  {
+    "name": "demo.tape",
+    "type": "file"
+  },
+  {
+    "name": "docs",
+    "type": "directory",
+    "children": [
+      {
+        "name": "ARCHITECTURE.md",
+        "type": "file"
+      },
+      {
+        "name": "BENCHMARKS.md",
+        "type": "file"
+      },
+      {
+        "name": "COMMUNITY_REGISTRY.md",
+        "type": "file"
+      },
+      {
+        "name": "DEPLOYMENT.md",
+        "type": "file"
+      },
+      {
+        "name": "OAUTH_CONFIG.md",
+        "type": "file"
+      },
+      {
+        "name": "OPENAPI_IMPORT.md",
+        "type": "file"
+      },
+      {
+        "name": "OWASP_AGENTIC_AI_COMPLIANCE.md",
+        "type": "file"
+      },
+      {
+        "name": "QUICKSTART.md",
+        "type": "file"
+      },
+      {
+        "name": "REMOTE_BACKENDS.md",
+        "type": "file"
+      },
+      {
+        "name": "SECURITY_AUDIT.md",
+        "type": "file"
+      },
+      {
+        "name": "WEBHOOKS.md",
+        "type": "file"
+      },
+      {
+        "name": "adr",
+        "type": "directory",
+        "children": [
+          {
+            "name": "ADR-001-inter-agent-message-signing.md",
+            "type": "file"
+          },
+          {
+            "name": "ADR-002-a2a-transport-adapter.md",
+            "type": "file"
+          },
+          {
+            "name": "ADR-003-mcp-tool-annotation-policy.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "always-load-pins.md",
+        "type": "file"
+      },
+      {
+        "name": "blog",
+        "type": "directory",
+        "children": [
+          {
+            "name": "security-aware-mcp-gateway.md",
+            "type": "file"
+          },
+          {
+            "name": "sovereign-stack-2026-04.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "competitive",
+        "type": "directory",
+        "children": [
+          {
+            "name": "openai-agents-sdk-0.14.0.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "design",
+        "type": "directory",
+        "children": [
+          {
+            "name": "BPD_DSL_DESIGN.md",
+            "type": "file"
+          },
+          {
+            "name": "DISTRIBUTED_GATEWAY.md",
+            "type": "file"
+          },
+          {
+            "name": "LLM_KEY_SERVER.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0032-provider-transform-playbook.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0043-llm-key-server.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0051-mtls-tool-access.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0060-webui-management.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0070-universal-config-export.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0071-security-firewall.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0072-semantic-tool-search.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0073-context-aware-tool-profiles.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0074-auto-capability-discovery.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0075-tool-cost-governance.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0080-systematic-improvements.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0081-intelligent-tool-surfacing.md",
+            "type": "file"
+          },
+          {
+            "name": "RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md",
+            "type": "file"
+          },
+          {
+            "name": "V22_FEATURES.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "evaluations",
+        "type": "directory",
+        "children": [
+          {
+            "name": "AP2_AND_GALILEO_EVALUATION.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "issue-73-impl-plan.md",
+        "type": "file"
+      },
+      {
+        "name": "launch_checklist.md",
+        "type": "file"
+      },
+      {
+        "name": "mcp-gateway-demo-opt.gif",
+        "type": "file"
+      },
+      {
+        "name": "mcp-gateway-demo.gif",
+        "type": "file"
+      },
+      {
+        "name": "plans",
+        "type": "directory",
+        "children": [
+          {
+            "name": "webui-management.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "research",
+        "type": "directory",
+        "children": [
+          {
+            "name": "codex-network-policy-port.md",
+            "type": "file"
+          },
+          {
+            "name": "hebb-1bit-factual-compensation.md",
+            "type": "file"
+          },
+          {
+            "name": "pgque-audit-log-eval.md",
+            "type": "file"
+          },
+          {
+            "name": "stanford-ai-index-2026-evidence-extract.md",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "show-hn.md",
+        "type": "file"
+      },
+      {
+        "name": "test-report-code-mode-profiles.md",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "examples",
+    "type": "directory",
+    "children": [
+      {
+        "name": "circuit-breaker.yaml",
+        "type": "file"
+      },
+      {
+        "name": "claude-desktop.json",
+        "type": "file"
+      },
+      {
+        "name": "config-bundles.yaml",
+        "type": "file"
+      },
+      {
+        "name": "config-fulcrum.yaml",
+        "type": "file"
+      },
+      {
+        "name": "cursor-settings.json",
+        "type": "file"
+      },
+      {
+        "name": "gateway-full.yaml",
+        "type": "file"
+      },
+      {
+        "name": "gateway-minimal.yaml",
+        "type": "file"
+      },
+      {
+        "name": "minimal.yaml",
+        "type": "file"
+      },
+      {
+        "name": "per-client-tool-scopes.yaml",
+        "type": "file"
+      },
+      {
+        "name": "playbook-morning-briefing.yaml",
+        "type": "file"
+      },
+      {
+        "name": "servers.yaml",
+        "type": "file"
+      },
+      {
+        "name": "transform-example.yaml",
+        "type": "file"
+      },
+      {
+        "name": "validator_demo.rs",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "gateway.example.yaml",
+    "type": "file"
+  },
+  {
+    "name": "glama.json",
+    "type": "file"
+  },
+  {
+    "name": "homebrew",
+    "type": "directory",
+    "children": [
+      {
+        "name": "mcp-gateway.rb",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "llms.txt",
+    "type": "file"
+  },
+  {
+    "name": "npm",
+    "type": "directory",
+    "children": [
+      {
+        "name": ".gitignore",
+        "type": "file"
+      },
+      {
+        "name": "package.json",
+        "type": "file"
+      },
+      {
+        "name": "run.js",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "packaging",
+    "type": "directory",
+    "children": [
+      {
+        "name": "homebrew",
+        "type": "directory",
+        "children": [
+          {
+            "name": "mcp-gateway.rb",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "playbooks",
+    "type": "directory",
+    "children": [
+      {
+        "name": "research.yaml",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "scripts",
+    "type": "directory",
+    "children": [
+      {
+        "name": "dev",
+        "type": "directory",
+        "children": [
+          {
+            "name": "install-hooks.sh",
+            "type": "file"
+          },
+          {
+            "name": "pre-push.sh",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "server.json",
+    "type": "file"
+  },
+  {
+    "name": "smithery.yaml",
+    "type": "file"
+  },
+  {
+    "name": "src",
+    "type": "directory",
+    "children": [
+      {
+        "name": "a2a",
+        "type": "directory",
+        "children": [
+          {
+            "name": "client.rs",
+            "type": "file"
+          },
+          {
+            "name": "mod.rs",
+            "type": "file"
+          },
+          {
+            "name": "provider.rs",
+            "type": "file"
+          },
+          {
+            "name": "translator.rs",
+            "type": "file"
+          },
+          {
+            "name": "types.rs",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "autotag.rs",
+        "type": "file"
+      },
+      {
+        "name": "backend",
+        "type": "directory",
+        "children": [
+          {
+            "name": "mod.rs",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "cache.rs",
+        "type": "file"
+      },
+      {
+        "name": "capability",
+        "type": "directory",
+        "children": [
+          {
+            "name": "backend.rs",
+            "type": "file"
+          },
+          {
+            "name": "definition",
+            "type": "directory",
+            "children": [
+              {
+                "name": "mod.rs",
+                "type": "file"
+              },
+              {
+                "name": "tests.rs",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "discovery",
+            "type": "directory",
+            "children": [
+              {
+                "name": "chain.rs",
+                "type": "file"
+              },
+              {
+                "name": "dedup.rs",
+                "type": "file"
+              },
+              {
+                "name": "detector.rs",
+                "type": "file"
+              },
+              {
+                "name": "html_scanner.rs",
+                "type": "file"
+              },
+              {
+                "name": "mod.rs",
+                "type": "file"
+              },
+              {
+                "name": "quality.rs",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "executor",
+            "type": "directory",
+            "children": [
+              {
+                "name": "credentials.rs",
+                "type": "file"
+              },
+              {
+                "name": "graphql.rs",
+                "type": "file"
+              },
+              {
+                "name": "jsonrpc.rs",
+                "type": "file"
+              },
+              {
+                "name": "mod.rs",
+                "type": "file"
+              },
+              {
+                "name": "params.rs",
+                "type": "file"
+              },
+              {
+                "name": "rest.rs",
+                "type": "file"
+              },
+              {
+                "name": "xml.rs",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "executor_tests.rs",
+            "type": "file"
+          },
+          {
+            "name": "hash.rs",
+            "type": "file"
+          },
+          {
+            "name": "loader.rs",
+            "type": "file"
+          },
+          {
+            "name": "mod.rs",
+            "type": "file"
+          },
+          {
+            "name": "openapi.rs",
+            "type": "file"
+          },
+          {
+            "name": "parser.rs",
+            "type": "file"
+          },
+          {
+            "name": "response_cache.rs",
+            "type": "file"
+          },
+          {
+            "name": "schema_validator",
+            "type": "directory",
+            "children": [
+              {
+                "name": "mod.rs",
+                "type": "file"
+              },
+              {
+                "name": "tests.rs",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "validator",
+            "type": "directory",
+            "children": [
+              {
+                "name": "checks.rs",
+                "type": "file"
+              },
+              {
+                "name": "mod.rs",
+                "type": "file"
+              },
+              {
+                "name": "tests",
+                "type": "directory",
+                "children": [
+                  {
+                    "name": "mod.rs",
+                    "type": "file"
+                  },
+                  {
+                    "name": "yaml_roundtrip.rs",
+                    "type": "file"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "watcher.rs",
+            "type": "file"
+          }
+        ]
+      },
+      {
+        "name": "chains",
+        "type": "directory",
+        "children": [
+          {
+            "name": "checkpoint.rs",
+            "type": "file"
+          },
+          {
+            "name": "executor.rs",
+            "type": "file"
+          },
+          {
+            "name": "interpolation.rs",
+            "type": "file"
+          },
+          {
+            "name": "mod.rs",
+            "type": "file"
+          },
+          {
+            "name": "observability.rs",
+            "type": "file"
+          },
+          {
+            "name": "retry.rs",
+            "type": "file"
+          },
+          {
+            "name": "types.rs",
+            "type": "file"
+          }
+        ]
+
+[…truncated 28356 chars — raise BridgeOptions.maxResultChars, or call the tool with a narrower scope (filter, head, pagination)…]
+
+   "type": "file"
+      },
+      {
+        "name": "skill_import_tests.rs",
+        "type": "file"
+      },
+      {
+        "name": "stdio_tests.rs",
+        "type": "file"
+      },
+      {
+        "name": "tool_list_tests.rs",
+        "type": "file"
+      },
+      {
+        "name": "tool_scope_tests.rs",
+        "type": "file"
+      },
+      {
+        "name": "webhook_tests.rs",
+        "type": "file"
+      },
+      {
+        "name": "webui_management_tests.rs",
+        "type": "file"
+      },
+      {
+        "name": "wolfram_llm_tests.rs",
+        "type": "file"
+      }
+    ]
+  },
+  {
+    "name": "tickets",
+    "type": "directory",
+    "children": [
+      {
+        "name": "CCAL-always-load",
+        "type": "directory",
+        "children": [
+          {
+            "name": "measure.md",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "tools",
+    "type": "directory",
+    "children": [
+      {
+        "name": "agent-bus-demo.sh",
+        "type": "file"
+      }
+    ]
+  }
+]
