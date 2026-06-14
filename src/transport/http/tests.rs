@@ -661,8 +661,14 @@ fn session_expired_detection_matches_known_signatures() {
 // =========================================================================
 #[tokio::test]
 async fn request_reinitializes_on_jsonrpc_session_error_response() {
-    use axum::{Json, Router, http::StatusCode, routing::post};
-    use serde_json::json;
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::post,
+    };
+    use serde_json::{Value, json};
 
     const FRESH_SESSION: &str = "fresh-session-after-jsonrpc-session-err";
 
@@ -719,7 +725,10 @@ async fn request_reinitializes_on_jsonrpc_session_error_response() {
     let response = transport.request("tools/list", None).await.unwrap();
 
     // THEN: recovery re-initialized (no stale session) and retried call succeeded
-    assert!(response.error.is_none(), "retried request after jsonrpc session error must succeed");
+    assert!(
+        response.error.is_none(),
+        "retried request after jsonrpc session error must succeed"
+    );
     assert_eq!(
         transport.session_id.read().as_deref(),
         Some(FRESH_SESSION),

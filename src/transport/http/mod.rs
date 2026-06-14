@@ -31,14 +31,21 @@ use crate::protocol::{
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
-/// Detect the session-expiry signature in a transport error (MIK-5982).
+/// Detect the session-expiry signature in a transport error (MIK-5982, MIK-6040).
 ///
-/// Matches three observed shapes:
-/// - JSON-RPC `-32015` session errors (rust-mcp-sdk servers, e.g. hebb-serve:
-///   `HTTP 400 Bad Request: {"code":-32015,...,"message":"Bad Request: Session not found"}`)
-/// - any body containing "session not found" (case-insensitive)
-/// - bare `HTTP 404` responses, which the MCP Streamable HTTP spec defines as
-///   "session terminated or expired" (callers gate this on having had a session)
+/// Matches observed shapes per MCP 2025-11-25 §2.5.4 (Session Management):
+///   "When a client receives HTTP 404 in response to a request containing an
+///    MCP-Session-Id, it MUST start a new session by sending a new `InitializeRequest`
+///    without a session ID attached."
+/// - JSON-RPC `-32015` session errors (rust-mcp-sdk servers, e.g. hebb-serve)
+/// - any Transport body containing "session not found" (case-insensitive)
+/// - bare `HTTP 404` (or "HTTP 404 Not Found: ...") responses (MCP Streamable HTTP)
+/// - (in `HttpTransport::request`) JSON-RPC error responses containing "Session not found"
+///   (code -32600 or -32015) even when delivered with 200 status. This covers remotes
+///   (e.g. some OAuth-protected Streamable HTTP) that invalidate the MCP session on
+///   token refresh and return the error either as HTTP 404 + body or 200 + jsonrpc err.
+///
+///   See: <https://github.com/MikkoParkkola/mcp-gateway/issues/247>
 fn is_session_expired_error(err: &Error) -> bool {
     let Error::Transport(msg) = err else {
         return false;
@@ -624,13 +631,24 @@ impl Transport for HttpTransport {
 
         let result = self.send_request(&request).await;
 
-        // MIK-5982: when the backend daemon restarts, our stored session ID is
-        // dead and every request — including circuit-breaker half-open probes —
-        // fails with `Session not found` forever (observed live 2026-06-11:
-        // hebb unreachable 6.5h while healthy). On the session-expiry
-        // signature, drop the session, re-run the initialize handshake, and
-        // retry the original request exactly once. `initialize()` calls
-        // `send_request` directly (not `request`), so this cannot recurse.
+        // MIK-5982 / MIK-6040: when the backend (or its session) expires (daemon
+        // restart, or remote invalidating MCP session e.g. on OAuth token refresh),
+        // every request — including CB half-open probes and health "ping"s — can
+        // fail with `Session not found`. Per MCP 2025-11-25 2.5.4 we MUST drop the
+        // MCP-Session-Id and send a fresh InitializeRequest (no session ID), then
+        // retry the original op exactly once.
+        // Recovery lives here (inside transport.request) so it also rescues
+        // half-open probes (see comment above) and is not gated behind the
+        // Backend failsafe/CB.
+        // We handle *two* shapes:
+        //   1. Transport err whose string matches is_session_expired_error (HTTP 404
+        //      or body text "session not found", -32015). This is the 404 status case.
+        //   2. Ok(JsonRpcResponse) whose embedded error indicates session expiry
+        //      (covers remotes returning 200 + {"error":{"code":-32600,"message":"Session not found"}}).
+        // `initialize()` uses send_request directly (never request) so no recursion.
+        // On success the caller (Backend::request) sees Ok and does record_success,
+        // resetting health/CB consecutive counts.
+        // GH-247: https://github.com/MikkoParkkola/mcp-gateway/issues/247
         let had_session = self.session_id.read().is_some();
         if let Err(ref err) = result
             && had_session
@@ -640,6 +658,21 @@ impl Transport for HttpTransport {
                 url = %self.base_url,
                 method = %method,
                 "Backend session expired; re-initializing and retrying once"
+            );
+            *self.session_id.write() = None;
+            self.initialize().await?;
+            return self.send_request(&request).await;
+        } else if let Ok(ref resp) = result
+            && had_session
+            && resp.error.as_ref().is_some_and(|e| {
+                let m = e.message.to_lowercase();
+                m.contains("session not found") || e.code == -32015 || e.code == -32600
+            })
+        {
+            warn!(
+                url = %self.base_url,
+                method = %method,
+                "Backend session expired (jsonrpc error response); re-initializing and retrying once"
             );
             *self.session_id.write() = None;
             self.initialize().await?;
