@@ -644,3 +644,87 @@ fn session_expired_detection_matches_known_signatures() {
         "Session not found".to_string()
     )));
 }
+
+// =========================================================================
+// Session recovery on JSON-RPC error response (in addition to HTTP 404 Transport err)
+// Per MCP 2025-11-25 2.5.4: on session invalid (whether via 404 or error body), client
+// MUST start new session with fresh InitializeRequest (no MCP-Session-Id).
+// This covers remotes that surface "Session not found" (code -32600 or text) as
+// JSON-RPC error envelope on 200 (or other) rather than (or in addition to) HTTP 404.
+// ----------------------------------------------------------------------------
+// MIK.MCPG.1 — Root cause identified and a fix implemented for the issue described below; change is reviewed, merged to main, and deployed to production.
+// MIK.MCPG.2 — A regression test (or reproducible verification step) covers the fixed behavior and passes in CI.
+// MIK.MCPG.3 — The originating GitHub issue is referenced/closed once the fix is merged to main and deployed to production.
+// ----------------------------------------------------------------------------
+// Originating: https://github.com/MikkoParkkola/mcp-gateway/issues/247
+// See also: is_session_expired_error, HttpTransport::request recovery, Backend health pings via "ping".
+// =========================================================================
+#[tokio::test]
+async fn request_reinitializes_on_jsonrpc_session_error_response() {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use serde_json::json;
+
+    const FRESH_SESSION: &str = "fresh-session-after-jsonrpc-session-err";
+
+    async fn mcp_handler(
+        State(hits): State<Arc<std::sync::atomic::AtomicU32>>,
+        _headers: HeaderMap,
+        Json(_body): Json<Value>,
+    ) -> axum::response::Response {
+        let hit = hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if hit == 0 {
+            // First hit (stale session): return *200* + JSON-RPC error envelope with "Session not found".
+            // This must still trigger re-initialize + retry (new path, not just Transport 404).
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": 1,
+                    "error": {"message": "Session not found", "code": -32600},
+                    "jsonrpc": "2.0"
+                })),
+            )
+                .into_response()
+        } else {
+            // Post-recovery (init + retried request): success + new session header.
+            (
+                StatusCode::OK,
+                [
+                    ("mcp-session-id", FRESH_SESSION),
+                ],
+                Json(json!({
+                    "id": 1,
+                    "result": {"protocolVersion": "2025-11-25", "capabilities": {}, "serverInfo": {"name": "mock", "version": "0"}},
+                    "jsonrpc": "2.0"
+                })),
+            )
+                .into_response()
+        }
+    }
+
+    let hits = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(Arc::clone(&hits));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    *transport.session_id.write() = Some("stale-session-before-jsonrpc-err".to_string());
+
+    // WHEN: a request receives a JSON-RPC session error response while a session ID is active
+    let response = transport.request("tools/list", None).await.unwrap();
+
+    // THEN: recovery re-initialized (no stale session) and retried call succeeded
+    assert!(response.error.is_none(), "retried request after jsonrpc session error must succeed");
+    assert_eq!(
+        transport.session_id.read().as_deref(),
+        Some(FRESH_SESSION),
+        "fresh session ID must be stored after recovery from jsonrpc session error response"
+    );
+
+    server.abort();
+}
