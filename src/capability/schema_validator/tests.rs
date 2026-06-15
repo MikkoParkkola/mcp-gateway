@@ -58,32 +58,38 @@ fn validate_output_reuses_object_schema_rules() {
 }
 
 // Regression for #250: upstream search APIs (Brave, Exa) return extra
-// top-level fields the gateway's declared output schema does not enumerate
-// (e.g. Brave's `mixed`/`type`, Exa's `costDollars`/`searchTime`). Output
-// validation must tolerate these extra keys instead of rejecting an
-// otherwise-valid response. Required-field and type checks still apply.
+// top-level fields the declared output schema does not enumerate (e.g. Brave's
+// `mixed`/`type`, Exa's `costDollars`/`searchTime`). A schema can opt into
+// tolerating these via `additionalProperties: true`, while the default stays
+// fail-closed (anti-exfiltration). Required and type checks always apply.
 #[test]
-fn validate_output_tolerates_extra_upstream_fields() {
-    let schema = schema_with_props(json!({ "web": { "type": "object" } }), &[]);
+fn validate_output_tolerates_extra_fields_when_schema_opts_in() {
+    let mut schema = schema_with_props(json!({ "web": { "type": "object" } }), &[]);
+    schema["additionalProperties"] = json!(true);
     let result = validate_output(
         &json!({ "web": { "results": [] }, "mixed": {}, "type": "search" }),
         &schema,
     );
     assert!(
         result.is_valid(),
-        "extra upstream fields must not fail output validation: {:?}",
+        "additionalProperties:true output must tolerate extra fields: {:?}",
         result.violations
     );
+}
 
-    // The same extra keys ARE rejected on the input path (strict).
-    let input = validate_arguments(
-        &json!({ "web": {}, "mixed": {}, "type": "search" }),
-        &schema,
-    );
+#[test]
+fn validate_output_rejects_extra_fields_by_default() {
+    // No additionalProperties → fail closed (anti-exfiltration default).
+    let schema = schema_with_props(json!({ "web": { "type": "object" } }), &[]);
+    let result = validate_output(&json!({ "web": {}, "exfil": "secret" }), &schema);
     assert!(
-        !input.is_valid(),
-        "input validation must still reject extra keys"
+        !result.is_valid(),
+        "default output validation must reject undeclared fields"
     );
+
+    // Inputs are always strict regardless.
+    let input = validate_arguments(&json!({ "web": {}, "exfil": "x" }), &schema);
+    assert!(!input.is_valid(), "input validation must reject extra keys");
 }
 
 #[test]

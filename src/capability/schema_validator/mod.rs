@@ -186,7 +186,6 @@ fn validate_object(
         }
     }
 
-    // Step 2 – unknown parameters.
     // Step 2 – extra keys not declared in the schema (strict for inputs only).
     for key in arg_map.keys() {
         if reject_extra_keys && !properties.contains_key(key.as_str()) {
@@ -248,10 +247,15 @@ fn validate_object(
 /// and simple numeric/string constraints.
 #[must_use]
 pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidationResult {
-    // Outputs are lenient on extra keys: upstream APIs legitimately return
-    // fields the declared schema does not enumerate. Required-field and type
-    // checks still apply.
-    validate_object(result, output_schema, false)
+    // Outputs fail closed by default: extra keys not declared in the schema are
+    // rejected, so a backend cannot smuggle undeclared fields past the contract
+    // (anti-exfiltration control). A schema may opt into leniency with
+    // `additionalProperties: true` — used for backends like search whose
+    // upstream responses carry well-known extra fields the schema does not
+    // enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`). Required and
+    // type checks always apply.
+    let allows_extra = output_schema.get("additionalProperties") == Some(&Value::Bool(true));
+    validate_object(result, output_schema, !allows_extra)
 }
 
 // ── Per-property validation ───────────────────────────────────────────────────
