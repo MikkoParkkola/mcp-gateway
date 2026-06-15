@@ -592,6 +592,115 @@ async fn request_reinitializes_session_and_retries_on_session_not_found() {
     server.abort();
 }
 
+/// robn's case (#247): a remote that invalidates the session on OAuth token
+/// refresh answers a live request with a bare HTTP 404. Per the MCP 2025-11-25
+/// transport spec (2.5.4), the client must open a new session with a fresh
+/// `InitializeRequest` (no session id) and retry. The transport must drop the
+/// dead session, re-run the initialize handshake, and retry the original
+/// request once. This is the 404 sibling of the `-32015` regression above;
+/// #248 added the `http 404` clause to the expiry classifier, and this test
+/// pins the end-to-end behaviour for the exact shape reported in #247.
+#[tokio::test]
+async fn request_reinitializes_session_and_retries_on_http_404() {
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::post,
+    };
+    use serde_json::json;
+
+    const FRESH_SESSION: &str = "fresh-session-after-404";
+
+    async fn mcp_handler(
+        State(hits): State<Arc<std::sync::atomic::AtomicU32>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> axum::response::Response {
+        hits.fetch_add(1, Ordering::Relaxed);
+        let session = headers
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let method = body["method"].as_str().unwrap_or("");
+
+        // Notifications (no id) are acknowledged unconditionally.
+        if body.get("id").is_none() {
+            return StatusCode::ACCEPTED.into_response();
+        }
+
+        if method == "initialize" {
+            // Remote hands out a fresh session on re-initialize (the refreshed
+            // OAuth token is already on the request at this point).
+            let mut resp_headers = HeaderMap::new();
+            resp_headers.insert("mcp-session-id", FRESH_SESSION.parse().unwrap());
+            return (
+                StatusCode::OK,
+                resp_headers,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "serverInfo": {"name": "mock", "version": "0"}
+                    }
+                })),
+            )
+                .into_response();
+        }
+
+        if session == FRESH_SESSION {
+            // Post-reinit session: requests succeed.
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {"ok": true}
+                })),
+            )
+                .into_response()
+        } else {
+            // Stale session invalidated on token refresh: bare HTTP 404, the
+            // exact shape robn reported in #247.
+            (StatusCode::NOT_FOUND, "session terminated".to_string()).into_response()
+        }
+    }
+
+    // GIVEN: a streamable backend that 404s the session the remote just killed
+    let hits = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(Arc::clone(&hits));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    *transport.session_id.write() = Some("stale-session-pre-refresh".to_string());
+
+    // WHEN: a request rides the session the remote just invalidated
+    let response = transport.request("tools/list", None).await.unwrap();
+
+    // THEN: the 404 read as session-expiry; transport re-initialized and retried
+    assert!(
+        response.error.is_none(),
+        "retried request must succeed after the 404 triggers a re-initialize"
+    );
+    assert_eq!(
+        transport.session_id.read().as_deref(),
+        Some(FRESH_SESSION),
+        "fresh session ID must replace the one invalidated on token refresh"
+    );
+
+    server.abort();
+}
+
 /// A request without any session that fails with a non-session error must NOT
 /// trigger the re-initialize path (no retry storm on genuinely broken backends).
 #[tokio::test]
