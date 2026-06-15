@@ -112,6 +112,23 @@ impl SchemaValidationResult {
 /// to work unchanged.
 #[must_use]
 pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaValidationResult {
+    // Inputs are strict: an unrecognised parameter is almost always a caller
+    // typo or a hallucinated field, so it is reported as a violation.
+    validate_object(arguments, input_schema, true)
+}
+
+/// Core object validator shared by [`validate_arguments`] and [`validate_output`].
+///
+/// `reject_extra_keys` controls how keys absent from the schema's `properties`
+/// are treated: strict (`true`) for inputs, lenient (`false`) for outputs, where
+/// upstream APIs legitimately return extra fields the declared schema does not
+/// enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`/`searchTime`).
+#[must_use]
+fn validate_object(
+    arguments: &Value,
+    input_schema: &Value,
+    reject_extra_keys: bool,
+) -> SchemaValidationResult {
     // No schema → nothing to validate.
     if input_schema.is_null() || input_schema == &Value::Object(serde_json::Map::new()) {
         return SchemaValidationResult {
@@ -169,9 +186,9 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
         }
     }
 
-    // Step 2 – unknown parameters.
+    // Step 2 – extra keys not declared in the schema (strict for inputs only).
     for key in arg_map.keys() {
-        if !properties.contains_key(key.as_str()) {
+        if reject_extra_keys && !properties.contains_key(key.as_str()) {
             let known: Vec<&str> = properties.keys().map(String::as_str).collect();
             violations.push(ValidationViolation::new(
                 key,
@@ -230,7 +247,15 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
 /// and simple numeric/string constraints.
 #[must_use]
 pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidationResult {
-    validate_arguments(result, output_schema)
+    // Outputs fail closed by default: extra keys not declared in the schema are
+    // rejected, so a backend cannot smuggle undeclared fields past the contract
+    // (anti-exfiltration control). A schema may opt into leniency with
+    // `additionalProperties: true` — used for backends like search whose
+    // upstream responses carry well-known extra fields the schema does not
+    // enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`). Required and
+    // type checks always apply.
+    let allows_extra = output_schema.get("additionalProperties") == Some(&Value::Bool(true));
+    validate_object(result, output_schema, !allows_extra)
 }
 
 // ── Per-property validation ───────────────────────────────────────────────────

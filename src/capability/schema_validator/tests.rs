@@ -57,6 +57,41 @@ fn validate_output_reuses_object_schema_rules() {
     assert_eq!(result.coerced["count"], json!(2));
 }
 
+// Regression for #250: upstream search APIs (Brave, Exa) return extra
+// top-level fields the declared output schema does not enumerate (e.g. Brave's
+// `mixed`/`type`, Exa's `costDollars`/`searchTime`). A schema can opt into
+// tolerating these via `additionalProperties: true`, while the default stays
+// fail-closed (anti-exfiltration). Required and type checks always apply.
+#[test]
+fn validate_output_tolerates_extra_fields_when_schema_opts_in() {
+    let mut schema = schema_with_props(json!({ "web": { "type": "object" } }), &[]);
+    schema["additionalProperties"] = json!(true);
+    let result = validate_output(
+        &json!({ "web": { "results": [] }, "mixed": {}, "type": "search" }),
+        &schema,
+    );
+    assert!(
+        result.is_valid(),
+        "additionalProperties:true output must tolerate extra fields: {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn validate_output_rejects_extra_fields_by_default() {
+    // No additionalProperties → fail closed (anti-exfiltration default).
+    let schema = schema_with_props(json!({ "web": { "type": "object" } }), &[]);
+    let result = validate_output(&json!({ "web": {}, "exfil": "secret" }), &schema);
+    assert!(
+        !result.is_valid(),
+        "default output validation must reject undeclared fields"
+    );
+
+    // Inputs are always strict regardless.
+    let input = validate_arguments(&json!({ "web": {}, "exfil": "x" }), &schema);
+    assert!(!input.is_valid(), "input validation must reject extra keys");
+}
+
 #[test]
 fn output_error_heading_matches_result_validation() {
     let schema = schema_with_props(json!({ "status": { "type": "string" } }), &["status"]);
