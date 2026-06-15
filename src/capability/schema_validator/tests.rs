@@ -57,6 +57,35 @@ fn validate_output_reuses_object_schema_rules() {
     assert_eq!(result.coerced["count"], json!(2));
 }
 
+// Regression for #250: upstream search APIs (Brave, Exa) return extra
+// top-level fields the gateway's declared output schema does not enumerate
+// (e.g. Brave's `mixed`/`type`, Exa's `costDollars`/`searchTime`). Output
+// validation must tolerate these extra keys instead of rejecting an
+// otherwise-valid response. Required-field and type checks still apply.
+#[test]
+fn validate_output_tolerates_extra_upstream_fields() {
+    let schema = schema_with_props(json!({ "web": { "type": "object" } }), &[]);
+    let result = validate_output(
+        &json!({ "web": { "results": [] }, "mixed": {}, "type": "search" }),
+        &schema,
+    );
+    assert!(
+        result.is_valid(),
+        "extra upstream fields must not fail output validation: {:?}",
+        result.violations
+    );
+
+    // The same extra keys ARE rejected on the input path (strict).
+    let input = validate_arguments(
+        &json!({ "web": {}, "mixed": {}, "type": "search" }),
+        &schema,
+    );
+    assert!(
+        !input.is_valid(),
+        "input validation must still reject extra keys"
+    );
+}
+
 #[test]
 fn output_error_heading_matches_result_validation() {
     let schema = schema_with_props(json!({ "status": { "type": "string" } }), &["status"]);
