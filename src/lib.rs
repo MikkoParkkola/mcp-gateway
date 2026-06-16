@@ -28,6 +28,7 @@
 
 #[cfg(feature = "a2a")]
 pub mod a2a;
+pub mod attestation;
 pub mod autotag;
 pub mod backend;
 pub mod cache;

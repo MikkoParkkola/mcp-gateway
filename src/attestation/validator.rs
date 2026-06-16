@@ -1,0 +1,557 @@
+//! Gateway-side attestation validation (MIK-5223 AC.3–AC.5, AC.9).
+//!
+//! The [`AttestationValidator`] is the single validation point: every
+//! cross-boundary call presents its token here.  Rejections — including
+//! forgery attempts — are recorded in the [`AuditRingBuffer`] with the
+//! measured detection latency, and emitted as `attestation_audit` tracing
+//! events (a name distinct from the existing `agent_tool_audit` signal so the
+//! two streams are independently attributable, B1-IDENT).
+//!
+//! Rotation: when a long-running task rotates its token, the predecessor
+//! enters a grace window during which in-flight syscalls that still carry it
+//! keep validating; after the window it is rejected as `RotatedOut`.  The
+//! rotation state serializes to a [`RotationCheckpoint`] so it survives
+//! checkpoint/restore (B3-DURABLE, ties to RUNTIME-C).
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+use chrono::{DateTime, TimeDelta, Utc};
+use serde::{Deserialize, Serialize};
+
+use super::signer::BnautAttestationSigner;
+use super::token::{AttestationToken, BNAUT_ISSUER, TokenClaims};
+
+/// Default capacity of the audit ring buffer.
+pub const DEFAULT_AUDIT_CAPACITY: usize = 1024;
+
+/// Default grace window during which a rotated-out token still validates.
+pub const DEFAULT_ROTATION_GRACE_SECS: i64 = 30;
+
+// ── Rejection reasons ────────────────────────────────────────────────────────
+
+/// Why a token failed validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AttestationRejection {
+    /// No token was presented at all (fail-closed boots hit this).
+    MissingToken,
+    /// The token is structurally invalid (bad base64, bad JSON, no separator).
+    MalformedToken {
+        /// Description of the structural defect.
+        detail: String,
+    },
+    /// The signature does not verify — forgery or tampering.
+    BadSignature,
+    /// The token claims an issuer other than bnaut-attestation.
+    UnknownIssuer {
+        /// The issuer the token claimed.
+        issuer: String,
+    },
+    /// The `expires_at` claim is not valid RFC-3339.
+    InvalidExpiry {
+        /// The raw claim value.
+        value: String,
+    },
+    /// The token has expired.
+    Expired {
+        /// The RFC-3339 expiration that has passed.
+        expires_at: String,
+    },
+    /// The token was rotated out and its grace window has closed.
+    RotatedOut {
+        /// `token_id` of the rejected predecessor token.
+        token_id: String,
+    },
+}
+
+impl std::fmt::Display for AttestationRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingToken => write!(f, "no attestation token presented"),
+            Self::MalformedToken { detail } => write!(f, "malformed attestation token: {detail}"),
+            Self::BadSignature => write!(f, "attestation signature verification failed"),
+            Self::UnknownIssuer { issuer } => write!(f, "unknown attestation issuer: {issuer}"),
+            Self::InvalidExpiry { value } => write!(f, "invalid expiry timestamp: {value}"),
+            Self::Expired { expires_at } => write!(f, "attestation token expired at {expires_at}"),
+            Self::RotatedOut { token_id } => {
+                write!(f, "token {token_id} rotated out and past its grace window")
+            }
+        }
+    }
+}
+
+// ── Audit ring buffer ────────────────────────────────────────────────────────
+
+/// One audit record for a rejected attestation check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationAuditRecord {
+    /// Monotonic sequence number — unique per record (B1-IDENT attribution).
+    pub seq: u64,
+    /// RFC-3339 timestamp of the rejection.
+    pub timestamp: String,
+    /// The boundary at which the call was rejected (e.g. `sandbox_boot`,
+    /// `gateway_invoke`).
+    pub boundary: String,
+    /// `token_id` when the payload was parseable; `None` for forged or
+    /// malformed tokens whose claims cannot be trusted.
+    pub token_id: Option<String>,
+    /// Claimed agent identity when parseable (untrusted for forgeries).
+    pub agent_identity: Option<String>,
+    /// Why the token was rejected.
+    pub rejection: AttestationRejection,
+    /// Microseconds between the validation starting and the rejection being
+    /// detected (AC.5: detection within 100ms).
+    pub detection_micros: u64,
+}
+
+/// Fixed-capacity ring buffer of attestation rejections (MIK-NEW.RUNTIME-A.3).
+///
+/// When full, the oldest record is evicted.  Thread-safe.
+#[derive(Debug)]
+pub struct AuditRingBuffer {
+    entries: Mutex<VecDeque<AttestationAuditRecord>>,
+    capacity: usize,
+    sequence: AtomicU64,
+}
+
+impl AuditRingBuffer {
+    /// Create a ring buffer holding at most `capacity` records.
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            entries: Mutex::new(VecDeque::with_capacity(
+                capacity.min(DEFAULT_AUDIT_CAPACITY),
+            )),
+            capacity: capacity.max(1),
+            sequence: AtomicU64::new(0),
+        }
+    }
+
+    /// Append a record, evicting the oldest when at capacity.  Returns the
+    /// assigned sequence number.
+    pub fn push(&self, mut record: AttestationAuditRecord) -> u64 {
+        let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
+        record.seq = seq;
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries.len() == self.capacity {
+            entries.pop_front();
+        }
+        entries.push_back(record);
+        seq
+    }
+
+    /// Snapshot of the current records, oldest first.
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<AttestationAuditRecord> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Number of records currently held.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// Whether the buffer holds no records.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Total records ever pushed (monotonic, survives eviction).
+    #[must_use]
+    pub fn total_pushed(&self) -> u64 {
+        self.sequence.load(Ordering::Relaxed)
+    }
+}
+
+// ── Rotation checkpoint ──────────────────────────────────────────────────────
+
+/// A rotated-out token still inside its grace window.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetiringToken {
+    /// `token_id` of the predecessor token.
+    pub token_id: String,
+    /// RFC-3339 instant after which the token is rejected.
+    pub reject_after: String,
+}
+
+/// Serializable rotation state (MIK-NEW.RUNTIME-A.4 / B3-DURABLE).
+///
+/// Persisting this across a checkpoint keeps in-flight grace windows intact
+/// when the validator is restored in a new process.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RotationCheckpoint {
+    /// Tokens rotated out but still within their grace window.
+    pub retiring: Vec<RetiringToken>,
+}
+
+// ── Validator ────────────────────────────────────────────────────────────────
+
+/// Gateway-side validator — the single point every cross-boundary call goes
+/// through (MIK-NEW.RUNTIME-A.3).
+#[derive(Debug)]
+pub struct AttestationValidator {
+    signer: BnautAttestationSigner,
+    audit: AuditRingBuffer,
+    /// `token_id` → instant after which the rotated-out token is rejected.
+    retiring: Mutex<HashMap<String, DateTime<Utc>>>,
+    rotation_grace: TimeDelta,
+    validations_total: AtomicU64,
+    rejections_total: AtomicU64,
+    rotations_total: AtomicU64,
+}
+
+impl AttestationValidator {
+    /// Create a validator that verifies with `signer`'s key material.
+    #[must_use]
+    pub fn new(signer: BnautAttestationSigner) -> Self {
+        Self::with_settings(
+            signer,
+            DEFAULT_AUDIT_CAPACITY,
+            TimeDelta::seconds(DEFAULT_ROTATION_GRACE_SECS),
+        )
+    }
+
+    /// Create a validator with explicit audit capacity and rotation grace.
+    #[must_use]
+    pub fn with_settings(
+        signer: BnautAttestationSigner,
+        audit_capacity: usize,
+        rotation_grace: TimeDelta,
+    ) -> Self {
+        Self {
+            signer,
+            audit: AuditRingBuffer::new(audit_capacity),
+            retiring: Mutex::new(HashMap::new()),
+            rotation_grace,
+            validations_total: AtomicU64::new(0),
+            rejections_total: AtomicU64::new(0),
+            rotations_total: AtomicU64::new(0),
+        }
+    }
+
+    /// Validate the token presented by a cross-boundary call.
+    ///
+    /// On success returns the verified claims.  On failure the rejection is
+    /// recorded in the audit ring buffer with its detection latency and
+    /// emitted as an `attestation_audit` tracing event, then returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AttestationRejection`] describing why the token was
+    /// refused.
+    pub fn validate_boundary_call(
+        &self,
+        encoded: Option<&str>,
+        boundary: &str,
+        now: DateTime<Utc>,
+    ) -> Result<TokenClaims, AttestationRejection> {
+        let started = Instant::now();
+        match self.check(encoded, now) {
+            Ok(claims) => {
+                self.validations_total.fetch_add(1, Ordering::Relaxed);
+                Ok(claims)
+            }
+            Err((rejection, claims)) => {
+                self.rejections_total.fetch_add(1, Ordering::Relaxed);
+                let detection_micros =
+                    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                let record = AttestationAuditRecord {
+                    seq: 0, // assigned by the ring buffer
+                    timestamp: now.to_rfc3339(),
+                    boundary: boundary.to_string(),
+                    token_id: claims.as_ref().map(|c| c.token_id.clone()),
+                    agent_identity: claims.as_ref().map(|c| c.agent_identity.clone()),
+                    rejection: rejection.clone(),
+                    detection_micros,
+                };
+                let seq = self.audit.push(record);
+                tracing::warn!(
+                    seq,
+                    boundary,
+                    rejection = %rejection,
+                    detection_micros,
+                    "attestation_audit"
+                );
+                Err(rejection)
+            }
+        }
+    }
+
+    /// Signature → structure → issuer → expiry → rotation, in that order.
+    /// Returns parsed claims alongside the rejection when they were readable
+    /// (for audit attribution; never trusted for authorization).
+    #[allow(clippy::result_large_err)]
+    fn check(
+        &self,
+        encoded: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<TokenClaims, (AttestationRejection, Option<TokenClaims>)> {
+        let Some(encoded) = encoded else {
+            return Err((AttestationRejection::MissingToken, None));
+        };
+        let (payload, signature) = AttestationToken::split_unverified(encoded)
+            .map_err(|detail| (AttestationRejection::MalformedToken { detail }, None))?;
+        if !self.signer.verify_bytes(&payload, &signature) {
+            // Claims from a forged token are attribution hints at best.
+            let claims = serde_json::from_slice::<TokenClaims>(&payload).ok();
+            return Err((AttestationRejection::BadSignature, claims));
+        }
+        let claims: TokenClaims = serde_json::from_slice(&payload).map_err(|e| {
+            (
+                AttestationRejection::MalformedToken {
+                    detail: format!("claims JSON: {e}"),
+                },
+                None,
+            )
+        })?;
+        if claims.issuer != BNAUT_ISSUER {
+            let issuer = claims.issuer.clone();
+            return Err((AttestationRejection::UnknownIssuer { issuer }, Some(claims)));
+        }
+        let expires_at = match claims.expires_at_utc() {
+            Ok(t) => t,
+            Err(value) => {
+                return Err((AttestationRejection::InvalidExpiry { value }, Some(claims)));
+            }
+        };
+        if now > expires_at {
+            let expires_at = claims.expires_at.clone();
+            return Err((AttestationRejection::Expired { expires_at }, Some(claims)));
+        }
+        let rotated_out = {
+            let retiring = self
+                .retiring
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            retiring
+                .get(&claims.token_id)
+                .is_some_and(|reject_after| now > *reject_after)
+        };
+        if rotated_out {
+            let token_id = claims.token_id.clone();
+            return Err((AttestationRejection::RotatedOut { token_id }, Some(claims)));
+        }
+        Ok(claims)
+    }
+
+    /// Rotate `current` for a long-running task (MIK-NEW.RUNTIME-A.4).
+    ///
+    /// The successor is signed immediately; `current` enters the grace window
+    /// (`now + rotation_grace`) so in-flight syscalls that still carry it are
+    /// not disrupted.
+    #[must_use]
+    pub fn rotate(
+        &self,
+        current: &TokenClaims,
+        now: DateTime<Utc>,
+        ttl: TimeDelta,
+    ) -> AttestationToken {
+        let successor = self.signer.rotate(current, now, ttl);
+        {
+            let mut retiring = self
+                .retiring
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            retiring.insert(current.token_id.clone(), now + self.rotation_grace);
+        }
+        self.rotations_total.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(
+            predecessor = %current.token_id,
+            successor = %successor.claims().token_id,
+            "attestation_rotation"
+        );
+        successor
+    }
+
+    /// Serialize rotation state for a checkpoint (B3-DURABLE).
+    #[must_use]
+    pub fn checkpoint(&self) -> RotationCheckpoint {
+        let retiring = self
+            .retiring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut entries: Vec<RetiringToken> = retiring
+            .iter()
+            .map(|(token_id, reject_after)| RetiringToken {
+                token_id: token_id.clone(),
+                reject_after: reject_after.to_rfc3339(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.token_id.cmp(&b.token_id));
+        RotationCheckpoint { retiring: entries }
+    }
+
+    /// Restore rotation state from a checkpoint, replacing current state.
+    /// Entries with unparseable timestamps are dropped (fail-closed: a token
+    /// absent from the retiring map validates only on its own merits).
+    pub fn restore(&self, checkpoint: &RotationCheckpoint) {
+        let mut restored = HashMap::with_capacity(checkpoint.retiring.len());
+        for entry in &checkpoint.retiring {
+            if let Ok(reject_after) = DateTime::parse_from_rfc3339(&entry.reject_after) {
+                restored.insert(entry.token_id.clone(), reject_after.with_timezone(&Utc));
+            }
+        }
+        let mut retiring = self
+            .retiring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *retiring = restored;
+    }
+
+    /// The audit ring buffer holding rejection records.
+    #[must_use]
+    pub fn audit(&self) -> &AuditRingBuffer {
+        &self.audit
+    }
+
+    /// Count of successful boundary validations.
+    #[must_use]
+    pub fn validations_total(&self) -> u64 {
+        self.validations_total.load(Ordering::Relaxed)
+    }
+
+    /// Count of rejected boundary validations — observably distinct from the
+    /// success counter and from pre-existing gateway metrics (B1-IDENT).
+    #[must_use]
+    pub fn rejections_total(&self) -> u64 {
+        self.rejections_total.load(Ordering::Relaxed)
+    }
+
+    /// Count of token rotations performed.
+    #[must_use]
+    pub fn rotations_total(&self) -> u64 {
+        self.rotations_total.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attestation::signer::TokenRequest;
+    use uuid::Uuid;
+
+    fn validator() -> AttestationValidator {
+        AttestationValidator::with_settings(
+            BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit"),
+            8,
+            TimeDelta::seconds(30),
+        )
+    }
+
+    fn issue(now: DateTime<Utc>) -> AttestationToken {
+        // Twin signer sharing the validator's key material.
+        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        signer.issue(
+            &TokenRequest {
+                agent_identity: "agent".to_string(),
+                task_uuid: Uuid::new_v4(),
+                capabilities: vec!["cap".to_string()],
+            },
+            now,
+            TimeDelta::minutes(10),
+        )
+    }
+
+    #[test]
+    fn valid_token_passes_and_counts() {
+        let v = validator();
+        let now = Utc::now();
+        let token = issue(now);
+        let claims = v
+            .validate_boundary_call(Some(token.encoded()), "test", now)
+            .unwrap();
+        assert_eq!(claims.agent_identity, "agent");
+        assert_eq!(v.validations_total(), 1);
+        assert_eq!(v.rejections_total(), 0);
+        assert!(v.audit().is_empty());
+    }
+
+    #[test]
+    fn missing_token_rejected_and_audited() {
+        let v = validator();
+        let err = v
+            .validate_boundary_call(None, "boot", Utc::now())
+            .unwrap_err();
+        assert_eq!(err, AttestationRejection::MissingToken);
+        assert_eq!(v.rejections_total(), 1);
+        let records = v.audit().snapshot();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].boundary, "boot");
+    }
+
+    #[test]
+    fn expired_token_rejected() {
+        let v = validator();
+        let issued = Utc::now();
+        let token = issue(issued);
+        let later = issued + TimeDelta::minutes(11);
+        let err = v
+            .validate_boundary_call(Some(token.encoded()), "call", later)
+            .unwrap_err();
+        assert!(matches!(err, AttestationRejection::Expired { .. }));
+    }
+
+    #[test]
+    fn ring_buffer_evicts_oldest_at_capacity() {
+        let buffer = AuditRingBuffer::new(2);
+        for i in 0..3 {
+            buffer.push(AttestationAuditRecord {
+                seq: 0,
+                timestamp: String::new(),
+                boundary: format!("b{i}"),
+                token_id: None,
+                agent_identity: None,
+                rejection: AttestationRejection::MissingToken,
+                detection_micros: 0,
+            });
+        }
+        let records = buffer.snapshot();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].boundary, "b1");
+        assert_eq!(records[1].boundary, "b2");
+        assert_eq!(buffer.total_pushed(), 3);
+    }
+
+    #[test]
+    fn checkpoint_round_trips_rotation_state() {
+        let v = validator();
+        let now = Utc::now();
+        let token = issue(now);
+        let _successor = v.rotate(token.claims(), now, TimeDelta::minutes(10));
+        let checkpoint = v.checkpoint();
+        assert_eq!(checkpoint.retiring.len(), 1);
+        assert_eq!(checkpoint.retiring[0].token_id, token.claims().token_id);
+
+        let fresh = validator();
+        fresh.restore(&checkpoint);
+        assert_eq!(fresh.checkpoint(), checkpoint);
+    }
+
+    #[test]
+    fn restore_drops_unparseable_timestamps() {
+        let v = validator();
+        v.restore(&RotationCheckpoint {
+            retiring: vec![RetiringToken {
+                token_id: "t".to_string(),
+                reject_after: "not-a-time".to_string(),
+            }],
+        });
+        assert!(v.checkpoint().retiring.is_empty());
+    }
+}
