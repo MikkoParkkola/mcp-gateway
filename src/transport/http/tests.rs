@@ -701,6 +701,118 @@ async fn request_reinitializes_session_and_retries_on_http_404() {
     server.abort();
 }
 
+/// MIK-6040 (#247): a remote that invalidates the MCP session on OAuth token
+/// refresh may answer a live request with HTTP **200** and the expiry encoded as
+/// a JSON-RPC `error` member (code `-32600`/`-32015`, message "Session not
+/// found") rather than a non-2xx status. The transport sees this as
+/// `Ok(JsonRpcResponse)` with `error: Some(..)`, so the `Err`-string classifier
+/// never fires. The `is_session_expired_response` path must catch it and run the
+/// same drop-session / re-initialize / retry-once recovery as the 404 and
+/// `-32015` cases above.
+#[tokio::test]
+async fn request_reinitializes_on_jsonrpc_session_error_response() {
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::post,
+    };
+    use serde_json::json;
+
+    const FRESH_SESSION: &str = "fresh-session-after-jsonrpc-session-err";
+
+    async fn mcp_handler(
+        State(hits): State<Arc<std::sync::atomic::AtomicU32>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> axum::response::Response {
+        hits.fetch_add(1, Ordering::Relaxed);
+        let session = headers
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let method = body["method"].as_str().unwrap_or("");
+
+        if body.get("id").is_none() {
+            return StatusCode::ACCEPTED.into_response();
+        }
+
+        if method == "initialize" {
+            let mut resp_headers = HeaderMap::new();
+            resp_headers.insert("mcp-session-id", FRESH_SESSION.parse().unwrap());
+            return (
+                StatusCode::OK,
+                resp_headers,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "serverInfo": {"name": "mock", "version": "0"}
+                    }
+                })),
+            )
+                .into_response();
+        }
+
+        if session == FRESH_SESSION {
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {"ok": true}
+                })),
+            )
+                .into_response()
+        } else {
+            // Stale session: HTTP 200 + JSON-RPC error (the MIK-6040 shape).
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "error": {"code": -32600, "message": "Session not found"}
+                })),
+            )
+                .into_response()
+        }
+    }
+
+    // GIVEN: a backend that signals stale-session via 200 + jsonrpc error
+    let hits = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(Arc::clone(&hits));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    *transport.session_id.write() = Some("stale-session-before-refresh".to_string());
+
+    // WHEN: a request rides the dead session and the remote answers 200 + error
+    let response = transport.request("tools/list", None).await.unwrap();
+
+    // THEN: recovery re-initialized (no stale session) and the retry succeeded
+    assert!(
+        response.error.is_none(),
+        "retried request after jsonrpc session error must succeed"
+    );
+    assert_eq!(
+        transport.session_id.read().as_deref(),
+        Some(FRESH_SESSION),
+        "fresh session ID must replace the stale one"
+    );
+
+    server.abort();
+}
+
 /// A request without any session that fails with a non-session error must NOT
 /// trigger the re-initialize path (no retry storm on genuinely broken backends).
 #[tokio::test]
@@ -752,4 +864,47 @@ fn session_expired_detection_matches_known_signatures() {
     assert!(!is_session_expired_error(&Error::Protocol(
         "Session not found".to_string()
     )));
+}
+
+#[test]
+fn session_expired_response_detection_matches_known_signatures() {
+    use crate::protocol::JsonRpcError;
+
+    let make = |code: i32, message: &str| JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: None,
+        error: Some(JsonRpcError {
+            code,
+            message: message.to_string(),
+            data: None,
+        }),
+    };
+
+    // MIK-6040: 200 + JSON-RPC error shapes a remote may use for session expiry.
+    assert!(is_session_expired_response(&make(
+        -32600,
+        "Session not found"
+    )));
+    assert!(is_session_expired_response(&make(
+        -32015,
+        "Bad Request: Session not found"
+    )));
+    // Match on message alone, even with an unexpected code.
+    assert!(is_session_expired_response(&make(
+        -32000,
+        "session not found"
+    )));
+    // Unrelated JSON-RPC errors must not match.
+    assert!(!is_session_expired_response(&make(
+        -32601,
+        "Method not found"
+    )));
+    // A successful response (no error) must not match.
+    assert!(!is_session_expired_response(&JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: Some(serde_json::json!({"ok": true})),
+        error: None,
+    }));
 }
