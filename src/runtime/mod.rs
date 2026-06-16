@@ -34,6 +34,10 @@ pub mod descriptor;
 pub mod divergence;
 pub mod r#override;
 
+/// Hardened provisioning call path (wired entry point, off-by-default feature).
+#[cfg(feature = "runtime-substrate")]
+pub mod provision;
+
 mod substrate;
 
 pub use compiler::{

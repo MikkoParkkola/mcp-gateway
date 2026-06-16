@@ -163,6 +163,12 @@ metrics = ["dep:metrics-exporter-prometheus"]
 ## NOT included in default — operators must explicitly enable.
 spec-preview = []
 
+## Dual-substrate OCI runtime abstraction (MIK-5226, B4-PLATFORM).
+## Gates the dormant descriptor->substrate compiler behind an explicit opt-in:
+## enables the `runtime compile` CLI subcommand and the hardened provisioning
+## call path (src/runtime/provision.rs). NOT in default — foundation code.
+runtime-substrate = []
+
 [[bin]]
 name = "mcp-gateway"
 path = "src/main.rs"
