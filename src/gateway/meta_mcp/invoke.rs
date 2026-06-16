@@ -233,6 +233,47 @@ fn json_is_populated(value: &Value) -> bool {
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl MetaMcp {
+    /// Validate the per-action attestation token presented on a
+    /// `gateway_invoke` call (MIK-5223, B1-IDENT).
+    ///
+    /// Returns `Ok(())` immediately when no validator is attached (the
+    /// default), so the attestation path is zero-cost for existing
+    /// deployments. When a validator is attached, the optional top-level
+    /// `attestation` token is validated at the `gateway_invoke` boundary
+    /// against the gateway's *trusted* clock (`Utc::now()`), never a
+    /// caller-supplied timestamp. Rejections are recorded in the validator's
+    /// audit ring buffer by `validate_boundary_call`. In **observe** mode the
+    /// rejection is logged and the call proceeds; in **enforce** mode the call
+    /// fails closed with JSON-RPC -32002.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JSON-RPC -32002 error only in enforce mode when the token is
+    /// missing or fails validation.
+    pub(super) fn check_attestation(&self, args: &Value, agent_id: Option<&str>) -> Result<()> {
+        let Some(validator) = self.attestation_validator.as_ref() else {
+            return Ok(());
+        };
+        let token = args.get("attestation").and_then(Value::as_str);
+        match validator.validate_boundary_call(token, "gateway_invoke", chrono::Utc::now()) {
+            Ok(_claims) => Ok(()),
+            Err(rejection) => match self.attestation_mode {
+                crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(
+                    -32002,
+                    format!("Attestation rejected at gateway_invoke: {rejection}"),
+                )),
+                crate::attestation::AttestationMode::Observe => {
+                    warn!(
+                        agent_id = agent_id.unwrap_or("unattributed"),
+                        rejection = %rejection,
+                        "attestation_observe_reject"
+                    );
+                    Ok(())
+                }
+            },
+        }
+    }
+
     /// `gateway_invoke` — invoke a tool on a backend with full tracing, caching,
     /// idempotency, error-budget tracking, and predictive prefetch.
     ///
@@ -329,6 +370,16 @@ impl MetaMcp {
         }
 
         tracing::Span::current().record("trace_id", trace_id);
+
+        // === PRE-INVOKE: Per-action attestation (MIK-5223, B1-IDENT) ======
+        //
+        // Zero-cost no-op unless a validator was attached via
+        // `with_attestation`. The token is presented in the top-level
+        // `attestation` field of the call. In observe mode validation is
+        // audited but never blocks; in enforce mode a missing/invalid token
+        // fails the call closed. The clock is the gateway's trusted clock,
+        // never a caller-supplied timestamp.
+        self.check_attestation(args, agent_id)?;
 
         if self.kill_switch.is_killed(server) {
             return Err(Error::json_rpc(

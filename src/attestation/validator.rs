@@ -30,6 +30,22 @@ pub const DEFAULT_AUDIT_CAPACITY: usize = 1024;
 /// Default grace window during which a rotated-out token still validates.
 pub const DEFAULT_ROTATION_GRACE_SECS: i64 = 30;
 
+/// How a wired attestation boundary treats a rejected token.
+///
+/// Distinct from the boot-time [`crate::attestation::AttestationEnforcement`]
+/// rollback flag: this governs an already-wired call boundary (e.g.
+/// `gateway_invoke`), not whether the boot gate is bypassed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AttestationMode {
+    /// Validate and audit every presented token, but never block a call.
+    /// The safe rollout position — enabling the validator on live traffic
+    /// cannot break unattested or mis-attested calls.
+    #[default]
+    Observe,
+    /// Fail closed: a missing or invalid token rejects the call.
+    Enforce,
+}
+
 // ── Rejection reasons ────────────────────────────────────────────────────────
 
 /// Why a token failed validation.

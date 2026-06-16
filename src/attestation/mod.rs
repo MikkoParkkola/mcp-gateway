@@ -42,6 +42,6 @@ pub use launcher::{
 pub use signer::{BnautAttestationSigner, TokenRequest};
 pub use token::{AttestationToken, BNAUT_ISSUER, SIGNING_ALGORITHM, TokenClaims};
 pub use validator::{
-    AttestationAuditRecord, AttestationRejection, AttestationValidator, AuditRingBuffer,
-    RetiringToken, RotationCheckpoint,
+    AttestationAuditRecord, AttestationMode, AttestationRejection, AttestationValidator,
+    AuditRingBuffer, RetiringToken, RotationCheckpoint,
 };
