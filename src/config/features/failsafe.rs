@@ -18,7 +18,12 @@ const DEFAULT_RETRY_MULTIPLIER: f64 = 2.0;
 const DEFAULT_RATE_LIMIT_RPS: u32 = 100;
 const DEFAULT_RATE_LIMIT_BURST: u32 = 50;
 
-const DEFAULT_HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
+// Deliberately NOT equal to `DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SECS` (30s).
+// When the health interval and the breaker's half-open timer are phase-locked,
+// a probe can re-trip the breaker on the same beat it would have half-opened,
+// wedging recovery. A 10s interval also means an auto-recovering backend is
+// detected and its breaker reset within ~one interval (see Backend::health_probe).
+const DEFAULT_HEALTH_CHECK_INTERVAL_SECS: u64 = 10;
 const DEFAULT_HEALTH_CHECK_TIMEOUT_SECS: u64 = 5;
 
 // ── Failsafe ───────────────────────────────────────────────────────────────────
@@ -136,5 +141,36 @@ impl Default for HealthCheckConfig {
             interval: Duration::from_secs(DEFAULT_HEALTH_CHECK_INTERVAL_SECS),
             timeout: Duration::from_secs(DEFAULT_HEALTH_CHECK_TIMEOUT_SECS),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The health-check interval must NOT equal the breaker reset timeout.
+    // When phase-locked, a probe can re-trip the breaker on the same beat it
+    // would have half-opened, wedging recovery (the bug this guards against).
+    #[test]
+    fn health_interval_is_decoupled_from_breaker_reset_timeout() {
+        let health = HealthCheckConfig::default();
+        let breaker = CircuitBreakerConfig::default();
+        assert_ne!(
+            health.interval, breaker.reset_timeout,
+            "health interval and breaker reset_timeout must differ to avoid phase-lock"
+        );
+    }
+
+    // Probe timeout must be shorter than the interval so a hung probe cannot
+    // overlap the next tick.
+    #[test]
+    fn health_timeout_is_shorter_than_interval() {
+        let health = HealthCheckConfig::default();
+        assert!(
+            health.timeout < health.interval,
+            "probe timeout ({:?}) must be < interval ({:?})",
+            health.timeout,
+            health.interval
+        );
     }
 }

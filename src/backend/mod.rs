@@ -843,6 +843,98 @@ impl Backend {
         self.failsafe.circuit_breaker.reset();
     }
 
+    /// Whether this backend's circuit breaker is currently tripped
+    /// (`Open` or `HalfOpen` — i.e. not `Closed`).
+    #[must_use]
+    pub fn is_circuit_tripped(&self) -> bool {
+        self.failsafe.circuit_breaker.state() != crate::failsafe::CircuitState::Closed
+    }
+
+    /// Tear down the current transport (killing any child process) and start a
+    /// fresh one.
+    ///
+    /// Unlike [`ensure_started`](Self::ensure_started), this does **not** trust
+    /// `is_connected()` — it always rebuilds. A wedged-but-not-exited child
+    /// (responds to `try_wait` as alive yet never answers requests) cannot be
+    /// recovered by `ensure_started` alone; this is the escape hatch the health
+    /// loop uses when a probe fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the fresh transport fails to start or initialize.
+    pub async fn force_restart(&self) -> Result<()> {
+        let _guard = self.start_lock.lock().await;
+        // Take the transport out and drop the RwLock write guard *before*
+        // awaiting close() — a parking_lot guard is not Send across an await.
+        let old = self.transport.write().take();
+        if let Some(old) = old {
+            let _ = old.close().await;
+        }
+        self.start().await
+    }
+
+    /// Active health/recovery probe driven by the background health loop.
+    ///
+    /// This is the gateway's automatic equivalent of `gateway_revive_server`.
+    /// Two properties make it actually recover a wedged backend, which the old
+    /// `backend.request("ping")` health check could not:
+    ///
+    /// 1. **It bypasses the circuit breaker.** A probe routed through
+    ///    [`request`](Self::request) short-circuits on `can_proceed()` and
+    ///    returns `CircuitOpen` *without touching the backend* — so it could
+    ///    never discover that an `Open` backend had recovered. This probe talks
+    ///    to the transport directly.
+    /// 2. **On success it resets a tripped breaker**; on failure it forces a
+    ///    transport rebuild so the next probe targets a fresh child.
+    ///
+    /// `timeout` bounds the probe so a hung backend cannot stall the loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot be started, the probe times out,
+    /// or the `ping` call fails. The breaker is left for organic traffic to
+    /// trip — this probe never records failures, only recoveries.
+    pub async fn health_probe(&self, timeout: Duration) -> Result<()> {
+        // `ensure_started` now respawns reliably because `is_connected()` does a
+        // real liveness check (Fix C).
+        if let Err(e) = self.ensure_started().await {
+            let _ = self.force_restart().await;
+            return Err(e);
+        }
+
+        let transport = { self.transport.read().clone() };
+        let Some(transport) = transport else {
+            return Err(Error::BackendUnavailable(self.name.clone()));
+        };
+
+        match tokio::time::timeout(timeout, transport.request("ping", None)).await {
+            Ok(Ok(_)) => {
+                if self.is_circuit_tripped() {
+                    info!(
+                        backend = %self.name,
+                        "Health probe succeeded; resetting tripped circuit breaker"
+                    );
+                    self.failsafe.circuit_breaker.reset();
+                }
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                warn!(backend = %self.name, error = %e, "Health probe failed; rebuilding transport");
+                let _ = self.force_restart().await;
+                Err(e)
+            }
+            Err(_elapsed) => {
+                warn!(
+                    backend = %self.name,
+                    timeout_ms = timeout.as_millis(),
+                    "Health probe timed out; rebuilding transport"
+                );
+                let _ = self.force_restart().await;
+                Err(Error::BackendTimeout(self.name.clone()))
+            }
+        }
+    }
+
     /// Get health metrics for this backend.
     pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
         self.failsafe.health_metrics()
@@ -1099,6 +1191,119 @@ mod tests {
             self.connected.store(false, Ordering::Relaxed);
             Ok(())
         }
+    }
+
+    // Method-agnostic transport for health-probe / recovery tests: answers any
+    // request with success unless `fail` is set, with a settable `connected`
+    // flag. Distinct from MockTransport, which hard-asserts "tools/list".
+    struct RecoveryMock {
+        connected: AtomicBool,
+        fail: AtomicBool,
+        pings: AtomicUsize,
+    }
+
+    impl RecoveryMock {
+        fn connected() -> Self {
+            Self {
+                connected: AtomicBool::new(true),
+                fail: AtomicBool::new(false),
+                pings: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Transport for RecoveryMock {
+        async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+            self.pings.fetch_add(1, Ordering::SeqCst);
+            if self.fail.load(Ordering::Relaxed) {
+                return Err(Error::BackendUnavailable("probe failed".to_string()));
+            }
+            Ok(JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({}),
+            ))
+        }
+
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::Relaxed)
+        }
+
+        async fn close(&self) -> Result<()> {
+            self.connected.store(false, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn is_circuit_tripped_reflects_breaker_state() {
+        let backend = Backend::new(
+            "test",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        assert!(!backend.is_circuit_tripped());
+        backend.trip_circuit_breaker_for_test();
+        assert!(backend.is_circuit_tripped());
+        backend.reset_circuit_breaker();
+        assert!(!backend.is_circuit_tripped());
+    }
+
+    // Headline regression: a successful health probe must auto-reset a tripped
+    // breaker. This is the recovery the old health check could never perform,
+    // because it pinged through the breaker (which short-circuits when Open).
+    #[tokio::test]
+    async fn health_probe_resets_tripped_breaker_on_success() {
+        let backend = Arc::new(Backend::new(
+            "test",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        let mock = Arc::new(RecoveryMock::connected());
+        *backend.transport.write() = Some(mock.clone() as Arc<dyn Transport>);
+
+        backend.trip_circuit_breaker_for_test();
+        assert!(backend.is_circuit_tripped(), "precondition: breaker open");
+
+        backend
+            .health_probe(Duration::from_secs(5))
+            .await
+            .expect("probe should succeed");
+
+        assert!(
+            !backend.is_circuit_tripped(),
+            "a successful probe must reset the tripped breaker"
+        );
+        assert_eq!(mock.pings.load(Ordering::SeqCst), 1);
+    }
+
+    // A failing probe must NOT reset the breaker — recovery is success-gated.
+    #[tokio::test]
+    async fn health_probe_failure_leaves_breaker_tripped() {
+        let backend = Arc::new(Backend::new(
+            "test",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        let mock = Arc::new(RecoveryMock::connected());
+        mock.fail.store(true, Ordering::Relaxed);
+        *backend.transport.write() = Some(mock.clone() as Arc<dyn Transport>);
+
+        backend.trip_circuit_breaker_for_test();
+        let result = backend.health_probe(Duration::from_secs(5)).await;
+
+        assert!(result.is_err(), "failed probe returns Err");
+        assert!(
+            backend.is_circuit_tripped(),
+            "a failed probe must leave the breaker tripped"
+        );
     }
 
     fn sample_tool(name: &str) -> Tool {
