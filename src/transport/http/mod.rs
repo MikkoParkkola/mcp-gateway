@@ -39,12 +39,40 @@ use crate::{Error, Result};
 /// - any body containing "session not found" (case-insensitive)
 /// - bare `HTTP 404` responses, which the MCP Streamable HTTP spec defines as
 ///   "session terminated or expired" (callers gate this on having had a session)
+///
+/// This covers the cases where the backend surfaces the expiry as a transport
+/// `Err` (non-2xx HTTP status, or a transport-layer failure). When the backend
+/// instead returns HTTP 200 with the expiry encoded as a JSON-RPC `error`
+/// member, use [`is_session_expired_response`] (MIK-6040, #247).
 fn is_session_expired_error(err: &Error) -> bool {
     let Error::Transport(msg) = err else {
         return false;
     };
     let lower = msg.to_lowercase();
     lower.contains("session not found") || msg.contains("-32015") || lower.starts_with("http 404")
+}
+
+/// Detect the session-expiry signature in a *successful-transport* JSON-RPC
+/// response whose body carries an `error` member (MIK-6040, #247).
+///
+/// Some remotes (notably OAuth-protected Streamable HTTP servers that invalidate
+/// the MCP session on token refresh) return HTTP 200 with the expiry encoded as
+/// a JSON-RPC error rather than a non-2xx status. The transport layer sees this
+/// as `Ok(JsonRpcResponse)` with `error: Some(..)`, so the [`is_session_expired_error`]
+/// classifier — which only inspects transport `Err` strings — never fires. This
+/// sibling classifier inspects the embedded error and matches:
+/// - code `-32015` (rust-mcp-sdk "Session not found")
+/// - code `-32600` (Invalid Request, observed for session-not-found on some remotes)
+/// - any `message` containing "session not found" (case-insensitive)
+///
+/// Per MCP 2025-11-25 §2.5.4 the recovery is identical to the `Err` path: drop
+/// the stale `MCP-Session-Id`, send a fresh `InitializeRequest`, and retry once.
+fn is_session_expired_response(resp: &JsonRpcResponse) -> bool {
+    resp.error.as_ref().is_some_and(|e| {
+        e.code == -32015
+            || e.code == -32600
+            || e.message.to_lowercase().contains("session not found")
+    })
 }
 
 /// HTTP transport for MCP servers using SSE or Streamable HTTP protocol
@@ -624,18 +652,29 @@ impl Transport for HttpTransport {
 
         let result = self.send_request(&request).await;
 
-        // MIK-5982: when the backend daemon restarts, our stored session ID is
-        // dead and every request — including circuit-breaker half-open probes —
-        // fails with `Session not found` forever (observed live 2026-06-11:
-        // hebb unreachable 6.5h while healthy). On the session-expiry
-        // signature, drop the session, re-run the initialize handshake, and
-        // retry the original request exactly once. `initialize()` calls
+        // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
+        // or a remote invalidating the MCP session on OAuth token refresh), every
+        // request — including circuit-breaker half-open probes — keeps failing
+        // until we re-handshake (observed live 2026-06-11: hebb unreachable 6.5h
+        // while healthy). Recovery lives here, inside `request`, so it also rescues
+        // half-open probes and is not gated behind the Backend failsafe/CB.
+        //
+        // The expiry arrives in one of two shapes, handled by one coherent path:
+        //   1. transport `Err` — non-2xx HTTP (404, or -32015 body) or a transport
+        //      failure, classified by `is_session_expired_error` (MIK-5982).
+        //   2. `Ok(JsonRpcResponse)` whose `error` member signals expiry even with
+        //      a 200 status (e.g. remotes returning `-32600`/`-32015`/"session not
+        //      found"), classified by `is_session_expired_response` (MIK-6040, #247).
+        //
+        // On either signature: drop the session, re-run the initialize handshake,
+        // and retry the original request exactly once. `initialize()` calls
         // `send_request` directly (not `request`), so this cannot recurse.
         let had_session = self.session_id.read().is_some();
-        if let Err(ref err) = result
-            && had_session
-            && is_session_expired_error(err)
-        {
+        let session_expired = match &result {
+            Err(err) => is_session_expired_error(err),
+            Ok(resp) => is_session_expired_response(resp),
+        };
+        if had_session && session_expired {
             warn!(
                 url = %self.base_url,
                 method = %method,
