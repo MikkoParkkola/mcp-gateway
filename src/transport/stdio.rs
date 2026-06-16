@@ -430,7 +430,26 @@ impl Transport for StdioTransport {
     }
 
     fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
+        if !self.connected.load(Ordering::Relaxed) {
+            return false;
+        }
+        // Defense in depth (Fix C): the reader task flips `connected=false` on
+        // stdout EOF, but a zombie child or a not-yet-scheduled reader task can
+        // leave the cached flag stale-true. A stale-true flag makes
+        // `Backend::ensure_started` a no-op and dispatches requests into a dead
+        // pipe — the core reason a tripped breaker never recovered. Confirm real
+        // liveness with a non-blocking waitpid. `try_lock` keeps this sync
+        // method from blocking; on lock contention we trust the flag.
+        if let Ok(mut guard) = self.child.try_lock()
+            && let Some(child) = guard.as_mut()
+            && let Ok(Some(_status)) = child.try_wait()
+        {
+            // Child has exited; reconcile the cached flag so callers and future
+            // checks see the truth.
+            self.connected.store(false, Ordering::Relaxed);
+            return false;
+        }
+        true
     }
 
     async fn close(&self) -> Result<()> {

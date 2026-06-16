@@ -711,9 +711,18 @@ impl Gateway {
                 tokio::select! {
                     _ = interval.tick() => {
                         for backend in backends_clone.all() {
-                            if backend.is_running() {
-                                // Send ping
-                                if let Err(e) = backend.request("ping", None).await {
+                            // Probe running backends (liveness) AND backends whose
+                            // breaker is tripped (recovery). The old guard only
+                            // probed running backends — but a backend that died
+                            // and tripped its breaker reports `is_running()==false`,
+                            // so it was skipped exactly when it needed recovery.
+                            // Cleanly-idle backends (closed breaker, not running)
+                            // are left alone so the idle reaper can shut them down.
+                            if backend.is_running() || backend.is_circuit_tripped() {
+                                // `health_probe` bypasses the breaker, resets it on
+                                // success, and rebuilds the transport on failure —
+                                // the automatic equivalent of gateway_revive_server.
+                                if let Err(e) = backend.health_probe(health_config.timeout).await {
                                     warn!(backend = %backend.name, error = %e, "Health check failed");
                                 }
                             }

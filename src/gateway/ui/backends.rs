@@ -126,6 +126,7 @@ pub fn backends_router() -> Router<Arc<AppState>> {
         .route("/ui/api/backends", post(add_backend))
         .route("/ui/api/backends/{name}", delete(remove_backend))
         .route("/ui/api/backends/{name}", patch(update_backend))
+        .route("/ui/api/backends/{name}/revive", post(revive_backend))
         .route("/ui/api/registry", get(list_registry))
         .route("/ui/api/registry/search", get(search_registry))
 }
@@ -239,6 +240,37 @@ async fn remove_backend(
 ///
 /// Merges the provided fields into the existing backend config.
 /// Returns 200 on success, 404 when not found.
+async fn revive_backend(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    AxumPath(name): AxumPath<String>,
+) -> impl IntoResponse {
+    let client = client.map(|Extension(c)| c);
+    if !is_admin(client.as_ref()) {
+        return admin_auth_required().into_response();
+    }
+
+    let Some(backend) = state.backends.get(&name) else {
+        return flat_error(StatusCode::NOT_FOUND, format!("Backend '{name}' not found"))
+            .into_response();
+    };
+
+    let breaker_was_open = backend.is_circuit_tripped();
+    backend.reset_circuit_breaker();
+    let rebuilt = backend.force_restart().await.is_ok();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "backend": name,
+            "status": "revived",
+            "breaker_was_open": breaker_was_open,
+            "transport_rebuilt": rebuilt,
+        })),
+    )
+        .into_response()
+}
+
 async fn update_backend(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
