@@ -1242,3 +1242,142 @@ fn revive_server_unregistered_backend_reports_breaker_not_open() {
     assert_eq!(result["breaker_was_open"], false);
     assert_eq!(result["status"], "active");
 }
+
+// ── Per-action attestation wiring (MIK-5223, B1-IDENT) ────────────────────
+//
+// These exercise the `gateway_invoke` attestation seam directly via the
+// `check_attestation` gate, isolating the wiring decision (no validator =>
+// no-op, observe => audit-but-pass, enforce => fail-closed) from the heavy
+// backend-dispatch machinery.
+
+#[cfg(test)]
+mod attestation_wiring {
+    use super::*;
+    use crate::attestation::{
+        AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,
+    };
+    use chrono::{TimeDelta, Utc};
+    use uuid::Uuid;
+
+    const KEY: &[u8] = b"gateway-invoke-wiring-key";
+
+    fn validator() -> Arc<AttestationValidator> {
+        Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
+            KEY.to_vec(),
+            "wiring",
+        )))
+    }
+
+    fn valid_token() -> String {
+        BnautAttestationSigner::new(KEY.to_vec(), "wiring")
+            .issue(
+                &TokenRequest {
+                    agent_identity: "agent-9".to_string(),
+                    task_uuid: Uuid::new_v4(),
+                    capabilities: vec!["tools:search".to_string()],
+                },
+                Utc::now(),
+                TimeDelta::minutes(5),
+            )
+            .encoded()
+            .to_string()
+    }
+
+    #[test]
+    fn no_validator_is_a_no_op_even_without_token() {
+        // GIVEN a gateway with no attestation validator attached (default)
+        let mm = make_meta_mcp();
+        // WHEN a call carries no attestation token
+        // THEN the gate passes (zero-cost no-op, byte-identical to before)
+        assert!(
+            mm.check_attestation(&json!({"server": "s", "tool": "t"}), None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn observe_mode_passes_invalid_token_but_audits_it() {
+        // GIVEN observe mode (enforce = false) — the safe rollout position
+        let v = validator();
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Observe);
+        // WHEN a call presents a forged/garbage token
+        let res = mm.check_attestation(
+            &json!({"server": "s", "tool": "t", "attestation": "forged.token"}),
+            Some("agent-9"),
+        );
+        // THEN the call is NOT blocked (observe never breaks traffic)...
+        assert!(res.is_ok());
+        // ...but the rejection is recorded in the audit ring buffer.
+        assert_eq!(v.rejections_total(), 1);
+        let records = v.audit().snapshot();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].boundary, "gateway_invoke");
+    }
+
+    #[test]
+    fn enforce_mode_rejects_missing_token_fail_closed() {
+        // GIVEN enforce mode (fail-closed)
+        let v = validator();
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Enforce);
+        // WHEN a call presents NO attestation token
+        let err = mm
+            .check_attestation(&json!({"server": "s", "tool": "t"}), None)
+            .unwrap_err();
+        // THEN the call is rejected with the attestation JSON-RPC code
+        let msg = err.to_string();
+        assert!(msg.contains("Attestation rejected"), "got: {msg}");
+        assert_eq!(v.rejections_total(), 1);
+    }
+
+    #[test]
+    fn enforce_mode_rejects_forged_token() {
+        // GIVEN enforce mode
+        let v = validator();
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Enforce);
+        // WHEN a call presents a token that fails signature verification
+        let err = mm
+            .check_attestation(
+                &json!({"server": "s", "tool": "t", "attestation": "bad.signature"}),
+                Some("agent-9"),
+            )
+            .unwrap_err();
+        // THEN it is rejected, and the forgery attempt is audited
+        assert!(err.to_string().contains("Attestation rejected"));
+        assert_eq!(v.rejections_total(), 1);
+    }
+
+    #[test]
+    fn enforce_mode_admits_valid_token() {
+        // GIVEN enforce mode and a correctly-signed, unexpired token
+        let v = validator();
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Enforce);
+        let token = valid_token();
+        // WHEN the call presents the valid token
+        let res = mm.check_attestation(
+            &json!({"server": "s", "tool": "t", "attestation": token}),
+            Some("agent-9"),
+        );
+        // THEN the call is admitted and the success is counted (no rejection)
+        assert!(res.is_ok());
+        assert_eq!(v.validations_total(), 1);
+        assert_eq!(v.rejections_total(), 0);
+        assert!(v.audit().is_empty());
+    }
+
+    #[test]
+    fn observe_mode_admits_valid_token_without_auditing() {
+        // GIVEN observe mode and a valid token
+        let v = validator();
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Observe);
+        let token = valid_token();
+        // WHEN the valid token is presented
+        let res = mm.check_attestation(
+            &json!({"server": "s", "tool": "t", "attestation": token}),
+            Some("agent-9"),
+        );
+        // THEN it passes and counts as a successful validation
+        assert!(res.is_ok());
+        assert_eq!(v.validations_total(), 1);
+        assert!(v.audit().is_empty());
+    }
+}

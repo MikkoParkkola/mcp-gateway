@@ -181,6 +181,27 @@ pub struct MetaMcp {
 
     /// Response contract config (issue #133, D1). Set when enabled.
     pub(super) response_contract: Option<Arc<crate::config::ResponseContractConfig>>,
+
+    /// Per-action attestation validator (MIK-5223, B1-IDENT).
+    ///
+    /// `Some` only when the gateway is constructed with
+    /// [`MetaMcp::with_attestation`]; `None` (the default) is a zero-cost
+    /// no-op on the hot path — existing callers are byte-identical. When
+    /// `Some`, every `gateway_invoke` presents its `attestation` token at the
+    /// `gateway_invoke` boundary; rejections are recorded in the validator's
+    /// audit ring buffer.
+    pub(super) attestation_validator: Option<Arc<crate::attestation::AttestationValidator>>,
+
+    /// Whether attestation is *enforced* (fail-closed) or merely *observed*.
+    ///
+    /// [`AttestationMode::Observe`](crate::attestation::AttestationMode) (the
+    /// safe default when wired) validates and audits every presented token but
+    /// never blocks a call — so enabling the validator on a live gateway
+    /// cannot break unattested traffic.
+    /// [`AttestationMode::Enforce`](crate::attestation::AttestationMode) rejects
+    /// calls whose token is missing or invalid with JSON-RPC -32002. Ignored
+    /// when `attestation_validator` is `None`.
+    pub(super) attestation_mode: crate::attestation::AttestationMode,
 }
 
 // ============================================================================
@@ -233,6 +254,8 @@ impl MetaMcp {
             transparency_logger: None,
             response_inspection_action_mode: false,
             response_contract: None,
+            attestation_validator: None,
+            attestation_mode: crate::attestation::AttestationMode::Observe,
         }
     }
 
@@ -308,6 +331,28 @@ impl MetaMcp {
     #[must_use]
     pub fn with_projection_mode(mut self, mode: crate::projection::ProjectionMode) -> Self {
         self.projection_mode = mode;
+        self
+    }
+
+    /// Attach a per-action attestation validator (MIK-5223, B1-IDENT).
+    ///
+    /// [`AttestationMode::Observe`](crate::attestation::AttestationMode)
+    /// validates and audits every `gateway_invoke` that presents an
+    /// `attestation` token, but a missing or invalid token never blocks the
+    /// call — the safe rollout position.
+    /// [`AttestationMode::Enforce`](crate::attestation::AttestationMode) is
+    /// fail-closed: a call whose token is missing or fails validation is
+    /// rejected with JSON-RPC -32002.
+    ///
+    /// Leaving this unset (the default) is a zero-cost no-op on the hot path.
+    #[must_use]
+    pub fn with_attestation(
+        mut self,
+        validator: Arc<crate::attestation::AttestationValidator>,
+        mode: crate::attestation::AttestationMode,
+    ) -> Self {
+        self.attestation_validator = Some(validator);
+        self.attestation_mode = mode;
         self
     }
 
