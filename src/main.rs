@@ -190,8 +190,56 @@ async fn main() -> ExitCode {
             data_dir,
         }) => commands::run_upgrade_command(dry_run, quiet, data_dir.as_deref()),
         Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd),
+        #[cfg(feature = "runtime-substrate")]
+        Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => run_stdio_server(cli).await,
         Some(Command::Serve { stdio: false }) | None => run_server(cli).await,
+    }
+}
+
+/// Handle `mcp-gateway runtime …` (feature `runtime-substrate`).
+///
+/// This is the wired call path that exercises the otherwise-dormant
+/// descriptor-to-substrate compiler (MIK-5226). It runs schema + security
+/// preflight, compiles, and prints the bundle as JSON. It does NOT launch a
+/// sandbox — provisioning a live runtime is deliberately out of scope until a
+/// launcher exists.
+#[cfg(feature = "runtime-substrate")]
+fn run_runtime_command(cmd: mcp_gateway::cli::RuntimeCommand) -> ExitCode {
+    use mcp_gateway::cli::RuntimeCommand;
+    use mcp_gateway::runtime::provision;
+
+    match cmd {
+        RuntimeCommand::Compile { descriptor, both } => {
+            match provision::compile_descriptor_file(&descriptor, both) {
+                Ok(report) => {
+                    for w in &report.warnings {
+                        eprintln!("warning: {w}");
+                    }
+                    if both && !report.divergences.is_empty() {
+                        eprintln!("cross-substrate divergences:");
+                        for d in &report.divergences {
+                            eprintln!("  - {d}");
+                        }
+                    }
+                    eprintln!("substrate: {}", report.substrate.name());
+                    match serde_json::to_string_pretty(&report.bundle) {
+                        Ok(json) => {
+                            println!("{json}");
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("error: failed to serialize bundle: {e}");
+                            ExitCode::FAILURE
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
 }
 

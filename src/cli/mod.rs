@@ -424,6 +424,29 @@ pub enum Command {
     /// ```
     #[command(subcommand, about = "Transparency log audit commands")]
     Audit(AuditCommand),
+
+    /// Dual-substrate OCI runtime abstraction (MIK-5226, B4-PLATFORM).
+    #[cfg(feature = "runtime-substrate")]
+    #[command(subcommand, about = "Sandbox runtime substrate commands (opt-in)")]
+    Runtime(RuntimeCommand),
+}
+
+/// Runtime-substrate subcommands (feature `runtime-substrate`).
+#[cfg(feature = "runtime-substrate")]
+#[derive(Subcommand, Debug)]
+pub enum RuntimeCommand {
+    /// Compile a sandbox descriptor to its substrate bundle (gVisor OCI or
+    /// Apple VM-spec), running schema + security preflight first.
+    #[command(about = "Compile a sandbox descriptor (YAML/JSON) to a substrate bundle")]
+    Compile {
+        /// Path to the descriptor file (YAML or JSON).
+        #[arg(value_name = "DESCRIPTOR")]
+        descriptor: std::path::PathBuf,
+
+        /// Compile for BOTH substrates and report cross-substrate divergence.
+        #[arg(long, default_value_t = false)]
+        both: bool,
+    },
 }
 
 /// Setup subcommands: interactive import wizard or config export.
