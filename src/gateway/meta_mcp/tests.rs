@@ -1269,18 +1269,72 @@ mod attestation_wiring {
     }
 
     fn valid_token() -> String {
+        token_with(vec!["t".to_string()])
+    }
+
+    fn token_with(capabilities: Vec<String>) -> String {
         BnautAttestationSigner::new(KEY.to_vec(), "wiring")
             .issue(
                 &TokenRequest {
                     agent_identity: "agent-9".to_string(),
                     task_uuid: Uuid::new_v4(),
-                    capabilities: vec!["tools:search".to_string()],
+                    capabilities,
                 },
                 Utc::now(),
                 TimeDelta::minutes(5),
             )
             .encoded()
             .to_string()
+    }
+
+    #[test]
+    fn mik_5223_caps_2_enforce_rejects_read_token_on_write_tool() {
+        // MIK-5223.CAPS.2 — a token minted for ["read"] must NOT authorize a
+        // write (non-read) tool under enforce mode (fail-closed, JSON-RPC -32002).
+        let v = validator();
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Enforce);
+        let token = token_with(vec!["read".to_string()]);
+        // WHEN the read-scoped token invokes a write tool
+        let err = mm
+            .check_attestation(
+                &json!({"server": "s", "tool": "write", "attestation": token}),
+                Some("agent-9"),
+            )
+            .unwrap_err();
+        // THEN the call is rejected with the attestation JSON-RPC code -32002
+        assert_eq!(err.to_rpc_code(), -32002, "got: {err}");
+        assert!(err.to_string().contains("Attestation rejected"));
+        assert_eq!(v.rejections_total(), 1);
+
+        // AND the same read-scoped token IS admitted for the read tool.
+        let ok = mm.check_attestation(
+            &json!({"server": "s", "tool": "read", "attestation": token_with(vec!["read".to_string()])}),
+            Some("agent-9"),
+        );
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn mik_5223_caps_3_observe_logs_capability_mismatch_without_blocking() {
+        // MIK-5223.CAPS.3 — observe mode records the capability mismatch in the
+        // audit ring buffer but does NOT block the call.
+        let v = validator();
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&v), AttestationMode::Observe);
+        let token = token_with(vec!["read".to_string()]);
+        let res = mm.check_attestation(
+            &json!({"server": "s", "tool": "write", "attestation": token}),
+            Some("agent-9"),
+        );
+        // THEN the call is NOT blocked...
+        assert!(res.is_ok());
+        // ...but the capability mismatch is audited.
+        assert_eq!(v.rejections_total(), 1);
+        let records = v.audit().snapshot();
+        assert_eq!(records.len(), 1);
+        assert!(matches!(
+            records[0].rejection,
+            crate::attestation::AttestationRejection::CapabilityNotGranted { .. }
+        ));
     }
 
     #[test]
