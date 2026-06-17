@@ -188,48 +188,87 @@ fn wiring_allows_safe_mount() {
     assert!(compile_descriptor(&d, false).is_ok());
 }
 
-// ── Finding #5/#6: fail-open egress surfaces a warning ───────────────────────
+// ── MIK-5226.SEC.2: egress is compiled into an enforceable config ────────────
 
 #[test]
-fn wiring_warns_on_unenforced_none_egress() {
+fn wiring_emits_none_egress_as_deny_all() {
     let mut d = base();
     d.network_egress = NetworkEgressPolicy::None;
     let report = compile_descriptor(&d, false).expect("None egress still compiles");
+    // Informational note references the policy.
     assert!(
         report
             .warnings
             .iter()
             .any(|w| w.contains("network_egress=None")),
-        "operator must be warned that None egress is not enforced"
+        "operator should be told None compiles to deny-all and needs launcher enforcement"
     );
+    // The emitted bundle proves a blocked destination is unreachable.
+    match &report.bundle {
+        crate::runtime::compiler::CompiledBundle::GVisor(b) => {
+            assert!(!b.egress.allows("8.8.8.8"));
+            assert!(!b.egress.allows("127.0.0.1"));
+        }
+        crate::runtime::compiler::CompiledBundle::AppleVm(s) => {
+            assert!(!s.egress.allows("8.8.8.8"));
+            assert!(!s.egress.allows("127.0.0.1"));
+        }
+    }
 }
 
 #[test]
-fn wiring_warns_on_unenforced_allowlist_egress() {
+fn wiring_emits_allowlist_egress_as_restricted() {
     let mut d = base();
     d.network_egress = NetworkEgressPolicy::Allowlist(vec!["10.0.0.0/8".to_string()]);
     let report = compile_descriptor(&d, false).expect("allowlist still compiles");
     assert!(
         report.warnings.iter().any(|w| w.contains("allowlist")),
-        "operator must be warned the egress allowlist is not enforced (fail-open)"
+        "operator should be told the allowlist compiles to a restricted config"
     );
+    // The emitted bundle proves a destination outside the allowlist is blocked.
+    match &report.bundle {
+        crate::runtime::compiler::CompiledBundle::GVisor(b) => {
+            assert!(b.egress.allows("10.1.2.3"));
+            assert!(!b.egress.allows("8.8.8.8"));
+        }
+        crate::runtime::compiler::CompiledBundle::AppleVm(s) => {
+            assert!(s.egress.allows("10.1.2.3"));
+            assert!(!s.egress.allows("8.8.8.8"));
+        }
+    }
 }
 
-// ── Finding #4: dropped-capability divergence warning on gVisor ──────────────
+// ── MIK-5226.SEC.1: gVisor now EMITS capabilities (no silent drop) ───────────
 
 #[test]
-fn wiring_warns_on_gvisor_dropped_capabilities() {
+fn wiring_gvisor_no_longer_warns_dropped_capabilities() {
     let mut d = base();
     d.substrate_override = Some(Substrate::GVisor);
     d.capabilities = vec!["CAP_NET_BIND_SERVICE".to_string()];
     let report = compile_descriptor(&d, false).expect("benign cap compiles");
     assert!(
-        report
+        !report
             .warnings
             .iter()
             .any(|w| w.contains("silently dropped")),
-        "gVisor compile must warn that capabilities are dropped"
+        "capabilities are now emitted into the OCI bundle — the drop warning must be gone"
     );
+    // And they are actually present in the emitted gVisor bundle.
+    match &report.bundle {
+        crate::runtime::compiler::CompiledBundle::GVisor(b) => {
+            let caps = b
+                .process
+                .capabilities
+                .as_ref()
+                .expect("gVisor bundle must carry capabilities");
+            assert!(caps.bounding.contains(&"CAP_NET_BIND_SERVICE".to_string()));
+            assert!(caps.effective.contains(&"CAP_NET_BIND_SERVICE".to_string()));
+            assert!(caps.permitted.contains(&"CAP_NET_BIND_SERVICE".to_string()));
+        }
+        crate::runtime::compiler::CompiledBundle::AppleVm(_) => {
+            panic!("substrate_override=GVisor must yield a gVisor bundle")
+        }
+    }
 }
 
 // ── File path entry point ─────────────────────────────────────────────────────
