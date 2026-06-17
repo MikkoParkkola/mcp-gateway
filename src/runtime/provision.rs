@@ -162,6 +162,11 @@ pub fn preflight(
     descriptor: &SandboxDescriptor,
     effective: Substrate,
 ) -> Result<Vec<String>, PreflightError> {
+    // `effective` is retained in the signature for call-site stability and
+    // future substrate-specific gating; egress/capability handling is now
+    // substrate-symmetric (MIK-5226.SEC.1/2), so it is not branched on here.
+    let _ = effective;
+
     // 1. Schema validation (closes the "compile never validates" finding).
     descriptor.validate().map_err(PreflightError::Schema)?;
 
@@ -203,33 +208,25 @@ pub fn preflight(
         }
     }
 
-    // 5. Non-fatal warnings: behaviours the compiler silently swallows today.
+    // 5. Non-fatal warnings: behaviours an operator should be aware of.
     let mut warnings = Vec::new();
 
-    // Egress policy is decorative in the current compiler (neither substrate
-    // enforces it). Warn loudly so operators do not assume isolation.
+    // MIK-5226.SEC.2: egress is now compiled into an enforceable `EgressConfig`
+    // emitted to BOTH substrate bundles (no longer decorative). The remaining
+    // caveat is that a launcher must apply the emitted config; surface that as
+    // an informational note rather than a fail-open alarm.
     match &descriptor.network_egress {
         NetworkEgressPolicy::None => warnings.push(
-            "network_egress=None is NOT enforced by the current compiler; the sandbox \
-             will still have a network namespace. Treat as fail-open until a launcher \
-             enforces it."
+            "network_egress=None compiles to a deny-all EgressConfig (no loopback, \
+             no external). The launcher must apply the emitted egress config."
                 .to_string(),
         ),
         NetworkEgressPolicy::Allowlist(cidrs) => warnings.push(format!(
-            "network_egress allowlist ({} entries) is NOT enforced; both substrates \
-             compile it to full NAT egress (fail-open).",
+            "network_egress allowlist ({} entries) compiles to a restricted EgressConfig \
+             on both substrates; the launcher must apply the emitted egress config.",
             cidrs.len()
         )),
         NetworkEgressPolicy::Loopback | NetworkEgressPolicy::Full => {}
-    }
-
-    if effective == Substrate::GVisor && !descriptor.capabilities.is_empty() {
-        warnings.push(format!(
-            "{} capability(ies) requested but the gVisor compiler does not emit them \
-             into the OCI bundle — they are silently dropped (privilege divergence vs \
-             Apple VM, which passes them through as entitlements).",
-            descriptor.capabilities.len()
-        ));
     }
 
     Ok(warnings)

@@ -101,9 +101,13 @@ fn compile_apple_vm_produces_vm_spec() {
     assert!(spec.virtiofs_mounts[0].read_only);
     assert!(!spec.virtiofs_mounts[1].read_only);
 
-    // Network
-    assert!(spec.network.enabled);
-    assert!(spec.network.nat);
+    // Network: descriptor uses Loopback egress, which must NOT enable the VM
+    // NAT interface (MIK-5226.SEC.2 — Loopback no longer collapses to NAT).
+    assert!(!spec.network.enabled);
+    assert!(!spec.network.nat);
+    // Loopback egress: localhost reachable, external denied.
+    assert!(spec.egress.allows("127.0.0.1"));
+    assert!(!spec.egress.allows("8.8.8.8"));
 
     // Environment
     assert_eq!(spec.env.get("TEST"), Some(&"value".to_string()));
@@ -375,4 +379,180 @@ fn apple_vm_spec_serializes_to_standard_json() {
     // Round-trip
     let restored: AppleVmSpec = serde_json::from_str(&json).unwrap();
     assert_eq!(spec, restored);
+}
+
+// ── MIK-5226.SEC.1: gVisor emits capabilities (no silent drop) ───────────
+
+#[test]
+fn gvisor_emits_requested_capabilities_into_oci_bundle() {
+    let compiler = Compiler::new();
+    let mut descriptor = make_descriptor();
+    descriptor.capabilities = vec!["CAP_NET_BIND_SERVICE".to_string(), "CAP_CHOWN".to_string()];
+
+    let bundle = compiler.compile_gvisor(&descriptor);
+    let caps = bundle
+        .process
+        .capabilities
+        .as_ref()
+        .expect("capabilities must be emitted, never dropped");
+
+    for set in [&caps.bounding, &caps.effective, &caps.permitted] {
+        assert!(set.contains(&"CAP_NET_BIND_SERVICE".to_string()));
+        assert!(set.contains(&"CAP_CHOWN".to_string()));
+    }
+}
+
+#[test]
+fn gvisor_empty_capabilities_emits_empty_sets_not_none_grant() {
+    let compiler = Compiler::new();
+    let mut descriptor = make_descriptor();
+    descriptor.capabilities = vec![];
+    let bundle = compiler.compile_gvisor(&descriptor);
+    let caps = bundle.process.capabilities.as_ref().unwrap();
+    assert!(caps.bounding.is_empty());
+    assert!(caps.effective.is_empty());
+    assert!(caps.permitted.is_empty());
+}
+
+#[test]
+fn gvisor_and_apple_grant_the_same_capability_set() {
+    let compiler = Compiler::new();
+    let mut descriptor = make_descriptor();
+    descriptor.capabilities = vec!["CAP_NET_BIND_SERVICE".to_string()];
+
+    let gvisor = compiler.compile_gvisor(&descriptor);
+    let apple = compiler.compile_apple_vm(&descriptor);
+
+    let gvisor_caps = gvisor.process.capabilities.as_ref().unwrap().granted();
+    let apple_caps: std::collections::BTreeSet<String> =
+        apple.entitlements.iter().cloned().collect();
+    assert_eq!(
+        gvisor_caps, apple_caps,
+        "same descriptor must grant identical capabilities on both substrates"
+    );
+}
+
+// ── MIK-5226.SEC.2: egress is enforceable on both substrates ─────────────
+
+#[test]
+fn egress_none_blocks_everything() {
+    let cfg = EgressConfig::from_policy(&NetworkEgressPolicy::None);
+    assert!(!cfg.allows("127.0.0.1"));
+    assert!(!cfg.allows("10.0.0.1"));
+    assert!(!cfg.allows("8.8.8.8"));
+}
+
+#[test]
+fn egress_loopback_allows_only_localhost() {
+    let cfg = EgressConfig::from_policy(&NetworkEgressPolicy::Loopback);
+    assert!(cfg.allows("127.0.0.1"));
+    assert!(!cfg.allows("8.8.8.8"));
+    assert!(!cfg.allows("10.0.0.1"));
+}
+
+#[test]
+fn egress_full_allows_everything() {
+    let cfg = EgressConfig::from_policy(&NetworkEgressPolicy::Full);
+    assert!(cfg.allows("127.0.0.1"));
+    assert!(cfg.allows("8.8.8.8"));
+    assert!(cfg.allows("10.0.0.1"));
+}
+
+#[test]
+fn egress_allowlist_blocks_destination_outside_cidr() {
+    let cfg = EgressConfig::from_policy(&NetworkEgressPolicy::Allowlist(vec![
+        "10.0.0.0/8".to_string(),
+        "192.168.1.0/24".to_string(),
+    ]));
+    // Inside the allowlist.
+    assert!(cfg.allows("10.255.0.1"));
+    assert!(cfg.allows("192.168.1.42"));
+    // A blocked destination is provably unreachable.
+    assert!(!cfg.allows("8.8.8.8"));
+    assert!(!cfg.allows("192.168.2.1"));
+}
+
+#[test]
+fn egress_fails_closed_on_unparseable_destination() {
+    let cfg = EgressConfig::from_policy(&NetworkEgressPolicy::Full);
+    assert!(!cfg.allows("not-an-ip"));
+    assert!(!cfg.allows(""));
+}
+
+#[test]
+fn both_substrates_emit_identical_egress_for_same_descriptor() {
+    let compiler = Compiler::new();
+    let mut descriptor = make_descriptor();
+    descriptor.network_egress = NetworkEgressPolicy::Allowlist(vec!["10.0.0.0/8".to_string()]);
+
+    let gvisor = compiler.compile_gvisor(&descriptor);
+    let apple = compiler.compile_apple_vm(&descriptor);
+
+    assert_eq!(
+        gvisor.egress, apple.egress,
+        "egress must be identical across substrates (no fail-open divergence)"
+    );
+    // Apple VM NAT interface reflects the restricted-but-enabled policy.
+    assert!(apple.network.enabled);
+    assert!(!gvisor.egress.allows("8.8.8.8"));
+}
+
+// ── MIK-5226.SEC.3: divergence detection compares caps AND egress ────────
+
+#[test]
+fn detect_divergence_flags_capability_mismatch() {
+    let compiler = Compiler::new();
+    let descriptor = make_descriptor();
+    let mut gvisor = compiler.compile_gvisor(&descriptor);
+    let apple = compiler.compile_apple_vm(&descriptor);
+
+    // Force a capability mismatch: gVisor grants a cap the Apple VM does not.
+    gvisor.process.capabilities = Some(OciCapabilities::from_list(&[
+        "CAP_NET_BIND_SERVICE".to_string()
+    ]));
+
+    let divergences = compiler.detect_divergence(&descriptor, &gvisor, &apple);
+    assert!(
+        divergences.iter().any(|d| d.contains("capabilities")),
+        "capability mismatch must be reported as divergence: {divergences:?}"
+    );
+}
+
+#[test]
+fn detect_divergence_flags_egress_mismatch() {
+    let compiler = Compiler::new();
+    let descriptor = make_descriptor();
+    let gvisor = compiler.compile_gvisor(&descriptor);
+    let mut apple = compiler.compile_apple_vm(&descriptor);
+
+    // Force an egress mismatch.
+    apple.egress = EgressConfig::from_policy(&NetworkEgressPolicy::Full);
+
+    let divergences = compiler.detect_divergence(&descriptor, &gvisor, &apple);
+    assert!(
+        divergences.iter().any(|d| d.contains("egress")),
+        "egress mismatch must be reported as divergence: {divergences:?}"
+    );
+}
+
+#[test]
+fn no_capability_or_egress_divergence_for_same_descriptor() {
+    let compiler = Compiler::new();
+    let mut descriptor = make_descriptor();
+    descriptor.capabilities = vec!["CAP_NET_BIND_SERVICE".to_string()];
+    descriptor.network_egress = NetworkEgressPolicy::Allowlist(vec!["10.0.0.0/8".to_string()]);
+
+    let (gvisor, apple, divergences) = compiler.compile_both(&descriptor);
+    let _ = (&gvisor, &apple);
+
+    // The same descriptor must NOT diverge on capabilities or egress — only
+    // the known structural deltas (mount-count for /proc, possibly cpu).
+    assert!(
+        !divergences.iter().any(|d| d.contains("capabilities")),
+        "identical descriptor must not diverge on capabilities: {divergences:?}"
+    );
+    assert!(
+        !divergences.iter().any(|d| d.contains("egress")),
+        "identical descriptor must not diverge on egress: {divergences:?}"
+    );
 }

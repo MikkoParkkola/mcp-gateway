@@ -178,7 +178,10 @@ fn ac_2_mik_new_runtime_d_2_compiler_descriptor_gviso() {
     assert_eq!(apple_spec.virtiofs_mounts.len(), 1);
     assert!(apple_spec.virtiofs_mounts[0].read_only);
     assert_eq!(apple_spec.virtiofs_mounts[0].source, "/host/data");
-    assert!(apple_spec.network.enabled);
+    // MIK-6164: Loopback egress no longer collapses to NAT — Apple VM
+    // networking stays disabled unless the policy actually permits egress
+    // (matches the Loopback assertion in src/runtime/compiler_tests.rs).
+    assert!(!apple_spec.network.enabled);
 
     // 3. Auto-detection: effective_substrate() uses current platform
     let substrate = descriptor.effective_substrate();
