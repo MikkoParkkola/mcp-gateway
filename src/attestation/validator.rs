@@ -81,6 +81,14 @@ pub enum AttestationRejection {
         /// `token_id` of the rejected predecessor token.
         token_id: String,
     },
+    /// The token is authentic and unexpired, but its capability allow-list
+    /// does not grant the requested action (MIK-6163, fail-closed).
+    CapabilityNotGranted {
+        /// The capability/action the call required.
+        required: String,
+        /// The capabilities the token actually carries.
+        granted: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for AttestationRejection {
@@ -95,6 +103,10 @@ impl std::fmt::Display for AttestationRejection {
             Self::RotatedOut { token_id } => {
                 write!(f, "token {token_id} rotated out and past its grace window")
             }
+            Self::CapabilityNotGranted { required, granted } => write!(
+                f,
+                "token capabilities {granted:?} do not grant required action {required:?}"
+            ),
         }
     }
 }
@@ -216,6 +228,19 @@ pub struct RotationCheckpoint {
     pub retiring: Vec<RetiringToken>,
 }
 
+// ── Capability matching ──────────────────────────────────────────────────────
+
+/// Whether a token's capability allow-list grants the requested action.
+///
+/// Fail-closed: the empty allow-list grants nothing. A capability grants the
+/// requested action when it is the `"*"` wildcard (a deliberately broad,
+/// operator-minted grant) or an exact match for the action. Matching is exact
+/// otherwise — no prefix/substring coercion that could widen a narrow grant.
+#[must_use]
+fn capabilities_grant(capabilities: &[String], required: &str) -> bool {
+    capabilities.iter().any(|cap| cap == "*" || cap == required)
+}
+
 // ── Validator ────────────────────────────────────────────────────────────────
 
 /// Gateway-side validator — the single point every cross-boundary call goes
@@ -267,6 +292,14 @@ impl AttestationValidator {
     /// recorded in the audit ring buffer with its detection latency and
     /// emitted as an `attestation_audit` tracing event, then returned.
     ///
+    /// `required_capability` is the action/tool the call is requesting. When
+    /// `Some`, the token's capability allow-list MUST grant it (an exact match,
+    /// or the `"*"` wildcard) or the call is rejected with
+    /// [`AttestationRejection::CapabilityNotGranted`] — authenticity alone never
+    /// authorizes an out-of-scope action (MIK-6163, fail-closed). `None` is for
+    /// capability-agnostic boundaries (e.g. `sandbox_boot`), which validate
+    /// authenticity only.
+    ///
     /// # Errors
     ///
     /// Returns the [`AttestationRejection`] describing why the token was
@@ -275,10 +308,11 @@ impl AttestationValidator {
         &self,
         encoded: Option<&str>,
         boundary: &str,
+        required_capability: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<TokenClaims, AttestationRejection> {
         let started = Instant::now();
-        match self.check(encoded, now) {
+        match self.check(encoded, required_capability, now) {
             Ok(claims) => {
                 self.validations_total.fetch_add(1, Ordering::Relaxed);
                 Ok(claims)
@@ -309,13 +343,14 @@ impl AttestationValidator {
         }
     }
 
-    /// Signature → structure → issuer → expiry → rotation, in that order.
-    /// Returns parsed claims alongside the rejection when they were readable
-    /// (for audit attribution; never trusted for authorization).
+    /// Signature → structure → issuer → expiry → rotation → capability, in that
+    /// order. Returns parsed claims alongside the rejection when they were
+    /// readable (for audit attribution; never trusted for authorization).
     #[allow(clippy::result_large_err)]
     fn check(
         &self,
         encoded: Option<&str>,
+        required_capability: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<TokenClaims, (AttestationRejection, Option<TokenClaims>)> {
         let Some(encoded) = encoded else {
@@ -362,6 +397,19 @@ impl AttestationValidator {
         if rotated_out {
             let token_id = claims.token_id.clone();
             return Err((AttestationRejection::RotatedOut { token_id }, Some(claims)));
+        }
+        // Capability allow-list check — the token is authentic and live, but it
+        // must still be scoped for the requested action (MIK-6163, fail-closed).
+        // Authenticity answers WHO; this answers WHAT they may do. A `None`
+        // requirement is a capability-agnostic boundary (e.g. sandbox_boot).
+        if let Some(required) = required_capability
+            && !capabilities_grant(&claims.capabilities, required)
+        {
+            let rejection = AttestationRejection::CapabilityNotGranted {
+                required: required.to_string(),
+                granted: claims.capabilities.clone(),
+            };
+            return Err((rejection, Some(claims)));
         }
         Ok(claims)
     }
@@ -490,7 +538,7 @@ mod tests {
         let now = Utc::now();
         let token = issue(now);
         let claims = v
-            .validate_boundary_call(Some(token.encoded()), "test", now)
+            .validate_boundary_call(Some(token.encoded()), "test", None, now)
             .unwrap();
         assert_eq!(claims.agent_identity, "agent");
         assert_eq!(v.validations_total(), 1);
@@ -502,7 +550,7 @@ mod tests {
     fn missing_token_rejected_and_audited() {
         let v = validator();
         let err = v
-            .validate_boundary_call(None, "boot", Utc::now())
+            .validate_boundary_call(None, "boot", None, Utc::now())
             .unwrap_err();
         assert_eq!(err, AttestationRejection::MissingToken);
         assert_eq!(v.rejections_total(), 1);
@@ -512,13 +560,62 @@ mod tests {
     }
 
     #[test]
+    fn mik_5223_caps_1_rejects_token_lacking_required_capability() {
+        // MIK-5223.CAPS.1 — fail-closed: an authentic, unexpired token whose
+        // capability allow-list does NOT include the requested action is
+        // rejected. Authenticity alone must not authorize an out-of-scope call.
+        let v = validator();
+        let now = Utc::now();
+        let token = issue(now); // minted with capabilities = ["cap"]
+
+        // Requesting an action the token was not scoped for → rejected.
+        let err = v
+            .validate_boundary_call(Some(token.encoded()), "gateway_invoke", Some("write"), now)
+            .unwrap_err();
+        assert!(
+            matches!(err, AttestationRejection::CapabilityNotGranted { .. }),
+            "expected CapabilityNotGranted, got: {err:?}"
+        );
+        assert_eq!(v.rejections_total(), 1);
+
+        // The same token IS admitted for the capability it actually holds.
+        let granted = v
+            .validate_boundary_call(Some(token.encoded()), "gateway_invoke", Some("cap"), now)
+            .unwrap();
+        assert_eq!(granted.agent_identity, "agent");
+
+        // A capability-agnostic boundary (None, e.g. sandbox_boot) still passes.
+        v.validate_boundary_call(Some(token.encoded()), "boot", None, now)
+            .unwrap();
+    }
+
+    #[test]
+    fn wildcard_capability_grants_any_action() {
+        // A token holding the "*" wildcard authorizes any requested action.
+        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let now = Utc::now();
+        let token = signer.issue(
+            &TokenRequest {
+                agent_identity: "agent".to_string(),
+                task_uuid: Uuid::new_v4(),
+                capabilities: vec!["*".to_string()],
+            },
+            now,
+            TimeDelta::minutes(10),
+        );
+        let v = validator();
+        v.validate_boundary_call(Some(token.encoded()), "gateway_invoke", Some("write"), now)
+            .unwrap();
+    }
+
+    #[test]
     fn expired_token_rejected() {
         let v = validator();
         let issued = Utc::now();
         let token = issue(issued);
         let later = issued + TimeDelta::minutes(11);
         let err = v
-            .validate_boundary_call(Some(token.encoded()), "call", later)
+            .validate_boundary_call(Some(token.encoded()), "call", None, later)
             .unwrap_err();
         assert!(matches!(err, AttestationRejection::Expired { .. }));
     }

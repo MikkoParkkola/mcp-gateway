@@ -255,7 +255,18 @@ impl MetaMcp {
             return Ok(());
         };
         let token = args.get("attestation").and_then(Value::as_str);
-        match validator.validate_boundary_call(token, "gateway_invoke", chrono::Utc::now()) {
+        // The requested action is the tool being invoked: the token's capability
+        // allow-list must grant it (MIK-6163). Missing tool → empty action,
+        // which only a "*" wildcard token can satisfy (fail-closed). The
+        // authenticity checks still run first, so a forged/expired token is
+        // rejected on those grounds regardless of capability.
+        let requested = args.get("tool").and_then(Value::as_str).unwrap_or_default();
+        match validator.validate_boundary_call(
+            token,
+            "gateway_invoke",
+            Some(requested),
+            chrono::Utc::now(),
+        ) {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
                 crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(

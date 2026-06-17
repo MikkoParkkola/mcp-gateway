@@ -129,7 +129,7 @@ fn ac_3_every_cross_boundary_call_validates_and_rejections_hit_ring_buffer() {
     // Every cross-boundary call goes through the gateway validator.
     for boundary in ["gateway_invoke", "gateway_search", "backend_proxy"] {
         let claims = v
-            .validate_boundary_call(Some(token.encoded()), boundary, now)
+            .validate_boundary_call(Some(token.encoded()), boundary, None, now)
             .expect("valid token must pass on every boundary");
         assert_eq!(claims.token_id, token.claims().token_id);
     }
@@ -139,7 +139,7 @@ fn ac_3_every_cross_boundary_call_validates_and_rejections_hit_ring_buffer() {
     // A rejected call logs to the audit ring buffer.
     let tampered = format!("{}x", token.encoded());
     let err = v
-        .validate_boundary_call(Some(&tampered), "gateway_invoke", now)
+        .validate_boundary_call(Some(&tampered), "gateway_invoke", None, now)
         .unwrap_err();
     assert!(matches!(
         err,
@@ -169,17 +169,17 @@ fn ac_4_rotation_does_not_disrupt_in_flight_syscalls() {
     // An in-flight syscall still carrying the predecessor token is NOT
     // disrupted: it validates inside the grace window.
     let in_flight = now + TimeDelta::seconds(5);
-    v.validate_boundary_call(Some(original.encoded()), "syscall", in_flight)
+    v.validate_boundary_call(Some(original.encoded()), "syscall", None, in_flight)
         .expect("in-flight syscall with predecessor token must not be disrupted");
 
     // The successor validates too, on the same path.
-    v.validate_boundary_call(Some(successor.encoded()), "syscall", in_flight)
+    v.validate_boundary_call(Some(successor.encoded()), "syscall", None, in_flight)
         .expect("successor token must validate");
 
     // After the grace window closes, the predecessor is rejected.
     let after_grace = now + TimeDelta::seconds(31);
     let err = v
-        .validate_boundary_call(Some(original.encoded()), "syscall", after_grace)
+        .validate_boundary_call(Some(original.encoded()), "syscall", None, after_grace)
         .unwrap_err();
     assert!(matches!(err, AttestationRejection::RotatedOut { .. }));
     assert_eq!(v.rotations_total(), 1);
@@ -240,7 +240,7 @@ fn ac_5_forgery_detected_and_logged_within_100ms_over_100_cases() {
     let before = v.audit().total_pushed();
     for (i, forged) in forgeries.iter().enumerate() {
         let started = Instant::now();
-        let result = v.validate_boundary_call(Some(forged), "forgery_probe", now);
+        let result = v.validate_boundary_call(Some(forged), "forgery_probe", None, now);
         let elapsed = started.elapsed();
         assert!(result.is_err(), "forgery case {i} must be detected");
         assert!(
@@ -317,7 +317,7 @@ fn ac_7_b1_ident_every_token_and_audit_record_uniquely_attributable() {
 
     // Every audit record is uniquely attributable: monotonic seq numbers.
     for _ in 0..3 {
-        let _ = v.validate_boundary_call(None, "probe", now);
+        let _ = v.validate_boundary_call(None, "probe", None, now);
     }
     let seqs: Vec<u64> = v.audit().snapshot().iter().map(|r| r.seq).collect();
     assert_eq!(seqs, vec![0, 1, 2]);
@@ -337,7 +337,7 @@ fn ac_8_b2_mem_na_token_consumable_downstream() {
     let token = signer().issue(&request(), now, TimeDelta::minutes(5));
     let v = validator();
     let claims = v
-        .validate_boundary_call(Some(token.encoded()), "runtime_b_bridge", now)
+        .validate_boundary_call(Some(token.encoded()), "runtime_b_bridge", None, now)
         .expect("downstream consumer must be able to validate the token");
     assert_eq!(&claims, token.claims());
 }
@@ -361,17 +361,17 @@ fn ac_9_b3_durable_rotation_state_persists_across_checkpoint() {
     // Grace window honored after restore: in-flight predecessor still valid…
     let in_flight = now + TimeDelta::seconds(5);
     fresh
-        .validate_boundary_call(Some(original.encoded()), "syscall", in_flight)
+        .validate_boundary_call(Some(original.encoded()), "syscall", None, in_flight)
         .expect("grace window must survive checkpoint/restore");
     // …and post-grace rejection also survives the checkpoint.
     let after_grace = now + TimeDelta::seconds(31);
     let err = fresh
-        .validate_boundary_call(Some(original.encoded()), "syscall", after_grace)
+        .validate_boundary_call(Some(original.encoded()), "syscall", None, after_grace)
         .unwrap_err();
     assert!(matches!(err, AttestationRejection::RotatedOut { .. }));
     // The successor is unaffected.
     fresh
-        .validate_boundary_call(Some(successor.encoded()), "syscall", after_grace)
+        .validate_boundary_call(Some(successor.encoded()), "syscall", None, after_grace)
         .expect("successor valid after restore");
 }
 

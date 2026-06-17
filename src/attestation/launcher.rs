@@ -201,7 +201,7 @@ impl AttestedSandboxLauncher {
         let mut flow_trace = vec!["token_required"];
         let claims = self
             .validator
-            .validate_boundary_call(token, BOOT_BOUNDARY, now)
+            .validate_boundary_call(token, BOOT_BOUNDARY, None, now)
             .map_err(|rejection| match rejection {
                 AttestationRejection::MissingToken => BootDenial::MissingToken,
                 other => BootDenial::InvalidToken(other),

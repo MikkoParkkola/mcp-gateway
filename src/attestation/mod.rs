@@ -15,7 +15,7 @@
 //!   └── rotate()           successor token; predecessor enters grace window
 //!
 //! AttestationValidator     (one per gateway; the single validation point)
-//!   ├── validate_boundary_call()  signature → claims → expiry → rotation
+//!   ├── validate_boundary_call()  signature → claims → expiry → rotation → capability
 //!   ├── audit: AuditRingBuffer    every rejection, with detection latency
 //!   └── checkpoint()/restore()    rotation state survives checkpoints (B3)
 //!
