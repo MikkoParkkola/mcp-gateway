@@ -113,16 +113,40 @@ impl MetaMcp {
             return None;
         }
 
-        let backend = self.backends.get(&surfaced.server)?;
-        let tool = backend.get_cached_tool(&surfaced.tool);
-        if tool.is_none() {
+        // MCP backend path: resolve from the backend's tool cache.
+        if let Some(backend) = self.backends.get(&surfaced.server) {
+            let tool = backend.get_cached_tool(&surfaced.tool);
+            if tool.is_none() {
+                debug!(
+                    server = %surfaced.server,
+                    tool = %surfaced.tool,
+                    "Surfaced tool not in backend cache — omitting from tools/list"
+                );
+            }
+            return tool;
+        }
+
+        // Capability backend path: capability tools (e.g. the `fulcrum`
+        // capability provider) live in a separate subsystem from MCP backends,
+        // so surface them by name from the capability tool set. This gives
+        // chat clients direct one-hop access to high-value capabilities
+        // (search, weather, travel, ...) instead of the gateway_search +
+        // gateway_invoke two-hop, which chat models handle poorly.
+        if let Some(cap) = self.get_capabilities() {
+            if let Some(tool) = cap
+                .get_tools()
+                .into_iter()
+                .find(|tl| tl.name == surfaced.tool)
+            {
+                return Some(tool);
+            }
             debug!(
                 server = %surfaced.server,
                 tool = %surfaced.tool,
-                "Surfaced tool not in backend cache — omitting from tools/list"
+                "Surfaced capability tool not found — omitting from tools/list"
             );
         }
-        tool
+        None
     }
 }
 
