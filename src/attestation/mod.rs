@@ -34,6 +34,7 @@ pub mod launcher;
 pub mod signer;
 pub mod token;
 pub mod validator;
+pub mod wiring;
 
 pub use launcher::{
     ATTESTATION_FLAG_ENV, AttestationEnforcement, AttestedSandboxLauncher, BootDenial,
@@ -44,4 +45,8 @@ pub use token::{AttestationToken, BNAUT_ISSUER, SIGNING_ALGORITHM, TokenClaims};
 pub use validator::{
     AttestationAuditRecord, AttestationMode, AttestationRejection, AttestationValidator,
     AuditRingBuffer, RetiringToken, RotationCheckpoint,
+};
+pub use wiring::{
+    ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV, ATTESTATION_SIGNING_KEY_ENV,
+    attestation_wiring_from_env, resolve_attestation_wiring,
 };
