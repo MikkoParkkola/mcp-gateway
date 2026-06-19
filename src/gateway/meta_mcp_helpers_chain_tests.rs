@@ -380,6 +380,7 @@ fn make_cb_stats_closed() -> CircuitBreakerStats {
         retry_after_ms: 0,
         current_failures: 0,
         failure_threshold: 5,
+        last_open_event: None,
     }
 }
 
@@ -391,6 +392,7 @@ fn make_cb_stats_open() -> CircuitBreakerStats {
         retry_after_ms: 29_000,
         current_failures: 5,
         failure_threshold: 5,
+        last_open_event: None,
     }
 }
 
@@ -433,6 +435,7 @@ fn build_circuit_breaker_stats_json_half_open_state() {
         retry_after_ms: 0,
         current_failures: 0,
         failure_threshold: 5,
+        last_open_event: None,
     };
     // WHEN: building JSON
     let json = build_circuit_breaker_stats_json("probing-backend", &stats);

@@ -226,7 +226,8 @@ impl ResolvedAuthConfig {
     /// Record a failed dispatch for this authenticated client.
     pub fn record_client_failure(&self, client_name: &str) {
         if let Some(breaker) = self.active_client_circuit_breaker(client_name) {
-            breaker.record_failure();
+            // Client path: placeholder reason is acceptable (AC.2 specifically requires real values only on backend path src/backend/mod.rs:681).
+            breaker.record_failure("client_dispatch_failed", std::time::Duration::ZERO);
         }
     }
 

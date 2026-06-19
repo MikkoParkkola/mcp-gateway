@@ -680,7 +680,8 @@ impl Backend {
             }
             Err(e) => {
                 tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
-                self.failsafe.record_failure();
+                // Thread real error + latency (no placeholder) per MIK-6119.AC.2
+                self.failsafe.record_failure(&e.to_string(), latency);
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
@@ -758,7 +759,7 @@ impl Backend {
             }
             Err(e) => {
                 tracing::error!(error = %e, latency_ms = latency.as_millis(), "Notification failed");
-                self.failsafe.record_failure();
+                self.failsafe.record_failure(&e.to_string(), latency);
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
@@ -787,7 +788,9 @@ impl Backend {
     pub(crate) fn trip_circuit_breaker_for_test(&self) {
         let threshold = self.failsafe.circuit_breaker.stats().failure_threshold;
         for _ in 0..threshold {
-            self.failsafe.circuit_breaker.record_failure();
+            self.failsafe
+                .circuit_breaker
+                .record_failure("test_trip", std::time::Duration::ZERO);
         }
     }
 

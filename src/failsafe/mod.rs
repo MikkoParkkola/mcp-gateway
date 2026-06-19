@@ -6,7 +6,8 @@ mod rate_limiter;
 mod retry;
 
 pub use circuit_breaker::{
-    CircuitBreaker, CircuitBreakerStats, CircuitState, build_circuit_breaker_error,
+    CircuitBreaker, CircuitBreakerOpenEvent, CircuitBreakerStats, CircuitState,
+    build_circuit_breaker_error,
 };
 pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;
@@ -53,9 +54,9 @@ impl Failsafe {
         self.health_tracker.record_success(latency);
     }
 
-    /// Record a failure
-    pub fn record_failure(&self) {
-        self.circuit_breaker.record_failure();
+    /// Record a failure (threads reason + latency to circuit breaker for open-event capture).
+    pub fn record_failure(&self, reason: &str, latency: std::time::Duration) {
+        self.circuit_breaker.record_failure(reason, latency);
         self.health_tracker.record_failure();
     }
 
