@@ -240,7 +240,12 @@ impl CapabilityExecutor {
             request_id = %uuid::Uuid::new_v4()
         )
     )]
-    pub async fn execute(&self, capability: &CapabilityDefinition, params: Value) -> Result<Value> {
+    pub async fn execute(
+        &self,
+        capability: &CapabilityDefinition,
+        params: Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<Value> {
         let start_time = std::time::Instant::now();
 
         let provider = capability
@@ -259,7 +264,7 @@ impl CapabilityExecutor {
         // Route through the protocol executor trait.
         let protocol_config = provider.protocol_config();
         let response = self
-            .dispatch_protocol(capability, provider, &protocol_config, &params)
+            .dispatch_protocol(capability, provider, &protocol_config, &params, identity)
             .await?;
 
         // Apply response transform pipeline if configured
@@ -301,6 +306,7 @@ impl CapabilityExecutor {
         provider: &ProviderConfig,
         protocol_config: &super::definition::ProtocolConfig,
         params: &Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Value> {
         use rest::{ExecutionContext, ProtocolExecutor as _};
 
@@ -313,19 +319,19 @@ impl CapabilityExecutor {
             "rest" => {
                 let executor = rest::RestExecutor { executor: self };
                 executor
-                    .execute(protocol_config, params.clone(), &ctx)
+                    .execute(protocol_config, params.clone(), &ctx, identity)
                     .await
             }
             "graphql" => {
                 let executor = graphql::GraphqlExecutor { executor: self };
                 executor
-                    .execute(protocol_config, params.clone(), &ctx)
+                    .execute(protocol_config, params.clone(), &ctx, identity)
                     .await
             }
             "jsonrpc" => {
                 let executor = jsonrpc::JsonRpcExecutor { executor: self };
                 executor
-                    .execute(protocol_config, params.clone(), &ctx)
+                    .execute(protocol_config, params.clone(), &ctx, identity)
                     .await
             }
             other => Err(Error::Config(format!(
@@ -350,6 +356,7 @@ impl CapabilityExecutor {
         capability: &CapabilityDefinition,
         provider: &ProviderConfig,
         params: &Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Value> {
         let config = &provider.config;
 
@@ -370,7 +377,7 @@ impl CapabilityExecutor {
 
         // Add headers; skip Authorization when auth.param is set (credential
         // goes as a query param instead of a header).
-        let headers = self.build_headers(config, &capability.auth, params).await?;
+        let headers = self.build_headers(config, &capability.auth, params, identity).await?;
         request = request.headers(headers);
 
         // Inject auth credential as a query parameter when auth.param is specified
@@ -378,7 +385,7 @@ impl CapabilityExecutor {
         if let Some(ref param_name) = capability.auth.param
             && capability.auth.required
         {
-            let credential = self.fetch_credential(&capability.auth).await?;
+            let credential = self.fetch_credential(&capability.auth, identity).await?;
             request = request.query(&[(param_name.as_str(), credential.as_str())]);
         }
 
@@ -459,6 +466,7 @@ impl CapabilityExecutor {
         config: &RestConfig,
         auth: &super::AuthConfig,
         params: &Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
 
@@ -480,7 +488,7 @@ impl CapabilityExecutor {
 
         // Skip header injection when auth.param is set (credential goes as query param).
         if auth.required && auth.param.is_none() {
-            self.inject_auth(&mut headers, auth).await?;
+            self.inject_auth(&mut headers, auth, identity).await?;
         }
 
         Ok(headers)
@@ -492,12 +500,14 @@ impl CapabilityExecutor {
     ///
     /// Credentials are fetched from secure storage and injected at runtime.
     /// They are NEVER logged or stored in memory longer than necessary.
+    /// For personal caps, identity passed down to select per-user cred (MIK-6208).
     pub(super) async fn inject_auth(
         &self,
         headers: &mut HeaderMap,
         auth: &super::AuthConfig,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<()> {
-        let credential = self.fetch_credential(auth).await?;
+        let credential = self.fetch_credential(auth, identity).await?;
 
         let header_name: HeaderName = auth
             .header

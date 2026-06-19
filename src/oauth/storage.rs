@@ -160,18 +160,48 @@ impl TokenStorage {
         hex::encode(&hash[..8])
     }
 
+    /// Generate storage key for a backend + identity (MIK-6208 per-user vault).
+    /// Uses `cred:{subject}:{provider}` semantics internally via subject in hash.
+    fn storage_key_with_subject(backend_name: &str, resource_url: &str, subject: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(backend_name.as_bytes());
+        hasher.update(b":");
+        hasher.update(resource_url.as_bytes());
+        hasher.update(b":sub:");
+        hasher.update(subject.as_bytes());
+        let hash = hasher.finalize();
+        hex::encode(&hash[..8])
+    }
+
     /// Get the file path for a backend's tokens
     fn token_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
         let key = Self::storage_key(backend_name, resource_url);
         self.base_dir.join(format!("{key}_tokens.json"))
     }
 
-    /// Load tokens for a backend
+    /// Get the file path for a backend's tokens under a specific identity subject.
+    /// Per-user tokens live alongside but with distinct hashed filenames (incl subject).
+    fn token_path_for_subject(&self, backend_name: &str, resource_url: &str, subject: &str) -> PathBuf {
+        let key = Self::storage_key_with_subject(backend_name, resource_url, subject);
+        self.base_dir.join(format!("{key}_tokens.json"))
+    }
+
+    /// Load tokens for a backend (shared / non-personal path)
     pub fn load(&self, backend_name: &str, resource_url: &str) -> Option<TokenInfo> {
-        let path = self.token_path(backend_name, resource_url);
+        self.load_with_subject(backend_name, resource_url, None)
+    }
+
+    /// Load tokens for a backend scoped to a VerifiedIdentity.subject (MIK.VAULT.1).
+    /// When subject present, uses `cred:{subject}:{provider}` derived key.
+    /// Personal creds are never mixed with shared.
+    pub fn load_with_subject(&self, backend_name: &str, resource_url: &str, subject: Option<&str>) -> Option<TokenInfo> {
+        let path = match subject {
+            Some(s) if !s.is_empty() => self.token_path_for_subject(backend_name, resource_url, s),
+            _ => self.token_path(backend_name, resource_url),
+        };
 
         if !path.exists() {
-            debug!(backend = %backend_name, "No stored tokens found");
+            debug!(backend = %backend_name, subject = ?subject, "No stored tokens found");
             return None;
         }
 
@@ -179,33 +209,47 @@ impl TokenStorage {
             Ok(content) => match serde_json::from_str::<TokenInfo>(&content) {
                 Ok(token) => {
                     if token.is_expired() {
-                        debug!(backend = %backend_name, "Stored token is expired");
+                        debug!(backend = %backend_name, subject = ?subject, "Stored token is expired");
                         // Keep the token info in case we can refresh it
                         Some(token)
                     } else {
-                        info!(backend = %backend_name, expires_in = ?token.time_until_expiry(), "Loaded valid token");
+                        info!(backend = %backend_name, subject = ?subject, expires_in = ?token.time_until_expiry(), "Loaded valid token");
                         Some(token)
                     }
                 }
                 Err(e) => {
-                    warn!(backend = %backend_name, error = %e, "Failed to parse stored token");
+                    warn!(backend = %backend_name, subject = ?subject, error = %e, "Failed to parse stored token");
                     None
                 }
             },
             Err(e) => {
-                warn!(backend = %backend_name, error = %e, "Failed to read token file");
+                warn!(backend = %backend_name, subject = ?subject, error = %e, "Failed to read token file");
                 None
             }
         }
     }
 
-    /// Save tokens for a backend
+    /// Save tokens for a backend (shared / non-personal path)
     ///
     /// # Errors
     ///
     /// Returns an error if the token cannot be serialized or written to disk.
     pub fn save(&self, backend_name: &str, resource_url: &str, token: &TokenInfo) -> Result<()> {
-        let path = self.token_path(backend_name, resource_url);
+        self.save_with_subject(backend_name, resource_url, token, None)
+    }
+
+    /// Save tokens for a backend under a specific identity (MIK.VAULT.1 / MIK.VAULT.4).
+    /// Per-user OAuth connect flow writes here, not global backend key.
+    /// Uses subject-hashed path so no cross-user leak possible.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token cannot be serialized or written to disk.
+    pub fn save_with_subject(&self, backend_name: &str, resource_url: &str, token: &TokenInfo, subject: Option<&str>) -> Result<()> {
+        let path = match subject {
+            Some(s) if !s.is_empty() => self.token_path_for_subject(backend_name, resource_url, s),
+            _ => self.token_path(backend_name, resource_url),
+        };
 
         let content = serde_json::to_string_pretty(token)
             .map_err(|e| Error::OAuth(format!("Failed to serialize token: {e}")))?;
@@ -221,7 +265,7 @@ impl TokenStorage {
             let _ = fs::set_permissions(&path, perms);
         }
 
-        info!(backend = %backend_name, "Saved OAuth token");
+        info!(backend = %backend_name, subject = ?subject, "Saved OAuth token");
         Ok(())
     }
 
@@ -231,12 +275,20 @@ impl TokenStorage {
     ///
     /// Returns an error if the token file exists but cannot be deleted.
     pub fn delete(&self, backend_name: &str, resource_url: &str) -> Result<()> {
-        let path = self.token_path(backend_name, resource_url);
+        self.delete_with_subject(backend_name, resource_url, None)
+    }
+
+    /// Delete tokens for a backend under identity subject.
+    pub fn delete_with_subject(&self, backend_name: &str, resource_url: &str, subject: Option<&str>) -> Result<()> {
+        let path = match subject {
+            Some(s) if !s.is_empty() => self.token_path_for_subject(backend_name, resource_url, s),
+            _ => self.token_path(backend_name, resource_url),
+        };
 
         if path.exists() {
             fs::remove_file(&path)
                 .map_err(|e| Error::OAuth(format!("Failed to delete token file: {e}")))?;
-            info!(backend = %backend_name, "Deleted OAuth token");
+            info!(backend = %backend_name, subject = ?subject, "Deleted OAuth token");
         }
 
         Ok(())

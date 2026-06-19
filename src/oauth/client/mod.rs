@@ -69,6 +69,9 @@ pub struct OAuthClient {
     ///
     /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
     token_refresh_buffer_secs: u64,
+    /// Subject from VerifiedIdentity for per-user token scoping (MIK-6208).
+    /// If set, connect flow writes use identity not global key.
+    identity_subject: Option<String>,
 }
 
 /// OAuth token response
@@ -107,6 +110,9 @@ pub struct OAuthClientConfig {
     pub callback_path: Option<String>,
     /// Seconds before expiry to proactively refresh (default: 300).
     pub token_refresh_buffer_secs: u64,
+    /// Optional OIDC subject for per-user credential vault (MIK-6208).
+    /// When present, token writes use identity-scoped storage_key (cred:{sub}:provider).
+    pub identity_subject: Option<String>,
 }
 
 impl OAuthClient {
@@ -136,6 +142,7 @@ impl OAuthClient {
             callback_port: cfg.callback_port,
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
+            identity_subject: cfg.identity_subject,
         }
     }
 
@@ -330,7 +337,7 @@ impl OAuthClient {
         );
 
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save_with_subject(&self.backend_name, &self.resource_url, &token, self.identity_subject.as_deref())?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
@@ -489,7 +496,7 @@ impl OAuthClient {
 
         // Store and cache the token
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save_with_subject(&self.backend_name, &self.resource_url, &token, self.identity_subject.as_deref())?;
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)
@@ -624,7 +631,7 @@ impl OAuthClient {
 
         // Store and cache
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save_with_subject(&self.backend_name, &self.resource_url, &token, self.identity_subject.as_deref())?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token refreshed successfully");

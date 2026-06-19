@@ -11,13 +11,22 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::oauth::TokenInfo;
+use crate::key_server::oidc::VerifiedIdentity;
+
 use crate::{Error, Result};
 
 use super::CapabilityExecutor;
 
 impl CapabilityExecutor {
     /// Fetch credential from secure storage.
-    pub(super) async fn fetch_credential(&self, auth: &super::super::AuthConfig) -> Result<String> {
+    ///
+    /// MIK.VAULT.1: resolve `cred:{identity}:{provider}` keyed by VerifiedIdentity.subject .
+    /// MIK.VAULT.2: caller (execute path) passes identity only for personal-tagged caps.
+    pub(super) async fn fetch_credential(
+        &self,
+        auth: &super::super::AuthConfig,
+        identity: Option<&VerifiedIdentity>,
+    ) -> Result<String> {
         let key = &auth.key;
 
         if let Some(var_name) = key.strip_prefix("env:") {
@@ -30,7 +39,7 @@ impl CapabilityExecutor {
         } else if let Some(keychain_key) = key.strip_prefix("keychain:") {
             self.fetch_from_keychain(keychain_key).await
         } else if let Some(provider) = key.strip_prefix("oauth:") {
-            self.fetch_oauth_token(provider, auth.token_endpoint.as_deref())
+            self.fetch_oauth_token(provider, auth.token_endpoint.as_deref(), identity)
                 .await
         } else if let Some(file_spec) = key.strip_prefix("file:") {
             self.fetch_from_file(file_spec)
@@ -139,6 +148,7 @@ impl CapabilityExecutor {
                         endpoint,
                         storage,
                         token.client_id.as_deref(),
+                        identity,
                     )
                     .await
                 {
@@ -186,6 +196,7 @@ impl CapabilityExecutor {
         token_endpoint: &str,
         storage: &crate::oauth::TokenStorage,
         client_id: Option<&str>,
+        identity: Option<&VerifiedIdentity>,
     ) -> Result<String> {
         let mut params = HashMap::new();
         params.insert("grant_type", "refresh_token");
@@ -248,7 +259,8 @@ impl CapabilityExecutor {
             client_secret: client_secret_owned,
         };
 
-        if let Err(e) = storage.save(provider, provider, &new_token) {
+        let sub = identity.map(|i| i.subject.as_str());
+        if let Err(e) = storage.save_with_subject(provider, provider, &new_token, sub) {
             warn!(
                 provider = %provider,
                 error = %e,
@@ -258,7 +270,11 @@ impl CapabilityExecutor {
 
         {
             let tokens = self.oauth_tokens.read();
-            tokens.insert(provider.to_string(), new_token.clone());
+            let ck = match identity {
+                Some(id) => format!("{}:{}", provider, id.subject),
+                None => provider.to_string(),
+            };
+            tokens.insert(ck, new_token.clone());
         }
 
         info!(provider = %provider, "OAuth token refreshed successfully");
@@ -409,7 +425,7 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         let ex = executor_with_storage(s);
         ex.set_oauth_token("p", valid_tok("cached"));
-        assert_eq!(ex.fetch_oauth_token("p", None).await.unwrap(), "cached");
+        assert_eq!(ex.fetch_oauth_token("p", None, None).await.unwrap(), "cached");
     }
 
     #[tokio::test]
@@ -418,7 +434,7 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         s.save("p2", "p2", &valid_tok("disk")).unwrap();
         let ex = executor_with_storage(s);
-        assert_eq!(ex.fetch_oauth_token("p2", None).await.unwrap(), "disk");
+        assert_eq!(ex.fetch_oauth_token("p2", None, None).await.unwrap(), "disk");
     }
 
     #[tokio::test]
@@ -427,7 +443,7 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         s.save("p3", "p3", &valid_tok("fresh")).unwrap();
         let ex = executor_with_storage(s);
-        ex.fetch_oauth_token("p3", None).await.unwrap();
+        ex.fetch_oauth_token("p3", None, None).await.unwrap();
         assert!(ex.oauth_tokens.read().contains_key("p3"));
     }
 
@@ -437,7 +453,7 @@ mod tests {
         let s = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
         s.save("p4", "p4", &expired_tok("old")).unwrap();
         let ex = executor_with_storage(s);
-        let err = ex.fetch_oauth_token("p4", None).await.unwrap_err();
+        let err = ex.fetch_oauth_token("p4", None, None).await.unwrap_err();
         assert!(err.to_string().contains("expired"), "{err}");
     }
 
@@ -449,14 +465,14 @@ mod tests {
         tok.refresh_token = Some("rt".to_string());
         s.save("p5", "p5", &tok).unwrap();
         let ex = executor_with_storage(s);
-        let err = ex.fetch_oauth_token("p5", None).await.unwrap_err();
+        let err = ex.fetch_oauth_token("p5", None, None).await.unwrap_err();
         assert!(err.to_string().contains("expired"), "{err}");
     }
 
     #[tokio::test]
     async fn missing_token_returns_not_found() {
         let ex = executor_no_storage();
-        let err = ex.fetch_oauth_token("unk", None).await.unwrap_err();
+        let err = ex.fetch_oauth_token("unk", None, None).await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not found"), "{msg}");
         assert!(msg.contains("unk"), "{msg}");
@@ -470,7 +486,7 @@ mod tests {
         let ex = executor_with_storage(s);
         ex.set_oauth_token("p6", expired_tok("mem_stale"));
         assert_eq!(
-            ex.fetch_oauth_token("p6", None).await.unwrap(),
+            ex.fetch_oauth_token("p6", None, None).await.unwrap(),
             "disk_fresh"
         );
     }
