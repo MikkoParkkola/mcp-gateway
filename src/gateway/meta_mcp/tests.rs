@@ -1434,4 +1434,41 @@ mod attestation_wiring {
         assert_eq!(v.validations_total(), 1);
         assert!(v.audit().is_empty());
     }
+
+    #[test]
+    fn resolved_observe_wiring_admits_under_capability_token_and_audits() {
+        // End-to-end of the wiring decision: the env-driven resolver builds an
+        // observe-mode validator, which is then attached via with_attestation.
+        // An under-capability / invalid token must be ADMITTED (never blocked)
+        // while the mismatch is recorded in the audit ring buffer.
+        let (validator, mode) =
+            crate::attestation::resolve_attestation_wiring(Some("observe"), Some(KEY), None)
+                .expect("observe must attach a validator");
+        assert_eq!(mode, AttestationMode::Observe);
+        let mm = make_meta_mcp().with_attestation(Arc::clone(&validator), mode);
+
+        // A forged/garbage token (under-capability is also covered by the CAPS
+        // tests above) — observe admits it but audits the rejection.
+        let res = mm.check_attestation(
+            &json!({"server": "s", "tool": "write", "attestation": "forged.token"}),
+            Some("agent-9"),
+        );
+        assert!(res.is_ok(), "observe must never block the call");
+        assert_eq!(validator.rejections_total(), 1);
+        assert_eq!(validator.audit().snapshot().len(), 1);
+    }
+
+    #[test]
+    fn resolved_off_wiring_is_a_pure_no_op() {
+        // off → resolver attaches no validator; the gateway behaves exactly as
+        // an un-wired one (the gate is a zero-cost no-op even without a token).
+        assert!(
+            crate::attestation::resolve_attestation_wiring(Some("off"), Some(KEY), None).is_none()
+        );
+        let mm = make_meta_mcp(); // no attestation attached, as off would leave it
+        assert!(
+            mm.check_attestation(&json!({"server": "s", "tool": "t"}), None)
+                .is_ok()
+        );
+    }
 }

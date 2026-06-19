@@ -230,6 +230,19 @@ impl Gateway {
             meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
         }
 
+        // ── Per-action attestation (MIK-5223 / MIK-6163, B1-IDENT) ────────────
+        // Wire the attestation validator from operator config (env-driven).
+        // Default posture is OBSERVE: audit every presented token at the
+        // `gateway_invoke` boundary but never block a call. `off` attaches no
+        // validator (pure no-op). Enforce is intentionally not yet a wired mode.
+        if let Some((validator, mode)) = crate::attestation::attestation_wiring_from_env() {
+            info!(
+                ?mode,
+                "Per-action attestation wired at gateway_invoke boundary"
+            );
+            meta_mcp_builder = meta_mcp_builder.with_attestation(validator, mode);
+        }
+
         let mut meta_mcp = Arc::new(meta_mcp_builder);
         meta_mcp.set_transition_tracker(Arc::clone(&transition_tracker));
 
