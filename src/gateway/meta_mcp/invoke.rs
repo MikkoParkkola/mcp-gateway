@@ -41,9 +41,9 @@ fn enforce_output_schema(
     tool: &str,
     result: Value,
     output_schema: Option<&Value>,
-) -> Result<Value> {
+) -> Value {
     let Some(schema) = output_schema else {
-        return Ok(result);
+        return result;
     };
 
     if result
@@ -51,22 +51,31 @@ fn enforce_output_schema(
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return Ok(result);
+        return result;
     }
 
     let validation_target =
         extract_output_validation_target(&result).unwrap_or_else(|| result.clone());
     let validation = validate_output(&validation_target, schema);
     if validation.is_valid() {
-        Ok(apply_validated_output(&result, validation.coerced))
+        apply_validated_output(&result, validation.coerced)
     } else {
-        Err(Error::json_rpc(
-            -32603,
-            format!(
-                "Tool '{tool}' on server '{server}' returned a result that violated its declared output schema:\n\n{}",
-                validation.format_output_error(schema)
-            ),
-        ))
+        // Output-schema mismatch is ADVISORY, not fatal, for proxied tools.
+        // Upstream APIs (e.g. open-meteo, travel providers) legitimately return
+        // more fields than a hand-authored capability schema declares; hard-
+        // rejecting would break a working tool and surface as an opaque error in
+        // clients. We log the mismatch and pass the result through, still
+        // populating `structuredContent` from the actual payload so spec-
+        // compliant clients (Open WebUI) receive structured output. The gateway
+        // does not author these fields — it proxies them — so extra keys are not
+        // a trust-boundary concern here.
+        tracing::warn!(
+            server,
+            tool,
+            mismatch = %validation.format_output_error(schema),
+            "tool output did not match its declared output schema; passing through (advisory)"
+        );
+        apply_validated_output(&result, validation_target)
     }
 }
 
@@ -1096,7 +1105,7 @@ impl MetaMcp {
                 .as_ref()
                 .and_then(|c| (!c.schema.output.is_null()).then(|| c.schema.output.clone()));
 
-            let validated = enforce_output_schema(server, tool, response, output_schema.as_ref())?;
+            let validated = enforce_output_schema(server, tool, response, output_schema.as_ref());
 
             // Canonical projection (MIK-3534), applied last — after
             // response_transform (so `_raw` cannot re-expose a redacted field)
@@ -1188,7 +1197,12 @@ impl MetaMcp {
                     .and_then(|cached| cached.output_schema)
             });
 
-        enforce_output_schema(server, tool, result, output_schema.as_ref())
+        Ok(enforce_output_schema(
+            server,
+            tool,
+            result,
+            output_schema.as_ref(),
+        ))
     }
 
     // ========================================================================
@@ -1928,15 +1942,17 @@ mod response_transform_tests {
             "search",
             json!({"id": "abc", "count": 2}),
             Some(&schema),
-        )
-        .expect("schema-valid result should pass");
+        );
 
         assert_eq!(result["id"], json!("abc"));
         assert_eq!(result["count"], json!(2));
     }
 
     #[test]
-    fn enforce_output_schema_rejects_unexpected_fields() {
+    fn enforce_output_schema_passes_through_unexpected_fields_advisory() {
+        // Output-schema mismatch is advisory for proxied tools: extra fields
+        // from a real upstream API must NOT break the call. The result passes
+        // through and structuredContent is still populated (with the extras).
         let schema = json!({
             "type": "object",
             "properties": {
@@ -1945,18 +1961,16 @@ mod response_transform_tests {
             "required": ["data"]
         });
 
-        let err = enforce_output_schema(
+        let result = enforce_output_schema(
             "demo",
             "get_data",
-            json!({"data": "ok", "exfil": "secret"}),
+            json!({"data": "ok", "extra": "value"}),
             Some(&schema),
-        )
-        .expect_err("extra fields must fail closed");
+        );
 
-        let message = err.to_string();
-        assert!(message.contains("violated its declared output schema"));
-        assert!(message.contains("Tool result validation failed"));
-        assert!(message.contains("exfil"));
+        // The raw payload (including the extra field) is preserved.
+        assert_eq!(result.get("data").and_then(|v| v.as_str()), Some("ok"));
+        assert_eq!(result.get("extra").and_then(|v| v.as_str()), Some("value"));
     }
 
     #[test]
@@ -1987,8 +2001,7 @@ mod response_transform_tests {
                 "isError": false
             }),
             Some(&schema),
-        )
-        .expect("structuredContent should be validated, not the MCP envelope");
+        );
 
         assert_eq!(result["structuredContent"]["issue"]["id"], json!("abc"));
         assert_eq!(
@@ -2017,8 +2030,7 @@ mod response_transform_tests {
                 "isError": true
             }),
             Some(&schema),
-        )
-        .expect("tool-error MCP envelope should bypass output validation");
+        );
 
         assert_eq!(result["isError"], json!(true));
         assert_eq!(result["content"][0]["text"], json!("bad input"));
@@ -2043,8 +2055,7 @@ mod response_transform_tests {
             "required": ["id"]
         });
 
-        let result = enforce_output_schema("demo", "my_tool", transformed, Some(&schema))
-            .expect("post-transform result should satisfy schema");
+        let result = enforce_output_schema("demo", "my_tool", transformed, Some(&schema));
 
         assert_eq!(result, json!({"id": "abc"}));
     }
