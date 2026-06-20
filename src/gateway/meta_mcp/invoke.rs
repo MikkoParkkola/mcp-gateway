@@ -60,13 +60,22 @@ fn enforce_output_schema(
     if validation.is_valid() {
         Ok(apply_validated_output(&result, validation.coerced))
     } else {
-        Err(Error::json_rpc(
-            -32603,
-            format!(
-                "Tool '{tool}' on server '{server}' returned a result that violated its declared output schema:\n\n{}",
-                validation.format_output_error(schema)
-            ),
-        ))
+        // Output-schema mismatch is ADVISORY, not fatal, for proxied tools.
+        // Upstream APIs (e.g. open-meteo, travel providers) legitimately return
+        // more fields than a hand-authored capability schema declares; hard-
+        // rejecting would break a working tool and surface as an opaque error in
+        // clients. We log the mismatch and pass the result through, still
+        // populating `structuredContent` from the actual payload so spec-
+        // compliant clients (Open WebUI) receive structured output. The gateway
+        // does not author these fields — it proxies them — so extra keys are not
+        // a trust-boundary concern here.
+        tracing::warn!(
+            server,
+            tool,
+            mismatch = %validation.format_output_error(schema),
+            "tool output did not match its declared output schema; passing through (advisory)"
+        );
+        Ok(apply_validated_output(&result, validation_target))
     }
 }
 
@@ -1936,7 +1945,10 @@ mod response_transform_tests {
     }
 
     #[test]
-    fn enforce_output_schema_rejects_unexpected_fields() {
+    fn enforce_output_schema_passes_through_unexpected_fields_advisory() {
+        // Output-schema mismatch is advisory for proxied tools: extra fields
+        // from a real upstream API must NOT break the call. The result passes
+        // through and structuredContent is still populated (with the extras).
         let schema = json!({
             "type": "object",
             "properties": {
@@ -1945,18 +1957,17 @@ mod response_transform_tests {
             "required": ["data"]
         });
 
-        let err = enforce_output_schema(
+        let result = enforce_output_schema(
             "demo",
             "get_data",
-            json!({"data": "ok", "exfil": "secret"}),
+            json!({"data": "ok", "extra": "value"}),
             Some(&schema),
         )
-        .expect_err("extra fields must fail closed");
+        .expect("extra fields are advisory, not fatal");
 
-        let message = err.to_string();
-        assert!(message.contains("violated its declared output schema"));
-        assert!(message.contains("Tool result validation failed"));
-        assert!(message.contains("exfil"));
+        // The raw payload (including the extra field) is preserved.
+        assert_eq!(result.get("data").and_then(|v| v.as_str()), Some("ok"));
+        assert_eq!(result.get("extra").and_then(|v| v.as_str()), Some("value"));
     }
 
     #[test]

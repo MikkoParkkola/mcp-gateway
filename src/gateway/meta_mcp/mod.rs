@@ -798,10 +798,15 @@ impl MetaMcp {
                 .invoke_tool(&invoke_args, session_id, api_key_name, agent_id)
                 .await;
             return match result {
-                Ok(content) => {
-                    use super::meta_mcp_helpers::wrap_tool_success;
-                    wrap_tool_success(id, &content, false)
-                }
+                // `invoke_tool` already returns a complete MCP tools/call result
+                // envelope ({content, structuredContent?, isError}) with output-
+                // schema enforcement applied. A surfaced tool is called by the
+                // client as a first-class tool, so the envelope must be returned
+                // verbatim — re-wrapping via `wrap_tool_success` would stringify
+                // the whole envelope into a text block and drop `structuredContent`
+                // (which spec-compliant clients such as Open WebUI require when the
+                // tool advertises an `outputSchema`).
+                Ok(content) => JsonRpcResponse::success_serialized(id, content),
                 Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
             };
         }
