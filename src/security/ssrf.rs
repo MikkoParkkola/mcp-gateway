@@ -445,11 +445,26 @@ pub async fn resolve_and_validate_host<R: HostResolver>(
 ///
 /// Returns `Error::Protocol` if the URL is malformed or targets a blocked range.
 pub fn validate_url_not_ssrf(url_str: &str) -> Result<()> {
-    let parsed =
-        url::Url::parse(url_str).map_err(|e| Error::Protocol(format!("Invalid URL: {e}")))?;
+    let parsed = url::Url::parse(url_str).map_err(|e| {
+        // A relative URL (no scheme://host) is the common symptom of an
+        // unconfigured or path-only backend/capability base URL. Name the
+        // offending value and say what is wrong, instead of the opaque
+        // "Invalid URL: relative URL without a base" surfaced to tool callers.
+        if e == url::ParseError::RelativeUrlWithoutBase {
+            Error::Protocol(format!(
+                "URL {url_str:?} is not absolute (missing scheme://host) — check the backend or capability base URL configuration"
+            ))
+        } else {
+            Error::Protocol(format!("Invalid URL {url_str:?}: {e}"))
+        }
+    })?;
 
     let Some(host) = parsed.host_str() else {
-        return Err(Error::Protocol("URL has no host".to_string()));
+        // e.g. "localhost:8080" parses with scheme="localhost" and no host —
+        // the classic scheme-less host:port misconfiguration.
+        return Err(Error::Protocol(format!(
+            "URL {url_str:?} has no host — if this is a host:port, prefix it with a scheme (e.g. http://)"
+        )));
     };
 
     check_host_not_ssrf(host)
@@ -877,6 +892,48 @@ mod tests {
     #[test]
     fn url_rejects_invalid_url() {
         assert!(validate_url_not_ssrf("not a url").is_err());
+    }
+
+    #[test]
+    fn url_relative_gives_actionable_error() {
+        // A bare relative URL (empty base + path, or a bare token) must fail with
+        // an actionable message that names the value and says it is not absolute —
+        // not the opaque "relative URL without a base". Regression for trvl#234.
+        for relative in ["/rpc", "search_flights"] {
+            let err = validate_url_not_ssrf(relative)
+                .expect_err("relative URL must be rejected")
+                .to_string();
+            assert!(
+                err.contains("not absolute"),
+                "message should explain the URL is not absolute: {err}"
+            );
+            assert!(
+                err.contains(relative),
+                "message should name the offending URL {relative:?}: {err}"
+            );
+            assert!(
+                !err.contains("relative URL without a base"),
+                "must not surface the opaque parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn url_schemeless_host_port_gives_actionable_error() {
+        // "localhost:8080/mcp" parses with scheme="localhost" and no host — the
+        // scheme-less host:port misconfiguration. The error must name the value
+        // and point at the missing scheme rather than a bare "no host".
+        let err = validate_url_not_ssrf("localhost:8080/mcp")
+            .expect_err("scheme-less host:port must be rejected")
+            .to_string();
+        assert!(
+            err.contains("localhost:8080/mcp"),
+            "should name the URL: {err}"
+        );
+        assert!(
+            err.contains("scheme"),
+            "should point at the missing scheme: {err}"
+        );
     }
 
     #[test]
