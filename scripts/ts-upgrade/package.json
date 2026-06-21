@@ -1,0 +1,6 @@
+{
+  "name": "mcp-gateway-ts-upgrade-tests",
+  "private": true,
+  "type": "module",
+  "main": "./validate.test.mjs"
+}
