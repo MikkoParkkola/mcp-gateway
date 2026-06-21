@@ -1,0 +1,12 @@
+{
+  "name": "ts-upgrade-harness",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MIK-3160 version-parameterized TypeScript-upgrade validation harness for JSDoc-narrowing fixtures.",
+  "main": "validate.test.mjs",
+  "scripts": {
+    "validate": "node validate.mjs",
+    "test": "node --test ."
+  }
+}
