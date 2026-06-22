@@ -3,24 +3,31 @@ use std::path::{Path, PathBuf};
 /// Result of verifying cross-runtime skill load.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SkillLoadVerification {
+    /// Absolute path to the skill directory that was checked.
     pub skill_path: String,
+    /// Per-runtime check results for each accessible runtime.
     pub runtimes_checked: Vec<RuntimeCheck>,
+    /// Whether every checked runtime can load the skill.
     pub all_loadable: bool,
+    /// Runtimes that were not accessible and deferred to a follow-up.
     pub deferred: Vec<String>,
 }
 
 /// Per-runtime check result.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RuntimeCheck {
+    /// Runtime identifier (e.g. "claude-code", "codex-cli", "openclaw").
     pub runtime: String,
+    /// Whether the runtime binary is accessible on the system.
     pub accessible: bool,
+    /// Whether the skill was successfully loaded by this runtime.
     pub loaded: bool,
 }
 
 /// Known agent runtime skill discovery paths.
 ///
-/// These are the standard locations where agent runtimes (Claude Code,
-/// Codex CLI, OpenClaw) discover skill definitions.
+/// These are the standard locations where agent runtimes (`claude-code`,
+/// `codex-cli`, `openclaw`) discover skill definitions.
 pub fn agent_skill_paths(base: &Path) -> Vec<PathBuf> {
     vec![
         base.join(".claude").join("skills").join("webwright"),
@@ -123,10 +130,24 @@ mod tests {
             .expect("write");
 
         let result = verify_skill_load(&skill_dir, tmp.path());
-        assert_eq!(result.runtimes_checked.len(), 1);
-        assert_eq!(result.runtimes_checked[0].runtime, "claude-code");
-        assert!(result.runtimes_checked[0].accessible);
-        assert!(!result.deferred.is_empty());
+        assert!(
+            !result.runtimes_checked.is_empty(),
+            "at least one runtime must be checked"
+        );
+        let claude = result
+            .runtimes_checked
+            .iter()
+            .find(|r| r.runtime == "claude-code")
+            .expect("claude-code must be checked");
+        assert!(claude.accessible);
+        // codex-cli and openclaw may or may not be installed — they are
+        // either checked (if accessible) or deferred
+        let deferred_or_checked =
+            result.deferred.len() + result.runtimes_checked.len();
+        assert!(
+            deferred_or_checked >= 2,
+            "claude-code + at least one other runtime must be accounted for"
+        );
     }
 
     #[test]

@@ -25,16 +25,18 @@
 //! 2. hebb-recall measurably short-circuits (cache-hit on second run)
 //! 3. end-to-end task completes with full artifact bundle
 
+/// Artifact bundle for run-artifact-first deliverable pattern.
 pub mod artifact;
+/// Hebb-embedded task memory cache (zero-IPC, in-process).
 pub mod memory;
+/// Cross-runtime skill load verification.
 pub mod skill_loader;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::Serialize;
-use serde_json::json;
 
 use crate::attestation::signer::{BnautAttestationSigner, TokenRequest};
 use crate::attestation::validator::{AttestationMode, AttestationValidator};
@@ -140,6 +142,7 @@ pub struct WebwrightSpikeRun {
 /// All three conditions must pass for a productionization epic filing.
 /// If any fails, the verdict is INSPIRE-only with no further engineering.
 #[derive(Debug, Clone, Serialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct GateVerdict {
     /// Whether bnaut-attestation identity propagated through trace.
     pub attestation_propagated: bool,
@@ -187,6 +190,7 @@ impl GateVerdict {
 /// 5. Propagate attestation identity through trace
 ///
 /// Returns the run output including gate verdict.
+#[allow(clippy::too_many_lines)]
 pub fn webwright_spike_run(
     ctx: &WebwrightSpikeContext,
     tasks: &[(TaskDescriptor, TaskResult)],
@@ -360,6 +364,7 @@ pub fn webwright_spike_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const TEST_KEY: &[u8] = b"test-key-32bytes-long-for-spike!!";
     const TEST_KEY_ID: &str = "test";

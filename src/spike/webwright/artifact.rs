@@ -8,10 +8,15 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
+    /// Source code artifact (spike runner, module implementation).
     Code,
+    /// Screenshot captured during browser automation.
     Screenshot,
+    /// DOM snapshot captured from the browser page.
     DomSnapshot,
+    /// Model reasoning trace (JSON-encoded step sequence).
     ModelTrace,
+    /// Hebb decision-pin recording a task checkpoint.
     HebbDecisionPin,
 }
 
@@ -30,10 +35,15 @@ impl std::fmt::Display for ArtifactKind {
 /// A single artifact entry in the bundle.
 #[derive(Debug, Clone, Serialize)]
 pub struct ArtifactEntry {
+    /// Kind of artifact (code, screenshot, DOM, trace, pin).
     pub kind: ArtifactKind,
+    /// Human-readable name for the artifact.
     pub name: String,
+    /// Relative path where the artifact is stored.
     pub path: String,
+    /// Size in bytes.
     pub byte_size: u64,
+    /// RFC3339 creation timestamp.
     pub created_at: String,
 }
 
@@ -125,8 +135,11 @@ impl ArtifactBundle {
 /// Result of verifying artifact bundle completeness.
 #[derive(Debug, Clone)]
 pub struct BundleVerification {
+    /// Whether all five required artifact kinds are present.
     pub complete: bool,
+    /// Which kinds are missing (empty when complete is true).
     pub missing: Vec<ArtifactKind>,
+    /// Total number of entries across all kinds.
     pub total_entries: u64,
 }
 

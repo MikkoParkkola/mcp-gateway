@@ -10,8 +10,11 @@ use sha2::{Digest, Sha256};
 /// A browser-automation task descriptor.
 #[derive(Debug, Clone)]
 pub struct TaskDescriptor {
+    /// Type of task (e.g. "scrape", "navigate").
     pub task_type: String,
+    /// Target URL for the browser automation.
     pub target_url: String,
+    /// Named parameters for the task.
     pub parameters: BTreeMap<String, Value>,
 }
 
@@ -29,6 +32,7 @@ impl TaskDescriptor {
     }
 
     /// Add a parameter to the descriptor (builder-style).
+    #[must_use]
     pub fn with_param(mut self, key: impl Into<String>, value: Value) -> Self {
         self.parameters.insert(key.into(), value);
         self
@@ -38,10 +42,15 @@ impl TaskDescriptor {
 /// Result of a completed browser-automation task.
 #[derive(Debug, Clone)]
 pub struct TaskResult {
+    /// JSON data produced by the task.
     pub data: Value,
+    /// Exit code (0 = success).
     pub exit_code: i32,
+    /// Captured DOM snapshot, if any.
     pub dom_snapshot: Option<String>,
+    /// Paths to screenshots taken during the task.
     pub screenshot_paths: Vec<String>,
+    /// JSON-encoded model trace, if captured.
     pub model_trace: Option<String>,
 }
 
@@ -166,16 +175,18 @@ impl TaskMemory {
         let hits = self.hits.load(Ordering::Relaxed);
         let misses = self.misses.load(Ordering::Relaxed);
         let total = hits + misses;
+        #[allow(clippy::cast_precision_loss)]
+        let hit_rate = if total > 0 {
+            hits as f64 / total as f64
+        } else {
+            0.0
+        };
         RecallStats {
             hits,
             misses,
             total,
             stores: self.stores.load(Ordering::Relaxed),
-            hit_rate: if total > 0 {
-                hits as f64 / total as f64
-            } else {
-                0.0
-            },
+            hit_rate,
         }
     }
 }
@@ -189,10 +200,15 @@ impl Default for TaskMemory {
 /// Snapshot of hebb-recall statistics.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RecallStats {
+    /// Total cache hits (monotonic).
     pub hits: u64,
+    /// Total cache misses (monotonic).
     pub misses: u64,
+    /// Total recall attempts (hits + misses).
     pub total: u64,
+    /// Total cache stores (monotonic).
     pub stores: u64,
+    /// Cache hit rate (hits / total), 0.0 when no attempts.
     pub hit_rate: f64,
 }
 
@@ -202,12 +218,19 @@ pub struct RecallStats {
 /// failure) for audit and durability verification.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HebbDecisionPin {
+    /// Unique identifier for this pin (UUID v4).
     pub pin_id: String,
+    /// Tag grouping pins (always "webwright-spike" for this spike).
     pub tag: String,
+    /// Task type that was executed.
     pub task_type: String,
+    /// Target URL of the browser automation.
     pub target_url: String,
+    /// Decision outcome (e.g. `"cache_hit"`, `"cache_miss"`).
     pub decision: String,
+    /// RFC3339 timestamp when the pin was recorded.
     pub timestamp: String,
+    /// Attestation token ID linking this pin to a validated run.
     pub attestation_token_id: Option<String>,
 }
 
@@ -230,6 +253,7 @@ impl HebbDecisionPin {
     }
 
     /// Attach an attestation token ID to this pin.
+    #[must_use]
     pub fn with_attestation(mut self, token_id: impl Into<String>) -> Self {
         self.attestation_token_id = Some(token_id.into());
         self
@@ -320,7 +344,6 @@ mod tests {
 
     #[test]
     fn task_memory_different_descriptors_different_keys() {
-        let mem = TaskMemory::new();
         let d1 = TaskDescriptor::new("scrape", "https://a.com");
         let d2 = TaskDescriptor::new("scrape", "https://b.com");
 
