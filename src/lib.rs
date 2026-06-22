@@ -69,6 +69,7 @@ pub mod semantic_search;
 pub mod session_sandbox;
 pub mod simhash;
 pub mod skills;
+pub mod spike;
 pub mod stats;
 #[cfg(feature = "tool-profiles")]
 pub mod tool_profiles;
