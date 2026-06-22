@@ -53,9 +53,10 @@ impl Failsafe {
         self.health_tracker.record_success(latency);
     }
 
-    /// Record a failure
-    pub fn record_failure(&self) {
-        self.circuit_breaker.record_failure();
+    /// Record a failure, threading the failure `reason` and request `latency`
+    /// into the circuit breaker so a Closed→Open trip is diagnosable (MIK-6119).
+    pub fn record_failure(&self, reason: &str, latency: std::time::Duration) {
+        self.circuit_breaker.record_failure(reason, latency);
         self.health_tracker.record_failure();
     }
 

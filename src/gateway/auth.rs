@@ -226,7 +226,7 @@ impl ResolvedAuthConfig {
     /// Record a failed dispatch for this authenticated client.
     pub fn record_client_failure(&self, client_name: &str) {
         if let Some(breaker) = self.active_client_circuit_breaker(client_name) {
-            breaker.record_failure();
+            breaker.record_failure("client_dispatch_failure", std::time::Duration::ZERO);
         }
     }
 
