@@ -112,6 +112,7 @@ Your agent will install the binary, run the setup wizard, import your existing M
 **Or four commands:**
 
 ```bash
+brew trust --tap MikkoParkkola/tap   # Homebrew 6.0+
 brew install MikkoParkkola/tap/mcp-gateway   # 1. install
 mcp-gateway setup wizard --configure-client  # 2. import existing servers + wire up clients
 mcp-gateway serve                            # 3. run
