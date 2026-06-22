@@ -64,6 +64,7 @@ pub mod scheduler;
 pub mod secret_injection;
 pub mod secrets;
 pub mod security;
+pub mod egress;
 #[cfg(feature = "semantic-search")]
 pub mod semantic_search;
 pub mod session_sandbox;

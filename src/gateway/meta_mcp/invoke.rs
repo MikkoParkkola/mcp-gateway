@@ -20,6 +20,7 @@ use crate::idempotency::{GuardOutcome, enforce};
 use crate::playbook::PlaybookEngine;
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
+use crate::egress::{score_mosaic_egress_before_dispatch, MosaicEgressDecision};
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
@@ -116,6 +117,9 @@ fn apply_validated_output(result: &Value, validated: Value) -> Value {
     }
     Value::Object(obj)
 }
+
+// (MIK-6273) canonical scoring lives in crate::egress::score_mosaic_egress_before_dispatch;
+// duplicate helpers removed to keep -D warnings clean.
 
 /// Apply a capability's canonical [`ProjectionSpec`](crate::projection::schema::ProjectionSpec)
 /// to a dispatched response (MIK-3534).
@@ -430,6 +434,9 @@ impl MetaMcp {
             return Err(Error::Protocol(msg));
         }
 
+        // MIK-6273.AC.3 guard is invoked later (post full selection, immediately pre-dispatch)
+        // using canonical score_mosaic_egress_before_dispatch to ensure single append + history hash.
+
         let tool_key = format!("{server}:{tool}");
 
         // `_full` requests bypass idempotency and response caching entirely.
@@ -576,6 +583,79 @@ impl MetaMcp {
             });
 
         let dispatch_start = Instant::now();
+
+        // === MIK-6273: Mosaic egress guard (post selection, pre-dispatch) ===
+        // Score only web-search/fetch style; appends to cumulative session history.
+        // Decisions: allow|warn|redact|block with full evidence fields.
+        let (mosaic_decision, mosaic_scores, mosaic_receipt) = score_mosaic_egress_before_dispatch(
+            session_id,
+            agent_id,
+            server,
+            tool,
+            &arguments,
+        );
+        // Telemetry (B1-IDENT: distinguishable mosaic_* counters)
+        telemetry_metrics::counter!(
+            "mosaic_egress_decision_total",
+            "server" => server.to_owned(),
+            "tool" => tool.to_owned(),
+            "decision" => mosaic_decision.as_str().to_string()
+        )
+        .increment(1);
+        if matches!(mosaic_decision, MosaicEgressDecision::Block) {
+            telemetry_metrics::counter!(
+                "mosaic_egress_block_total",
+                "server" => server.to_owned(),
+                "tool" => tool.to_owned()
+            )
+            .increment(1);
+        } else if matches!(mosaic_decision, MosaicEgressDecision::Warn) {
+            telemetry_metrics::counter!(
+                "mosaic_egress_warn_total",
+                "server" => server.to_owned(),
+                "tool" => tool.to_owned()
+            )
+            .increment(1);
+        }
+        match mosaic_decision {
+            MosaicEgressDecision::Block => {
+                return Err(Error::Protocol(format!(
+                    "mosaic egress block: direct_risk={:.2} mosaic_risk={:.2} threshold={:.2}",
+                    mosaic_scores.direct_risk, mosaic_scores.mosaic_risk, mosaic_scores.threshold
+                )));
+            }
+            MosaicEgressDecision::Redact => {
+                // Redact the query surface for dispatch.
+                if let Some(obj) = arguments.as_object_mut() {
+                    if let Some(q) = obj.get_mut("query") {
+                        *q = serde_json::json!("[REDACTED-MOSAIC]");
+                    }
+                    if let Some(u) = obj.get_mut("url") {
+                        *u = serde_json::json!("[REDACTED-MOSAIC]");
+                    }
+                }
+            }
+            MosaicEgressDecision::Warn => {
+                tracing::warn!(
+                    server = server,
+                    tool = tool,
+                    direct = mosaic_scores.direct_risk,
+                    mosaic = mosaic_scores.mosaic_risk,
+                    "mosaic egress warn (proceeding)"
+                );
+            }
+            MosaicEgressDecision::Allow => {}
+        }
+
+        tracing::info!(
+            target: "mosaic_egress",
+            decision = mosaic_decision.as_str(),
+            direct = mosaic_scores.direct_risk,
+            mosaic = mosaic_scores.mosaic_risk,
+            has_receipt = true,
+            "mosaic egress decision with attestable receipt"
+        );
+
         let dispatch_result = self
             .dispatch_to_backend(
                 server,
