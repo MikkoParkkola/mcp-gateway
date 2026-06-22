@@ -75,6 +75,10 @@ pub struct CircuitBreakerStats {
     pub current_failures: u32,
     /// Configured failure threshold
     pub failure_threshold: u32,
+    /// Reason string from the failure that triggered the last Closed→Open transition
+    pub last_open_reason: String,
+    /// Latency in milliseconds of the request that triggered the last Closed→Open transition
+    pub last_open_latency_ms: u64,
 }
 
 /// Circuit breaker for backend or client protection.
@@ -99,6 +103,10 @@ pub struct CircuitBreaker {
     trips_count: AtomicU64,
     /// Epoch-millisecond timestamp of the last Closed→Open transition (0 = never)
     last_trip_ms: AtomicU64,
+    /// Reason string from the most recent failure (set before transition_to)
+    last_failure_reason: RwLock<String>,
+    /// Latency in ms of the most recent failure (set before transition_to)
+    last_failure_latency_ms: AtomicU64,
 }
 
 impl CircuitBreaker {
@@ -117,6 +125,8 @@ impl CircuitBreaker {
             last_state_change: AtomicU64::new(0),
             trips_count: AtomicU64::new(0),
             last_trip_ms: AtomicU64::new(0),
+            last_failure_reason: RwLock::new(String::new()),
+            last_failure_latency_ms: AtomicU64::new(0),
         }
     }
 
@@ -222,10 +232,16 @@ impl CircuitBreaker {
 
     /// Record a failed request
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
-    pub fn record_failure(&self) {
+    pub fn record_failure(&self, reason: &str, latency: Duration) {
         if !self.enabled {
             return;
         }
+
+        #[allow(clippy::cast_possible_truncation)]
+        let latency_ms = latency.as_millis() as u64;
+
+        *self.last_failure_reason.write() = reason.to_string();
+        self.last_failure_latency_ms.store(latency_ms, Ordering::Relaxed);
 
         let state = *self.state.read();
 
@@ -288,6 +304,8 @@ impl CircuitBreaker {
             retry_after_ms,
             current_failures: self.failures.load(Ordering::Relaxed),
             failure_threshold: self.failure_threshold,
+            last_open_reason: self.last_failure_reason.read().clone(),
+            last_open_latency_ms: self.last_failure_latency_ms.load(Ordering::Relaxed),
         }
     }
 
@@ -314,11 +332,22 @@ impl CircuitBreaker {
                 // Record the trip
                 self.trips_count.fetch_add(1, Ordering::Relaxed);
                 self.last_trip_ms.store(epoch_ms, Ordering::Relaxed);
+                let reason = self.last_failure_reason.read().clone();
+                let latency_ms = self.last_failure_latency_ms.load(Ordering::Relaxed);
+                let consecutive_fail_count = self.failures.load(Ordering::Relaxed);
                 warn!(
                     backend = %self.name,
-                    failures = self.failures.load(Ordering::Relaxed),
+                    reason = %reason,
+                    latency_ms = latency_ms,
+                    consecutive_fail_count = consecutive_fail_count,
                     "Circuit breaker opened"
                 );
+                telemetry_metrics::counter!(
+                    "mcp_circuit_breaker_opened_total",
+                    "backend" => self.name.clone(),
+                    "reason" => reason.clone()
+                )
+                .increment(1);
             }
             CircuitState::HalfOpen => {
                 self.successes.store(0, Ordering::Relaxed);
@@ -461,7 +490,7 @@ mod tests {
         // GIVEN: a breaker tripped open by hitting the failure threshold
         let cb = CircuitBreaker::new("test", &make_config(true, 3));
         for _ in 0..3 {
-            cb.record_failure();
+            cb.record_failure("test failure", Duration::ZERO);
         }
         assert_eq!(cb.state(), CircuitState::Open);
         assert!(!cb.can_proceed());
@@ -659,11 +688,40 @@ mod tests {
             retry_after_ms: 0,
             current_failures: 0,
             failure_threshold: 3,
+            last_open_reason: String::new(),
+            last_open_latency_ms: 0,
         };
         // WHEN: building the error message
         let msg = build_circuit_breaker_error("my-backend", &stats);
         // THEN: it mentions closed state
         assert!(msg.contains("my-backend"));
         assert!(msg.contains("closed"));
+    }
+
+    // ── MIK-6119 AC.1: breaker_open_event ─────────────────────────────────
+
+    /// MIK-6119.AC.1: `CircuitBreaker::record_failure` accepts the failure `reason`
+    /// and request `latency`, and on a Closed→Open transition the breaker captures a
+    /// structured open-event carrying `backend`, `reason`, `latency_ms`, and
+    /// `consecutive_fail_count` (= the failure count at trip), retrievable via a
+    /// public accessor/`CircuitBreakerStats` field without parsing logs.
+    #[test]
+    fn breaker_open_event() {
+        let cb = CircuitBreaker::new("hebb", &make_config(true, 3));
+
+        cb.record_failure("connect timeout", Duration::from_millis(1500));
+        cb.record_failure("connect timeout", Duration::from_millis(2100));
+        cb.record_failure("read timeout", Duration::from_millis(5000));
+
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        let s = cb.stats();
+        assert_eq!(s.state, CircuitState::Open);
+        assert_eq!(s.last_open_reason, "read timeout");
+        assert_eq!(s.last_open_latency_ms, 5000);
+        assert_eq!(s.current_failures, 3);
+        assert_eq!(s.failure_threshold, 3);
+        assert_eq!(s.trips_count, 1);
+        assert_ne!(s.last_trip_ms, 0);
     }
 }

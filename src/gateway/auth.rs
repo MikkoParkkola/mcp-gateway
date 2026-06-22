@@ -8,6 +8,7 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
 use dashmap::DashMap;
@@ -226,7 +227,7 @@ impl ResolvedAuthConfig {
     /// Record a failed dispatch for this authenticated client.
     pub fn record_client_failure(&self, client_name: &str) {
         if let Some(breaker) = self.active_client_circuit_breaker(client_name) {
-            breaker.record_failure();
+            breaker.record_failure("auth failure", Duration::ZERO);
         }
     }
 

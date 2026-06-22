@@ -54,8 +54,8 @@ impl Failsafe {
     }
 
     /// Record a failure
-    pub fn record_failure(&self) {
-        self.circuit_breaker.record_failure();
+    pub fn record_failure(&self, reason: &str, latency: std::time::Duration) {
+        self.circuit_breaker.record_failure(reason, latency);
         self.health_tracker.record_failure();
     }
 
