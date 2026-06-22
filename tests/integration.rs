@@ -113,11 +113,11 @@ fn test_circuit_breaker_opens_after_failures() {
     let cb = CircuitBreaker::new("test", &config);
 
     // Record failures
-    cb.record_failure();
-    cb.record_failure();
+    cb.record_failure("test", Duration::ZERO);
+    cb.record_failure("test", Duration::ZERO);
     assert_eq!(cb.state(), CircuitState::Closed); // Still closed
 
-    cb.record_failure(); // Third failure
+    cb.record_failure("test", Duration::ZERO); // Third failure
     assert_eq!(cb.state(), CircuitState::Open); // Now open
 }
 
@@ -132,8 +132,8 @@ fn test_circuit_breaker_disabled() {
     let cb = CircuitBreaker::new("test", &config);
 
     // Even with failures, it stays closed when disabled
-    cb.record_failure();
-    cb.record_failure();
+    cb.record_failure("test", Duration::ZERO);
+    cb.record_failure("test", Duration::ZERO);
     assert!(cb.can_proceed());
 }
 
