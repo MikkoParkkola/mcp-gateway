@@ -49,7 +49,7 @@ pub use definition::ProtocolConfig;
 pub use definition::*;
 #[cfg(feature = "discovery")]
 pub use discovery::{DiscoveryEngine, DiscoveryOptions, DiscoveryResult};
-pub use executor::CapabilityExecutor;
+pub use executor::{CapabilityExecutor, IdentityObserver};
 pub use executor::graphql::GraphqlExecutor;
 pub use executor::jsonrpc::JsonRpcExecutor;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};
@@ -123,7 +123,9 @@ impl CapabilityRegistry {
         let capability = self
             .get(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
-        self.executor.execute(capability, params).await
+        // No caller identity at this registry-level entry point (CLI / internal
+        // callers); per-request identity is threaded via the gateway path.
+        self.executor.execute(capability, params, None).await
     }
 
     /// Get capability count

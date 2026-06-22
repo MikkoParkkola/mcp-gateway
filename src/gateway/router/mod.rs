@@ -79,6 +79,10 @@ pub struct AppState {
     pub firewall: Option<Arc<Firewall>>,
     /// Per-agent identity configuration (OWASP ASI03).
     pub agent_identity_config: AgentIdentityConfig,
+    /// Trusted edge header carrying the per-request caller email (MIK-6207).
+    /// Default `Cf-Access-Authenticated-User-Email`; the HTTP layer extracts a
+    /// caller `VerifiedIdentity` from it (fallback `X-Gateway-Identity`).
+    pub caller_identity_header: String,
 }
 
 /// Create the router.

@@ -24,6 +24,9 @@ pub struct ExecutionContext<'a> {
     pub capability: &'a crate::capability::CapabilityDefinition,
     /// The provider-level timeout in seconds
     pub timeout_secs: u64,
+    /// Per-request caller identity threaded from the HTTP boundary (MIK-6207).
+    /// `None` when no trusted edge header was present; resolution is unchanged.
+    pub identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
 }
 
 /// Trait for protocol-specific execution adapters.
@@ -109,7 +112,7 @@ impl ProtocolExecutor for RestExecutor<'_> {
         };
 
         self.executor
-            .execute_provider(ctx.capability, &provider, &params)
+            .execute_provider(ctx.capability, &provider, &params, ctx.identity)
             .await
     }
 }

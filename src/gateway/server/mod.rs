@@ -655,6 +655,7 @@ impl Gateway {
             #[cfg(feature = "firewall")]
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
+            caller_identity_header: self.config.security.caller_identity_header.clone(),
         });
 
         // Create router
@@ -1077,7 +1078,15 @@ impl Gateway {
                 }
 
                 meta_mcp
-                    .handle_tools_call(id, &tool_name, arguments, Some(session_id), None, None)
+                    .handle_tools_call(
+                        id,
+                        &tool_name,
+                        arguments,
+                        Some(session_id),
+                        None,
+                        None,
+                        None,
+                    )
                     .await
             }
             "prompts/list" => meta_mcp.handle_prompts_list(id, params.as_ref()).await,

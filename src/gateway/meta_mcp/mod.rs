@@ -778,6 +778,10 @@ impl MetaMcp {
     ///
     /// `api_key_name` — the name of the authenticated API key (for cost accounting).
     /// `agent_id` — optional caller agent identifier (OWASP ASI03).
+    /// `identity` — optional per-request caller identity extracted at the HTTP
+    /// boundary from a trusted edge header (MIK-6207). Threaded through to the
+    /// capability executor; `None` preserves the pre-change behaviour exactly.
+    #[allow(clippy::too_many_arguments)] // request-scoped params threaded explicitly (no global state); MIK-6207 adds identity
     pub async fn handle_tools_call(
         &self,
         id: RequestId,
@@ -786,6 +790,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> JsonRpcResponse {
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
         if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
@@ -795,7 +800,7 @@ impl MetaMcp {
                 "arguments": arguments,
             });
             let result = self
-                .invoke_tool(&invoke_args, session_id, api_key_name, agent_id)
+                .invoke_tool(&invoke_args, session_id, api_key_name, agent_id, identity)
                 .await;
             return match result {
                 // `invoke_tool` already returns a complete MCP tools/call result
@@ -818,7 +823,7 @@ impl MetaMcp {
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
             "gateway_invoke" => {
-                self.invoke_tool(&arguments, session_id, api_key_name, agent_id)
+                self.invoke_tool(&arguments, session_id, api_key_name, agent_id, identity)
                     .await
             }
             "gateway_get_stats" => self.get_stats(&arguments).await,

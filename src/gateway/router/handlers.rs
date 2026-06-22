@@ -27,11 +27,52 @@ use crate::gateway::destructive_confirmation::{
 };
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::streaming::create_sse_response;
+use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
+
+/// Fallback header carrying the per-request caller email when the configured
+/// trusted edge header is absent (MIK-6207). Used for LAN/Tailscale interior
+/// callers that do not transit Cloudflare Access.
+const FALLBACK_CALLER_IDENTITY_HEADER: &str = "X-Gateway-Identity";
+
+/// Extract a per-request caller identity from a trusted edge header.
+///
+/// The Cloudflare-fronted deployment trusts a CF-verified email injected at the
+/// tunnel origin (`trusted_header`, default `Cf-Access-Authenticated-User-Email`)
+/// and the trusted LAN/Tailscale interior may supply `X-Gateway-Identity` as a
+/// fallback. The resolved email is wrapped in a [`VerifiedIdentity`] whose
+/// `issuer` records the trust source (`cf-access-trusted-header`); cryptographic
+/// JWKS verification of `Cf-Access-Jwt-Assertion` is an explicit follow-up.
+///
+/// Returns `None` when no trusted header carries a non-empty value, in which
+/// case downstream credential resolution behaves exactly as before (back-compat).
+fn extract_caller_identity(
+    headers: &HeaderMap,
+    trusted_header: &str,
+) -> Option<VerifiedIdentity> {
+    let read = |name: &str| -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+
+    let email = read(trusted_header).or_else(|| read(FALLBACK_CALLER_IDENTITY_HEADER))?;
+
+    Some(VerifiedIdentity {
+        subject: email.clone(),
+        email,
+        name: None,
+        groups: Vec::new(),
+        issuer: "cf-access-trusted-header".to_string(),
+    })
+}
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
@@ -264,6 +305,11 @@ pub(super) async fn meta_mcp_handler(
         });
     let query_str = http_request.uri().query();
     let agent_identity = extract_agent_identity(&headers, query_str, bearer_token);
+
+    // MIK-6207: per-request caller identity from a trusted edge header. Threaded
+    // through to the capability executor so per-user credential resolution and
+    // gating can consume it downstream. `None` when absent → behaviour unchanged.
+    let caller_identity = extract_caller_identity(&headers, &state.caller_identity_header);
 
     // Per-connection Code Mode override (issue #146 / RFC-0132).
     // Accepted value: ?codemode=search_and_execute
@@ -522,6 +568,7 @@ pub(super) async fn meta_mcp_handler(
                     Some(session_id.as_str()),
                     api_key_name,
                     agent_id,
+                    caller_identity.as_ref(),
                 )
                 .await;
 

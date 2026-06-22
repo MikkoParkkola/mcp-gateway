@@ -352,10 +352,19 @@ impl CapabilityBackend {
     /// required parameters, and invalid enum values are all rejected with an
     /// LLM-friendly error message returned as a tool error content block.
     ///
+    /// `identity` carries the per-request caller identity threaded from the HTTP
+    /// boundary (MIK-6207). It is forwarded to the executor's propagation seam;
+    /// `None` preserves the pre-change behaviour exactly.
+    ///
     /// # Errors
     ///
     /// Returns an error if the capability is not found or execution fails.
-    pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolsCallResult> {
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
 
         // O(1) lookup; clone releases the read lock before the async executor call.
@@ -389,7 +398,7 @@ impl CapabilityBackend {
         // backend liveness (MIK-5080).
         let result = self
             .executor
-            .execute(&capability, validation.coerced)
+            .execute(&capability, validation.coerced, identity)
             .await?;
 
         Ok(build_success_tool_result(&capability, result))

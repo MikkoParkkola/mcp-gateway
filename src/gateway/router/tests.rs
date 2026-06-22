@@ -64,6 +64,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         #[cfg(feature = "firewall")]
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        caller_identity_header: "Cf-Access-Authenticated-User-Email".to_string(),
     })
 }
 
@@ -106,6 +107,7 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         #[cfg(feature = "firewall")]
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        caller_identity_header: "Cf-Access-Authenticated-User-Email".to_string(),
     })
 }
 
@@ -144,6 +146,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         #[cfg(feature = "firewall")]
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        caller_identity_header: "Cf-Access-Authenticated-User-Email".to_string(),
     })
 }
 
@@ -191,6 +194,7 @@ fn test_router_app_state_with_ssrf(
         #[cfg(feature = "firewall")]
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        caller_identity_header: "Cf-Access-Authenticated-User-Email".to_string(),
     })
 }
 
@@ -246,6 +250,7 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         #[cfg(feature = "firewall")]
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        caller_identity_header: "Cf-Access-Authenticated-User-Email".to_string(),
     })
 }
 

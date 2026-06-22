@@ -143,7 +143,7 @@ pub async fn execute_tool(
         .ok_or_else(|| Error::Config(format!("Tool not found: '{tool_name}'")))?;
 
     let executor = Arc::new(CapabilityExecutor::new());
-    executor.execute(cap, args).await
+    executor.execute(cap, args, None).await
 }
 
 /// Build registry entries from the catalogue (for completion / listing).

@@ -165,7 +165,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
         // Inject auth if configured on the capability
         if ctx.capability.auth.required && ctx.capability.auth.param.is_none() {
             self.executor
-                .inject_auth(&mut headers, &ctx.capability.auth)
+                .inject_auth(&mut headers, &ctx.capability.auth, ctx.identity)
                 .await?;
         }
 

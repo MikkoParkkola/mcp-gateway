@@ -65,7 +65,7 @@ async fn video_agent_create_to_download_round_trip_with_real_api() {
         .unwrap_or_else(|_| "A presenter explaining our product launch in 30 seconds.".to_string());
 
     let create = backend
-        .call_tool("video_agent_create", json!({ "prompt": prompt }))
+        .call_tool("video_agent_create", json!({ "prompt": prompt }), None)
         .await
         .expect("video_agent_create call");
     let create_json = extract_json(&create);
@@ -77,7 +77,7 @@ async fn video_agent_create_to_download_round_trip_with_real_api() {
     let mut last = Value::Null;
     for _ in 0..36 {
         let get = backend
-            .call_tool("video_get", json!({ "video_id": video_id.clone() }))
+            .call_tool("video_get", json!({ "video_id": video_id.clone() }), None)
             .await
             .expect("video_get call");
         last = extract_json(&get);
@@ -101,7 +101,7 @@ async fn video_agent_create_to_download_round_trip_with_real_api() {
         .to_string();
 
     let download = backend
-        .call_tool("video_download", json!({ "video_url": video_url }))
+        .call_tool("video_download", json!({ "video_url": video_url }), None)
         .await
         .expect("video_download call");
     let download_json = extract_json(&download);

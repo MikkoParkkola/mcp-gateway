@@ -240,10 +240,26 @@ pub struct SecurityConfig {
     /// Remote MCP server provenance verification (OWASP ASI04). Default: disabled.
     #[serde(default)]
     pub remote_server_signing: RemoteServerSigningConfig,
+    /// Trusted edge header carrying the per-request caller email (MIK-6207).
+    ///
+    /// At the Cloudflare-fronted deployment, Cloudflare Access injects a
+    /// CF-verified email at the tunnel origin and the LAN/Tailscale interior is
+    /// trusted, so the gateway *trusts* this header. The HTTP layer extracts the
+    /// caller identity from it (falling back to `X-Gateway-Identity`) into an
+    /// `Option<VerifiedIdentity>`. Cryptographic JWKS verification of
+    /// `Cf-Access-Jwt-Assertion` is an explicit follow-up.
+    ///
+    /// Default: `Cf-Access-Authenticated-User-Email`.
+    #[serde(default = "default_caller_identity_header")]
+    pub caller_identity_header: String,
 }
 
 const fn default_trust_configured_backends() -> bool {
     true
+}
+
+fn default_caller_identity_header() -> String {
+    "Cf-Access-Authenticated-User-Email".to_string()
 }
 
 impl Default for SecurityConfig {
@@ -261,6 +277,7 @@ impl Default for SecurityConfig {
             response_inspection: ResponseInspectionConfig::default(),
             response_contract: ResponseContractConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
+            caller_identity_header: default_caller_identity_header(),
         }
     }
 }

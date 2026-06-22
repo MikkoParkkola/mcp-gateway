@@ -42,6 +42,17 @@ use crate::security::validate_url_not_ssrf;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
 
+/// Observer invoked with the per-request caller identity (if any) at the very
+/// top of [`CapabilityExecutor::execute`], before any provider resolution or
+/// network I/O.
+///
+/// Default `None` — when unset the call is skipped entirely, so behaviour is
+/// byte-identical to before identity threading (MIK-6207, back-compat).
+/// This is the downstream observability seam that proves per-request caller
+/// identity propagated all the way from the HTTP boundary to the executor.
+pub type IdentityObserver =
+    Arc<dyn Fn(Option<&crate::key_server::oidc::VerifiedIdentity>) + Send + Sync>;
+
 /// Executor for capability REST calls
 pub struct CapabilityExecutor {
     pub(super) client: Client,
@@ -58,6 +69,10 @@ pub struct CapabilityExecutor {
     /// counts as a live backend. Surfaced via the capability backend in
     /// `/health` (MIK-5080).
     pub(super) health: crate::failsafe::HealthTracker,
+    /// Optional per-request caller-identity observer (MIK-6207). `None` by
+    /// default; behaviour is unchanged when unset. Tests and downstream
+    /// consumers install one to observe the threaded `VerifiedIdentity`.
+    pub(super) identity_observer: Option<IdentityObserver>,
 }
 
 /// Maximum number of send attempts (1 initial + 2 retries) for transient
@@ -183,7 +198,20 @@ impl CapabilityExecutor {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
+            identity_observer: None,
         }
+    }
+
+    /// Attach a per-request caller-identity observer (MIK-6207).
+    ///
+    /// The observer fires once per [`execute`](Self::execute) call with the
+    /// threaded `Option<&VerifiedIdentity>`, before any provider resolution.
+    /// Installing one does not alter credential resolution; it is purely an
+    /// observability seam used to prove end-to-end identity propagation.
+    #[must_use]
+    pub fn with_identity_observer(mut self, observer: IdentityObserver) -> Self {
+        self.identity_observer = Some(observer);
+        self
     }
 
     /// Whether outbound transport is currently considered healthy.
@@ -212,6 +240,7 @@ impl CapabilityExecutor {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
+            identity_observer: None,
         }
     }
 
@@ -234,14 +263,35 @@ impl CapabilityExecutor {
     /// Returns an error if the request fails, the response is invalid, or
     /// credentials cannot be resolved.
     #[tracing::instrument(
-        skip(self, params),
+        skip(self, params, identity),
         fields(
             capability = %capability.name,
             request_id = %uuid::Uuid::new_v4()
         )
     )]
-    pub async fn execute(&self, capability: &CapabilityDefinition, params: Value) -> Result<Value> {
+    pub async fn execute(
+        &self,
+        capability: &CapabilityDefinition,
+        params: Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<Value> {
         let start_time = std::time::Instant::now();
+
+        // MIK-6207: per-request caller identity propagation seam. Fires before
+        // any provider resolution or network I/O so downstream observers see the
+        // identity even if execution later fails (e.g. no reachable endpoint).
+        // Credential resolution is NOT changed by identity here — this ticket
+        // delivers the propagation plumbing only; per-user resolution/gating are
+        // downstream follow-ups that consume this seam.
+        if let Some(observer) = &self.identity_observer {
+            observer(identity);
+        }
+        if let Some(caller) = identity {
+            tracing::debug!(
+                caller_identity = %caller.email,
+                "Capability execute: per-request caller identity present"
+            );
+        }
 
         let provider = capability
             .primary_provider()
@@ -259,7 +309,7 @@ impl CapabilityExecutor {
         // Route through the protocol executor trait.
         let protocol_config = provider.protocol_config();
         let response = self
-            .dispatch_protocol(capability, provider, &protocol_config, &params)
+            .dispatch_protocol(capability, provider, &protocol_config, &params, identity)
             .await?;
 
         // Apply response transform pipeline if configured
@@ -301,12 +351,14 @@ impl CapabilityExecutor {
         provider: &ProviderConfig,
         protocol_config: &super::definition::ProtocolConfig,
         params: &Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Value> {
         use rest::{ExecutionContext, ProtocolExecutor as _};
 
         let ctx = ExecutionContext {
             capability,
             timeout_secs: provider.timeout,
+            identity,
         };
 
         match protocol_config.protocol_name() {
@@ -339,7 +391,7 @@ impl CapabilityExecutor {
     /// This is the core REST execution method. It is `pub(crate)` so the
     /// [`RestExecutor`](rest::RestExecutor) adapter can delegate to it.
     #[tracing::instrument(
-        skip(self, params),
+        skip(self, params, identity),
         fields(
             capability = %capability.name,
             provider = %provider.service
@@ -350,6 +402,7 @@ impl CapabilityExecutor {
         capability: &CapabilityDefinition,
         provider: &ProviderConfig,
         params: &Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Value> {
         let config = &provider.config;
 
@@ -370,7 +423,9 @@ impl CapabilityExecutor {
 
         // Add headers; skip Authorization when auth.param is set (credential
         // goes as a query param instead of a header).
-        let headers = self.build_headers(config, &capability.auth, params).await?;
+        let headers = self
+            .build_headers(config, &capability.auth, params, identity)
+            .await?;
         request = request.headers(headers);
 
         // Inject auth credential as a query parameter when auth.param is specified
@@ -378,7 +433,7 @@ impl CapabilityExecutor {
         if let Some(ref param_name) = capability.auth.param
             && capability.auth.required
         {
-            let credential = self.fetch_credential(&capability.auth).await?;
+            let credential = self.fetch_credential(&capability.auth, identity).await?;
             request = request.query(&[(param_name.as_str(), credential.as_str())]);
         }
 
@@ -459,6 +514,7 @@ impl CapabilityExecutor {
         config: &RestConfig,
         auth: &super::AuthConfig,
         params: &Value,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
 
@@ -480,7 +536,7 @@ impl CapabilityExecutor {
 
         // Skip header injection when auth.param is set (credential goes as query param).
         if auth.required && auth.param.is_none() {
-            self.inject_auth(&mut headers, auth).await?;
+            self.inject_auth(&mut headers, auth, identity).await?;
         }
 
         Ok(headers)
@@ -496,8 +552,9 @@ impl CapabilityExecutor {
         &self,
         headers: &mut HeaderMap,
         auth: &super::AuthConfig,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<()> {
-        let credential = self.fetch_credential(auth).await?;
+        let credential = self.fetch_credential(auth, identity).await?;
 
         let header_name: HeaderName = auth
             .header

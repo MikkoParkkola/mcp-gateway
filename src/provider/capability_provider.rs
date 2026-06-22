@@ -58,7 +58,7 @@ impl Provider for CapabilityProvider {
     }
 
     async fn invoke(&self, tool: &str, args: Value) -> Result<Value> {
-        let result = self.backend.call_tool(tool, args).await?;
+        let result = self.backend.call_tool(tool, args, None).await?;
         flatten_tool_call_result(result)
     }
 

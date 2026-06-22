@@ -17,7 +17,26 @@ use super::CapabilityExecutor;
 
 impl CapabilityExecutor {
     /// Fetch credential from secure storage.
-    pub(super) async fn fetch_credential(&self, auth: &super::super::AuthConfig) -> Result<String> {
+    ///
+    /// `identity` carries the per-request caller identity threaded from the HTTP
+    /// boundary (MIK-6207). This ticket delivers the propagation plumbing only:
+    /// when `identity` is `None` resolution is byte-identical to before the
+    /// change (full back-compat), and a present identity does **not** alter
+    /// resolution today. Per-user credential resolution and gating are downstream
+    /// follow-ups that consume this seam.
+    pub(super) async fn fetch_credential(
+        &self,
+        auth: &super::super::AuthConfig,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<String> {
+        // Propagation seam: caller identity is observable here for downstream
+        // per-user resolution work, but is intentionally NOT consulted yet.
+        if let Some(caller) = identity {
+            tracing::trace!(
+                caller_identity = %caller.email,
+                "fetch_credential: caller identity present (resolution unchanged)"
+            );
+        }
         let key = &auth.key;
 
         if let Some(var_name) = key.strip_prefix("env:") {
@@ -368,6 +387,7 @@ mod tests {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
+            identity_observer: None,
         }
     }
 
@@ -379,6 +399,7 @@ mod tests {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
+            identity_observer: None,
         }
     }
 
@@ -498,5 +519,87 @@ mod tests {
         let ex = CapabilityExecutor::new();
         let err = ex.fetch_from_file("/path/to/file.json:").unwrap_err();
         assert!(err.to_string().contains("Empty field name"), "{err}");
+    }
+
+    // MIK-6207.AC.2 AC.2: `fetch_credential` signature carries
+    // `Option<&VerifiedIdentity>`; when identity is `None` behaviour is
+    // byte-identical to today (back-compat).
+    //
+    // Polarity: asserts that resolution with `None` is IDENTICAL to the
+    // pre-change resolution for every source (`env:`, `file:`, bare-`UPPER`) and
+    // that a present identity does NOT alter resolution (this ticket delivers
+    // propagation plumbing only — per-user resolution is a downstream follow-up).
+    #[tokio::test]
+    #[allow(unsafe_code)] // edition-2024 env mutation; unique var names avoid cross-test races
+    async fn fetch_credential_none_is_backcompat() {
+        use crate::capability::definition::AuthConfig;
+        use crate::key_server::oidc::VerifiedIdentity;
+
+        let ex = CapabilityExecutor::new();
+        let identity = VerifiedIdentity {
+            subject: "alice@example.com".to_string(),
+            email: "alice@example.com".to_string(),
+            name: None,
+            groups: Vec::new(),
+            issuer: "test".to_string(),
+        };
+
+        // --- env: source ---------------------------------------------------
+        unsafe { std::env::set_var("MIK_6207_ENV_SRC", "env-secret") };
+        let auth_env = AuthConfig {
+            key: "env:MIK_6207_ENV_SRC".to_string(),
+            ..Default::default()
+        };
+        let env_none = ex.fetch_credential(&auth_env, None).await.unwrap();
+        let env_some = ex
+            .fetch_credential(&auth_env, Some(&identity))
+            .await
+            .unwrap();
+        assert_eq!(env_none, "env-secret", "env: must resolve unchanged");
+        assert_eq!(
+            env_none, env_some,
+            "env: resolution must be identical regardless of identity"
+        );
+
+        // --- bare UPPER source ---------------------------------------------
+        unsafe { std::env::set_var("MIK_6207_BARE_UPPER", "bare-secret") };
+        let auth_bare = AuthConfig {
+            key: "MIK_6207_BARE_UPPER".to_string(),
+            ..Default::default()
+        };
+        let bare_none = ex.fetch_credential(&auth_bare, None).await.unwrap();
+        let bare_some = ex
+            .fetch_credential(&auth_bare, Some(&identity))
+            .await
+            .unwrap();
+        assert_eq!(bare_none, "bare-secret", "bare-UPPER must resolve unchanged");
+        assert_eq!(
+            bare_none, bare_some,
+            "bare-UPPER resolution must be identical regardless of identity"
+        );
+
+        // --- file: source --------------------------------------------------
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cred.json");
+        std::fs::write(&path, r#"{"token":"file-secret"}"#).unwrap();
+        let auth_file = AuthConfig {
+            key: format!("file:{}:token", path.display()),
+            ..Default::default()
+        };
+        let file_none = ex.fetch_credential(&auth_file, None).await.unwrap();
+        let file_some = ex
+            .fetch_credential(&auth_file, Some(&identity))
+            .await
+            .unwrap();
+        assert_eq!(file_none, "file-secret", "file: must resolve unchanged");
+        assert_eq!(
+            file_none, file_some,
+            "file: resolution must be identical regardless of identity"
+        );
+
+        unsafe {
+            std::env::remove_var("MIK_6207_ENV_SRC");
+            std::env::remove_var("MIK_6207_BARE_UPPER");
+        }
     }
 }

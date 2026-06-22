@@ -304,12 +304,20 @@ impl MetaMcp {
         session_id: Option<&str>,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, api_key_name, agent_id, &trace_id_clone)
-                .await
+            self.invoke_tool_traced(
+                args,
+                session_id,
+                api_key_name,
+                agent_id,
+                identity,
+                &trace_id_clone,
+            )
+            .await
         })
         .await
     }
@@ -322,6 +330,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         trace_id: &str,
     ) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
@@ -584,6 +593,7 @@ impl MetaMcp {
                 prompt_cache_key.as_deref(),
                 want_full,
                 session_id,
+                identity,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -1044,6 +1054,7 @@ impl MetaMcp {
     /// Applies secret injection before forwarding. When `prompt_cache_key` is
     /// `Some`, it is injected into the request `_meta` field so that
     /// OpenAI-compatible backends can use it for prompt caching.
+    #[allow(clippy::too_many_arguments)] // request-scoped params threaded explicitly (no global state); MIK-6207 adds identity
     async fn dispatch_to_backend(
         &self,
         server: &str,
@@ -1052,6 +1063,7 @@ impl MetaMcp {
         prompt_cache_key: Option<&str>,
         want_full: bool,
         session_id: Option<&str>,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -1060,7 +1072,7 @@ impl MetaMcp {
             && server == cap.name
             && cap.has_capability(tool)
         {
-            let result = cap.call_tool(tool, arguments).await?;
+            let result = cap.call_tool(tool, arguments, identity).await?;
             let mut response = serde_json::to_value(result)?;
 
             // Apply per-capability response_transform when configured.

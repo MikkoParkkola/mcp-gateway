@@ -372,6 +372,7 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
             None,
             None,
             None,
+            None,
         )
         .await;
     // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
@@ -544,6 +545,7 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
             RequestId::Number(100),
             "gateway_execute",
             args,
+            None,
             None,
             None,
             None,
@@ -779,6 +781,7 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             RequestId::Number(7),
             "gateway_reload_config",
             json!({}),
+            None,
             None,
             None,
             None,
@@ -1044,6 +1047,7 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -1078,6 +1082,7 @@ async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -1102,6 +1107,7 @@ async fn tools_call_surfaced_tool_name_bypasses_meta_tool_dispatch() {
             RequestId::Number(1),
             "my_surfaced_tool",
             json!({}),
+            None,
             None,
             None,
             None,
@@ -1136,6 +1142,7 @@ async fn colliding_name_is_dispatched_as_meta_tool_not_proxy() {
             RequestId::Number(1),
             "gateway_list_servers",
             json!({}),
+            None,
             None,
             None,
             None,

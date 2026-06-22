@@ -234,7 +234,7 @@ async fn cap_test(file: std::path::PathBuf, args: String) -> ExitCode {
     );
     println!();
     let executor = Arc::new(CapabilityExecutor::new());
-    match executor.execute(&cap, params).await {
+    match executor.execute(&cap, params, None).await {
         Ok(result) => {
             println!("✅ Success:\n");
             println!(
