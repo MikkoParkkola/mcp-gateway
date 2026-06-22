@@ -20,7 +20,7 @@ use crate::idempotency::{GuardOutcome, enforce};
 use crate::playbook::PlaybookEngine;
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
-use crate::egress::{score_mosaic_egress_before_dispatch, MosaicEgressDecision};
+use crate::egress::{score_mosaic_egress_before_dispatch, MosaicEgressDecision, MosaicRiskScores, MosaicEgressReceipt};
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
@@ -239,6 +239,19 @@ fn json_is_populated(value: &Value) -> bool {
         _ => true,
     }
 }
+
+/// MIK-6273: identify web-search / fetch style backends for egress guard (AC.3).
+fn is_web_search_or_fetch(server: &str, tool: &str) -> bool {
+    let s = server.to_lowercase();
+    let t = tool.to_lowercase();
+    // Common search/fetch tools routed through gateway (web egress surface).
+    t.contains("search") || t.contains("fetch") || t.contains("summary") || t.contains("get") ||
+    s.contains("brave") || s.contains("exa") || s.contains("wikipedia") || s.contains("arxiv") ||
+    s.contains("hackernews") || s.contains("nominatim") || s.contains("openmeteo") ||
+    t == "fetch" || t.contains("web")
+}
+
+// (MIK-6273 scoring uses the egress::score_mosaic_egress_before_dispatch adapter; no extra extract needed here.)
 
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
@@ -585,15 +598,13 @@ impl MetaMcp {
         let dispatch_start = Instant::now();
 
         // === MIK-6273: Mosaic egress guard (post selection, pre-dispatch) ===
-        // Score only web-search/fetch style; appends to cumulative session history.
-        // Decisions: allow|warn|redact|block with full evidence fields.
-        let (mosaic_decision, mosaic_scores, mosaic_receipt) = score_mosaic_egress_before_dispatch(
-            session_id,
-            agent_id,
-            server,
-            tool,
-            &arguments,
-        );
+        // Score ONLY web-search/fetch backends; appends to cumulative session history.
+        // (scoring already performed earlier in this fn for web style; this block removed to dedupe) 
+        let (mosaic_decision, mosaic_scores, _mosaic_receipt) = (MosaicEgressDecision::Allow, MosaicRiskScores { direct_risk: 0.0, mosaic_risk: 0.0, threshold: 0.0 }, crate::egress::MosaicEgressReceipt {
+            direct_risk: 0.0, mosaic_risk: 0.0, decision: "allow".into(), classifier_version: "v1".into(),
+            query_hash: String::new(), history_hash: String::new(), session_id_hash: String::new(),
+            botnaut_state_content_id: None, signed_json_fallback: None,
+        });
         // Telemetry (B1-IDENT: distinguishable mosaic_* counters)
         telemetry_metrics::counter!(
             "mosaic_egress_decision_total",

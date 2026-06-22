@@ -63,9 +63,9 @@ fn ac_3_mik_6273_ac_3_ac_3_gateway_egress_guard_is_wire() {
     assert!(m.contains("score_mosaic_egress_before_dispatch"), "AC.3 fn");
 
     // Also verify wiring produces decision for a search tool (AC.3)
-    let args = serde_json::json!({"query": "public research query only"});
-    let score = score_mosaic_egress_before_dispatch(Some("sess-ac3"), None, "brave", "brave_search", &args);
-    assert!(matches!(score.decision, MosaicEgressDecision::Allow | MosaicEgressDecision::Warn | MosaicEgressDecision::Redact | MosaicEgressDecision::Block));
+    let q = "public research query only";
+    let (dec, _scores, _receipt) = score_mosaic_egress_before_dispatch(Some("sess-ac3"), None, "brave", "brave_search", q);
+    assert!(matches!(dec, MosaicEgressDecision::Allow | MosaicEgressDecision::Warn | MosaicEgressDecision::Redact | MosaicEgressDecision::Block));
 }
 
 /// MIK-6273.AC.4 AC.4: Regression tests prove mosaic detection uses cumulative history, not only the current query: a fixture where every individual query is below threshold must become `block` or `redact` when the final query completes a private fact across history. CHECK: `cargo test -p mcp-gateway mosaic_history_reassembly_blocks_final_query` exits 0 (expected: test passes)
@@ -78,21 +78,20 @@ fn mosaic_history_reassembly_blocks_final_query() {
     let q2 = "KEY constant used in mik_5223_acs test file";
     let q3 = "bnaut signer test vector value prefix";
     // Score q1, q2 individually (history builds)
-    let _ = score_mosaic_egress_before_dispatch(Some(sid), None, "brave", "brave_search", &serde_json::json!({"query": q1}));
-    let _ = score_mosaic_egress_before_dispatch(Some(sid), None, "brave", "brave_search", &serde_json::json!({"query": q2}));
+    let _ = score_mosaic_egress_before_dispatch(Some(sid), None, "brave", "brave_search", q1);
+    let _ = score_mosaic_egress_before_dispatch(Some(sid), None, "brave", "brave_search", q2);
     // Now the completing query
-    let s3 = score_mosaic_egress_before_dispatch(Some(sid), None, "brave", "brave_search", &serde_json::json!({"query": q3}));
-    let d3 = s3.decision;
+    let (d3, _sc, _rc) = score_mosaic_egress_before_dispatch(Some(sid), None, "brave", "brave_search", q3);
     assert!(
         d3 == MosaicEgressDecision::Block || d3 == MosaicEgressDecision::Redact,
         "AC.4: final query must block/redact via cumulative mosaic (not individual)"
     );
     // Sanity: direct on last alone is not sufficient without history (reset + single)
-    mcp_gateway::egress::mosaic_guard::reset_logs_for_test();
-    let alone_s = score_mosaic_egress_before_dispatch(Some("alone"), None, "brave", "brave_search", &serde_json::json!({"query": q3}));
+    mcp_gateway::egress::reset_logs_for_test();
+    let (alone_d, _, _) = score_mosaic_egress_before_dispatch(Some("alone"), None, "brave", "brave_search", q3);
     // alone may warn but for this chain the mosaic needs prior to go high
     // The key AC.4 assert is the cumulative case above.
-    let _ = alone_s;
+    let _ = alone_d;
 }
 
 /// MIK-6273.AC.5 AC.5: Decision evidence is attestable: each egress decision record includes direct risk, mosaic risk, decision, classifier version, query hash, history hash, session id hash, and either a botnaut `.state`/receipt reference or a signed JSON fallback. CHECK: file `crates/mcp-gateway/src/egress/mosaic_receipt.rs` contains `history_hash` AND `classifier_version` AND `botnaut_state_content_id` AND `signed_json_fallback`
@@ -107,20 +106,22 @@ fn ac_5_mik_6273_ac_5_ac_5_decision_evidence_is_attesta() {
     assert!(rc.contains("signed_json_fallback"), "AC.5");
 
     // Runtime: produce receipt and assert fields (use real scorer path)
-    let s5 = score_mosaic_egress_before_dispatch(Some("ac5"), None, "exa", "exa_search", &serde_json::json!({"query": "sample query for ac5 receipt"}));
-    // Receipt produced inside score but exposed via MosaicEgressScore; construct one explicitly for AC.5 field check.
+    let q5 = "sample query for ac5 receipt";
+    let (dec5, scores5, rec5) = score_mosaic_egress_before_dispatch(Some("ac5"), None, "exa", "exa_search", q5);
+    // Use returned receipt directly; also roundtrip via from_score for coverage.
+    assert!(rec5.history_hash.len() > 4);
+    assert!(rec5.classifier_version.len() > 0);
+    assert!(rec5.signed_json_fallback.is_some() || rec5.botnaut_state_content_id.is_some());
     let rec = MosaicEgressReceipt::from_score(
-        s5.direct_risk,
-        s5.mosaic_risk,
-        s5.decision,
-        &s5.classifier_version,
-        &s5.query_hash,
-        &s5.history_hash,
-        &s5.session_id_hash,
+        scores5.direct_risk,
+        scores5.mosaic_risk,
+        dec5,
+        &rec5.classifier_version,
+        &rec5.query_hash,
+        &rec5.history_hash,
+        &rec5.session_id_hash,
     );
     assert!(rec.history_hash.len() > 4);
-    assert!(rec.classifier_version.len() > 0);
-    assert!(rec.signed_json_fallback.is_some() || rec.botnaut_state_content_id.is_some());
 }
 
 /// MIK-6273.AC.6 AC.6: Governance artifact explains the threat model, limitations, deployment mode, and operator playbook, with explicit caveat that MosaicLeaks is a controlled benchmark rather than deployed-system prevalence measurement. CHECK: file `docs/security/mosaic-leakage/MIK-6273-governance-note.md` contains `controlled benchmark, not a measurement of leakage in deployed systems` AND `adversary sees only the cumulative query log`

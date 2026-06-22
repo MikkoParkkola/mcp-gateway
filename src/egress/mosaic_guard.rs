@@ -111,7 +111,7 @@ fn classify_direct_and_mosaic(
     // Tokenize simply.
     let tokens: Vec<String> = all
         .iter()
-        .flat_map(|s| s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|t| t.len() > 2).map(|t| t.to_string()))
+        .flat_map(|s| s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|t| t.len() > 2).map(|t| t.to_string()).collect::<Vec<_>>())
         .collect();
 
     // Seeded private fragments that when combined with retrieval trigger mosaic.
@@ -237,15 +237,15 @@ pub fn score_mosaic_egress_before_dispatch(
         decision: effective.as_str().to_string(),
         classifier_version: "mosaic-leakage-fixture-v1".to_string(),
         query_hash: q_hash,
-        history_hash,
-        session_id_hash: sess_hash,
+        history_hash: history_hash.clone(),
+        session_id_hash: sess_hash.clone(),
         botnaut_state_content_id: None,
         signed_json_fallback: Some(build_signed_json_fallback(
             effective.as_str(),
             direct_risk,
             mosaic_risk,
-            &sess_hash,
-            &history_hash,
+            &sess_hash.clone(),
+            &history_hash.clone(),
         )),
     };
 
@@ -283,7 +283,9 @@ pub fn reset_history_for_tests() {
 
 /// Exposed for AC integration tests (name chosen to match skeleton references).
 pub fn reset_logs_for_test() {
-    reset_history_for_tests();
+    let l = history();
+    let mut h = l.write();
+    h.clear();
 }
 
 /// Shim so skeleton ac test code that calls run_classifier_eval works.
@@ -292,7 +294,7 @@ pub fn reset_logs_for_test() {
 pub fn run_classifier_eval() -> (f64, f64, usize, usize) {
     // Re-run a minimal slice of the seeded logic to return numbers.
     // Full numbers and asserts live in the real test fn below.
-    reset_history_for_tests();
+    reset_logs_for_test();
     // Use protected sessions to get raw high-risk decisions for seeded.
     let seeded_qs = vec![
         "acme-corp-secret-xyz site:github.com",
@@ -331,7 +333,7 @@ mod tests {
 
     #[test]
     fn mosaic_history_reassembly_blocks_final_query() {
-        reset_history_for_tests();
+        reset_logs_for_test();
         let sid = Some("sess-hist-1");
         let agent = Some("agent-reasm");
 
@@ -376,7 +378,7 @@ mod tests {
     /// AC.2 classifier eval: >=20 seeded mosaic cases, >=50 benign; recall>=0.85, block_fp<=0.05
     #[test]
     fn mosaic_leakage_classifier_eval() {
-        reset_history_for_tests();
+        reset_logs_for_test();
 
         // Seeded mosaic cases (individual queries look benign-ish; cumulative triggers reassembly).
         // We force per-case fresh sessions to avoid cross-talk, and use protected- to get raw decision.

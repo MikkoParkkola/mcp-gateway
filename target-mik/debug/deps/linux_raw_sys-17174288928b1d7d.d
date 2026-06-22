@@ -1,0 +1,10 @@
+/home/mikko/.symphony/workspaces/mcp-gateway/MIK-6273/grok-native/target-mik/debug/deps/linux_raw_sys-17174288928b1d7d.d: /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/lib.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/elf.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/auxvec.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/errno.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/general.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/ioctl.rs
+
+/home/mikko/.symphony/workspaces/mcp-gateway/MIK-6273/grok-native/target-mik/debug/deps/liblinux_raw_sys-17174288928b1d7d.rmeta: /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/lib.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/elf.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/auxvec.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/errno.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/general.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/ioctl.rs
+
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/lib.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/elf.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/auxvec.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/errno.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/general.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/linux-raw-sys-0.12.1/src/aarch64/ioctl.rs:

@@ -1,0 +1,11 @@
+/home/mikko/.symphony/workspaces/mcp-gateway/MIK-6273/grok-native/target-mik/debug/deps/left_right-07f338d47f42b366.d: /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/lib.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/sync.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/write.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read/guard.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read/factory.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/aliasing.rs
+
+/home/mikko/.symphony/workspaces/mcp-gateway/MIK-6273/grok-native/target-mik/debug/deps/libleft_right-07f338d47f42b366.rmeta: /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/lib.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/sync.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/write.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read/guard.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read/factory.rs /home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/aliasing.rs
+
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/lib.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/sync.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/write.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read/guard.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/read/factory.rs:
+/home/mikko/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/left-right-0.11.7/src/aliasing.rs:
