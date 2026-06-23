@@ -1,0 +1,243 @@
+# Plugin Backend Roster — canonical pin-versioned backend bundle
+# ===============================================================
+#
+# This config bundle is shipped with the mcp-gateway Claude Code plugin.
+# It declares the 29 curated, pin-versioned MCP server backends that the
+# gateway routes through its single /mcp meta-tool endpoint.
+#
+# Architecture: the plugin's mcpServers map declares exactly ONE entry
+# (the gateway process). This roster is the gateway's *internal* backend
+# configuration — loaded via --config at startup.
+#
+# Usage: mcp-gateway --config examples/plugin-backend-roster.yaml
+
+server:
+  host: "127.0.0.1"
+  port: 39401
+  request_timeout: 30s
+  shutdown_timeout: 5s
+
+meta_mcp:
+  enabled: true
+  cache_tools: true
+  cache_ttl: 5m
+
+capabilities:
+  enabled: true
+  name: mcp-gateway-plugin
+  directories:
+    - ./capabilities
+
+backends:
+  # ── Filesystem & Storage ──────────────────────────────────────────
+  filesystem:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-filesystem@0.6.2"]
+    description: "Local filesystem read/write via MCP"
+    enabled: true
+    timeout: 30s
+
+  memory:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-memory@0.6.3"]
+    description: "Persistent knowledge-graph memory store"
+    enabled: true
+    timeout: 30s
+
+  google-drive:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-gdrive@0.6.2"]
+    description: "Google Drive file access"
+    enabled: true
+    timeout: 30s
+
+  # ── Search & Retrieval ────────────────────────────────────────────
+  brave:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-brave-search@0.5.2"]
+    description: "Brave web search API"
+    enabled: true
+    timeout: 15s
+
+  tavily:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-tavily@0.5.2"]
+    description: "Tavily AI-optimized search"
+    enabled: true
+    timeout: 15s
+
+  exa:
+    command: "npx"
+    args: ["-y", "@exa-labs/mcp-server@0.3.0"]
+    description: "Exa neural search engine"
+    enabled: true
+    timeout: 15s
+
+  fetch:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-fetch@0.6.2"]
+    description: "HTTP fetch for URL content"
+    enabled: true
+    timeout: 30s
+
+  # ── Documentation & Knowledge ─────────────────────────────────────
+  context7:
+    command: "npx"
+    args: ["-y", "@upstash/context7-mcp@1.0.7"]
+    description: "Library documentation lookup"
+    enabled: true
+    timeout: 15s
+
+  gitmcp:
+    http_url: "https://gitmcp.io/docs/sse"
+    description: "GitMCP — docs + code search for any public GitHub repo"
+    enabled: true
+    timeout: 30s
+
+  deepwiki:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-deepwiki@0.2.0"]
+    description: "Deep repository documentation search"
+    enabled: true
+    timeout: 30s
+
+  # ── Productivity & Collaboration ──────────────────────────────────
+  notion:
+    command: "npx"
+    args: ["-y", "@notionhq/notion-mcp-server@0.2.4"]
+    description: "Notion workspace integration"
+    enabled: true
+    timeout: 30s
+
+  github:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-github@0.6.2"]
+    description: "GitHub repos, issues, PRs, and actions"
+    enabled: true
+    timeout: 30s
+
+  slack:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-slack@0.5.2"]
+    description: "Slack messaging and channel management"
+    enabled: true
+    timeout: 15s
+
+  linear:
+    command: "npx"
+    args: ["-y", "@linear/mcp-server@0.1.4"]
+    description: "Linear issue tracking and project management"
+    enabled: true
+    timeout: 15s
+
+  jira:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-jira@0.5.2"]
+    description: "Jira issue tracking integration"
+    enabled: true
+    timeout: 15s
+
+  figma:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-figma@0.5.2"]
+    description: "Figma design file access"
+    enabled: true
+    timeout: 30s
+
+  # ── Database & Data ───────────────────────────────────────────────
+  postgresql:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-postgres@0.6.2"]
+    description: "PostgreSQL database queries"
+    enabled: true
+    timeout: 30s
+
+  sqlite:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-sqlite@0.6.2"]
+    description: "SQLite database access"
+    enabled: true
+    timeout: 30s
+
+  redis:
+    command: "npx"
+    args: ["-y", "@redis/mcp-server@0.1.0"]
+    description: "Redis key-value store"
+    enabled: true
+    timeout: 15s
+
+  supabase:
+    command: "npx"
+    args: ["-y", "@supabase/mcp-server@0.3.0"]
+    description: "Supabase database and auth"
+    enabled: true
+    timeout: 30s
+
+  # ── Code Quality & DevOps ─────────────────────────────────────────
+  sentry:
+    command: "npx"
+    args: ["-y", "@sentry/mcp-server@0.2.0"]
+    description: "Sentry error tracking and monitoring"
+    enabled: true
+    timeout: 15s
+
+  # ── Browser & Automation ──────────────────────────────────────────
+  puppeteer:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-puppeteer@0.5.2"]
+    description: "Browser automation via Puppeteer"
+    enabled: true
+    timeout: 60s
+
+  playwright:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-playwright@0.5.2"]
+    description: "Browser automation via Playwright"
+    enabled: true
+    timeout: 60s
+
+  # ── Compute & Reasoning ───────────────────────────────────────────
+  wolfram:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-wolfram-alpha@0.5.2"]
+    description: "Wolfram Alpha computational knowledge"
+    enabled: true
+    timeout: 30s
+
+  sequential-thinking:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking@0.6.2"]
+    description: "Structured step-by-step reasoning"
+    enabled: true
+    timeout: 30s
+
+  # ── Communication ─────────────────────────────────────────────────
+  email:
+    command: "npx"
+    args: ["-y", "@anthropic/mcp-server-email@0.5.2"]
+    description: "Email sending via SMTP"
+    enabled: true
+    timeout: 15s
+
+  # ── Cloud & Infrastructure ────────────────────────────────────────
+  cloudflare:
+    command: "npx"
+    args: ["-y", "@cloudflare/mcp-server@0.1.2"]
+    description: "Cloudflare Workers and R2 management"
+    enabled: true
+    timeout: 30s
+
+  vercel:
+    command: "npx"
+    args: ["-y", "@vercel/mcp-server@0.1.2"]
+    description: "Vercel deployment management"
+    enabled: true
+    timeout: 30s
+
+  # ── Maps & Geolocation ────────────────────────────────────────────
+  google-maps:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-google-maps@0.6.2"]
+    description: "Google Maps geocoding and directions"
+    enabled: true
+    timeout: 15s

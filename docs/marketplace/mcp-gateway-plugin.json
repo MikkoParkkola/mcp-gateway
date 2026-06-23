@@ -1,0 +1,43 @@
+{
+  "plugins": [
+    {
+      "name": "mcp-gateway",
+      "version": "2.19.0",
+      "description": "MCP package-manager plugin — single /mcp meta-tool endpoint routing 29 pin-versioned backends with ~95% context-token savings. Turns the local mcp-gateway router into the de-facto MCP curation layer.",
+      "author": {
+        "name": "Mikko Parkkola",
+        "email": "mikko.parkkola@iki.fi"
+      },
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/MikkoParkkola/mcp-gateway"
+      },
+      "homepage": "https://github.com/MikkoParkkola/mcp-gateway#readme",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "model-context-protocol",
+        "gateway",
+        "package-manager",
+        "meta-tool",
+        "plugin"
+      ],
+      "category": "infrastructure",
+      "compatibility": {
+        "claude-code": ">=1.0.0"
+      },
+      "install": {
+        "type": "plugin",
+        "source": ".claude-plugin/plugin.json"
+      },
+      "dependencies": [
+        {
+          "name": "mcp-gateway",
+          "version": "~2.19.0"
+        }
+      ],
+      "screenshots": [],
+      "changelog": "https://github.com/MikkoParkkola/mcp-gateway/blob/main/CHANGELOG.md"
+    }
+  ]
+}

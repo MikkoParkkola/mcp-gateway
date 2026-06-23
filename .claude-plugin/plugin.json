@@ -1,0 +1,34 @@
+{
+  "name": "mcp-gateway",
+  "version": "2.19.0",
+  "description": "MCP package-manager plugin — single /mcp meta-tool endpoint routing 29 pin-versioned backends with ~95% context-token savings",
+  "author": "Mikko Parkkola",
+  "repository": "https://github.com/MikkoParkkola/mcp-gateway",
+  "homepage": "https://github.com/MikkoParkkola/mcp-gateway#readme",
+  "license": "MIT",
+  "mcpServers": {
+    "mcp-gateway": {
+      "command": "npx",
+      "args": ["-y", "@mikkoparkkola/mcp-gateway@2.19.0", "--config", "${CLAUDE_PLUGIN_ROOT}/examples/plugin-backend-roster.yaml"]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/config/hooks/gateway-attribution.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "dependencies": [
+    {
+      "name": "mcp-gateway",
+      "version": "~2.19.0"
+    }
+  ]
+}
