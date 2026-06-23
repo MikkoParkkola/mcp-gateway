@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trace JSONL Compare</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/default.min.css">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app" class="shell" v-cloak>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div>
+          <h1 class="brand-title">Webwright Trajectory Comparison</h1>
+          <div class="brand-copy">
+            Compare Codex JSONL, Webwright raw and trajectory traces, and Copilot session markdown
+          </div>
+        </div>
+        <nav class="tab-strip">
+          <button class="tab" :class="{ active: activeView === 'summary' }" @click="activeView = 'summary'">Summary View</button>
+          <button class="tab" :class="{ active: activeView === 'traces' }" @click="activeView = 'traces'">Detailed Trace</button>
+        </nav>
+      </div>
+    </header>
+
+    <section class="upload-rail">
+      <article
+        v-for="slot in slots"
+        :key="slot.key"
+        class="upload-card"
+        @dragenter.prevent="dragTarget = slot.key"
+        @dragover.prevent="dragTarget = slot.key"
+        @dragleave.prevent="dragTarget = null"
+        @drop.prevent="handleDrop(slot.key, $event)"
+      >
+        <div class="upload-head">
+          <div>
+            <h2 class="upload-title">{{ slot.title }}</h2>
+            <div class="upload-subtitle">{{ slot.subtitle }}</div>
+          </div>
+          <div class="badge-row" v-if="traceBySide(slot.key)">
+            <span class="badge good">{{ traceBySide(slot.key).formatLabel }}</span>
+            <span class="badge">commands {{ traceBySide(slot.key).summary.commandRuns }}</span>
+          </div>
+        </div>
+
+        <div class="upload-body" :style="dragTarget === slot.key ? 'border-color: var(--accent); background: #f1fbf9;' : ''">
+          <template v-if="traceBySide(slot.key)">
+            <div class="upload-file">{{ traceBySide(slot.key).fileName }}</div>
+            <div class="upload-subtitle">{{ traceBySide(slot.key).description }}</div>
+            <div class="badge-row">
+              <span class="badge">thoughts {{ traceBySide(slot.key).summary.thoughts }}</span>
+              <span class="badge">commands {{ traceBySide(slot.key).summary.commands }}</span>
+              <span class="badge">finals {{ traceBySide(slot.key).summary.finalResponses }}</span>
+              <span class="badge" :class="traceBySide(slot.key).tokenModeLabel === 'exact' ? 'good' : 'warn'">{{ tokenTotalDisplay(traceBySide(slot.key)) }}</span>
+            </div>
+            <div class="button-row">
+              <label class="button-label primary">
+                Replace file
+                <input type="file" accept=".jsonl,.json,.md,.txt" @change="handleFileInput(slot.key, $event)">
+              </label>
+              <button class="button" @click="clearTrace(slot.key)">Clear</button>
+            </div>
+            <div v-if="traceBySide(slot.key).kind === 'raw_response_jsonl'" class="attachment-box">
+              <div class="upload-subtitle">
+                <span v-if="traceBySide(slot.key).companionFileName">Attached trajectory.json: {{ traceBySide(slot.key).companionFileName }}</span>
+                <span v-else>Optional: attach trajectory.json here to replace the estimate with exact cumulative tokens.</span>
+              </div>
+              <div class="button-row">
+                <label class="button-label">
+                  {{ traceBySide(slot.key).companionFileName ? 'Replace trajectory.json' : 'Attach trajectory.json' }}
+                  <input type="file" accept=".json" @change="handleCompanionInput(slot.key, $event)">
+                </label>
+                <button v-if="traceBySide(slot.key).companionFileName" class="button" @click="clearCompanion(slot.key)">Remove trajectory.json</button>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="upload-file">Drop a trace file here</div>
+            <div class="upload-subtitle">
+              Accepted: Codex JSONL, Webwright Responses JSONL (raw_responses.jsonl), trajectory.json, and Copilot session markdown.
+            </div>
+            <div class="button-row">
+              <label class="button-label primary">
+                Choose file
+                <input type="file" accept=".jsonl,.json,.md,.txt" @change="handleFileInput(slot.key, $event)">
+              </label>
+            </div>
+          </template>
+          <div class="badge-row" v-if="errorBySide(slot.key)">
+            <span class="badge bad">{{ errorBySide(slot.key) }}</span>
+          </div>
+          <div class="badge-row" v-if="attachmentErrorBySide(slot.key)">
+            <span class="badge bad">{{ attachmentErrorBySide(slot.key) }}</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <main class="content">
+      <section v-if="!hasAnyTrace" class="panel">
+        <div class="empty-state">
+          Load at least one trace to inspect extracted thought entries, shell commands, token provenance, and end-state outputs.
+        </div>
+      </section>
+
+      <template v-else>
+        <section v-if="activeView === 'summary'">
+          <section v-if="!bothLoaded" class="panel">
+            <div class="empty-state">
+              Load a second trace to use the side-by-side comparison matrix. Per-trace summary still works with a single upload.
+            </div>
+          </section>
+
+          <section class="panel" v-if="bothLoaded">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Comparison Matrix</h2>
+                <div class="muted">Every format is normalized into task hints, thoughts, commands, outputs, and token provenance rows.</div>
+              </div>
+            </div>
+            <table class="compare-table">
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>{{ leftTrace.fileName }}</th>
+                  <th>{{ rightTrace.fileName }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in comparisonRows" :key="row.label">
+                  <td>{{ row.label }}</td>
+                  <td class="mono">{{ row.left }}</td>
+                  <td class="mono">{{ row.right }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Per-Trace Summary</h2>
+                <div class="muted">Exact totals come from trace snapshots when present. Otherwise the page shows estimated output tokens from extracted trace text.</div>
+              </div>
+              <div class="toolbar-copy">{{ tokenizerStatus }}</div>
+            </div>
+            <div class="trace-pane-grid">
+              <article class="mini-card" v-for="trace in loadedTraces" :key="trace.side + '-summary'">
+                <div class="trace-card-head">
+                  <div>
+                    <h3>{{ trace.fileName }}</h3>
+                    <div class="muted">{{ trace.formatLabel }}</div>
+                  </div>
+                  <div class="badge-row">
+                    <span class="badge" :class="trace.tokenModeLabel === 'exact' ? 'good' : 'warn'">{{ trace.tokenModeLabel }}</span>
+                    <span class="badge">{{ tokenTotalDisplay(trace) }}</span>
+                  </div>
+                </div>
+                <div class="metric-grid">
+                  <article class="metric" v-for="metric in trace.metrics" :key="trace.side + '-' + metric.label">
+                    <div class="metric-label">{{ metric.label }}</div>
+                    <div class="metric-value">{{ metric.value }}</div>
+                    <div class="metric-sub">{{ metric.sub }}</div>
+                  </article>
+                </div>
+                <div class="task-box" v-if="trace.taskPrompt">
+                  <strong>Task Hint</strong>
+                  {{ trace.taskPrompt }}
+                </div>
+                <div class="task-box">
+                  <strong>Token Source</strong>
+                  {{ tokenNote(trace) }}
+                </div>
+                <table class="compare-table token-table">
+                  <tbody>
+                    <tr v-for="row in trace.tokenRows" :key="trace.side + '-token-row-' + row.label">
+                      <th>{{ row.label }}</th>
+                      <td class="mono">{{ row.value }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="task-box" v-if="trace.countedFieldLabels.length">
+                  <strong>Counted Fields</strong>
+                  {{ trace.countedFieldLabels.join(', ') }}
+                </div>
+                <div class="bar-list" v-if="trace.tokenBasisRows.length">
+                  <div class="bar-row" v-for="row in trace.tokenBasisRows" :key="trace.side + '-token-basis-' + row.label">
+                    <div>
+                      <div class="mono">{{ row.label }}</div>
+                      <div class="bar-wrap"><div class="bar" :style="{ width: row.width + '%' }"></div></div>
+                    </div>
+                    <div class="mono">{{ row.value }}</div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Pattern Breakdown</h2>
+                <div class="muted">Top command families and normalized event categories in each trace.</div>
+              </div>
+            </div>
+            <div class="trace-pane-grid">
+              <article class="mini-card" v-for="trace in loadedTraces" :key="trace.side + '-bars'">
+                <h3>{{ trace.fileName }}</h3>
+                <div class="bar-list">
+                  <div class="bar-row" v-for="row in trace.commandFamilies" :key="trace.side + '-cmd-' + row.label">
+                    <div>
+                      <div class="mono">{{ row.label }}</div>
+                      <div class="bar-wrap"><div class="bar" :style="{ width: row.width + '%' }"></div></div>
+                    </div>
+                    <div class="mono">{{ row.value }}</div>
+                  </div>
+                </div>
+                <div class="bar-list">
+                  <div class="bar-row" v-for="row in trace.channelFamilies" :key="trace.side + '-channel-' + row.label">
+                    <div>
+                      <div class="mono">{{ row.label }}</div>
+                      <div class="bar-wrap"><div class="bar" :style="{ width: row.width + '%' }"></div></div>
+                    </div>
+                    <div class="mono">{{ row.value }}</div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+        </section>
+
+        <section v-else>
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Detailed Trace</h2>
+                <div class="muted">Switch between extracted code, reasoning, commands, and the combined typed timeline.</div>
+              </div>
+              <div class="tab-strip">
+                <button
+                  v-for="tab in detailTabs"
+                  :key="tab.value"
+                  class="tab"
+                  :class="{ active: traceTab === tab.value }"
+                  @click="traceTab = tab.value"
+                >
+                  {{ tab.label }}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div class="trace-grid">
+            <article class="trace-card" v-for="trace in loadedTraces" :key="trace.side + '-trace'">
+              <div class="trace-card-head">
+                <div>
+                  <h3 class="trace-name">{{ trace.fileName }}</h3>
+                  <div class="trace-file">{{ trace.filePath || 'Uploaded from local disk' }}</div>
+                </div>
+                <div class="badge-row">
+                  <span class="badge good">{{ trace.formatLabel }}</span>
+                  <span class="badge" :class="trace.tokenModeLabel === 'exact' ? 'good' : 'warn'">{{ tokenTotalDisplay(trace) }}</span>
+                </div>
+              </div>
+
+              <div class="metric-badges" style="margin-top: 12px;">
+                <span class="badge">python {{ trace.summary.pythonScripts }}</span>
+                <span class="badge">thoughts {{ trace.summary.thoughts }}</span>
+                <span class="badge">commands {{ trace.summary.commandRuns }}</span>
+                <span class="badge">finals {{ trace.summary.finalResponses }}</span>
+              </div>
+
+              <div v-if="traceTab === 'python'" class="thought-list">
+                <template v-if="trace.pythonScripts.length">
+                  <article class="thought-entry" v-for="script in trace.pythonScripts" :key="trace.side + '-python-' + script.id">
+                    <div class="thought-head">
+                      <div class="thought-title">python {{ script.order }}</div>
+                      <div class="event-time">{{ script.timeLabel }}</div>
+                    </div>
+                    <div class="event-meta">
+                      <span class="badge" v-for="chip in script.chips" :key="script.id + '-' + chip">{{ chip }}</span>
+                    </div>
+                    <div class="task-box" style="margin-top: 8px;" v-if="script.title || script.sourceLabel">
+                      <strong>{{ script.title || 'Python Script' }}</strong>
+                      {{ script.sourceLabel }}
+                    </div>
+                    <div class="detail-sections">
+                      <section class="detail-section" v-for="(section, sectionIndex) in script.sections" :key="script.id + '-section-' + sectionIndex">
+                        <div v-if="section.label" class="detail-section-label">{{ section.label }}</div>
+                        <div v-if="section.type === 'text'" class="detail-text">{{ section.text }}</div>
+                        <pre v-else class="detail-code-wrap"><code class="detail-code" :class="codeClass(section.language)">{{ section.text }}</code></pre>
+                      </section>
+                    </div>
+                  </article>
+                </template>
+                <div v-else class="task-box">
+                  <strong>No Python scripts</strong>
+                  No Python script blocks were extracted from this trace.
+                </div>
+              </div>
+
+              <div v-else-if="traceTab === 'thoughts'" class="thought-list">
+                <article class="thought-entry" v-for="thought in trace.thoughtEntries" :key="trace.side + '-thought-' + thought.id">
+                  <div class="thought-head">
+                    <div class="thought-title">thought {{ thought.order }}</div>
+                    <div class="event-time">{{ thought.timeLabel }}</div>
+                  </div>
+                  <div class="event-meta">
+                    <span class="badge" v-for="chip in thought.chips" :key="thought.id + '-' + chip">{{ chip }}</span>
+                  </div>
+                  <div class="detail-sections">
+                    <section class="detail-section" v-for="(section, sectionIndex) in thought.sections" :key="thought.id + '-section-' + sectionIndex">
+                      <div v-if="section.label" class="detail-section-label">{{ section.label }}</div>
+                      <div v-if="section.type === 'text'" class="detail-text">{{ section.text }}</div>
+                      <pre v-else class="detail-code-wrap"><code class="detail-code" :class="codeClass(section.language)">{{ section.text }}</code></pre>
+                    </section>
+                  </div>
+                </article>
+              </div>
+
+              <div v-else-if="traceTab === 'commands'" class="run-list">
+                <article class="command-run" v-for="run in trace.commandRuns" :key="trace.side + '-run-' + run.id">
+                  <div class="run-head">
+                    <div class="run-title">command {{ run.order }}</div>
+                    <div class="event-time">{{ run.timeLabel }}</div>
+                  </div>
+                  <div class="event-meta">
+                    <span class="badge">{{ run.primaryCommand }}</span>
+                    <span class="badge">{{ run.channel }}</span>
+                    <span class="badge" :class="run.statusClass">{{ run.status }}</span>
+                    <span class="badge" v-if="run.exitCode !== null">exit {{ run.exitCode }}</span>
+                  </div>
+                  <div class="detail-sections">
+                    <section class="detail-section" v-for="(section, sectionIndex) in run.sections" :key="run.id + '-section-' + sectionIndex">
+                      <div v-if="section.label" class="detail-section-label">{{ section.label }}</div>
+                      <div v-if="section.type === 'text'" class="detail-text">{{ section.text }}</div>
+                      <pre v-else class="detail-code-wrap"><code class="detail-code" :class="codeClass(section.language)">{{ section.text }}</code></pre>
+                    </section>
+                  </div>
+                </article>
+              </div>
+
+              <div v-else class="event-list">
+                <article class="event detail-card" v-for="entry in trace.detailEntries" :key="trace.side + '-detail-' + entry.id">
+                  <div class="event-head">
+                    <div>
+                      <div class="event-kind">{{ entry.kindLabel }}</div>
+                      <div class="event-summary detail-summary" v-if="shouldShowEntrySummary(entry)">{{ entry.summary }}</div>
+                    </div>
+                    <div class="event-time">{{ entry.timeLabel }}</div>
+                  </div>
+                  <div class="event-meta">
+                    <span class="badge" v-for="chip in entry.chips" :key="entry.id + '-' + chip">{{ chip }}</span>
+                  </div>
+                  <div class="detail-sections">
+                    <section class="detail-section" v-for="(section, sectionIndex) in entry.sections" :key="entry.id + '-section-' + sectionIndex">
+                      <div v-if="section.label" class="detail-section-label">{{ section.label }}</div>
+                      <div v-if="section.type === 'text'" class="detail-text">{{ section.text }}</div>
+                      <pre v-else class="detail-code-wrap"><code class="detail-code" :class="codeClass(section.language)">{{ section.text }}</code></pre>
+                    </section>
+                  </div>
+                </article>
+              </div>
+            </article>
+          </div>
+        </section>
+      </template>
+    </main>
+  </div>
+  <div class="boot-overlay" aria-hidden="true">
+    <div class="boot-panel">
+      <div class="boot-spinner"></div>
+      <div class="boot-title">Loading comparison view</div>
+      <div class="boot-copy">Preparing trace parser and UI.</div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
