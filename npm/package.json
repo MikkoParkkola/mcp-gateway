@@ -22,7 +22,11 @@
     "mcp-gateway": "run.js"
   },
   "files": [
-    "run.js"
+    "run.js",
+    ".claude-plugin",
+    "hooks",
+    "examples/config-bundles.yaml",
+    "docs/marketplace"
   ],
   "scripts": {
     "postinstall": "node run.js --install"

@@ -1,0 +1,20 @@
+{
+  "plugins": [
+    {
+      "name": "mcp-gateway",
+      "version": "2.12.1",
+      "description": "Universal MCP Gateway — MCP package manager substrate. Single meta-tool endpoint for 95% token savings. Curated pin-versioned bundles. Declares exactly one mcpServer entry (the gateway); roster via config bundle.",
+      "author": "Mikko Parkkola",
+      "repository": "https://github.com/MikkoParkkola/mcp-gateway",
+      "homepage": "https://github.com/MikkoParkkola/mcp-gateway",
+      "license": "MIT",
+      "mcpServers": {
+        "mcp-gateway": {
+          "command": "npx",
+          "args": ["-y", "@mikkoparkkola/mcp-gateway"]
+        }
+      },
+      "dependencies": ["mcp-gateway"]
+    }
+  ]
+}
