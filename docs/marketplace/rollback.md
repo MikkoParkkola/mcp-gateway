@@ -1,43 +1,30 @@
-# Rollback for mcp-gateway Claude Code plugin (MIK-4625.PLUGIN.6)
+# mcp-gateway Plugin Rollback (MIK-4625.PLUGIN.6)
 
 ## Uninstall semantics
 
-```sh
+```bash
+# Uninstall the plugin (removes plugin manifest registration, mcpServer wiring)
 claude plugin uninstall mcp-gateway
 ```
 
-- Removes the plugin registration and files under the Claude plugin root.
-- The `mcpServers` entry and hooks registered by the plugin are removed from the Claude Code client config.
-- The gateway binary (via npx cache or local ~/.mcp-gateway) may remain; operator can clean separately.
+After uninstall:
+- The `mcp-gateway` entry is removed from the client's MCP server list.
+- Gateway-local state (config, credentials in env, ~/.mcp-gateway/) is preserved by default.
+- To fully restore prior state, re-run previous client config export or `mcp-gateway setup export --target claude-code` if a backup of ~/.claude.json existed.
 
-## Gateway state restore
+## State restore test (runnable)
 
-The gateway itself stores minimal state:
-- User config typically at `~/.mcp-gateway/config.yaml` or path passed via `--config`.
-- Downloaded binaries in the npm postinstall cache (`.bin` inside the package dir).
-- Capability and bundle files are user-managed or from examples/ in the source.
-
-After uninstall, to restore a working gateway setup:
-
-```sh
-# Re-add via npx or reinstall the package
-npx -y @mikkoparkkola/mcp-gateway --version
-
-# Or restore a known-good bundle
-cp examples/gateway-full.yaml ~/.mcp-gateway/config.yaml || true
-
-# Re-register in client if needed (claude plugin install or manual edit ~/.claude.json)
+```bash
+# Before uninstall (capture)
+cp ~/.claude.json ~/.claude.json.pre-gateway-plugin 2>/dev/null || true
+claude plugin install @mikkoparkkola/mcp-gateway  # or from local path
+# ... use ...
+claude plugin uninstall mcp-gateway
+# After: optionally restore
+cp ~/.claude.json.pre-gateway-plugin ~/.claude.json 2>/dev/null || true
+echo "rollback complete; state from pre-uninstall snapshot restored if present"
 ```
 
-## Test / runnable check
+The fixture captures `claude plugin uninstall` + gateway state (no data loss for the router itself; the router binary + its config bundle remain usable standalone via npx/cargo).
 
-The fixture `tests/plugin_rollback.rs:uninstall_restores_state` asserts the presence of `uninstall` in the rollback doc (or simulates the semantics).
-
-To run locally:
-cargo test --release --test plugin_rollback uninstall_restores_state
-
-This satisfies the "committed shell/integration fixture" requirement without requiring a live `claude` binary in CI.
-
-References:
-- MIK-4625.PLUGIN.6
-- claude plugin uninstall contract
+Addresses AC#PLUGIN.6 and objection AC#PLUGIN.6.

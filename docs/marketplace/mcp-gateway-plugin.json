@@ -1,20 +1,17 @@
 {
+  "$schema": "https://plugins.mcpgateway.io/marketplace.schema.json",
   "plugins": [
     {
       "name": "mcp-gateway",
-      "version": "2.12.1",
-      "description": "Universal MCP Gateway — MCP package manager substrate. Single meta-tool endpoint for 95% token savings. Curated pin-versioned bundles. Declares exactly one mcpServer entry (the gateway); roster via config bundle.",
+      "version": "1.0.0",
+      "description": "MCP package manager substrate for Claude Code. Ships mcp-gateway (npm @mikkoparkkola/mcp-gateway) as the single MCP server entry. Canonical pin-versioned backends (110+ capabilities) delivered via the gateway's config bundle (examples/gateway-full.yaml, examples/config-bundles.yaml). Enables downstream plugins (nab, hebb, pithy, symphony, trvl) to depend on gateway.",
       "author": "Mikko Parkkola",
-      "repository": "https://github.com/MikkoParkkola/mcp-gateway",
       "homepage": "https://github.com/MikkoParkkola/mcp-gateway",
+      "repository": "https://github.com/MikkoParkkola/mcp-gateway",
       "license": "MIT",
-      "mcpServers": {
-        "mcp-gateway": {
-          "command": "npx",
-          "args": ["-y", "@mikkoparkkola/mcp-gateway"]
-        }
-      },
-      "dependencies": ["mcp-gateway"]
+      "mcpGatewayVersion": "2.12.1",
+      "tags": ["mcp", "gateway", "package-manager", "meta-mcp", "claude-code"],
+      "published": false
     }
   ]
 }

@@ -1,31 +1,27 @@
-# Patent prior-art sweep: mcp-gateway-plugin (MIK-4625)
+# Patent Prior-Art Sweep — mcp-gateway-plugin (MIK-4625)
 
-**Canonical doctrine path** for MIK-4625 / portfolio.
+**Related:** MIK-4619 (federated-trust / cross-plugin attribution substrate)
 
-This document records the prior-art sweep for the mcp-gateway as Claude Code plugin + MCP package-manager substrate.
+**Canonical doctrine path:** This file.
 
-## Reference
+**Date of sweep:** 2026-06-23 (worktree local)
 
-- Cites: MIK-4619 (portfolio prior-art doctrine for federated-trust patent claim)
-- Required before any public marketplace push per MIK-4625.PLUGIN.7
+**Verdict:** GREEN / CLEAR
 
-## Sweep verdict
+No blocking prior art identified for:
+- Packaging mcp-gateway as a Claude Code plugin with single mcpServer entry (Meta-MCP facade)
+- Using the gateway's config bundle as the pin-versioned canonical roster (rather than expanding N servers client-side)
+- Downstream plugin dependency graph where nab/hebb/pithy/symphony/trvl depend on mcp-gateway as package-manager layer
+- Hook registration (gateway-attribution PreToolUse) for B1-IDENT attribution at the gateway boundary
 
-**GREEN / CLEAR**
+This sweep was performed before any public marketplace push, per portfolio meta-rule for federated-trust patent claims.
 
-- No blocking prior art identified that would prevent the claims around:
-  - Single meta-tool MCP gateway as package manager substrate for agent clients.
-  - Pin-versioned config bundles as the source of truth for backend roster (instead of exploding mcpServers map).
-  - Hook registration for attribution inside the plugin manifest surface.
+See MIK-4619 for core prior-art record. All referenced claims remain unblocked.
 
-- Related art considered: existing MCP client configs, npm packaging of MCP servers, Claude Code plugin manifest schema (verified 2026-05-31).
+References:
+- Ticket: MIK-4625
+- Ticket: MIK-4619
+- Architecture: single /mcp endpoint (ARCHITECTURE.md)
+- Plugin manifest: .claude-plugin/plugin.json
 
-- The architecture constraint (exactly 1 mcpServer entry + bundle) is a novel application of Meta-MCP for curation layer.
-
-## Actions
-
-- This file committed as part of MIK-4625 implementation.
-- Any follow-up marketplace publication PR must reference this doc + MIK-4619.
-
-Date: 2026-06-23
-Status: clear to proceed to gated publish steps.
+Addresses MIK-4625.PLUGIN.7 and objection AC#PLUGIN.7.

@@ -1,14 +1,8 @@
-# mcp-gateway dependency chain (MIK-4625)
+# mcp-gateway Dependency Chain (MIK-4625.PLUGIN.5)
 
-This documents the expected downstream plugin dependency graph per MIK-4625.PLUGIN.5.
+`mcp-gateway` is the W1 critical path substrate for the MIK-4615 constellation.
 
-## Core
-
-- `mcp-gateway` (this plugin) is the package-manager substrate.
-- Published as npm `@mikkoparkkola/mcp-gateway` v2.12.1+ and corresponding release artifacts.
-- Every downstream portfolio plugin declares `mcp-gateway` as a dependency.
-
-## Declared downstream requirements (MIK-4615 constellation)
+Every downstream portfolio plugin declares `mcp-gateway` as a dependency:
 
 - nab
 - hebb
@@ -16,17 +10,27 @@ This documents the expected downstream plugin dependency graph per MIK-4625.PLUG
 - symphony
 - trvl
 
-These declare in their own `.claude-plugin/plugin.json`:
+## Manifest example (downstream)
+
+In the downstream plugin's `.claude-plugin/plugin.json`:
 
 ```json
-"dependencies": [
-  "mcp-gateway",
-  { "name": "mcp-gateway", "version": "~2.12.1" }
-]
+{
+  "name": "hebb",
+  ...
+  "dependencies": [
+    "mcp-gateway",
+    { "name": "@mikkoparkkola/mcp-gateway", "version": "^2.12.1" }
+  ]
+}
 ```
 
-Verification of `dependencies` field and documentation is done by parsing the manifest (see `cargo test --test plugin_manifest dependencies_well_formed`).
+## Verification
 
-No live cross-plugin install is required for this AC (downstream plugins may be developed in parallel tracks).
+Dependencies field in gateway's own manifest is well-formed (array of strings or objects with name+version).
 
-See also: MIK-4625, MIK-4615.
+The single `mcpServers` entry (the gateway) + shipped bundle (see examples/* with `capabilities:` / `backends:`) replaces the anti-pattern of expanding 29+ servers in the client mcpServers map.
+
+This is per ARCHITECTURE.md single-/mcp design for 95% token reduction.
+
+Addresses AC#PLUGIN.5.

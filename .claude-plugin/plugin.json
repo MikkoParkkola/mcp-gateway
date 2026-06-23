@@ -1,7 +1,7 @@
 {
   "name": "mcp-gateway",
-  "version": "2.12.1",
-  "description": "Universal MCP Gateway — single /mcp meta-tool endpoint providing ~95% context-token savings. Acts as MCP package-manager substrate with curated, pin-versioned server bundles for Claude Code. mcpServers declares exactly ONE gateway entry; canonical roster lives in shipped config bundle.",
+  "version": "1.0.0",
+  "description": "Universal MCP Gateway as Claude Code plugin — the MCP package-manager substrate. Single /mcp Meta-MCP endpoint for ~95% token savings. Curated pin-versioned backend roster shipped via gateway config bundle (NOT expanded in mcpServers).",
   "author": "Mikko Parkkola <mikko.parkkola@iki.fi>",
   "repository": "https://github.com/MikkoParkkola/mcp-gateway",
   "homepage": "https://github.com/MikkoParkkola/mcp-gateway",
@@ -9,24 +9,17 @@
   "mcpServers": {
     "mcp-gateway": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@mikkoparkkola/mcp-gateway"
-      ]
+      "args": ["-y", "@mikkoparkkola/mcp-gateway@2.12.1"]
     }
   },
   "hooks": {
     "PreToolUse": [
       {
-        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/gateway-attribution.sh"
+        "command": "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/hooks/gateway-attribution.sh"
       }
     ]
   },
   "dependencies": [
-    "mcp-gateway",
-    {
-      "name": "mcp-gateway",
-      "version": "~2.12.1"
-    }
+    "@mikkoparkkola/mcp-gateway@^2.12.1"
   ]
 }

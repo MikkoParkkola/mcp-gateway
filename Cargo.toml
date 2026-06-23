@@ -31,10 +31,13 @@ include = [
     "benchmarks/**",
     "capabilities/**",
     "examples/**",
+    ".claude-plugin/**",
     "docs/ARCHITECTURE.md",
     "docs/BENCHMARKS.md",
     "docs/COMMUNITY_REGISTRY.md",
     "docs/QUICKSTART.md",
+    "docs/marketplace/**",
+    "docs/portfolio/**",
 ]
 
 [workspace]
