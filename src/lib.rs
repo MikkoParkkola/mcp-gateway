@@ -79,6 +79,7 @@ pub mod transition;
 pub mod transport;
 pub mod tunnel;
 pub mod validator;
+pub mod webwright_spike;
 
 pub use error::{Error, Result};
 
