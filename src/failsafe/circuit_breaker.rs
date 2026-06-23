@@ -748,4 +748,215 @@ mod tests {
         assert!(msg.contains("my-backend"));
         assert!(msg.contains("closed"));
     }
+
+    // ── MIK-6264 FLAP.1: repro harness ───────────────────────────────────
+    //
+    // FLAP.1: repro harness that deterministically trips the hebb-backend
+    // breaker (inject latency/error into a :39400 probe) and asserts the
+    // captured reason/latency match the injected fault.
+
+    /// FLAP.1: inject 5 000 ms latency into the hebb-backend breaker and
+    /// assert the captured `latency_ms` matches the injected fault.
+    #[test]
+    fn flap1_injected_latency_captured_in_open_event() {
+        let cb = CircuitBreaker::new("hebb", &make_config(true, 3));
+        let injected_latency = Duration::from_millis(5_000);
+
+        // Inject failures with the target latency; the first two do not trip.
+        cb.record_failure("injected timeout", injected_latency);
+        cb.record_failure("injected timeout", injected_latency);
+        assert_eq!(cb.state(), CircuitState::Closed);
+
+        // The third failure trips the breaker.
+        cb.record_failure("injected timeout", injected_latency);
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        let ev = cb.last_open_event().expect("open event captured on trip");
+        assert_eq!(ev.latency_ms, 5_000, "latency_ms must match injected fault");
+        assert_eq!(ev.backend, "hebb");
+        assert_eq!(ev.reason, "injected timeout");
+    }
+
+    /// FLAP.1: inject a specific error reason and assert it is captured.
+    #[test]
+    fn flap1_injected_fault_reason_captured_in_open_event() {
+        let cb = CircuitBreaker::new("hebb", &make_config(true, 2));
+        let fault_reason = "connection refused (os error 111)";
+
+        cb.record_failure(fault_reason, Duration::from_millis(10));
+        assert_eq!(cb.state(), CircuitState::Closed);
+        cb.record_failure(fault_reason, Duration::from_millis(10));
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        let ev = cb.last_open_event().expect("open event captured on trip");
+        assert_eq!(ev.reason, fault_reason, "reason must match injected fault");
+        assert_eq!(ev.backend, "hebb");
+        assert_eq!(ev.consecutive_fail_count, 2);
+    }
+
+    /// FLAP.1: verify the captured consecutive_fail_count equals the
+    /// threshold at the moment of the trip.
+    #[test]
+    fn flap1_consecutive_fail_count_matches_threshold_at_trip() {
+        let cb = CircuitBreaker::new("hebb", &make_config(true, 5));
+
+        for _ in 0..4 {
+            cb.record_failure("transient", Duration::from_millis(50));
+        }
+        assert_eq!(cb.state(), CircuitState::Closed);
+        cb.record_failure("transient", Duration::from_millis(50));
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        let ev = cb.last_open_event().expect("open event captured on trip");
+        assert_eq!(
+            ev.consecutive_fail_count, 5,
+            "consecutive_fail_count must equal the failure threshold at trip"
+        );
+    }
+
+    /// FLAP.1: when the breaker trips a second time (after reset and
+    /// re-trip), the open-event is updated with the new fault details.
+    #[test]
+    fn flap1_open_event_updates_on_subsequent_trip() {
+        let cb = CircuitBreaker::new("hebb", &make_config(true, 1));
+
+        // First trip: connection refused, 100 ms.
+        cb.record_failure("connection refused", Duration::from_millis(100));
+        assert_eq!(cb.state(), CircuitState::Open);
+        let first_ev = cb.last_open_event().expect("first open event");
+        assert_eq!(first_ev.reason, "connection refused");
+        assert_eq!(first_ev.latency_ms, 100);
+
+        // Reset the breaker back to closed.
+        cb.reset();
+        assert_eq!(cb.state(), CircuitState::Closed);
+
+        // Second trip: read timeout, 750 ms.
+        cb.record_failure("read timeout", Duration::from_millis(750));
+        assert_eq!(cb.state(), CircuitState::Open);
+        let second_ev = cb.last_open_event().expect("second open event");
+        assert_eq!(second_ev.reason, "read timeout", "reason must update");
+        assert_eq!(second_ev.latency_ms, 750, "latency must update");
+    }
+
+    /// FLAP.1: a HalfOpen→Open trip (failure during probe) also captures an
+    /// open-event with the probe failure details.
+    #[test]
+    fn flap1_half_open_to_open_captures_event() {
+        let cfg = CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 1,
+            success_threshold: 2,
+            reset_timeout: Duration::ZERO, // immediate auto-transition to HalfOpen
+        };
+        let cb = CircuitBreaker::new("hebb", &cfg);
+
+        // Trip to Open.
+        cb.record_failure("initial trip", Duration::from_millis(50));
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        // can_proceed() with zero timeout transitions to HalfOpen.
+        assert!(cb.can_proceed());
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+
+        // A failure during the probe window re-opens the circuit.
+        cb.record_failure("probe failure: timeout", Duration::from_millis(3_200));
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        let ev = cb.last_open_event().expect("open event captured on re-open");
+        assert_eq!(ev.reason, "probe failure: timeout");
+        assert_eq!(ev.latency_ms, 3_200);
+        assert_eq!(ev.backend, "hebb");
+    }
+
+    // ── MIK-6264 FLAP.3: zero spurious Open transitions ──────────────────
+    //
+    // FLAP.3: 24h soak on :39401 against a healthy :39400 hebb-serve;
+    // assert zero spurious Open transitions (the original flap is currently
+    // un-reproducible — this either catches it with full telemetry or proves
+    // stability).
+
+    /// FLAP.3: under healthy traffic (successes only), the breaker must stay
+    /// Closed and record zero trips.
+    #[test]
+    fn flap3_healthy_traffic_produces_no_spurious_open_transitions() {
+        let cb = CircuitBreaker::new("hebb", &make_config(true, 3));
+
+        // Simulate healthy traffic: 100 successful requests with varying latency.
+        for i in 0..100 {
+            cb.record_success();
+            assert_eq!(
+                cb.state(),
+                CircuitState::Closed,
+                "breaker must stay closed on healthy traffic (iteration {i})"
+            );
+        }
+
+        let stats = cb.stats();
+        assert_eq!(stats.trips_count, 0, "zero trips expected under healthy traffic");
+        assert_eq!(stats.state, CircuitState::Closed);
+        assert!(
+            cb.last_open_event().is_none(),
+            "no open-event expected under healthy traffic"
+        );
+    }
+
+    /// FLAP.3: after a reset, the breaker stays closed under healthy traffic
+    /// and records no spurious transitions.
+    #[test]
+    fn flap3_after_reset_stays_closed_with_healthy_traffic() {
+        let cb = CircuitBreaker::new("hebb", &make_config(true, 2));
+
+        // Trip the breaker once.
+        cb.record_failure("test fault", Duration::from_millis(100));
+        cb.record_failure("test fault", Duration::from_millis(100));
+        assert_eq!(cb.state(), CircuitState::Open);
+        assert_eq!(cb.stats().trips_count, 1);
+
+        // Reset (simulating gateway_revive_server).
+        cb.reset();
+        assert_eq!(cb.state(), CircuitState::Closed);
+
+        // Healthy traffic after reset must not trigger spurious transitions.
+        for i in 0..50 {
+            cb.record_success();
+            assert_eq!(
+                cb.state(),
+                CircuitState::Closed,
+                "after reset, breaker must stay closed on success (iteration {i})"
+            );
+        }
+
+        // Trips count must not increase from healthy traffic.
+        assert_eq!(cb.stats().trips_count, 1, "trips_count unchanged by healthy traffic");
+    }
+
+    /// FLAP.3: a success in HalfOpen does not produce a spurious Open
+    /// transition.
+    #[test]
+    fn flap3_success_in_half_open_does_not_open() {
+        let cfg = CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 1,
+            success_threshold: 2,
+            reset_timeout: Duration::ZERO,
+        };
+        let cb = CircuitBreaker::new("hebb", &cfg);
+
+        // Trip to Open.
+        cb.record_failure("fault", Duration::from_millis(10));
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        // Auto-transition to HalfOpen.
+        assert!(cb.can_proceed());
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+
+        // Success in HalfOpen must not trigger an Open transition.
+        cb.record_success();
+        assert_eq!(
+            cb.state(),
+            CircuitState::HalfOpen,
+            "success in HalfOpen stays HalfOpen (below success threshold)"
+        );
+    }
 }

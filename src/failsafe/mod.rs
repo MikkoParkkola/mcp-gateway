@@ -6,7 +6,8 @@ mod rate_limiter;
 mod retry;
 
 pub use circuit_breaker::{
-    CircuitBreaker, CircuitBreakerStats, CircuitState, build_circuit_breaker_error,
+    BreakerOpenEvent, CircuitBreaker, CircuitBreakerStats, CircuitState,
+    build_circuit_breaker_error,
 };
 pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;
