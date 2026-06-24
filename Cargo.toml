@@ -177,6 +177,10 @@ path = "src/main.rs"
 name = "gateway_benchmarks"
 harness = false
 
+[[bench]]
+name = "agent_runtime_bench"
+harness = false
+
 [profile.dev]
 debug = 0               # No debug symbols — biggest size saver (~50%)
 strip = true            # Strip remaining metadata
