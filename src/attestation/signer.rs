@@ -28,7 +28,7 @@ pub struct TokenRequest {
 }
 
 /// Issues and verifies attestation tokens with bnaut-attestation key material.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BnautAttestationSigner {
     key: Vec<u8>,
     key_id: String,
