@@ -30,7 +30,7 @@ fn semver_at_least(version: &str, min_major: u64, min_minor: u64, min_patch: u64
         .collect::<Result<_, _>>()
         .expect("version should be numeric semver");
     assert_eq!(parts.len(), 3, "version should have major.minor.patch");
-    parts.as_slice() >= [min_major, min_minor, min_patch]
+    [parts[0], parts[1], parts[2]] >= [min_major, min_minor, min_patch]
 }
 
 // MIK-4625.PLUGIN.1: `.claude-plugin/plugin.json` exists with `name`, `version`
