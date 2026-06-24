@@ -1,9 +1,22 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+#
+# MCP Gateway — universal Meta-MCP gateway for AI tool aggregation.
+# Install: cargo install mcp-gateway  (or use a pre-built binary from GitHub Releases)
+
 startCommand:
   type: stdio
   configSchema:
+    # JSON Schema defining the configuration options for the MCP.
     type: object
-    properties: {}
+    properties:
+      configFile:
+        type: string
+        description: >-
+          Path to a gateway.yaml configuration file. When empty, the gateway
+          starts with sensible defaults (no backends, 110+ built-in REST
+          capabilities available on demand).
+        title: Gateway Config File
   commandFunction:
-    - mcp-gateway
-    - serve
-    - --stdio
+    # A function that produces the CLI command to start the MCP on stdio.
+    |-
+    (config) => ({ command: 'mcp-gateway', args: ['serve', '--stdio'].concat(config.configFile ? ['--config', config.configFile] : []), env: {} })

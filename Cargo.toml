@@ -34,6 +34,7 @@ include = [
     "docs/ARCHITECTURE.md",
     "docs/BENCHMARKS.md",
     "docs/COMMUNITY_REGISTRY.md",
+    "docs/DISTRIBUTION.md",
     "docs/QUICKSTART.md",
 ]
 
