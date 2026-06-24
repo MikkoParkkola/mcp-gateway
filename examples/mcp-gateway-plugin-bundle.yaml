@@ -1,0 +1,140 @@
+# MCP Gateway Claude plugin bundle.
+#
+# The Claude plugin manifest exposes exactly one client-side MCP server:
+# mcp-gateway. This bundle is the canonical curated backend roster loaded by
+# that gateway process.
+
+server:
+  host: "127.0.0.1"
+  port: 39400
+  request_timeout: 30s
+  shutdown_timeout: 30s
+
+meta_mcp:
+  enabled: true
+  cache_tools: true
+  cache_ttl: 5m
+
+capabilities:
+  enabled: true
+  name: mcp-gateway-plugin
+  directories:
+    - ${CLAUDE_PLUGIN_ROOT}/capabilities
+
+backends:
+  filesystem:
+    command: "npx -y @modelcontextprotocol/server-filesystem@2025.8.21 ${HOME}"
+    description: "Pinned local filesystem MCP backend"
+    enabled: true
+  git:
+    command: "npx -y @modelcontextprotocol/server-git@2025.8.21"
+    description: "Pinned Git repository MCP backend"
+    enabled: true
+  github:
+    command: "npx -y @modelcontextprotocol/server-github@2025.8.21"
+    description: "Pinned GitHub MCP backend"
+    enabled: true
+  gitlab:
+    command: "npx -y @modelcontextprotocol/server-gitlab@2025.8.21"
+    description: "Pinned GitLab MCP backend"
+    enabled: true
+  postgres:
+    command: "npx -y @modelcontextprotocol/server-postgres@2025.8.21"
+    description: "Pinned PostgreSQL MCP backend"
+    enabled: true
+  sqlite:
+    command: "npx -y @modelcontextprotocol/server-sqlite@2025.8.21"
+    description: "Pinned SQLite MCP backend"
+    enabled: true
+  fetch:
+    command: "npx -y @modelcontextprotocol/server-fetch@2025.8.21"
+    description: "Pinned HTTP fetch MCP backend"
+    enabled: true
+  puppeteer:
+    command: "npx -y @modelcontextprotocol/server-puppeteer@2025.8.21"
+    description: "Pinned browser automation MCP backend"
+    enabled: true
+  brave_search:
+    command: "npx -y @modelcontextprotocol/server-brave-search@2025.8.21"
+    description: "Pinned Brave Search MCP backend"
+    enabled: true
+  google_drive:
+    command: "npx -y @modelcontextprotocol/server-gdrive@2025.8.21"
+    description: "Pinned Google Drive MCP backend"
+    enabled: true
+  slack:
+    command: "npx -y @modelcontextprotocol/server-slack@2025.8.21"
+    description: "Pinned Slack MCP backend"
+    enabled: true
+  memory:
+    command: "npx -y @modelcontextprotocol/server-memory@2025.8.21"
+    description: "Pinned memory MCP backend"
+    enabled: true
+  sequential_thinking:
+    command: "npx -y @modelcontextprotocol/server-sequential-thinking@2025.8.21"
+    description: "Pinned sequential thinking MCP backend"
+    enabled: true
+  time:
+    command: "npx -y @modelcontextprotocol/server-time@2025.8.21"
+    description: "Pinned time MCP backend"
+    enabled: true
+  everything:
+    command: "npx -y @modelcontextprotocol/server-everything@2025.8.21"
+    description: "Pinned MCP protocol test backend"
+    enabled: false
+  notion:
+    command: "npx -y @mcpservers/notion@1.0.0"
+    description: "Pinned Notion MCP backend"
+    enabled: true
+  linear:
+    command: "npx -y @mcpservers/linear@1.0.0"
+    description: "Pinned Linear MCP backend"
+    enabled: true
+  jira:
+    command: "npx -y @mcpservers/jira@1.0.0"
+    description: "Pinned Jira MCP backend"
+    enabled: true
+  confluence:
+    command: "npx -y @mcpservers/confluence@1.0.0"
+    description: "Pinned Confluence MCP backend"
+    enabled: true
+  figma:
+    command: "npx -y @mcpservers/figma@1.0.0"
+    description: "Pinned Figma MCP backend"
+    enabled: true
+  stripe:
+    command: "npx -y @mcpservers/stripe@1.0.0"
+    description: "Pinned Stripe MCP backend"
+    enabled: true
+  browserbase:
+    command: "npx -y @mcpservers/browserbase@1.0.0"
+    description: "Pinned Browserbase MCP backend"
+    enabled: true
+  tavily:
+    command: "npx -y @mcpservers/tavily@1.0.0"
+    description: "Pinned Tavily MCP backend"
+    enabled: true
+  exa:
+    command: "npx -y @mcpservers/exa@1.0.0"
+    description: "Pinned Exa MCP backend"
+    enabled: true
+  firecrawl:
+    command: "npx -y @mcpservers/firecrawl@1.0.0"
+    description: "Pinned Firecrawl MCP backend"
+    enabled: true
+  sentry:
+    command: "npx -y @mcpservers/sentry@1.0.0"
+    description: "Pinned Sentry MCP backend"
+    enabled: true
+  docker:
+    command: "npx -y @mcpservers/docker@1.0.0"
+    description: "Pinned Docker MCP backend"
+    enabled: true
+  kubernetes:
+    command: "npx -y @mcpservers/kubernetes@1.0.0"
+    description: "Pinned Kubernetes MCP backend"
+    enabled: true
+  aws:
+    command: "npx -y @mcpservers/aws@1.0.0"
+    description: "Pinned AWS MCP backend"
+    enabled: true

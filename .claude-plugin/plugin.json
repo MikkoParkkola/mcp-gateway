@@ -1,0 +1,34 @@
+{
+  "name": "mcp-gateway",
+  "version": "2.12.1",
+  "description": "Universal MCP Gateway plugin that exposes one Meta-MCP endpoint backed by curated, pin-versioned server bundles.",
+  "author": "Mikko Parkkola <mikko.parkkola@iki.fi>",
+  "repository": "https://github.com/MikkoParkkola/mcp-gateway",
+  "homepage": "https://github.com/MikkoParkkola/mcp-gateway",
+  "license": "MIT",
+  "dependencies": [],
+  "mcpServers": {
+    "mcp-gateway": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mikkoparkkola/mcp-gateway@2.12.1",
+        "--config",
+        "${CLAUDE_PLUGIN_ROOT}/examples/mcp-gateway-plugin-bundle.yaml"
+      ]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hooks/gateway-attribution"
+          }
+        ]
+      }
+    ]
+  }
+}

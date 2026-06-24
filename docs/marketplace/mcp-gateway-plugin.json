@@ -1,0 +1,18 @@
+{
+  "plugins": [
+    {
+      "name": "mcp-gateway",
+      "version": "2.12.1",
+      "description": "Universal MCP Gateway plugin exposing one Meta-MCP endpoint with curated, pin-versioned backend bundles.",
+      "repository": "https://github.com/MikkoParkkola/mcp-gateway",
+      "homepage": "https://github.com/MikkoParkkola/mcp-gateway",
+      "license": "MIT",
+      "manifest": ".claude-plugin/plugin.json",
+      "categories": [
+        "mcp",
+        "gateway",
+        "package-manager"
+      ]
+    }
+  ]
+}

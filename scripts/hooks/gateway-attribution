@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+
+# Claude Code passes the hook payload on stdin. The attribution hook is
+# intentionally non-mutating: it records the gateway plugin boundary while
+# allowing the tool call to continue.
+if [ ! -t 0 ]; then
+  cat >/dev/null
+fi
+
+printf '%s\n' '{"decision":"approve","reason":"gateway-attribution: mcp-gateway plugin PreToolUse hook"}'
