@@ -191,6 +191,36 @@ pub struct ResponseContractConfig {
     pub tools: std::collections::HashMap<String, ToolContractConfig>,
 }
 
+// ── IdentityGrantsConfig ─────────────────────────────────────────────────────
+
+/// Local identity-grants file configuration.
+///
+/// When enabled, the gateway loads a JSON or YAML file containing
+/// `IdentityGrant` rows and applies them to personal capability dispatch.
+/// This is the free/core local operator path; org-wide grant storage and
+/// delegated approvals remain enterprise control-plane concerns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IdentityGrantsConfig {
+    /// Load local identity grants at startup. Default: `false`.
+    pub enabled: bool,
+    /// JSON or YAML file containing `IdentityGrant` rows.
+    pub path: String,
+    /// Fail startup if the configured file cannot be read or parsed. Default:
+    /// `true` so operators do not silently run with an empty grant store.
+    pub fail_on_error: bool,
+}
+
+impl Default for IdentityGrantsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: "~/.mcp-gateway/identity-grants.yaml".to_string(),
+            fail_on_error: true,
+        }
+    }
+}
+
 // ── SecurityConfig ────────────────────────────────────────────────────────────
 
 /// Security configuration for the gateway.
@@ -237,6 +267,9 @@ pub struct SecurityConfig {
     /// Per-tool fail-closed response contract gate (issue #133, D1). Default: disabled.
     #[serde(default)]
     pub response_contract: ResponseContractConfig,
+    /// Local personal-capability grant file. Default: disabled.
+    #[serde(default)]
+    pub identity_grants: IdentityGrantsConfig,
     /// Remote MCP server provenance verification (OWASP ASI04). Default: disabled.
     #[serde(default)]
     pub remote_server_signing: RemoteServerSigningConfig,
@@ -260,6 +293,7 @@ impl Default for SecurityConfig {
             transparency_log: TransparencyLogConfig::default(),
             response_inspection: ResponseInspectionConfig::default(),
             response_contract: ResponseContractConfig::default(),
+            identity_grants: IdentityGrantsConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
         }
     }

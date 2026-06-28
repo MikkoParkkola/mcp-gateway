@@ -29,10 +29,10 @@ use crate::{Error, Result};
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, FailsafeConfig,
-    HealthCheckConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
-    KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
-    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
-    SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
+    HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
+    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
+    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
+    RetryConfig, SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────

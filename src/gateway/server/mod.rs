@@ -5,6 +5,7 @@ mod support;
 mod warmstart;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -43,6 +44,40 @@ use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 #[cfg(feature = "cost-governance")]
 use support::build_persisted_costs;
 use support::{log_startup_banner, serve_tls, shutdown_signal};
+
+fn expand_home_path(path: &str) -> PathBuf {
+    if path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(rest);
+    }
+    PathBuf::from(path)
+}
+
+async fn load_configured_identity_grants(
+    config: &crate::config::IdentityGrantsConfig,
+) -> Result<Option<(PathBuf, crate::identity_grants::LocalIdentityGrantStore)>> {
+    if !config.enabled {
+        return Ok(None);
+    }
+
+    let path = expand_home_path(&config.path);
+    match crate::identity_grants::load_identity_grants_file(&path).await {
+        Ok(grants) => Ok(Some((path, grants))),
+        Err(e) if config.fail_on_error => Err(Error::Config(e)),
+        Err(e) => {
+            warn!(
+                error = %e,
+                path = %path.display(),
+                "Failed to load local identity grants; personal capabilities without matching grants will fail closed"
+            );
+            Ok(None)
+        }
+    }
+}
 
 /// MCP Gateway server
 pub struct Gateway {
@@ -291,6 +326,21 @@ impl Gateway {
                 "observe"
             };
             info!(action, "Response contract gate enabled");
+        }
+
+        // ── Local identity grants (MIK-6553 free/core) ───────────────────────
+        if let Some((path, grants)) =
+            load_configured_identity_grants(&self.config.security.identity_grants).await?
+        {
+            let count = grants.len();
+            Arc::get_mut(&mut meta_mcp)
+                .expect("no other Arc references at this point")
+                .set_identity_grants(grants);
+            info!(
+                grants = count,
+                path = %path.display(),
+                "Local identity grants loaded"
+            );
         }
 
         Ok(BuiltMetaMcp {
@@ -1138,12 +1188,15 @@ impl Gateway {
 mod tests {
     use std::sync::Arc;
 
+    use chrono::{Duration, Utc};
     use serde_json::json;
 
-    use super::Gateway;
+    use super::{Gateway, load_configured_identity_grants};
     use crate::{
         backend::BackendRegistry,
+        config::IdentityGrantsConfig,
         gateway::meta_mcp::MetaMcp,
+        identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant, IdentityGrantFile},
         mtls::{MtlsConfig, MtlsPolicy},
         security::ToolPolicy,
     };
@@ -1158,6 +1211,23 @@ mod tests {
 
     fn test_mtls_policy() -> Arc<MtlsPolicy> {
         Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()))
+    }
+
+    fn test_grant_file() -> IdentityGrantFile {
+        let subject = GrantSubject::new("api_key", "alice", Some("Alice".to_string()));
+        IdentityGrantFile::new(vec![IdentityGrant {
+            grant_id: "grant-startup-1".to_string(),
+            subject: subject.clone(),
+            agent: GrantAgent::Exact("agent-a".to_string()),
+            capability: "personal_calendar".to_string(),
+            tool: Some("read_day".to_string()),
+            scope: GrantScope::Read,
+            owner: Some(subject),
+            expires_at: Some(Utc::now() + Duration::hours(1)),
+            revoked_at: None,
+            provenance: "test://startup".to_string(),
+            reason: "prove startup grant loading".to_string(),
+        }])
     }
 
     #[tokio::test]
@@ -1190,5 +1260,46 @@ mod tests {
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0]["error"]["code"], -32600);
         assert_eq!(responses[0]["error"]["message"], "Invalid Request");
+    }
+
+    #[tokio::test]
+    async fn load_configured_identity_grants_reads_enabled_local_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("identity-grants.json");
+        let body = serde_json::to_string_pretty(&test_grant_file()).unwrap();
+        tokio::fs::write(&path, body).await.unwrap();
+
+        let config = IdentityGrantsConfig {
+            enabled: true,
+            path: path.display().to_string(),
+            fail_on_error: true,
+        };
+        let (loaded_path, store) = load_configured_identity_grants(&config)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(loaded_path, path);
+        assert_eq!(store.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn load_configured_identity_grants_fails_when_enabled_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-grants.yaml");
+        let config = IdentityGrantsConfig {
+            enabled: true,
+            path: missing.display().to_string(),
+            fail_on_error: true,
+        };
+
+        let err = load_configured_identity_grants(&config).await.unwrap_err();
+
+        match err {
+            crate::Error::Config(message) => {
+                assert!(message.contains("failed to read identity grants file"));
+            }
+            other => panic!("expected config error, got {other:?}"),
+        }
     }
 }

@@ -259,6 +259,35 @@ fn recommendation_requires_confirmation_for_sensitive_or_destructive_workflow() 
     assert!(recommendation.lease.is_some());
 }
 
+#[tokio::test]
+async fn load_identity_grants_file_reads_yaml_and_allows_matching_personal_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("identity-grants.yaml");
+    let body = serde_yaml::to_string(&IdentityGrantFile::new(vec![grant()])).unwrap();
+    tokio::fs::write(&path, body).await.unwrap();
+
+    let store = load_identity_grants_file(&path).await.unwrap();
+    let evaluation = store.evaluate(&personal_request(Some(alice())));
+
+    assert_eq!(store.len(), 1);
+    assert!(evaluation.allowed);
+    assert_eq!(evaluation.reason, IdentityGrantDecisionReason::GrantMatched);
+    assert_eq!(evaluation.audit.grant_id.as_deref(), Some("grant-1"));
+}
+
+#[tokio::test]
+async fn load_identity_grants_file_rejects_unknown_schema_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("identity-grants.yaml");
+    tokio::fs::write(&path, "schema_version: identity_grants.v0\ngrants: []\n")
+        .await
+        .unwrap();
+
+    let err = load_identity_grants_file(&path).await.unwrap_err();
+
+    assert!(err.contains("unsupported identity grants schema version"));
+}
+
 #[test]
 fn recommendation_requests_admin_review_for_cross_user_access() {
     let store = LocalIdentityGrantStore::new();

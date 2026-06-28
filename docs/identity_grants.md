@@ -10,6 +10,47 @@ opt in with `metadata.exposure: personal`. Existing capability files default to
 `shared`, so current single-user deployments remain compatible while personal
 tools fail closed unless caller identity, owner evidence, and a live grant match.
 
+## Local Grant File
+
+Free/core deployments can load local grant rows at startup:
+
+```yaml
+security:
+  identity_grants:
+    enabled: true
+    path: ~/.mcp-gateway/identity-grants.yaml
+    fail_on_error: true
+```
+
+`fail_on_error` defaults to `true`. If the operator explicitly enables local
+grants but the file is missing, unreadable, malformed, or uses an unsupported
+schema version, gateway startup fails instead of silently running with an empty
+grant store.
+
+Grant files are JSON or YAML:
+
+```yaml
+schema_version: identity_grants.v1
+grants:
+  - grant_id: alice-calendar-read
+    subject:
+      authority: api_key
+      subject: alice
+      label: Alice
+    agent:
+      exact: agent-a
+    capability: personal_calendar
+    tool: read_day
+    scope: read
+    owner:
+      authority: api_key
+      subject: alice
+      label: Alice
+    expires_at: "2026-06-28T23:00:00Z"
+    provenance: local-operator
+    reason: Alice approved read-only calendar access for agent-a.
+```
+
 ## Model
 
 An `IdentityGrant` records:
@@ -76,14 +117,14 @@ lease can be used.
 Free/core:
 
 - Local grant schema.
-- Local in-memory evaluator.
+- Local JSON/YAML grant-file loader and in-memory evaluator.
 - Fail-closed personal capability dispatch for local capability tools.
 - Audit-event shape.
 - Recommendation-only least-privilege lease suggestions for local workflows.
 
 Enterprise:
 
-- Durable org-wide grant storage.
+- Durable org-wide grant storage and synchronization.
 - SSO and group inheritance.
 - Delegated approvals.
 - Evidence export.

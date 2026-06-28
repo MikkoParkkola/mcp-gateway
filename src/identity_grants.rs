@@ -7,9 +7,13 @@
 //! and public tools keep their backward-compatible behavior.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Stable local grant-file schema version.
+pub const IDENTITY_GRANTS_FILE_SCHEMA_VERSION: &str = "identity_grants.v1";
 
 /// Default recommendation lease duration for local grants.
 pub const DEFAULT_GRANT_LEASE_SECONDS: i64 = 60 * 60;
@@ -134,6 +138,66 @@ pub struct IdentityGrant {
     pub provenance: String,
     /// Operator-visible reason.
     pub reason: String,
+}
+
+/// Local JSON/YAML grant file loaded by free/core deployments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityGrantFile {
+    /// Grant-file schema version.
+    #[serde(default = "default_identity_grants_file_schema_version")]
+    pub schema_version: String,
+    /// Durable local grant rows.
+    #[serde(default)]
+    pub grants: Vec<IdentityGrant>,
+}
+
+impl IdentityGrantFile {
+    /// Build a grant file from rows.
+    #[must_use]
+    pub fn new(grants: Vec<IdentityGrant>) -> Self {
+        Self {
+            schema_version: IDENTITY_GRANTS_FILE_SCHEMA_VERSION.to_string(),
+            grants,
+        }
+    }
+}
+
+fn default_identity_grants_file_schema_version() -> String {
+    IDENTITY_GRANTS_FILE_SCHEMA_VERSION.to_string()
+}
+
+/// Load local identity grants from a JSON or YAML file.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, parsed, or uses an unsupported
+/// schema version.
+pub async fn load_identity_grants_file(path: &Path) -> Result<LocalIdentityGrantStore, String> {
+    let content = tokio::fs::read_to_string(path).await.map_err(|e| {
+        format!(
+            "failed to read identity grants file {}: {e}",
+            path.display()
+        )
+    })?;
+    let file = serde_json::from_str::<IdentityGrantFile>(&content)
+        .or_else(|_| serde_yaml::from_str::<IdentityGrantFile>(&content))
+        .map_err(|e| {
+            format!(
+                "failed to parse identity grants file {}: {e}",
+                path.display()
+            )
+        })?;
+
+    if file.schema_version != IDENTITY_GRANTS_FILE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported identity grants schema version '{}' in {}; expected '{}'",
+            file.schema_version,
+            path.display(),
+            IDENTITY_GRANTS_FILE_SCHEMA_VERSION
+        ));
+    }
+
+    Ok(LocalIdentityGrantStore::from_grants(file.grants))
 }
 
 impl IdentityGrant {
@@ -432,6 +496,28 @@ impl LocalIdentityGrantStore {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Build a local store from persisted grant rows.
+    #[must_use]
+    pub fn from_grants(grants: impl IntoIterator<Item = IdentityGrant>) -> Self {
+        let mut store = Self::new();
+        for grant in grants {
+            store.upsert(grant);
+        }
+        store
+    }
+
+    /// Number of grant rows in the store.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.grants.len()
+    }
+
+    /// Whether the store contains no grant rows.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.grants.is_empty()
     }
 
     /// Insert or replace a grant.

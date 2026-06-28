@@ -27,8 +27,8 @@ pub use key_server::{
 };
 pub use playbooks::PlaybooksConfig;
 pub use security::{
-    AgentIdentityConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
-    ToolContractConfig,
+    AgentIdentityConfig, IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig,
+    SecurityConfig, ToolContractConfig,
 };
 pub use streaming::StreamingConfig;
 pub use webhooks::WebhookConfig;
