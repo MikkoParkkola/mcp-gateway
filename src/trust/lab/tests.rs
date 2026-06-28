@@ -186,11 +186,123 @@ fn active_eval_plan_only_invokes_declared_safe_fixtures() {
     let plan = CatalogTrustLab::plan_active_fixture_calls(&calls);
 
     assert!(plan[0].invoked);
+    assert_eq!(plan[0].status, TrustLabFixtureCallStatus::Planned);
     assert!(!plan[1].invoked);
+    assert_eq!(plan[1].status, TrustLabFixtureCallStatus::Skipped);
     assert_eq!(
         plan[1].skipped_reason.as_deref(),
         Some("fixture was not explicitly declared safe")
     );
+}
+
+#[test]
+fn active_eval_runner_records_passed_isolated_fixture_runtime() {
+    let fixtures = vec![TrustLabFixtureCall {
+        tool_name: "search_docs".to_string(),
+        arguments: json!({"q": "release notes"}),
+        declared_safe: true,
+    }];
+    let runtime =
+        CatalogTrustLab::run_active_fixture_calls("unit_isolated", true, &fixtures, |fixture| {
+            TrustLabFixtureExecution::passed(json!({
+                "tool": fixture.tool_name,
+                "ok": true
+            }))
+        });
+
+    let lab = CatalogTrustLab::new(TrustLabPolicy {
+        advisory_only: false,
+        ..TrustLabPolicy::default()
+    });
+    let evaluation = lab.evaluate_card_with_runtime_at(&clean_card(), None, fixed_time(), runtime);
+
+    assert!(evaluation.runtime.active_eval);
+    assert!(evaluation.runtime.isolated);
+    assert_eq!(evaluation.runtime.provider, "unit_isolated");
+    assert_eq!(
+        evaluation.runtime.fixture_calls[0].status,
+        TrustLabFixtureCallStatus::Passed
+    );
+    assert!(
+        evaluation.runtime.fixture_calls[0]
+            .result_digest_sha256
+            .is_some()
+    );
+    assert!(evaluation.scanners.iter().any(|scanner| {
+        scanner.scanner_id == TRUST_LAB_ACTIVE_FIXTURE_SCANNER
+            && scanner.status == TrustLabScannerStatus::Pass
+    }));
+    assert_eq!(evaluation.policy_verdict, TrustLabPolicyVerdict::Allow);
+}
+
+#[test]
+fn active_eval_refuses_to_invoke_without_isolation() {
+    let fixtures = vec![TrustLabFixtureCall {
+        tool_name: "search_docs".to_string(),
+        arguments: json!({"q": "release notes"}),
+        declared_safe: true,
+    }];
+    let runtime =
+        CatalogTrustLab::run_active_fixture_calls("unit_not_isolated", false, &fixtures, |_| {
+            panic!("non-isolated active fixture must not be invoked")
+        });
+
+    let lab = CatalogTrustLab::new(TrustLabPolicy {
+        advisory_only: false,
+        ..TrustLabPolicy::default()
+    });
+    let evaluation = lab.evaluate_card_with_runtime_at(&clean_card(), None, fixed_time(), runtime);
+
+    assert!(!evaluation.runtime.active_eval);
+    assert!(!evaluation.runtime.fixture_calls[0].invoked);
+    assert_eq!(
+        evaluation.runtime.fixture_calls[0]
+            .skipped_reason
+            .as_deref(),
+        Some("runtime isolation was not enabled")
+    );
+    assert!(
+        evaluation
+            .findings
+            .iter()
+            .any(|finding| finding.code == "TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED")
+    );
+    assert_eq!(evaluation.policy_verdict, TrustLabPolicyVerdict::Block);
+}
+
+#[test]
+fn active_eval_failed_fixture_blocks_enablement() {
+    let fixtures = vec![TrustLabFixtureCall {
+        tool_name: "search_docs".to_string(),
+        arguments: json!({"q": "release notes"}),
+        declared_safe: true,
+    }];
+    let runtime =
+        CatalogTrustLab::run_active_fixture_calls("unit_isolated", true, &fixtures, |_| {
+            TrustLabFixtureExecution::failed("fixture returned protocol error")
+        });
+
+    let lab = CatalogTrustLab::new(TrustLabPolicy {
+        advisory_only: false,
+        ..TrustLabPolicy::default()
+    });
+    let evaluation = lab.evaluate_card_with_runtime_at(&clean_card(), None, fixed_time(), runtime);
+
+    assert_eq!(
+        evaluation.runtime.fixture_calls[0].status,
+        TrustLabFixtureCallStatus::Failed
+    );
+    assert!(
+        evaluation
+            .findings
+            .iter()
+            .any(|finding| finding.code == "TRUSTLAB_ACTIVE_FIXTURE_FAILED")
+    );
+    assert_eq!(
+        evaluation.remediation_plan.outcome,
+        TrustLabRemediationOutcome::Block
+    );
+    assert_eq!(evaluation.policy_verdict, TrustLabPolicyVerdict::Block);
 }
 
 #[test]

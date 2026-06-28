@@ -294,6 +294,24 @@ fn remediation_action_from_finding(finding: &TrustFinding) -> TrustLabRemediatio
                 true,
                 true,
             ),
+            "TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED" => (
+                TrustLabRemediationCategory::RestrictRuntime,
+                "Run active evaluation in isolation",
+                true,
+                true,
+            ),
+            "TRUSTLAB_ACTIVE_FIXTURE_FAILED" => (
+                TrustLabRemediationCategory::BlockEnablement,
+                "Resolve failing active fixture",
+                false,
+                true,
+            ),
+            "TRUSTLAB_ACTIVE_FIXTURE_SKIPPED" | "TRUSTLAB_UNSAFE_FIXTURE_SKIPPED" => (
+                TrustLabRemediationCategory::ReviewScanner,
+                "Review active fixture evidence",
+                false,
+                false,
+            ),
             "TRUSTLAB_TOOL_POISONING" => (
                 TrustLabRemediationCategory::Quarantine,
                 "Quarantine suspicious tool descriptor",

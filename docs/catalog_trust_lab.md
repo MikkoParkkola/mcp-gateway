@@ -9,10 +9,10 @@ CatalogTrustLab is the advisory evaluation layer for candidate MCP servers. It t
 - Existing AX-010 tool-poisoning scanner results.
 - Missing MCP behavior annotations.
 - Broad host-impacting permissions and high-risk classifications.
-- Safe active-eval planning: only fixture calls explicitly marked safe may be invoked.
+- Safe active-eval planning and execution evidence: only fixture calls explicitly marked safe may be invoked, and only when the runtime is reported as isolated.
 - Remediation plans that map findings to enable, fix, block, or quarantine outcomes.
 
-The current implementation is static/advisory. It records runtime evidence as `static_advisory` and does not launch candidate servers. Sandboxed RuntimeProvider execution is the next implementation step.
+The default CLI implementation remains static/advisory when no active runner is wired. The core TrustLab evaluator now also supports active fixture execution evidence through an injected runner: declared-safe fixtures are executed only when runtime isolation is present, non-isolated runs are skipped and blocked by evidence, and failed safe fixtures block enablement. Sandboxed RuntimeProvider-backed CLI execution and enterprise scheduling remain follow-up work.
 
 ## License Split
 
@@ -23,6 +23,7 @@ Free/core:
 - TrustCard/CBOM validation.
 - Baseline drift checks with local baseline files.
 - Safe fixture-call planning.
+- Isolated active-fixture evidence model for local or test runners.
 - Local CLI reports through `mcp-gateway trust lab evaluate`.
 
 Enterprise:
@@ -68,9 +69,21 @@ Every JSON evaluation includes `remediation_plan` with:
 
 This keeps the default local workflow automation-first: the report tells operators what can be fixed mechanically and what still needs a human decision.
 
+## Active Fixture Evidence
+
+Active fixture evaluation is fail-closed:
+
+- Fixtures without `declared_safe: true` are skipped and recorded as `TRUSTLAB_UNSAFE_FIXTURE_SKIPPED`.
+- Declared-safe fixtures are not invoked unless the runtime evidence says isolation is enabled.
+- Non-isolated active evaluation attempts produce `TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED` and block enablement.
+- Failed declared-safe fixture calls produce `TRUSTLAB_ACTIVE_FIXTURE_FAILED` and block enablement.
+- Passing fixture calls record a digest of the captured output rather than raw output-dependent policy.
+
+This gives future RuntimeProvider integration one stable contract: execute the candidate server in isolation, call only reviewed safe fixtures, then attach the resulting `TrustLabRuntimeEvidence` to the evaluation.
+
 ## Current Limits
 
-- No live candidate server execution yet.
+- No CLI-wired live candidate server execution yet.
 - No managed baseline registry yet; baseline support is local file read/write.
 - No automatic config patch application yet; remediation plans are report evidence and review guidance.
 - No enterprise scheduler, approval workflow, or export sink yet.
