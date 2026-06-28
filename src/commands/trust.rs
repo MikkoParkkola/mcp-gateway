@@ -128,12 +128,14 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
             match run_lab_evaluation(
                 &capabilities,
                 name.as_deref(),
-                policy,
-                baseline.as_deref(),
-                write_baseline.as_deref(),
-                baseline_registry.as_deref(),
-                update_baseline_registry,
-                &baseline_id,
+                LabEvaluationOptions {
+                    policy,
+                    baseline_path: baseline.as_deref(),
+                    write_baseline_path: write_baseline.as_deref(),
+                    baseline_registry_path: baseline_registry.as_deref(),
+                    update_baseline_registry,
+                    baseline_id: &baseline_id,
+                },
             )
             .await
             {
@@ -293,16 +295,28 @@ struct LabEvaluationRun {
     written_registry_baseline: Option<PathBuf>,
 }
 
+struct LabEvaluationOptions<'a> {
+    policy: TrustLabPolicy,
+    baseline_path: Option<&'a Path>,
+    write_baseline_path: Option<&'a Path>,
+    baseline_registry_path: Option<&'a Path>,
+    update_baseline_registry: bool,
+    baseline_id: &'a str,
+}
+
 async fn run_lab_evaluation(
     capabilities: &Path,
     name: Option<&str>,
-    policy: TrustLabPolicy,
-    baseline_path: Option<&Path>,
-    write_baseline_path: Option<&Path>,
-    baseline_registry_path: Option<&Path>,
-    update_baseline_registry: bool,
-    baseline_id: &str,
+    options: LabEvaluationOptions<'_>,
 ) -> Result<LabEvaluationRun, String> {
+    let LabEvaluationOptions {
+        policy,
+        baseline_path,
+        write_baseline_path,
+        baseline_registry_path,
+        update_baseline_registry,
+        baseline_id,
+    } = options;
     let cards = select_cards(capabilities, name).await?;
     let baseline = match baseline_path {
         Some(path) => Some(read_lab_baseline(path).await?),
@@ -869,12 +883,14 @@ schema:
         let report = run_lab_evaluation(
             temp.path(),
             Some("weather"),
-            TrustLabPolicy::default(),
-            None,
-            Some(&baseline_path),
-            None,
-            false,
-            "weather-baseline",
+            LabEvaluationOptions {
+                policy: TrustLabPolicy::default(),
+                baseline_path: None,
+                write_baseline_path: Some(&baseline_path),
+                baseline_registry_path: None,
+                update_baseline_registry: false,
+                baseline_id: "weather-baseline",
+            },
         )
         .await
         .unwrap();
@@ -897,12 +913,14 @@ schema:
         let write_report = run_lab_evaluation(
             temp.path(),
             Some("weather"),
-            TrustLabPolicy::default(),
-            None,
-            None,
-            Some(&registry),
-            true,
-            "weather-baseline",
+            LabEvaluationOptions {
+                policy: TrustLabPolicy::default(),
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: Some(&registry),
+                update_baseline_registry: true,
+                baseline_id: "weather-baseline",
+            },
         )
         .await
         .unwrap();
@@ -928,12 +946,14 @@ schema:
         let read_report = run_lab_evaluation(
             temp.path(),
             Some("weather"),
-            TrustLabPolicy::default(),
-            None,
-            None,
-            Some(&registry),
-            false,
-            "weather-baseline",
+            LabEvaluationOptions {
+                policy: TrustLabPolicy::default(),
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: Some(&registry),
+                update_baseline_registry: false,
+                baseline_id: "weather-baseline",
+            },
         )
         .await
         .unwrap();
@@ -958,12 +978,14 @@ schema:
         let err = run_lab_evaluation(
             temp.path(),
             Some("weather"),
-            TrustLabPolicy::default(),
-            None,
-            None,
-            Some(&registry),
-            false,
-            "missing-baseline",
+            LabEvaluationOptions {
+                policy: TrustLabPolicy::default(),
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: Some(&registry),
+                update_baseline_registry: false,
+                baseline_id: "missing-baseline",
+            },
         )
         .await
         .unwrap_err();
