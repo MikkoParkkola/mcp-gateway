@@ -36,9 +36,13 @@ history.txt
 # Local cargo config
 .cargo/
 
-# Internal planning docs and drafts
+# Internal planning docs, strategic positioning, and competitive intelligence
 docs/plans/
 docs/submissions/
+docs/strategy/
+docs/competitive/
+docs/competitive-intelligence/
+docs/positioning/
 linkedin-post-draft.md
 .gitnexus
 AGENTS.md

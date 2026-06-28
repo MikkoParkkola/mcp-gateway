@@ -1,0 +1,72 @@
+licenseTier: enterprise
+
+image:
+  repository: ghcr.io/mikkoparkkola/mcp-gateway
+  tag: latest
+  pullPolicy: IfNotPresent
+
+namespace:
+  create: false
+  name: mcp-gateway
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 39400
+
+ingress:
+  enabled: false
+  className: ""
+  hosts: []
+  tls:
+    enabled: false
+    issuerRef: ""
+
+runtimeProfile:
+  provider: kubernetes
+  restartPolicy: on_failure
+  resources:
+    cpu: 500m
+    memory: 256Mi
+
+policy:
+  networkEgress: deny_all
+  allowedHosts: []
+  contextIntegrity:
+    mode: monitor_only
+  exceptions: []
+
+protectedValues:
+  provider: kubernetes
+  refs: []
+
+persistence:
+  enabled: false
+  storageClassName: ""
+  size: 1Gi
+
+observability:
+  metrics:
+    enabled: true
+    path: /metrics
+  otel:
+    enabled: false
+    endpoint: ""
+  evidence:
+    enabled: true
+    endpoint: /trust/evidence
+
+rollout:
+  strategy: RollingUpdate
+  maxUnavailable: 0
+  maxSurge: 1
+  revisionHistoryLimit: 10
+
+humanGates:
+  requireNamespaceApproval: true
+  requireIngressApproval: true
+  requireProtectedValueProviderApproval: true
+  requireTenancyApproval: true
+  requirePolicyExceptionApproval: true
+  requireDestructiveRollbackApproval: true

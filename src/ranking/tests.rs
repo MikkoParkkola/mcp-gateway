@@ -1,5 +1,7 @@
 use super::*;
 
+mod schema;
+
 #[test]
 fn test_record_and_retrieve_usage() {
     let ranker = SearchRanker::new();
@@ -20,19 +22,19 @@ fn test_ranking_with_text_relevance() {
             server: "s1".to_string(),
             tool: "weather".to_string(), // Exact match
             description: "Get weather".to_string(),
-            score: 0.0,
+            ..SearchResult::new("s1", "weather", "Get weather")
         },
         SearchResult {
             server: "s2".to_string(),
             tool: "get_weather_forecast".to_string(), // Contains
             description: "Forecast".to_string(),
-            score: 0.0,
+            ..SearchResult::new("s2", "get_weather_forecast", "Forecast")
         },
         SearchResult {
             server: "s3".to_string(),
             tool: "forecast".to_string(),
             description: "Get weather data".to_string(), // Desc contains
-            score: 0.0,
+            ..SearchResult::new("s3", "forecast", "Get weather data")
         },
     ];
 
@@ -57,13 +59,13 @@ fn test_ranking_with_usage_boost() {
             server: "s1".to_string(),
             tool: "popular".to_string(),
             description: "Contains search term".to_string(),
-            score: 0.0,
+            ..SearchResult::new("s1", "popular", "Contains search term")
         },
         SearchResult {
             server: "s2".to_string(),
             tool: "exact".to_string(), // Exact match but no usage
             description: "Something".to_string(),
-            score: 0.0,
+            ..SearchResult::new("s2", "exact", "Something")
         },
     ];
 
@@ -154,13 +156,13 @@ fn test_ranking_preserves_unmatched() {
             server: "s1".to_string(),
             tool: "unrelated".to_string(),
             description: "No match".to_string(),
-            score: 0.0,
+            ..SearchResult::new("s1", "unrelated", "No match")
         },
         SearchResult {
             server: "s2".to_string(),
             tool: "also_unrelated".to_string(),
             description: "Still no match".to_string(),
-            score: 0.0,
+            ..SearchResult::new("s2", "also_unrelated", "Still no match")
         },
     ];
 
@@ -171,15 +173,131 @@ fn test_ranking_preserves_unmatched() {
     assert!(ranked[1].score < f64::EPSILON);
 }
 
+#[test]
+fn ranking_suppresses_unsafe_unauthorized_unhealthy_and_untrusted_tools() {
+    let search_ranker = SearchRanker::new();
+    let candidates = vec![
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "unsafe_search",
+            "description": "Search everything",
+            "unsafe": true
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "unauthorized_search",
+            "description": "Search everything",
+            "authorized": false
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "unhealthy_search",
+            "description": "Search everything",
+            "status": "disabled"
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "untrusted_search",
+            "description": "Search everything",
+            "trust_score": 0.1
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "safe_search",
+            "description": "Search everything",
+            "trust_score": 0.9,
+            "authorized": true
+        }))
+        .unwrap(),
+    ];
+
+    let ranked = search_ranker.rank(candidates, "search");
+
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].tool, "safe_search");
+    assert!(ranked[0].explanation.included);
+}
+
+#[test]
+fn ranking_uses_cost_latency_trust_and_feedback_as_safe_downgrades() {
+    let search_ranker = SearchRanker::new();
+    search_ranker.record_use("s", "cheap_fast_search");
+    let candidates = vec![
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "expensive_slow_search",
+            "description": "Search documents",
+            "cost_category": "high",
+            "latency_ms": 2500,
+            "trust_score": 0.6,
+            "authorized": true
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "cheap_fast_search",
+            "description": "Search documents",
+            "cost_category": "free",
+            "latency_ms": 50,
+            "trust_score": 0.95,
+            "authorized": true
+        }))
+        .unwrap(),
+    ];
+
+    let ranked = search_ranker.rank(candidates, "search documents");
+
+    assert_eq!(ranked[0].tool, "cheap_fast_search");
+    assert!(ranked[0].signals.user_feedback > 0.0);
+    assert!(
+        ranked[1]
+            .explanation
+            .reasons
+            .contains(&"cost_downgraded".to_string())
+    );
+    assert!(
+        ranked[1]
+            .explanation
+            .reasons
+            .contains(&"latency_downgraded".to_string())
+    );
+    assert!(
+        ranked[1]
+            .explanation
+            .reasons
+            .contains(&"trust_downgraded".to_string())
+    );
+}
+
+#[test]
+fn ranking_explanation_does_not_echo_query_payload() {
+    let search_ranker = SearchRanker::new();
+    let candidates = vec![
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "invoice_search",
+            "description": "Search invoices",
+            "authorized": true
+        }))
+        .unwrap(),
+    ];
+
+    let ranked = search_ranker.rank(candidates, "search invoice ACME-12345");
+    let explanation = serde_json::to_string(&ranked[0].explanation).unwrap();
+
+    assert!(ranked[0].explanation.included);
+    assert!(!explanation.contains("ACME-12345"));
+    assert!(ranked[0].signals.relevance > 0.0);
+}
+
 // ── score_text_relevance ─────────────────────────────────────────────
 
 fn sr(tool: &str, description: &str) -> SearchResult {
-    SearchResult {
-        server: "s".to_string(),
-        tool: tool.to_string(),
-        description: description.to_string(),
-        score: 0.0,
-    }
+    SearchResult::new("s", tool, description)
 }
 
 #[test]
@@ -635,245 +753,4 @@ fn is_keyword_match_with_synonyms_still_finds_exact() {
 fn is_keyword_match_with_synonyms_returns_false_for_no_match() {
     let desc = "does stuff [keywords: weather, temperature]";
     assert!(!is_keyword_match_with_synonyms(desc, "find"));
-}
-
-// ── schema-aware matching ─────────────────────────────────────────────
-
-#[test]
-fn is_schema_field_match_finds_exact_token() {
-    // GIVEN: description with [schema: symbol, exchange, price]
-    // WHEN: checking each token
-    // THEN: all match, and non-schema words do not
-    let desc = "stock api [schema: symbol, exchange, price]";
-    assert!(is_schema_field_match(desc, "symbol"));
-    assert!(is_schema_field_match(desc, "exchange"));
-    assert!(is_schema_field_match(desc, "price"));
-    assert!(!is_schema_field_match(desc, "volume"));
-    assert!(!is_schema_field_match(desc, "stock"));
-}
-
-#[test]
-fn is_schema_field_match_returns_false_when_no_schema_section() {
-    // GIVEN: description without [schema: ...] section
-    // WHEN: checking a word
-    // THEN: returns false
-    assert!(!is_schema_field_match("plain description", "symbol"));
-}
-
-#[test]
-fn is_schema_field_match_returns_false_for_partial_token() {
-    // GIVEN: schema has "exchange" and we look for "change"
-    // WHEN: checking
-    // THEN: partial substring does not match (token boundary enforced)
-    let desc = "tool [schema: symbol, exchange]";
-    assert!(!is_schema_field_match(desc, "change"));
-    assert!(!is_schema_field_match(desc, "sym"));
-}
-
-#[test]
-fn score_text_relevance_single_schema_field_scores_6() {
-    // GIVEN: description has [schema: symbol] and query is "symbol"
-    // WHEN: scoring
-    // THEN: score is 6.0 (schema single-word path: 6.0)
-    let words = vec!["symbol"];
-    let score = score_text_relevance(
-        "market_data",
-        "Get market data [schema: symbol, exchange]",
-        "symbol",
-        &words,
-    );
-    assert!(
-        (score - 6.0).abs() < f64::EPSILON,
-        "expected 6.0, got {score}"
-    );
-}
-
-#[test]
-fn score_text_relevance_two_schema_fields_scores_above_single_schema_field() {
-    // GIVEN: description has [schema: symbol, exchange, price]
-    // WHEN: scoring "symbol exchange" (2 query words, both schema fields)
-    // THEN: score is ≥ the score for querying just "symbol" (1 field)
-    //
-    // NOTE: the text-coverage path dominates here (words appear literally in
-    // the description string, so 10+2*2=14) but we assert ≥ 8.0 to confirm
-    // the multi-field schema path is at least as good as its direct score.
-    let two_words = vec!["symbol", "exchange"];
-    let one_word = vec!["symbol"];
-    let score_two = score_text_relevance(
-        "market_data",
-        "Get market data [schema: symbol, exchange, price]",
-        "symbol exchange",
-        &two_words,
-    );
-    let score_one = score_text_relevance(
-        "market_data2",
-        "Get market data [schema: symbol, price]",
-        "symbol",
-        &one_word,
-    );
-    assert!(
-        score_two >= score_one,
-        "two-field query ({score_two}) should score ≥ one-field query ({score_one})"
-    );
-    assert!(
-        score_two >= 8.0,
-        "two-field match should score ≥ 8.0, got {score_two}"
-    );
-}
-
-#[test]
-fn score_text_relevance_schema_scores_above_description_substring() {
-    // GIVEN: two tools — one with schema field, one with query only in description text
-    // WHEN: scoring "symbol"
-    // THEN: schema-match tool scores higher than description-text-only tool
-    let words = vec!["symbol"];
-    let schema_score = score_text_relevance(
-        "market_data",
-        "Market data [schema: symbol, exchange]",
-        "symbol",
-        &words,
-    );
-    let text_score = score_text_relevance(
-        "other_tool",
-        "Handles ticker symbol lookups in plain text",
-        "symbol",
-        &words,
-    );
-    // schema match should yield ≥ 6.0, text-only is ≤ 2.0
-    assert!(
-        schema_score > text_score,
-        "schema ({schema_score}) should beat description-text ({text_score})"
-    );
-}
-
-#[test]
-fn score_text_relevance_keyword_tag_beats_schema_match() {
-    // GIVEN: query "symbol", one tool has keyword tag, other has schema field
-    // WHEN: scoring
-    // THEN: keyword-tag match (8.0) beats single-schema-field match (6.0)
-    let words = vec!["symbol"];
-    let kw_score = score_text_relevance(
-        "kw_tool",
-        "Market data [keywords: symbol, exchange]",
-        "symbol",
-        &words,
-    );
-    let schema_score = score_text_relevance(
-        "schema_tool",
-        "Market data [schema: symbol, exchange]",
-        "symbol",
-        &words,
-    );
-    assert!(
-        kw_score > schema_score,
-        "keyword ({kw_score}) should beat schema ({schema_score})"
-    );
-}
-
-#[test]
-fn ranking_schema_fields_find_stock_symbol_tool() {
-    // GIVEN: query "stock symbol" against tools without explicit description match
-    // The stock tool has [schema: symbol, exchange, price, volume]
-    // WHEN: ranking
-    // THEN: the stock tool with schema fields ranks first
-    let search_ranker = SearchRanker::new();
-    let results = vec![
-        sr("weather_api", "Get current weather data"),
-        sr(
-            "market_data",
-            "Fetch financial data [schema: symbol, exchange, price, volume]",
-        ),
-        sr("search_web", "Search the web for any query"),
-    ];
-    let ranked = search_ranker.rank(results, "stock symbol");
-    assert_eq!(
-        ranked[0].tool,
-        "market_data",
-        "market_data should rank first; got {:?}",
-        ranked
-            .iter()
-            .map(|r| (&r.tool, r.score))
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        ranked[0].score > 0.0,
-        "schema match should produce positive score"
-    );
-}
-
-#[test]
-fn ranking_schema_field_tool_scores_above_zero_for_field_query() {
-    // GIVEN: query "symbol exchange", tool only matches via schema fields
-    // (description itself doesn't mention those words as plain text)
-    // WHEN: ranking
-    // THEN: schema-annotated tool scores > 0 (i.e. the schema section was searched)
-    //
-    // NOTE: because schema tokens appear literally in the description string,
-    // the text-coverage path also fires. Both paths produce a positive score.
-    // The test asserts the schema tool is correctly matched with a meaningful score.
-    let search_ranker = SearchRanker::new();
-    let results = vec![
-        sr(
-            "schema_tool",
-            "Financial data [schema: symbol, exchange, price]",
-        ),
-        sr("unrelated_tool", "Send emails and notifications"),
-    ];
-    let ranked = search_ranker.rank(results, "symbol exchange");
-    let schema_result = ranked.iter().find(|r| r.tool == "schema_tool").unwrap();
-    assert!(
-        schema_result.score >= 8.0,
-        "schema tool should score ≥ 8.0 for 2 matching fields, got {}",
-        schema_result.score
-    );
-    assert_eq!(ranked[0].tool, "schema_tool", "schema tool must rank first");
-}
-
-#[test]
-fn ranking_query_stock_symbol_finds_tool_with_symbol_schema_field() {
-    // Integration test: verifies the issue requirement
-    // A tool with input {symbol: string, exchange: string} should match "stock symbol"
-    let search_ranker = SearchRanker::new();
-    let results = vec![
-        sr("get_weather", "Retrieve current weather conditions"),
-        sr(
-            "get_quote",
-            "Retrieve financial quotes [schema: symbol, exchange, price, volume, currency]",
-        ),
-        sr("list_files", "List files in a directory"),
-    ];
-    let ranked = search_ranker.rank(results, "stock symbol");
-    assert_eq!(
-        ranked[0].tool,
-        "get_quote",
-        "get_quote must rank first for 'stock symbol'; scores: {:?}",
-        ranked
-            .iter()
-            .map(|r| (&r.tool, r.score))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn extract_tag_section_finds_keywords_section() {
-    let desc = "tool desc [keywords: search, web] [schema: symbol]";
-    let section = extract_tag_section(desc, "keywords");
-    assert!(section.is_some());
-    assert!(section.unwrap().contains("search"));
-    assert!(section.unwrap().contains("web"));
-}
-
-#[test]
-fn extract_tag_section_finds_schema_section() {
-    let desc = "tool desc [keywords: search] [schema: symbol, exchange]";
-    let section = extract_tag_section(desc, "schema");
-    assert!(section.is_some());
-    assert!(section.unwrap().contains("symbol"));
-}
-
-#[test]
-fn extract_tag_section_returns_none_for_missing_section() {
-    let desc = "plain description with no tags";
-    assert!(extract_tag_section(desc, "keywords").is_none());
-    assert!(extract_tag_section(desc, "schema").is_none());
 }

@@ -9,7 +9,10 @@ use mcp_gateway::{
         compute_capability_hash, parse_capability_file, rewrite_with_pin, validate_capability,
     },
     cli::CapCommand,
-    discovery::AutoDiscovery,
+    discovery::{
+        AutoDiscovery,
+        shadow::{ShadowRemediationAction, ShadowScanReport, ShadowTrustStatus},
+    },
     registry::Registry,
 };
 
@@ -258,11 +261,21 @@ async fn cap_discover(
     gateway_config: Option<std::path::PathBuf>,
 ) -> ExitCode {
     let discovery = AutoDiscovery::new();
-    println!("🔍 Discovering MCP servers...\n");
+    let structured_output = matches!(format.as_str(), "json" | "yaml");
+    if !structured_output {
+        println!("🔍 Discovering MCP servers...\n");
+    }
     match discovery.discover_all().await {
         Ok(servers) => {
             if shadow {
-                return cap_discover_shadow(servers, &format, gateway_config).await;
+                return cap_discover_shadow(
+                    servers,
+                    &format,
+                    gateway_config,
+                    write_config,
+                    config_path,
+                )
+                .await;
             }
 
             if servers.is_empty() {
@@ -304,43 +317,152 @@ async fn cap_discover_shadow(
     discovered: Vec<mcp_gateway::discovery::DiscoveredServer>,
     format: &str,
     gateway_config: Option<std::path::PathBuf>,
+    write_config: bool,
+    output_config_path: Option<std::path::PathBuf>,
 ) -> ExitCode {
     // Resolve which gateway config to load. Try the provided path first, then
     // fall back to `gateway.yaml` in the current directory.
-    let config_path = gateway_config.unwrap_or_else(|| std::path::PathBuf::from("gateway.yaml"));
+    let compare_config_path =
+        gateway_config.unwrap_or_else(|| std::path::PathBuf::from("gateway.yaml"));
 
     let registered_names: std::collections::HashSet<String> =
-        if let Ok(config) = mcp_gateway::config::Config::load(Some(&config_path)) {
+        if let Ok(config) = mcp_gateway::config::Config::load(Some(&compare_config_path)) {
             config.backends.into_keys().collect()
         } else {
             // Config not found or unreadable — all discovered servers are unregistered.
             eprintln!(
                 "⚠️  Could not load gateway config from '{}'; \
                  treating all discovered servers as unregistered.",
-                config_path.display()
+                compare_config_path.display()
             );
             std::collections::HashSet::new()
         };
 
     let shadow_servers: Vec<_> = discovered
-        .into_iter()
+        .iter()
         .filter(|s| !registered_names.contains(&s.name))
+        .cloned()
+        .collect();
+    let report = ShadowScanReport::from_discovered(
+        &discovered,
+        &registered_names,
+        Some(&compare_config_path),
+    );
+    let adoptable_names: std::collections::HashSet<&str> = report
+        .assets
+        .iter()
+        .filter(|asset| asset.remediation.action == ShadowRemediationAction::AdoptIntoGateway)
+        .map(|asset| asset.name.as_str())
         .collect();
 
-    if shadow_servers.is_empty() {
+    match format {
+        "json" => println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        ),
+        "yaml" => println!("{}", serde_yaml::to_string(&report).unwrap_or_default()),
+        _ => print_shadow_report(&report),
+    }
+
+    if write_config && !shadow_servers.is_empty() {
+        let adoptable_servers: Vec<_> = shadow_servers
+            .iter()
+            .filter(|server| adoptable_names.contains(server.name.as_str()))
+            .cloned()
+            .collect();
+        if adoptable_servers.is_empty() {
+            eprintln!("No adoptable local shadow servers found; leaving gateway config unchanged.");
+            eprintln!("Review the report actions before changing network or sensitive findings.");
+            return ExitCode::SUCCESS;
+        }
+
+        let apply_path = output_config_path.unwrap_or_else(|| compare_config_path.clone());
+        match crate::write_discovered_to_config(&adoptable_servers, Some(&apply_path)) {
+            Ok(path) => {
+                eprintln!(
+                    "Adopted {} local shadow server(s) into {}",
+                    adoptable_servers.len(),
+                    path.display()
+                );
+                let skipped = shadow_servers.len().saturating_sub(adoptable_servers.len());
+                if skipped > 0 {
+                    eprintln!(
+                        "Skipped {skipped} shadow finding(s) that require owner review or quarantine."
+                    );
+                }
+                eprintln!(
+                    "Verify with: mcp-gateway cap discover --shadow --gateway-config {}",
+                    path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to adopt shadow servers: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn print_shadow_report(report: &ShadowScanReport) {
+    if report.assets.is_empty() {
         println!("✅ No shadow servers found — all discovered MCP servers are registered.");
-        return ExitCode::SUCCESS;
+        println!("Passive scan only; no discovered tools were invoked.");
+        return;
     }
 
     println!(
-        "⚠️  Found {} shadow (unregistered) MCP server(s):\n",
-        shadow_servers.len()
+        "⚠️  Found {} shadow (unregistered) MCP server(s). Passive scan only; no discovered tools were invoked.\n",
+        report.summary.unmanaged_total
     );
-    print_discovered_servers(&shadow_servers, format);
-    println!("💡 To register these servers, run:");
-    println!("   mcp-gateway cap discover --write-config");
+    println!("Action groups:");
+    for group in &report.action_groups {
+        println!("  {:?}: {} asset(s)", group.action, group.count);
+    }
+    println!();
 
-    ExitCode::SUCCESS
+    for asset in &report.assets {
+        println!("📦 {}", asset.name);
+        println!("   ID: {}", asset.id);
+        println!("   Severity: {:?}", asset.severity);
+        println!("   Source: {:?}", asset.source);
+        println!("   Trust: {:?}", asset.trust_status);
+        println!("   Transport: {}", asset.transport.kind);
+        if let Some(endpoint) = &asset.transport.endpoint {
+            println!("   Endpoint: {endpoint}");
+        }
+        if let Some(path) = &asset.evidence.config_path {
+            println!("   Config: {path}");
+        }
+        if let Some(pid) = asset.evidence.pid {
+            println!("   PID: {pid}");
+        }
+        if let Some(executable) = &asset.evidence.executable {
+            println!("   Executable: {executable} (arguments redacted)");
+        }
+        println!("   Auth exposure: {:?}", asset.auth_exposure);
+        println!("   Data risk: {:?}", asset.data_risk);
+        println!("   Recommended action: {:?}", asset.remediation.action);
+        println!("   Confidence: {:?}", asset.remediation.confidence);
+        println!(
+            "   Confirmation required: {}",
+            asset.remediation.confirmation_required
+        );
+        println!("   Verify: {}", asset.remediation.verification_step);
+        if asset.remediation.action == ShadowRemediationAction::AdoptIntoGateway
+            && let Some(command) = &asset.remediation.apply_command
+        {
+            println!("   Apply after review: {command}");
+        }
+        if asset.trust_status == ShadowTrustStatus::Unmanaged {
+            println!("   Reason: {}", asset.risk_reasons.join(", "));
+        }
+        println!();
+    }
+
+    println!("Default mode is dry-run. To adopt reviewed local unmanaged servers, rerun with:");
+    println!("   mcp-gateway cap discover --shadow --write-config");
 }
 
 fn print_discover_empty() {

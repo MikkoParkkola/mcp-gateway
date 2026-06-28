@@ -3,13 +3,13 @@
 [![CI](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
-[![Rust](https://img.shields.io/badge/rust-1.88+-blue.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.95+-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
-[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10_controls%2Btracked_gaps-yellow.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
+[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_covered-brightgreen.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
@@ -54,15 +54,26 @@ MCP Gateway removes that tradeoff entirely.
 
 The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The README benchmark scenario also surfaces stats, cost report, playbooks, profile controls, disabled-capability visibility, and reload for a 15-tool surface. Surfacing webhook status adds the 16th tool.
 
-### Why not...
+### Public MCP Gateway Comparison
 
-| Alternative | What it does | Why MCP Gateway is different |
-|---|---|---|
-| **Direct MCP connections** | Each server connected individually | Every tool definition loaded every request. 100 tools = 15K tokens burned. Gateway: a small fixed 13-16 tool surface instead of every backend tool. |
-| **Claude's ToolSearch** | Built-in deferred tool loading | Only works with tools already configured. Gateway adds unlimited backends + REST APIs without MCP servers. |
-| **Archestra** | Cloud-hosted MCP registry | Requires cloud account, sends data to third party. Gateway is local-only, zero external dependencies. |
-| **Kong / Portkey** | General API gateways | Not MCP-aware. No meta-tool discovery, no tool search, no capability YAML system. |
-| **Building fewer MCP servers** | Reduce tool count manually | You lose capabilities. Gateway lets you keep everything and pay the token cost of the compact Meta-MCP surface. |
+Sources are linked in the project names. This table compares public,
+user-facing behavior, not internal roadmap scoring.
+
+| Axis | **MCP Gateway** | **[Docker MCP Gateway / Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/)** | **[MCPJungle](https://github.com/mcpjungle/MCPJungle)** | **[mcpo](https://github.com/open-webui/mcpo) / [Supergateway](https://github.com/supercorp-ai/supergateway)** |
+|---|---|---|---|---|
+| Primary job | MCP and REST capability router with a compact Meta-MCP surface | Docker-managed catalog, profiles, containerized MCP servers, and gateway | Self-hosted gateway that runs many MCP servers behind one endpoint | Protocol bridges: MCP-to-OpenAPI for mcpo; stdio-to-SSE/WS for Supergateway |
+| Install | Standalone Rust binary via cargo, Homebrew, VS Code, Cursor, and local build | Docker Desktop / Docker CLI plugin flow | Self-hosted gateway install and server registration | Python/uvx/Docker for mcpo; npm/CLI bridge for Supergateway |
+| Configuration | Wizard, local starter profile, client export, doctor JSON, backup and rollback | Docker profiles and catalog selection | Centralized server and client configuration | Per-bridge command/config for each exposed server or transport |
+| Security | OWASP Agentic AI matrix, firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
+| Identity and grants | Local identity-grant contract plus enterprise governance boundary | Docker/team controls depend on Docker organization setup | Authenticated clients and server access control | Not a grant engine; delegates identity policy to the surrounding deployment |
+| Runtime isolation | RuntimeProvider policy planning plus Docker/Podman/Kubernetes deployment paths | Container-first isolation is the core runtime model | Runs and manages MCP servers behind the gateway | Bridges existing server processes/transports rather than isolating arbitrary tools |
+| Trust metadata | TrustCard/CBOM generation, validation, TrustLab evidence, provenance stubs | Catalog packages carry image provenance and security update flow | Gateway inventory and observability focus | Protocol metadata bridge; trust metadata is not the primary product surface |
+| Discovery | Meta-MCP listing/search, ShadowRadar unmanaged-server inventory, capability registry | Docker MCP Catalog of packaged servers | Centralized discovery across configured servers | Exposes one bridged server surface at a time unless composed externally |
+| Policy and governance | Policy, grants, audit events, control-plane domain, enterprise evidence boundary | Docker org/catalog/profile policy model | Centralized access control for teams | No broad governance plane; use with another policy layer when needed |
+| Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
+| Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
+| Deployment | Local, team gateway, Docker, system service, and enterprise Kubernetes alpha manifests | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
+| Licensing | Dual-license posture: free/core local gateway plus enterprise governance and fleet features | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
 
 ## vs Anthropic MCP Tunnels
 
@@ -91,7 +102,7 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
-- **OWASP Agentic AI Top 10.** Controls are mapped across all 10 risks, with explicitly tracked partial/out-of-scope gaps for multi-gateway signing, tool-result sandboxing, collusion detection, and remote-server provenance. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
+- **OWASP Agentic AI Top 10.** Controls are covered across all 10 ASI risks at the gateway boundary, with hardening follow-ups tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
 
 ### Recent additions
 
@@ -162,7 +173,7 @@ Invoke-WebRequest -Uri https://github.com/MikkoParkkola/mcp-gateway/releases/lat
 mcp-gateway setup wizard --configure-client
 ```
 
-Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex, and running MCP processes; lets you pick which servers to import into `gateway.yaml`; and writes the gateway entry back into each detected client config so they route through the gateway instead. Add `--yes` to skip the prompts and import everything.
+Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex, and running MCP processes; lets you pick which servers to import into `gateway.yaml`; previews the gateway entry; writes it into each detected client config; verifies the write; and prints backup/rollback paths when an existing client config changes. Add `--yes` to skip the prompts and import everything.
 
 #### Option B — Add servers from the built-in registry
 
@@ -215,11 +226,14 @@ The web dashboard is at <http://localhost:39400/ui> once `serve` is running.
 `setup export` writes the gateway entry into client config files for you. It auto-detects the right path per client:
 
 ```bash
-mcp-gateway setup export --target all                 # all detected clients
-mcp-gateway setup export --target claude-code         # one client
 mcp-gateway setup export --target all --dry-run       # preview without writing
+mcp-gateway setup export --target all                 # write, back up, verify
+mcp-gateway setup export --target claude-code         # one client
 mcp-gateway setup export --target all --watch         # regenerate on gateway.yaml changes
+mcp-gateway setup export --rollback <backup-file>     # restore one client config
 ```
+
+Existing client files are backed up before mutation. The command prints the exact rollback command beside each updated client.
 
 | Client | Config path |
 |--------|-------------|

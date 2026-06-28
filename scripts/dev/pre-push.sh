@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pre-push gate — local fmt + lint + lib-test parity with CI.
+# pre-push gate — public hygiene + local fmt + lint + lib-test parity with CI.
 # Bypass: SKIP_PREPUSH=1 (logged, audit-only).
 # Wall-clock budget on warm cache: <60s.
 set -euo pipefail
@@ -13,6 +13,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 if [[ -f Cargo.toml ]]; then
+  echo "[pre-push] public repo hygiene"
+  scripts/dev/check-public-repo-hygiene.sh
+
   echo "[pre-push] cargo fmt --check"
   cargo fmt --all --check 2>&1 | tail -20 || { echo "FAIL: cargo fmt"; exit 1; }
 

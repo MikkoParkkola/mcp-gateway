@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-gateway
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp-gateway-reconciler
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+rules:
+  - apiGroups: ["mcpgateway.io"]
+    resources:
+      - gateways
+      - gateways/status
+      - mcpservers
+      - mcpservers/status
+      - policies
+      - policies/status
+      - runtimeprofiles
+      - runtimeprofiles/status
+      - trustcardreferences
+      - trustcardreferences/status
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-gateway-reconciler
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+subjects:
+  - kind: ServiceAccount
+    name: mcp-gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mcp-gateway-reconciler

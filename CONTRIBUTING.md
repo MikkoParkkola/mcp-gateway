@@ -22,6 +22,7 @@ cargo run -- serve --config gateway.yaml --log-level debug
 
 ```bash
 cargo fmt --all -- --check && \
+scripts/dev/check-public-repo-hygiene.sh && \
 cargo clippy --all-features -- -D warnings && \
 cargo test --all-features && \
 python3 benchmarks/token_savings.py --scenario readme --json
@@ -184,6 +185,12 @@ Smaller PRs are reviewed faster. For large changes, open an issue first.
 ## Architecture Decisions
 
 Changes affecting public API, config schema, new dependencies, transport protocols, or security features should be discussed in a GitHub issue before implementation. Design docs live in `docs/design/`.
+
+## Public Repo Hygiene
+
+Public docs should explain install, operation, architecture, security, compliance, and user-facing comparisons. Internal strategy, competitive intelligence, product positioning, roadmap reasoning, launch OPSEC, patent strategy, and build-vs-integrate licensing analysis must stay outside tracked public paths.
+
+Use ignored local paths for private strategy work: `docs/strategy/`, `docs/competitive/`, `docs/competitive-intelligence/`, or `docs/positioning/`. Before pushing, run `scripts/dev/check-public-repo-hygiene.sh`; CI runs the same check and fails if tracked public docs contain high-confidence internal strategy markers.
 
 ## Good First Issues
 

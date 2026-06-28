@@ -13,6 +13,7 @@ use crate::config::{BackendConfig, TransportConfig};
 
 pub mod config_scanner;
 pub mod process_scanner;
+pub mod shadow;
 
 use config_scanner::ConfigScanner;
 use process_scanner::ProcessScanner;

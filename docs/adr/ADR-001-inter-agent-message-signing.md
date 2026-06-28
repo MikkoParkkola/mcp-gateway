@@ -35,7 +35,7 @@ mTLS protects the channel but not the message envelope. Once a response exits th
 2. That the response content was not modified after signing.
 3. That the response is fresh (not a replay of a previous legitimate response).
 
-The current OWASP compliance matrix (`docs/OWASP_AGENTIC_AI_COMPLIANCE.md`) rates ASI07 as **PARTIAL** and lists "application-layer message signing and nonce-based replay protection" as a P0 remediation.
+The pre-implementation OWASP compliance matrix (`docs/OWASP_AGENTIC_AI_COMPLIANCE.md`) listed ASI07 as incomplete and called for application-layer message signing plus nonce-based replay protection. The current matrix lists ASI07 as **COVERED** for the gateway boundary.
 
 ---
 
@@ -125,7 +125,7 @@ Verification is the client's responsibility. The gateway signs; it does not veri
 
 ### Positive
 
-- **ASI07 coverage moves from PARTIAL to COVERED**. Application-layer message integrity is established independent of TLS termination.
+- **ASI07 coverage is now COVERED**. Application-layer message integrity is established independent of TLS termination.
 - **Replay protection** prevents a captured response from being re-delivered to trick an agent into repeating actions.
 - **Zero breaking changes**. The feature is opt-in (`enabled: false` by default). Unsigned responses are structurally identical to today's responses -- no `_signature` block is present. Clients that do not understand `_signature` can ignore it.
 - **Leverages existing infrastructure**. `hmac` 0.13, `sha2` 0.11, `hex` 0.4, and `subtle` 2.6 are already in `Cargo.toml`. `DashMap` is already used for idempotency. `canonical_json()` exists in `src/hashing.rs`. No new dependencies required.
@@ -164,7 +164,7 @@ Verification is the client's responsibility. The gateway signs; it does not veri
 | `src/security/mod.rs` | Add `pub mod message_signing;` |
 | `src/gateway/meta_mcp/invoke.rs` | Post-dispatch: call `sign_response()` before returning; pre-dispatch: call `verify_nonce()` if enabled |
 | `src/gateway/meta_mcp/mod.rs` | Hold `NonceStore` in `MetaMcp` struct (alongside existing `idempotency_cache`) |
-| `docs/OWASP_AGENTIC_AI_COMPLIANCE.md` | Update ASI07 from PARTIAL to COVERED, add control reference |
+| `docs/OWASP_AGENTIC_AI_COMPLIANCE.md` | Status implemented: ASI07 is COVERED with the message-signing control reference |
 
 ### Rough API shape
 

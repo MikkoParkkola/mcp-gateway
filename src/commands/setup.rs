@@ -10,7 +10,10 @@ use std::io::{self, IsTerminal};
 use std::path::Path;
 use std::process::ExitCode;
 
+#[cfg(feature = "config-export")]
+use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 use mcp_gateway::{
+    cli::InitProfile,
     config::{Config, TransportConfig},
     config_persistence::{load_config_or_default, write_config},
     discovery::{AutoDiscovery, DiscoveredServer, DiscoverySource},
@@ -33,11 +36,7 @@ pub async fn run_setup_command(yes: bool, output: &Path, configure_client: bool)
     // ── 1. Discover ────────────────────────────────────────────────────────
     let servers = discover_all_servers().await;
     if servers.is_empty() {
-        println!("No MCP servers found in any AI client config.");
-        println!();
-        println!("Run 'mcp-gateway init' to create a fresh config, then add backends with:");
-        println!("  mcp-gateway add <name>");
-        return ExitCode::SUCCESS;
+        return handle_empty_discovery(output, configure_client).await;
     }
 
     print_discovery_summary(&servers);
@@ -64,7 +63,15 @@ pub async fn run_setup_command(yes: bool, output: &Path, configure_client: bool)
         return ExitCode::SUCCESS;
     }
 
-    // ── 3. Merge into config ───────────────────────────────────────────────
+    // ── 3. Ensure first-run config ─────────────────────────────────────────
+    if !output.exists() {
+        let code = bootstrap_local_profile(output);
+        if code != ExitCode::SUCCESS {
+            return code;
+        }
+    }
+
+    // ── 4. Merge into config ───────────────────────────────────────────────
     let mut config = load_config_or_default(output);
     let added = merge_servers_into_config(&mut config, &selected);
 
@@ -76,12 +83,15 @@ pub async fn run_setup_command(yes: bool, output: &Path, configure_client: bool)
     println!();
     println!("Imported {added} server(s) into {}", output.display());
 
-    // ── 4. Client config ───────────────────────────────────────────────────
+    // ── 5. Client config ───────────────────────────────────────────────────
     if configure_client {
-        configure_ai_clients(output, &config);
+        let code = configure_ai_clients(output).await;
+        if code != ExitCode::SUCCESS {
+            return code;
+        }
     }
 
-    // ── 5. Next steps ──────────────────────────────────────────────────────
+    // ── 6. Next steps ──────────────────────────────────────────────────────
     print_next_steps(output);
     ExitCode::SUCCESS
 }
@@ -97,6 +107,61 @@ async fn discover_all_servers() -> Vec<DiscoveredServer> {
             eprintln!("Warning: Discovery partially failed: {e}");
             Vec::new()
         }
+    }
+}
+
+async fn handle_empty_discovery(output: &Path, configure_client: bool) -> ExitCode {
+    println!("No MCP servers found in any AI client config.");
+
+    let bootstrapped = if output.exists() {
+        println!("Using existing gateway config at {}.", output.display());
+        false
+    } else {
+        let code = bootstrap_local_profile(output);
+        if code != ExitCode::SUCCESS {
+            return code;
+        }
+        true
+    };
+
+    if configure_client {
+        return configure_ai_clients(output).await;
+    }
+
+    if !bootstrapped {
+        print_next_steps(output);
+    }
+    ExitCode::SUCCESS
+}
+
+fn bootstrap_local_profile(output: &Path) -> ExitCode {
+    println!(
+        "Bootstrapping a local zero-key starter config at {}.",
+        output.display()
+    );
+    super::run_init_command(output, true, InitProfile::Local)
+}
+
+async fn configure_ai_clients(output: &Path) -> ExitCode {
+    #[cfg(feature = "config-export")]
+    {
+        super::config_export::run_config_export(
+            ExportTarget::All,
+            ConnectionMode::Proxy,
+            "gateway",
+            false,
+            false,
+            None,
+            output,
+        )
+        .await
+    }
+
+    #[cfg(not(feature = "config-export"))]
+    {
+        let _ = output;
+        eprintln!("Error: setup --configure-client requires the config-export feature");
+        ExitCode::FAILURE
     }
 }
 
@@ -215,99 +280,6 @@ fn merge_servers_into_config(config: &mut Config, selected: &[&DiscoveredServer]
     added
 }
 
-// ── AI client configuration ────────────────────────────────────────────────────
-
-/// Attempt to write the gateway URL into detected AI client configs.
-///
-/// Best-effort: prints warnings but never returns an error to the caller.
-fn configure_ai_clients(config_path: &Path, config: &Config) {
-    println!();
-    println!("Configuring AI clients to use gateway...");
-
-    let gateway_url = format!("http://{}:{}/mcp", config.server.host, config.server.port);
-
-    write_client_entry_if_exists(
-        &home_path(".claude.json"),
-        "Claude Code",
-        "gateway",
-        &gateway_url,
-    );
-    write_client_entry_if_exists(
-        &home_path(".cursor/mcp.json"),
-        "Cursor",
-        "gateway",
-        &gateway_url,
-    );
-    write_client_entry_if_exists(
-        &claude_desktop_path(),
-        "Claude Desktop",
-        "gateway",
-        &gateway_url,
-    );
-
-    println!("  Gateway endpoint: configured from server.host/server.port");
-    println!("  Config: {}", config_path.display());
-}
-
-fn write_client_entry_if_exists(path: &Path, client: &str, name: &str, url: &str) {
-    if !path.exists() {
-        return;
-    }
-
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("  Warning: Cannot read {}: {e}", path.display());
-            return;
-        }
-    };
-
-    let mut json: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("  Warning: Cannot parse {}: {e}", path.display());
-            return;
-        }
-    };
-
-    // Ensure mcpServers object exists.
-    let mcp_servers = json.as_object_mut().and_then(|obj| {
-        obj.entry("mcpServers")
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
-            .as_object_mut()
-    });
-
-    let Some(mcp_servers) = mcp_servers else {
-        return;
-    };
-
-    if mcp_servers.contains_key(name) {
-        println!("  {client}: gateway entry already present, skipping");
-        return;
-    }
-
-    mcp_servers.insert(name.to_string(), serde_json::json!({ "url": url }));
-
-    let updated = match serde_json::to_string_pretty(&json) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("  Warning: Cannot serialize {}: {e}", path.display());
-            return;
-        }
-    };
-
-    match std::fs::write(path, updated) {
-        Ok(()) => println!("  {client}: added gateway entry"),
-        Err(e) => eprintln!("  Warning: Cannot write {}: {e}", path.display()),
-    }
-}
-
-// ── Platform path helpers ──────────────────────────────────────────────────────
-// Delegated to the shared `paths` module so both setup (import) and
-// config_export (export) resolve client paths from one place.
-
-use crate::commands::paths::{claude_desktop_path, home_path};
-
 // ── Output helpers ─────────────────────────────────────────────────────────────
 
 fn print_next_steps(config_path: &Path) {
@@ -391,6 +363,69 @@ mod tests {
         // THEN: nothing changes
         assert_eq!(added, 0);
         assert_eq!(config.backends.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn empty_discovery_bootstraps_local_profile_when_config_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+
+        let code = handle_empty_discovery(&path, false).await;
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(path.exists());
+        assert!(
+            dir.path()
+                .join("capabilities/knowledge/weather_current.yaml")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("capabilities/knowledge/public_holidays.yaml")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_discovery_preserves_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        let existing = "server:\n  host: 127.0.0.1\n  port: 39400\n";
+        std::fs::write(&path, existing).unwrap();
+
+        let code = handle_empty_discovery(&path, false).await;
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), existing);
+        assert!(
+            !dir.path()
+                .join("capabilities/knowledge/weather_current.yaml")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn first_run_import_path_preserves_local_sample_capabilities() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        let server = make_stdio_server("surrealdb", DiscoverySource::RunningProcess);
+
+        let code = bootstrap_local_profile(&path);
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let mut config = load_config_or_default(&path);
+        let selected = vec![&server];
+        let added = merge_servers_into_config(&mut config, &selected);
+        write_config(&path, &config).unwrap();
+
+        let reloaded = Config::load(Some(&path)).unwrap();
+        assert_eq!(added, 1);
+        assert!(reloaded.backends.contains_key("surrealdb"));
+        assert!(
+            dir.path()
+                .join("capabilities/knowledge/weather_current.yaml")
+                .exists()
+        );
     }
 
     #[test]

@@ -99,12 +99,11 @@ pub(super) fn json_to_code_mode_search_result(v: &Value) -> Option<crate::rankin
     let description = v.get("description")?.as_str().unwrap_or("").to_string();
     let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
     let server = server_opt?.to_string();
-    Some(crate::ranking::SearchResult {
+    Some(crate::ranking::SearchResult::new(
         server,
-        tool: tool_name.to_string(),
+        tool_name,
         description,
-        score: 0.0,
-    })
+    ))
 }
 
 /// Reconstruct ranked Code Mode results from ranked `SearchResult` objects.
@@ -126,6 +125,20 @@ pub(super) fn ranked_results_to_code_mode_json(
                 .iter()
                 .find(|v| v.get("tool").and_then(Value::as_str) == Some(&tool_ref))
                 .cloned()
+                .map(|mut value| {
+                    if let Value::Object(ref mut map) = value {
+                        map.insert("score".to_string(), json!(r.score));
+                        map.insert(
+                            "ranking".to_string(),
+                            json!({
+                                "included": r.explanation.included,
+                                "reasons": r.explanation.reasons,
+                                "signals": r.signals
+                            }),
+                        );
+                    }
+                    value
+                })
         })
         .collect()
 }

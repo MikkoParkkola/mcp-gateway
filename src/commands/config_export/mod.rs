@@ -31,6 +31,7 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -58,9 +59,17 @@ pub struct ExportResult {
     pub client: &'static str,
     pub path: PathBuf,
     pub action: ExportAction,
+    pub safety: Option<ExportSafety>,
+}
+
+/// Safety metadata emitted for an applied client config mutation.
+pub struct ExportSafety {
+    pub backup_path: Option<PathBuf>,
+    pub verified: bool,
 }
 
 /// What the exporter did (or failed to do) for a single client.
+#[derive(Debug, Clone)]
 pub enum ExportAction {
     /// A new config file was created.
     Created,
@@ -71,6 +80,14 @@ pub enum ExportAction {
     /// An error occurred; the file was not modified.
     Failed(String),
 }
+
+struct SafeMergeResult {
+    action: ExportAction,
+    backup_path: Option<PathBuf>,
+    verified: bool,
+}
+
+const BACKUP_MARKER: &str = ".mcp-gateway.bak.";
 
 // ── Core logic ────────────────────────────────────────────────────────────────
 
@@ -228,6 +245,137 @@ pub fn merge_into_config(
     Ok(action)
 }
 
+fn merge_into_config_with_safety(
+    path: &Path,
+    servers_key: &str,
+    entry_name: &str,
+    entry: &Value,
+) -> Result<SafeMergeResult, String> {
+    let backup_path = create_backup(path)?;
+    let action = merge_into_config(path, servers_key, entry_name, entry)?;
+    verify_gateway_entry(path, servers_key, entry_name, entry)?;
+
+    Ok(SafeMergeResult {
+        action,
+        backup_path,
+        verified: true,
+    })
+}
+
+fn create_backup(path: &Path) -> Result<Option<PathBuf>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("Cannot determine file name for {}", path.display()))?
+        .to_string_lossy();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("System clock error while creating backup: {e}"))?
+        .as_nanos();
+    let backup_path = parent.join(format!("{file_name}{BACKUP_MARKER}{timestamp}"));
+
+    std::fs::copy(path, &backup_path).map_err(|e| {
+        format!(
+            "Cannot create backup {} from {}: {e}",
+            backup_path.display(),
+            path.display()
+        )
+    })?;
+
+    Ok(Some(backup_path))
+}
+
+fn verify_gateway_entry(
+    path: &Path,
+    servers_key: &str,
+    entry_name: &str,
+    entry: &Value,
+) -> Result<(), String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Cannot verify {}: {e}", path.display()))?;
+    let doc: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Cannot parse {} after write: {e}", path.display()))?;
+    let actual = doc
+        .get(servers_key)
+        .and_then(|servers| servers.get(entry_name))
+        .ok_or_else(|| {
+            format!(
+                "Verification failed: '{}.{}' missing from {}",
+                servers_key,
+                entry_name,
+                path.display()
+            )
+        })?;
+
+    if actual == entry {
+        Ok(())
+    } else {
+        Err(format!(
+            "Verification failed: '{}.{}' in {} does not match planned entry",
+            servers_key,
+            entry_name,
+            path.display()
+        ))
+    }
+}
+
+pub fn rollback_client_config(backup_path: &Path) -> Result<PathBuf, String> {
+    let original_path = original_path_from_backup(backup_path)?;
+    let bytes = std::fs::read(backup_path)
+        .map_err(|e| format!("Cannot read backup {}: {e}", backup_path.display()))?;
+
+    if let Some(parent) = original_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
+    }
+
+    let parent = original_path.parent().unwrap_or(Path::new("."));
+    let file_name = original_path.file_name().map_or_else(
+        || "config.json".to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let tmp = parent.join(format!(".{file_name}.rollback.tmp"));
+    std::fs::write(&tmp, &bytes)
+        .map_err(|e| format!("Cannot write rollback temp file {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &original_path).map_err(|e| {
+        format!(
+            "Cannot rename {} -> {}: {e}",
+            tmp.display(),
+            original_path.display()
+        )
+    })?;
+
+    Ok(original_path)
+}
+
+fn original_path_from_backup(backup_path: &Path) -> Result<PathBuf, String> {
+    let file_name = backup_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("Invalid backup file name: {}", backup_path.display()))?;
+    let (original_name, _) = file_name.rsplit_once(BACKUP_MARKER).ok_or_else(|| {
+        format!(
+            "Backup file name must contain '{BACKUP_MARKER}': {}",
+            backup_path.display()
+        )
+    })?;
+
+    if original_name.is_empty() {
+        return Err(format!(
+            "Backup file name has empty original path: {}",
+            backup_path.display()
+        ));
+    }
+
+    Ok(backup_path.with_file_name(original_name))
+}
+
 // ── Client specs ──────────────────────────────────────────────────────────────
 
 /// Build the list of `ClientSpec`s for the given target.
@@ -321,8 +469,27 @@ pub async fn run_config_export(
     name: &str,
     watch: bool,
     dry_run: bool,
+    rollback: Option<PathBuf>,
     config_path: &Path,
 ) -> ExitCode {
+    if let Some(backup_path) = rollback {
+        match rollback_client_config(&backup_path) {
+            Ok(original_path) => {
+                println!(
+                    "Restored {} from {}",
+                    original_path.display(),
+                    backup_path.display()
+                );
+                println!("Run 'mcp-gateway doctor' to verify the restored client config.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Error: Rollback failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     let config = match Config::load(Some(config_path)) {
         Ok(c) => c,
         Err(e) => {
@@ -341,10 +508,10 @@ pub async fn run_config_export(
         ConnectionMode::Proxy | ConnectionMode::Auto => "proxy",
         ConnectionMode::Stdio => "stdio",
     };
+    let entry = build_gateway_entry(&config, Some(config_path), resolved);
 
     if target == ExportTarget::Generic {
         // Generic: print JSON to stdout.
-        let entry = build_gateway_entry(&config, Some(config_path), mode);
         let wrapper = json!({ "mcpServers": { name: entry } });
         println!(
             "{}",
@@ -355,8 +522,14 @@ pub async fn run_config_export(
 
     println!("Exporting gateway config to AI clients...");
     println!();
+    println!("Planned gateway entry ({mode_label} mode):");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({ name: entry.clone() })).unwrap_or_default()
+    );
+    println!();
 
-    let results = do_export(target, mode, name, dry_run, config_path, &config);
+    let results = do_export(target, name, dry_run, &entry);
 
     let mut written = 0usize;
     let mut failed = false;
@@ -366,11 +539,13 @@ pub async fn run_config_export(
         let status = match &r.action {
             ExportAction::Created => {
                 written += 1;
-                format!("Created  {path}")
+                let suffix = format_safety_suffix(r.safety.as_ref());
+                format!("Created  {path}{suffix}")
             }
             ExportAction::Updated => {
                 written += 1;
-                format!("Updated  {path}")
+                let suffix = format_safety_suffix(r.safety.as_ref());
+                format!("Updated  {path}{suffix}")
             }
             ExportAction::Skipped(reason) => format!("Skipped  ({reason})"),
             ExportAction::Failed(err) => {
@@ -404,28 +579,45 @@ pub async fn run_config_export(
 }
 
 /// Perform the actual export for all specs; returns a result per client.
-fn do_export(
-    target: ExportTarget,
-    mode: ConnectionMode,
-    name: &str,
-    dry_run: bool,
-    config_path: &Path,
-    config: &Config,
-) -> Vec<ExportResult> {
+fn do_export(target: ExportTarget, name: &str, dry_run: bool, entry: &Value) -> Vec<ExportResult> {
     let specs = client_specs(target);
-    let entry = build_gateway_entry(config, Some(config_path), mode);
 
     specs
         .into_iter()
         .map(|spec| {
-            let action = export_one(&spec, name, &entry, dry_run);
+            let (action, safety) = export_one_detailed(&spec, name, entry, dry_run);
             ExportResult {
                 client: spec.label,
                 path: spec.path,
                 action,
+                safety,
             }
         })
         .collect()
+}
+
+fn format_safety_suffix(safety: Option<&ExportSafety>) -> String {
+    let Some(safety) = safety else {
+        return String::new();
+    };
+
+    let mut parts = Vec::new();
+    if let Some(backup_path) = &safety.backup_path {
+        parts.push(format!("backup: {}", backup_path.display()));
+        parts.push(format!(
+            "rollback: mcp-gateway setup export --rollback {}",
+            backup_path.display()
+        ));
+    }
+    if safety.verified {
+        parts.push("verified".to_string());
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join("; "))
+    }
 }
 
 /// Export (or dry-run) a single client spec.
@@ -435,6 +627,15 @@ pub(super) fn export_one(
     entry: &Value,
     dry_run: bool,
 ) -> ExportAction {
+    export_one_detailed(spec, name, entry, dry_run).0
+}
+
+fn export_one_detailed(
+    spec: &ClientSpec,
+    name: &str,
+    entry: &Value,
+    dry_run: bool,
+) -> (ExportAction, Option<ExportSafety>) {
     // For workspace-relative paths (Cursor, VS Code, Cline): skip if the
     // parent directory does not exist, since there is no project open.
     if (!spec.path.is_absolute()
@@ -445,7 +646,10 @@ pub(super) fn export_one(
         && !parent.as_os_str().is_empty()
         && !parent.exists()
     {
-        return ExportAction::Skipped(format!("no {} directory", parent.display()));
+        return (
+            ExportAction::Skipped(format!("no {} directory", parent.display())),
+            None,
+        );
     }
 
     // For global paths (Claude Desktop, Windsurf, Zed): skip if the parent
@@ -455,20 +659,30 @@ pub(super) fn export_one(
         && !parent.as_os_str().is_empty()
         && !parent.exists()
     {
-        return ExportAction::Skipped(format!("{} not installed", spec.label));
+        return (
+            ExportAction::Skipped(format!("{} not installed", spec.label)),
+            None,
+        );
     }
 
     if dry_run {
         // Dry-run: report what would happen without touching the filesystem.
-        if spec.path.exists() {
+        let action = if spec.path.exists() {
             ExportAction::Updated
         } else {
             ExportAction::Created
-        }
+        };
+        (action, None)
     } else {
-        match merge_into_config(&spec.path, spec.servers_key, name, entry) {
-            Ok(action) => action,
-            Err(e) => ExportAction::Failed(e),
+        match merge_into_config_with_safety(&spec.path, spec.servers_key, name, entry) {
+            Ok(result) => {
+                let safety = ExportSafety {
+                    backup_path: result.backup_path,
+                    verified: result.verified,
+                };
+                (result.action, Some(safety))
+            }
+            Err(e) => (ExportAction::Failed(e), None),
         }
     }
 }

@@ -75,6 +75,38 @@ services:
 
 Stdio backends spawn child processes. If those backends use `npx`, install Node.js in the image or run them as HTTP sidecar containers.
 
+### Container Verification
+
+Use the same doctor command for local and container deployments:
+
+```bash
+mcp-gateway doctor --config gateway.yaml --format json
+curl -sf http://localhost:39400/health > /dev/null
+scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
+scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + routed tool call
+```
+
+Client configs are still generated on the host, not inside the container:
+
+```bash
+mcp-gateway setup export --target all --dry-run --config gateway.yaml
+mcp-gateway setup export --target all --config gateway.yaml
+```
+
+Applied exports print any backup file and a rollback command. Use that rollback command before deleting or hand-editing a generated client config.
+
+## Kubernetes Enterprise Alpha
+
+The enterprise-alpha Kubernetes package lives in
+[`deploy/kubernetes/enterprise-alpha`](../deploy/kubernetes/enterprise-alpha/README.md).
+It is manifest-first and currently covers CRD shape, Helm-style values,
+least-privilege base resources, network policy defaults, HA probes, read-only
+preflight checks, and local manifest tests.
+
+Free/core deployment remains Docker, Docker Compose, and single-node service
+templates. Kubernetes HA, cluster policy reconciliation, managed rollout,
+multi-tenant namespaces, and fleet evidence export are enterprise scope.
+
 ## Configuration Loading Order
 
 Config merges from three sources (later overrides earlier):
@@ -219,6 +251,23 @@ sudo chown -R mcp-gateway:mcp-gateway /etc/mcp-gateway
 sudo systemctl daemon-reload
 sudo systemctl enable --now mcp-gateway
 ```
+
+## Client Configuration Safety
+
+`mcp-gateway setup export` is the supported way to write Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Cline, and Zed client configs.
+
+```bash
+# Preview the exact entry first
+mcp-gateway setup export --target all --dry-run --config /etc/mcp-gateway/gateway.yaml
+
+# Apply with backup and post-write verification
+mcp-gateway setup export --target all --config /etc/mcp-gateway/gateway.yaml
+
+# Restore one client config from the printed backup path
+mcp-gateway setup export --rollback /path/to/client.json.mcp-gateway.bak.123456789
+```
+
+The exporter preserves unrelated client settings, creates a sibling backup before updating an existing file, verifies the gateway entry after writing, and prints the rollback command. For managed team deployments, generate and review the client entry once, then distribute it through your MDM, dotfile manager, or configuration-management system instead of asking each user to hand-edit JSON.
 
 ## Health Checks
 

@@ -103,6 +103,38 @@ No token cost for loading GitMCP's schemas into the model: the gateway's
 Meta-MCP surface keeps discovery compact and the AI only pays for the tool it
 actually calls.
 
+## ShadowRadar before trusting remote endpoints
+
+Use passive discovery to find remote or local MCP endpoints that bypass the
+gateway:
+
+```bash
+mcp-gateway cap discover --shadow --format json
+```
+
+The `shadow_radar.v1` report lists unmanaged assets only and includes stable
+IDs, source, ownership, transport exposure, trust status, data risk,
+recommended action, confidence, confirmation requirement, verification step,
+and rollback step. The default scan is local and passive: it reads known client
+configs, environment hints, and the local process table, but it does not
+handshake with discovered servers or invoke their tools.
+
+Code that renders TrustCards, doctor findings, or control-plane inventory
+should consume the derived `shadow_radar.handoff.v1` feed from
+`ShadowScanReport::consumer_handoff()`. The handoff keeps the scan passive,
+preserves stable asset IDs, and carries only human-safe evidence pointers such
+as sanitized endpoints, executable basenames, ports, and config paths.
+
+For reviewed local findings, adoption is explicit:
+
+```bash
+mcp-gateway cap discover --shadow --write-config
+```
+
+Free/core includes local passive inventory and risk hints. Enterprise fleet
+features are scheduled org-wide inventory, drift evidence, SIEM export, owner
+assignment, and policy remediation.
+
 ## Authenticated remote backends
 
 For remote servers that need auth, add headers or OAuth:

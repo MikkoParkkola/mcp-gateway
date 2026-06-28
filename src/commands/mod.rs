@@ -16,6 +16,7 @@ mod plugin;
 mod setup;
 mod skills;
 mod stats;
+mod trust;
 mod upgrade;
 
 #[cfg(feature = "webui")]
@@ -31,13 +32,14 @@ pub use skills::{
     run_skills_show,
 };
 pub use stats::run_stats_command;
+pub use trust::run_trust_command;
 pub use upgrade::{check_upgrade, data_dir as upgrade_data_dir, run_upgrade_command};
 
 use std::process::ExitCode;
 
 use mcp_gateway::{
     cli::{
-        TlsCommand, ToolCommand,
+        InitProfile, TlsCommand, ToolCommand,
         completion::{ShellTarget, generate_completion},
         invoke::{ToolCatalogue, build_completion_tool_names, execute_tool, resolve_args},
         output::{OutputFormat, print_tool_inspect, print_tool_list, print_tool_result},
@@ -49,10 +51,27 @@ use mcp_gateway::{
 
 /// Generate a starter gateway configuration file.
 ///
-/// Writes a commented YAML configuration to `output`. When `with_examples` is
-/// `true` three free-tier capability definitions are included so the user can
-/// start experimenting immediately.
-pub fn run_init_command(output: &std::path::Path, with_examples: bool) -> ExitCode {
+const LOCAL_SAMPLE_CAPABILITIES: &[(&str, &str)] = &[
+    (
+        "capabilities/knowledge/weather_current.yaml",
+        include_str!("../../capabilities/knowledge/weather_current.yaml"),
+    ),
+    (
+        "capabilities/knowledge/public_holidays.yaml",
+        include_str!("../../capabilities/knowledge/public_holidays.yaml"),
+    ),
+];
+
+/// Generate a starter gateway configuration file.
+///
+/// Writes a commented YAML configuration to `output`. The local profile also
+/// writes zero-key sample capability files next to the config so a clean install
+/// can route a tool call without manual YAML authoring.
+pub fn run_init_command(
+    output: &std::path::Path,
+    with_examples: bool,
+    profile: InitProfile,
+) -> ExitCode {
     if output.exists() {
         eprintln!(
             "Error: {} already exists. Remove it first or choose a different path with --output.",
@@ -61,11 +80,17 @@ pub fn run_init_command(output: &std::path::Path, with_examples: bool) -> ExitCo
         return ExitCode::FAILURE;
     }
 
-    let config_content = build_init_config(with_examples);
+    let sample_files = init_sample_capability_files(output, with_examples, profile);
+    if let Err(e) = preflight_init_targets(output, &sample_files) {
+        eprintln!("Error: {e}");
+        return ExitCode::FAILURE;
+    }
 
-    match std::fs::write(output, config_content) {
+    let config_content = build_init_config(with_examples, profile);
+
+    match write_init_files(output, &config_content, &sample_files) {
         Ok(()) => {
-            print_init_success(output);
+            print_init_success(output, profile, !sample_files.is_empty());
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -75,74 +100,158 @@ pub fn run_init_command(output: &std::path::Path, with_examples: bool) -> ExitCo
     }
 }
 
-fn build_init_config(with_examples: bool) -> String {
-    let examples_section = if with_examples {
-        r#"
-# Capabilities - direct REST API integration (no MCP server needed)
-# These free capabilities work out of the box with zero API keys.
-capabilities:
-  enabled: true
-  directories:
-    - capabilities
-
-# Example MCP backends (uncomment to enable)
-# backends:
-#   filesystem:
-#     command: "npx -y @anthropic/mcp-server-filesystem /path/to/dir"
-#     description: "File system access"
-#   brave-search:
-#     command: "npx -y @anthropic/mcp-server-brave-search"
-#     description: "Web search via Brave"
-#     env:
-#       BRAVE_API_KEY: "${BRAVE_API_KEY}"
-"#
+fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
+    let write_local_samples = with_examples && profile == InitProfile::Local;
+    let examples_section = if write_local_samples {
+        concat!(
+            "\n",
+            "# Capabilities - direct REST API integration (no MCP server needed)\n",
+            "# The local profile writes zero-key sample tools into ./capabilities/.\n",
+            "capabilities:\n",
+            "  enabled: true\n",
+            "  directories:\n",
+            "    - capabilities\n",
+            "\n",
+            "# Add MCP backends with `mcp-gateway add <name> -- <command>` or run:\n",
+            "#   mcp-gateway setup wizard --configure-client\n",
+            "# backends:\n",
+            "#   filesystem:\n",
+            "#     command: \"npx -y @anthropic/mcp-server-filesystem /path/to/dir\"\n",
+            "#     description: \"File system access\"\n",
+        )
     } else {
-        r#"
-# Capabilities - direct REST API integration
-capabilities:
-  enabled: true
-  directories:
-    - capabilities
-
-# Add your MCP backends here:
-# backends:
-#   my-server:
-#     command: "npx -y @my/mcp-server"
-#     description: "My MCP server"
-"#
+        concat!(
+            "\n",
+            "# Capabilities - direct REST API integration\n",
+            "capabilities:\n",
+            "  enabled: true\n",
+            "  directories:\n",
+            "    - capabilities\n",
+            "\n",
+            "# Add your MCP backends here:\n",
+            "# backends:\n",
+            "#   my-server:\n",
+            "#     command: \"npx -y @my/mcp-server\"\n",
+            "#     description: \"My MCP server\"\n",
+        )
     };
 
     format!(
-        r#"# MCP Gateway Configuration
-# ========================
-# Generated by: mcp-gateway init
-#
-# Documentation: https://github.com/MikkoParkkola/mcp-gateway#readme
-
-# Server settings
-server:
-  host: "127.0.0.1"
-  port: 39400
-
-# Meta-MCP mode - exposes a compact gateway tool surface
-# Common deployment: 14 tools (12 minimum, 15 with webhooks)
-# Keeps prompt overhead low by discovering backend tools on demand
-meta_mcp:
-  enabled: true
-  cache_tools: true
-  cache_ttl: 300s
-{examples_section}"#
+        concat!(
+            "# MCP Gateway Configuration\n",
+            "# ========================\n",
+            "# Generated by: mcp-gateway init\n",
+            "# Profile: {profile}\n",
+            "#\n",
+            "# Documentation: https://github.com/MikkoParkkola/mcp-gateway#readme\n",
+            "\n",
+            "# Server settings\n",
+            "server:\n",
+            "  host: \"127.0.0.1\"\n",
+            "  port: 39400\n",
+            "\n",
+            "# Meta-MCP mode - exposes a compact gateway tool surface\n",
+            "# Common deployment: 14 tools (12 minimum, 15 with webhooks)\n",
+            "# Keeps prompt overhead low by discovering backend tools on demand\n",
+            "meta_mcp:\n",
+            "  enabled: true\n",
+            "  cache_tools: true\n",
+            "  cache_ttl: 300s\n",
+            "{examples_section}",
+        ),
+        profile = profile,
+        examples_section = examples_section,
     )
 }
 
-fn print_init_success(output: &std::path::Path) {
+fn init_sample_capability_files(
+    output: &std::path::Path,
+    with_examples: bool,
+    profile: InitProfile,
+) -> Vec<(std::path::PathBuf, &'static str)> {
+    if !with_examples || profile != InitProfile::Local {
+        return Vec::new();
+    }
+
+    let base = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    LOCAL_SAMPLE_CAPABILITIES
+        .iter()
+        .map(|(relative, content)| (base.join(relative), *content))
+        .collect()
+}
+
+fn preflight_init_targets(
+    output: &std::path::Path,
+    sample_files: &[(std::path::PathBuf, &'static str)],
+) -> std::io::Result<()> {
+    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty())
+        && parent.exists()
+        && !parent.is_dir()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{} exists and is not a directory", parent.display()),
+        ));
+    }
+
+    for (path, _) in sample_files {
+        if path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "{} already exists; remove it or rerun with --with-examples=false",
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn write_init_files(
+    output: &std::path::Path,
+    config_content: &str,
+    sample_files: &[(std::path::PathBuf, &'static str)],
+) -> std::io::Result<()> {
+    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    for (path, _) in sample_files {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    std::fs::write(output, config_content)?;
+
+    for (path, content) in sample_files {
+        std::fs::write(path, content)?;
+    }
+
+    Ok(())
+}
+
+fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samples: bool) {
     println!("Created {}", output.display());
+    println!("Profile: {profile}");
+    if wrote_samples {
+        println!("Created zero-key sample capabilities under ./capabilities/");
+    }
     println!();
     println!("Next steps:");
-    println!("  1. Review and edit {}", output.display());
+    println!("  1. Run diagnostics:");
+    println!("     mcp-gateway doctor -c {}", output.display());
     println!("  2. Start the gateway:");
     println!("     mcp-gateway -c {}", output.display());
-    println!("  3. Add to your MCP client (e.g. Claude Desktop):");
+    println!("  3. Add to your MCP client:");
+    println!("     mcp-gateway setup wizard --configure-client");
+    println!("  4. Or add manually:");
     println!("     {{");
     println!("       \"mcpServers\": {{");
     println!("         \"gateway\": {{");

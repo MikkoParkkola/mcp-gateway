@@ -1,11 +1,14 @@
 //! Secondary subcommand enums for `mcp-gateway`.
 //!
-//! This module contains [`CapCommand`], [`PluginCommand`], and [`TlsCommand`]
-//! — all extracted from `cli/mod.rs` to keep each file under 800 lines.
+//! This module contains [`CapCommand`], [`PluginCommand`], [`TlsCommand`], and
+//! [`TrustCommand`] — all extracted from `cli/mod.rs` to keep each file under
+//! 800 lines.
 
 use std::path::PathBuf;
 
 use clap::Subcommand;
+
+use crate::cli::output::OutputFormat;
 
 /// Capability management subcommands
 #[derive(Subcommand, Debug)]
@@ -79,9 +82,11 @@ pub enum CapCommand {
     /// Checks Claude Desktop, VS Code, Cursor, Windsurf, ~/.config/mcp/,
     /// running MCP processes, and `MCP_SERVER_*` environment variables.
     ///
-    /// Use `--shadow` to show only servers that are *not* already registered
-    /// as backends in the gateway configuration (i.e. shadow / unregistered
-    /// servers).
+    /// Use `--shadow` for a passive `ShadowRadar` report of servers that are
+    /// *not* already registered as backends in the gateway configuration. The
+    /// report classifies ownership, transport exposure, trust status, data
+    /// risk, recommended action, confidence, verification, and rollback. It
+    /// never invokes discovered tools.
     #[command(about = "Auto-discover existing MCP servers on this machine")]
     Discover {
         /// Output format: "table" (human-readable), "json", or "yaml"
@@ -96,8 +101,8 @@ pub enum CapCommand {
         #[arg(long)]
         config_path: Option<PathBuf>,
 
-        /// Show only servers that are NOT registered in the gateway config
-        /// (shadow / unregistered servers).
+        /// Emit a passive `ShadowRadar` report for servers that are NOT
+        /// registered in the gateway config.
         #[arg(long)]
         shadow: bool,
 
@@ -186,6 +191,133 @@ pub enum CapCommand {
         /// Cost per API call in USD (annotated in generated capability metadata)
         #[arg(long)]
         cost_per_call: Option<f64>,
+    },
+}
+
+/// `TrustCard` and CBOM advisory metadata commands.
+#[derive(Subcommand, Debug)]
+pub enum TrustCommand {
+    /// Generate `TrustCard` and CBOM metadata from local capability YAML files.
+    #[command(about = "Generate TrustCard metadata from local capabilities")]
+    Generate {
+        /// Directory containing capability YAML definitions.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Output format.
+        #[arg(short, long, default_value = "json", value_enum)]
+        format: OutputFormat,
+
+        /// Optional file path for machine JSON output.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Inspect one generated `TrustCard` from the local capability catalogue.
+    #[command(about = "Inspect a generated TrustCard for one capability")]
+    Inspect {
+        /// Capability/server name to inspect.
+        #[arg(required = true)]
+        name: String,
+
+        /// Directory containing capability YAML definitions.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Validate a `TrustCard` file or generated local capability `TrustCard`s.
+    #[command(about = "Validate TrustCard metadata")]
+    Validate {
+        /// `TrustCard` JSON or YAML file to validate. If omitted, generated
+        /// `TrustCard`s from --capabilities are validated.
+        #[arg(long)]
+        file: Option<PathBuf>,
+
+        /// Directory containing capability YAML definitions, used when --file
+        /// is omitted.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Return a non-zero exit code for warning findings, not only failures.
+        #[arg(long)]
+        strict: bool,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Evaluate generated `TrustCard`s with `CatalogTrustLab`.
+    #[command(subcommand, about = "CatalogTrustLab advisory evaluation commands")]
+    Lab(TrustLabCommand),
+}
+
+/// `CatalogTrustLab` evaluation commands.
+#[derive(Subcommand, Debug)]
+pub enum TrustLabCommand {
+    /// Evaluate one or all local capability `TrustCard`s.
+    #[command(about = "Evaluate generated TrustCards with CatalogTrustLab")]
+    Evaluate {
+        /// Optional capability/server name to evaluate. If omitted, every
+        /// generated local `TrustCard` is evaluated.
+        name: Option<String>,
+
+        /// Directory containing capability YAML definitions.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Return non-zero when policy verdict is block. Default mode is
+        /// advisory-only and records would-block evidence without failing.
+        #[arg(long)]
+        enforce: bool,
+
+        /// Optional `TrustLab` baseline JSON/YAML file for schema-drift checks.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+
+        /// Write the current generated tool schema digests as a baseline file.
+        #[arg(long)]
+        write_baseline: Option<PathBuf>,
+
+        /// Baseline identifier used when --write-baseline is set.
+        #[arg(long, default_value = "local-baseline")]
+        baseline_id: String,
+
+        /// Minimum score for policy allow.
+        #[arg(long, default_value_t = 75)]
+        minimum_score: u8,
+
+        /// Minimum score for certification.
+        #[arg(long, default_value_t = 90)]
+        certification_score: u8,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
     },
 }
 

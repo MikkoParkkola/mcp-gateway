@@ -11,359 +11,17 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-// ============================================================================
-// Synonym expansion
-// ============================================================================
+mod scoring;
 
-/// Return the synonym group for a given word (all lowercase).
-///
-/// Each word maps to the *other* members of its group. Matches against synonyms
-/// score at 0.8× of an exact match to prefer literal terms. Returns an empty
-/// slice when the word has no known synonyms.
-///
-/// # Extending the synonym map
-///
-/// Add a new `match` arm with the canonical and alternate spellings:
-/// ```text
-/// "send" | "deliver" | "publish" | "emit" => &["send", "deliver", "publish", "emit"],
-/// ```
-/// Every word in the group must map to the full group (bidirectional).
-#[must_use]
-pub fn expand_synonyms(word: &str) -> &'static [&'static str] {
-    match word {
-        // search group
-        "search" | "find" | "discover" | "locate" | "lookup" | "query" => {
-            &["search", "find", "discover", "locate", "lookup", "query"]
-        }
-        // monitor group
-        "monitor" | "watch" | "track" | "observe" | "alert" => {
-            &["monitor", "watch", "track", "observe", "alert"]
-        }
-        // extract group
-        "extract" | "scrape" | "parse" | "pull" | "fetch" => {
-            &["extract", "scrape", "parse", "pull", "fetch"]
-        }
-        // create group
-        "create" | "generate" | "make" | "build" | "produce" => {
-            &["create", "generate", "make", "build", "produce"]
-        }
-        // analyze group
-        "analyze" | "examine" | "inspect" | "audit" | "review" => {
-            &["analyze", "examine", "inspect", "audit", "review"]
-        }
-        // batch group
-        "batch" | "bulk" | "mass" | "parallel" | "concurrent" => {
-            &["batch", "bulk", "mass", "parallel", "concurrent"]
-        }
-        // entity group
-        "entity" | "record" | "item" | "object" | "resource" => {
-            &["entity", "record", "item", "object", "resource"]
-        }
-        // research group
-        "research" | "investigate" | "study" | "explore" => {
-            &["research", "investigate", "study", "explore"]
-        }
-        // send group
-        "send" | "deliver" | "publish" | "emit" | "notify" => {
-            &["send", "deliver", "publish", "emit", "notify"]
-        }
-        // delete group
-        "delete" | "remove" | "purge" | "clear" | "destroy" => {
-            &["delete", "remove", "purge", "clear", "destroy"]
-        }
-        // list group
-        "list" | "enumerate" | "browse" | "catalog" | "index" => {
-            &["list", "enumerate", "browse", "catalog", "index"]
-        }
-        // convert group
-        "convert" | "transform" | "translate" | "format" | "encode" => {
-            &["convert", "transform", "translate", "format", "encode"]
-        }
-        // execute group
-        "execute" | "run" | "invoke" | "call" | "trigger" => {
-            &["execute", "run", "invoke", "call", "trigger"]
-        }
-        // show group
-        "show" | "display" | "render" | "print" | "view" => {
-            &["show", "display", "render", "print", "view"]
-        }
-        // check group
-        "check" | "validate" | "verify" | "test" | "assert" => {
-            &["check", "validate", "verify", "test", "assert"]
-        }
-        // modify group
-        "modify" | "update" | "edit" | "change" | "patch" => {
-            &["modify", "update", "edit", "change", "patch"]
-        }
-        // count group
-        "count" | "aggregate" | "summarize" | "total" | "tally" => {
-            &["count", "aggregate", "summarize", "total", "tally"]
-        }
-        // access group
-        "access" | "read" | "get" | "retrieve" | "obtain" => {
-            &["access", "read", "get", "retrieve", "obtain"]
-        }
-        // store group
-        "store" | "save" | "write" | "persist" | "cache" => {
-            &["store", "save", "write", "persist", "cache"]
-        }
-        // connect group
-        "connect" | "link" | "attach" | "join" | "bind" => {
-            &["connect", "link", "attach", "join", "bind"]
-        }
-        _ => &[],
-    }
-}
+use scoring::score_text_relevance;
+pub use scoring::{expand_synonyms, is_schema_field_match};
 
-/// Score multiplier applied to synonym-expanded matches.
-///
-/// Exact matches retain their full score; synonym matches are discounted
-/// to prefer literal term alignment over semantic expansion.
-const SYNONYM_MULTIPLIER: f64 = 0.8;
+#[cfg(test)]
+use scoring::{
+    SYNONYM_MULTIPLIER, extract_tag_section, is_keyword_match, is_keyword_match_with_synonyms,
+};
 
-// ============================================================================
-// Scoring helpers
-// ============================================================================
-
-/// Return `true` if `text` contains `word` as a substring, or contains any
-/// synonym of `word`.  The `synonym_hit` output flag is set to `true` when a
-/// synonym (not the word itself) produced the match — callers can apply the
-/// `SYNONYM_MULTIPLIER` in that case.
-fn text_contains_with_synonyms(text: &str, word: &str) -> (bool, bool) {
-    if text.contains(word) {
-        return (true, false);
-    }
-    for syn in expand_synonyms(word) {
-        if *syn != word && text.contains(*syn) {
-            return (true, true);
-        }
-    }
-    (false, false)
-}
-
-/// Keyword-tag scoring: returns `(score, via_synonym)`.
-///
-/// Tier: `6 + 2N` where N is the number of matched keyword tags.
-#[allow(clippy::cast_precision_loss)]
-fn keyword_tag_score(desc_lower: &str, words: &[&str]) -> (f64, bool) {
-    if !desc_lower.contains("[keywords:") {
-        return (0.0, false);
-    }
-    let exact_kw = count_keyword_matches(desc_lower, words);
-    if exact_kw > 0 {
-        return (6.0 + (exact_kw as f64) * 2.0, false);
-    }
-    let syn_kw = count_keyword_matches_with_synonyms(desc_lower, words);
-    if syn_kw > 0 {
-        (6.0 + (syn_kw as f64) * 2.0, true)
-    } else {
-        (0.0, false)
-    }
-}
-
-/// Text-coverage scoring for multi-word queries: returns `(score, via_synonym)`.
-///
-/// Counts query words found anywhere in `combined` (tool name + description).
-/// Tiers: `10+2N` (all N matched), `3+2M` (M of N partial), `0` (no match).
-#[allow(clippy::cast_precision_loss)]
-fn text_coverage_score(combined: &str, words: &[&str]) -> (f64, bool) {
-    if words.len() <= 1 {
-        return (0.0, false);
-    }
-    let exact_matched = words.iter().filter(|w| combined.contains(**w)).count();
-    if exact_matched == words.len() {
-        return (10.0 + (exact_matched as f64) * 2.0, false);
-    }
-    let syn_matched = words
-        .iter()
-        .filter(|w| text_contains_with_synonyms(combined, w).0)
-        .count();
-    let any_syn = words
-        .iter()
-        .any(|w| text_contains_with_synonyms(combined, w).1);
-    if syn_matched == words.len() {
-        (10.0 + (syn_matched as f64) * 2.0, any_syn)
-    } else if syn_matched > 0 {
-        (3.0 + (syn_matched as f64) * 2.0, any_syn)
-    } else {
-        (0.0, false)
-    }
-}
-
-/// Select the winning `(score, via_synonym)` from the three scoring paths.
-///
-/// Schema scores are never synonym-discounted (field names are exact identifiers).
-fn best_coverage_score(kw: (f64, bool), schema: f64, text: (f64, bool)) -> (f64, bool) {
-    let (kw_best, kw_syn) = if kw.0 >= text.0 { kw } else { text };
-    if schema > kw_best {
-        (schema, false)
-    } else {
-        (kw_best, kw_syn)
-    }
-}
-
-/// Compute text relevance score for a single result against a pre-lowercased query.
-///
-/// `words` must be `query.split_whitespace().collect()` — passed in to avoid
-/// re-splitting for every result in a batch.
-///
-/// Synonym-expanded matches use the same scoring tiers but with a
-/// `SYNONYM_MULTIPLIER` (0.8×) applied to the base text-relevance score before
-/// the usage multiplier is applied.
-fn score_text_relevance(tool: &str, description: &str, query: &str, words: &[&str]) -> f64 {
-    let tool_lower = tool.to_lowercase();
-    let desc_lower = description.to_lowercase();
-
-    // Tier 1: single-word exact name match
-    if tool_lower == query {
-        return 10.0;
-    }
-
-    // Tier 2: all words found in tool name alone
-    if words.len() > 1 {
-        if words.iter().all(|w| tool_lower.contains(w)) {
-            return 15.0;
-        }
-        let syn_all_in_name = words
-            .iter()
-            .all(|w| text_contains_with_synonyms(&tool_lower, w).0);
-        let any_synonym = words
-            .iter()
-            .any(|w| text_contains_with_synonyms(&tool_lower, w).1);
-        if syn_all_in_name && any_synonym {
-            return 15.0 * SYNONYM_MULTIPLIER;
-        }
-    }
-
-    // Coverage tiers: keyword-tag, schema-field, text-coverage — take the best.
-    let combined = format!("{tool_lower} {desc_lower}");
-    let (best, via_syn) = best_coverage_score(
-        keyword_tag_score(&desc_lower, words),
-        schema_field_score(&desc_lower, words),
-        text_coverage_score(&combined, words),
-    );
-    if best > 0.0 {
-        return if via_syn {
-            best * SYNONYM_MULTIPLIER
-        } else {
-            best
-        };
-    }
-
-    // Single-word substring fallbacks (exact, then schema-field, then desc, then synonyms)
-    if tool_lower.contains(query) {
-        return 5.0;
-    }
-    if words.len() == 1 && is_schema_field_match(&desc_lower, query) {
-        return 6.0;
-    }
-    if desc_lower.contains(query) {
-        return 2.0;
-    }
-    if words.len() == 1 {
-        for syn in expand_synonyms(query) {
-            if *syn != query {
-                if tool_lower.contains(syn) {
-                    return 5.0 * SYNONYM_MULTIPLIER;
-                }
-                if desc_lower.contains(syn) {
-                    return 2.0 * SYNONYM_MULTIPLIER;
-                }
-            }
-        }
-    }
-
-    0.0
-}
-
-/// Extract a bracketed tag section from a lowercased description by its prefix.
-///
-/// Returns the content between `[{prefix}:` and the matching `]`, or `None`
-/// if the section is absent.  Used by both keyword and schema tag lookups.
-fn extract_tag_section<'a>(desc_lower: &'a str, prefix: &str) -> Option<&'a str> {
-    let marker = format!("[{prefix}:");
-    let start = desc_lower.find(marker.as_str())?;
-    let after_marker = &desc_lower[start + marker.len()..];
-    let end = after_marker.find(']').unwrap_or(after_marker.len());
-    Some(&after_marker[..end])
-}
-
-/// Check whether `word` appears as a discrete keyword inside the
-/// `[keywords: tag1, tag2, ...]` suffix of a lowercased description.
-/// Also matches against hyphen-split parts (e.g., "entity" matches "entity-discovery").
-fn is_keyword_match(desc_lower: &str, word: &str) -> bool {
-    let Some(section) = extract_tag_section(desc_lower, "keywords") else {
-        return false;
-    };
-    section.split(',').any(|tag| {
-        let tag = tag.trim();
-        tag == word || tag.split('-').any(|part| part == word)
-    })
-}
-
-/// Check whether `word` appears as a token inside the `[schema: ...]` suffix.
-///
-/// Schema tokens are plain lowercase identifiers separated by commas.
-#[must_use]
-pub fn is_schema_field_match(desc_lower: &str, word: &str) -> bool {
-    let Some(section) = extract_tag_section(desc_lower, "schema") else {
-        return false;
-    };
-    section.split(',').any(|token| token.trim() == word)
-}
-
-/// Count how many query words match schema fields in the description.
-fn count_schema_field_matches(desc_lower: &str, words: &[&str]) -> usize {
-    words
-        .iter()
-        .filter(|w| is_schema_field_match(desc_lower, w))
-        .count()
-}
-
-/// Compute the schema-field scoring tier for a query against a description.
-///
-/// Returns `(score, via_synonym=false)` — schema tokens are exact identifiers
-/// so synonym expansion is never applied here.
-///
-/// Tier: `4 + 2N` where N is the count of matched schema fields.
-/// A single match scores 6.0 (above description-substring at 2.0, below
-/// keyword-tag at 8.0). When no schema section is present, returns 0.0.
-#[allow(clippy::cast_precision_loss)]
-fn schema_field_score(desc_lower: &str, words: &[&str]) -> f64 {
-    if !desc_lower.contains("[schema:") {
-        return 0.0;
-    }
-    let n = count_schema_field_matches(desc_lower, words);
-    if n > 0 { 4.0 + (n as f64) * 2.0 } else { 0.0 }
-}
-
-/// Check whether `word` or any of its synonyms appears as a keyword tag in the description.
-fn is_keyword_match_with_synonyms(desc_lower: &str, word: &str) -> bool {
-    if is_keyword_match(desc_lower, word) {
-        return true;
-    }
-    expand_synonyms(word)
-        .iter()
-        .any(|syn| *syn != word && is_keyword_match(desc_lower, syn))
-}
-
-/// Count how many query words match keywords in the description (exact only).
-fn count_keyword_matches(desc_lower: &str, words: &[&str]) -> usize {
-    words
-        .iter()
-        .filter(|w| is_keyword_match(desc_lower, w))
-        .count()
-}
-
-/// Count how many query words match keywords in the description (exact or synonym).
-fn count_keyword_matches_with_synonyms(desc_lower: &str, words: &[&str]) -> usize {
-    words
-        .iter()
-        .filter(|w| is_keyword_match_with_synonyms(desc_lower, w))
-        .count()
-}
-
-/// Search result with relevance score
+/// Search result with relevance score and adaptive ranking metadata.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     /// Server name
@@ -374,6 +32,139 @@ pub struct SearchResult {
     pub description: String,
     /// Relevance score (higher = more relevant)
     pub score: f64,
+    /// Coarse ranking signals used for scoring and explanations.
+    pub signals: RankingSignals,
+    /// Deterministic explanation for inclusion or downgrade.
+    pub explanation: RankingExplanation,
+    /// Exclusion reason when policy prefilters suppress the result.
+    pub exclusion: Option<RankingExclusion>,
+}
+
+impl SearchResult {
+    /// Create a search result with neutral non-relevance signals.
+    #[must_use]
+    pub fn new(
+        server: impl Into<String>,
+        tool: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            server: server.into(),
+            tool: tool.into(),
+            description: description.into(),
+            score: 0.0,
+            signals: RankingSignals::default(),
+            explanation: RankingExplanation {
+                included: true,
+                reasons: Vec::new(),
+            },
+            exclusion: None,
+        }
+    }
+}
+
+/// Coarse ranking signals. Values are clamped to `0.0..=1.0` except
+/// `usage_count`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingSignals {
+    /// Text relevance computed from name, description, keywords, and schema.
+    pub relevance: f64,
+    /// Safety score. `0.0` suppresses the candidate.
+    pub safety: f64,
+    /// Trust score. Very low trust suppresses the candidate.
+    pub trust: f64,
+    /// Grant/authorization fit. `0.0` suppresses the candidate.
+    pub grant: f64,
+    /// Runtime health score. `0.0` suppresses the candidate.
+    pub runtime_health: f64,
+    /// Cost-efficiency score.
+    pub cost_efficiency: f64,
+    /// Latency score.
+    pub latency: f64,
+    /// Freshness score.
+    pub freshness: f64,
+    /// Local feedback boost derived from safe usage counters.
+    pub user_feedback: f64,
+    /// Local usage count used to compute feedback.
+    pub usage_count: u64,
+}
+
+impl Default for RankingSignals {
+    fn default() -> Self {
+        Self {
+            relevance: 0.0,
+            safety: 1.0,
+            trust: 1.0,
+            grant: 1.0,
+            runtime_health: 1.0,
+            cost_efficiency: 1.0,
+            latency: 1.0,
+            freshness: 1.0,
+            user_feedback: 0.0,
+            usage_count: 0,
+        }
+    }
+}
+
+impl RankingSignals {
+    fn from_json(value: &Value) -> Self {
+        Self {
+            safety: parse_safety_signal(value),
+            trust: parse_numeric_signal(value, &["trust_score", "trust"], 1.0),
+            grant: parse_grant_signal(value),
+            runtime_health: parse_runtime_health_signal(value),
+            cost_efficiency: parse_cost_efficiency_signal(value),
+            latency: parse_latency_signal(value),
+            freshness: parse_numeric_signal(value, &["freshness_score", "freshness"], 1.0),
+            ..Self::default()
+        }
+    }
+
+    fn multiplier(&self) -> f64 {
+        // Relevance remains dominant. Non-text signals gently reorder safe
+        // candidates without letting popularity override a poor intent match.
+        let weighted = (self.safety * 0.24)
+            + (self.trust * 0.18)
+            + (self.grant * 0.18)
+            + (self.runtime_health * 0.14)
+            + (self.cost_efficiency * 0.10)
+            + (self.latency * 0.06)
+            + (self.freshness * 0.04)
+            + (self.user_feedback.min(1.0) * 0.06);
+        weighted.clamp(0.0, 1.25)
+    }
+}
+
+/// Deterministic ranking explanation emitted with search results.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RankingExplanation {
+    /// Whether the candidate survived policy prefilters.
+    pub included: bool,
+    /// Stable explanation reasons that do not include request payloads.
+    pub reasons: Vec<String>,
+}
+
+/// Suppression category for policy prefilters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RankingExclusion {
+    /// Exclusion kind.
+    pub kind: RankingExclusionKind,
+    /// Stable explanation reason.
+    pub reason: String,
+}
+
+/// Coarse reason a candidate was suppressed before relevance ranking.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RankingExclusionKind {
+    /// Unsafe metadata or risk marker.
+    Unsafe,
+    /// Missing or denied grant.
+    Unauthorized,
+    /// Unhealthy or disabled runtime.
+    Unhealthy,
+    /// Trust signal is below the safe threshold.
+    Untrusted,
 }
 
 /// Search ranker with usage-based weighting
@@ -437,6 +228,16 @@ impl SearchRanker {
         let words: Vec<&str> = query_lower.split_whitespace().collect();
 
         for result in &mut results {
+            if let Some(exclusion) = exclusion_for(&result.signals) {
+                result.exclusion = Some(exclusion.clone());
+                result.explanation = RankingExplanation {
+                    included: false,
+                    reasons: vec![exclusion.reason],
+                };
+                result.score = 0.0;
+                continue;
+            }
+
             let text_relevance =
                 score_text_relevance(&result.tool, &result.description, &query_lower, &words);
 
@@ -448,10 +249,15 @@ impl SearchRanker {
                 0.0
             };
 
-            // Multiplicative: usage amplifies relevance, can't promote irrelevant tools
-            result.score = text_relevance * (1.0 + usage_factor);
+            result.signals.relevance = text_relevance;
+            result.signals.usage_count = usage;
+            result.signals.user_feedback = usage_factor;
+
+            result.score = text_relevance * (1.0 + usage_factor) * result.signals.multiplier();
+            result.explanation = explanation_for(result);
         }
 
+        results.retain(|result| result.exclusion.is_none());
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -524,12 +330,172 @@ struct UsageEntry {
 /// Convert a JSON search result to a `SearchResult`
 #[must_use]
 pub fn json_to_search_result(value: &Value) -> Option<SearchResult> {
-    Some(SearchResult {
-        server: value.get("server")?.as_str()?.to_string(),
-        tool: value.get("tool")?.as_str()?.to_string(),
-        description: value.get("description")?.as_str()?.to_string(),
-        score: 0.0,
-    })
+    let mut result = SearchResult::new(
+        value.get("server")?.as_str()?,
+        value.get("tool")?.as_str()?,
+        value.get("description")?.as_str()?,
+    );
+    result.signals = RankingSignals::from_json(value);
+    Some(result)
+}
+
+fn explanation_for(result: &SearchResult) -> RankingExplanation {
+    let mut reasons = Vec::new();
+    if result.signals.relevance > 0.0 {
+        reasons.push("intent_match".to_string());
+    } else {
+        reasons.push("weak_intent_match".to_string());
+    }
+    if result.signals.safety >= 1.0 {
+        reasons.push("safety_ok".to_string());
+    }
+    if result.signals.grant >= 1.0 {
+        reasons.push("grant_ok".to_string());
+    }
+    if result.signals.trust < 0.75 {
+        reasons.push("trust_downgraded".to_string());
+    } else {
+        reasons.push("trust_ok".to_string());
+    }
+    if result.signals.cost_efficiency < 0.75 {
+        reasons.push("cost_downgraded".to_string());
+    } else {
+        reasons.push("cost_fit".to_string());
+    }
+    if result.signals.latency < 0.75 {
+        reasons.push("latency_downgraded".to_string());
+    } else {
+        reasons.push("latency_fit".to_string());
+    }
+    if result.signals.user_feedback > 0.0 {
+        reasons.push("local_feedback_boost".to_string());
+    }
+
+    RankingExplanation {
+        included: true,
+        reasons,
+    }
+}
+
+fn exclusion_for(signals: &RankingSignals) -> Option<RankingExclusion> {
+    if signals.safety <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unsafe,
+            reason: "suppressed_unsafe".to_string(),
+        });
+    }
+    if signals.grant <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unauthorized,
+            reason: "suppressed_unauthorized".to_string(),
+        });
+    }
+    if signals.runtime_health <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unhealthy,
+            reason: "suppressed_unhealthy".to_string(),
+        });
+    }
+    if signals.trust < 0.20 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Untrusted,
+            reason: "suppressed_untrusted".to_string(),
+        });
+    }
+    None
+}
+
+fn parse_numeric_signal(value: &Value, keys: &[&str], default: f64) -> f64 {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_f64))
+        .unwrap_or(default)
+        .clamp(0.0, 1.0)
+}
+
+fn parse_safety_signal(value: &Value) -> f64 {
+    if value
+        .get("unsafe")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return 0.0;
+    }
+    if value
+        .get("risk_level")
+        .or_else(|| value.get("risk"))
+        .and_then(Value::as_str)
+        .is_some_and(|risk| matches!(risk, "high" | "critical" | "unsafe"))
+    {
+        return 0.0;
+    }
+    parse_numeric_signal(value, &["safety_score", "safety"], 1.0)
+}
+
+fn parse_grant_signal(value: &Value) -> f64 {
+    if value.get("authorized").and_then(Value::as_bool) == Some(false) {
+        return 0.0;
+    }
+    if value
+        .get("grant_status")
+        .or_else(|| value.get("grant"))
+        .and_then(Value::as_str)
+        .is_some_and(|grant| matches!(grant, "denied" | "missing" | "unauthorized"))
+    {
+        return 0.0;
+    }
+    parse_numeric_signal(value, &["grant_score", "grant"], 1.0)
+}
+
+fn parse_runtime_health_signal(value: &Value) -> f64 {
+    if value
+        .get("status")
+        .or_else(|| value.get("runtime_status"))
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "disabled" | "unhealthy" | "down"))
+    {
+        return 0.0;
+    }
+    if value
+        .get("health")
+        .and_then(Value::as_str)
+        .is_some_and(|health| matches!(health, "unhealthy" | "down"))
+    {
+        return 0.0;
+    }
+    parse_numeric_signal(value, &["runtime_health", "health_score"], 1.0)
+}
+
+fn parse_cost_efficiency_signal(value: &Value) -> f64 {
+    if let Some(score) = value.get("cost_efficiency").and_then(Value::as_f64) {
+        return score.clamp(0.0, 1.0);
+    }
+    if let Some(category) = value
+        .get("cost_category")
+        .or_else(|| value.get("cost_tier"))
+        .and_then(Value::as_str)
+    {
+        return match category {
+            "free" => 1.0,
+            "low" => 0.85,
+            "medium" => 0.65,
+            "high" => 0.35,
+            _ => 0.75,
+        };
+    }
+    if let Some(cost) = value.get("cost_usd").and_then(Value::as_f64) {
+        return (1.0 / (1.0 + (cost * 100.0))).clamp(0.0, 1.0);
+    }
+    1.0
+}
+
+fn parse_latency_signal(value: &Value) -> f64 {
+    if let Some(score) = value.get("latency_score").and_then(Value::as_f64) {
+        return score.clamp(0.0, 1.0);
+    }
+    if let Some(latency_ms) = value.get("latency_ms").and_then(Value::as_f64) {
+        return (1.0 / (1.0 + (latency_ms / 1000.0))).clamp(0.0, 1.0);
+    }
+    1.0
 }
 
 #[cfg(test)]

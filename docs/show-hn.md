@@ -102,7 +102,7 @@ Repos:
 - `botnaut/` (proprietary, formal proofs reproducible — see `formal/README.md`)
 - `metacognition/` (MetaThinker, design + scaffolding public)
 
-Stack: Rust 1.88 edition 2024, Python 3.12+ for the gate, Z3 for enforcement, TLA+ for the amendment protocol, CUDA 13.2 for HIGGS.
+Stack: Rust 1.95 edition 2024, Python 3.12+ for the gate, Z3 for enforcement, TLA+ for the amendment protocol, CUDA 13.2 for HIGGS.
 
 Citations:
 - Invariant Labs, tool-poisoning: https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks
