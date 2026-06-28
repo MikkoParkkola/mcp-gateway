@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 
 use crate::cli::output::OutputFormat;
 
@@ -192,6 +192,49 @@ pub enum CapCommand {
         #[arg(long)]
         cost_per_call: Option<f64>,
     },
+}
+
+/// Safe protocol import subcommands.
+#[derive(Subcommand, Debug)]
+pub enum ProtocolImportCommand {
+    /// Preview disabled capability drafts from an API or MCP package source.
+    #[command(about = "Preview disabled import drafts without writing or enabling tools")]
+    Preview {
+        /// Source format to import.
+        #[arg(long, value_enum)]
+        kind: ProtocolImportKind,
+
+        /// Source file to preview.
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Source name used in generated plan metadata for OpenAPI/GraphQL.
+        #[arg(long)]
+        source_name: Option<String>,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+
+        /// Context-integrity profile attached to generated draft policy defaults.
+        #[arg(long, default_value = "imported_tool_baseline")]
+        context_integrity_profile: String,
+    },
+}
+
+/// Protocol source formats accepted by the safe import preview command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ProtocolImportKind {
+    /// `OpenAPI` 3.x or Swagger 2.0 file.
+    #[value(name = "openapi", alias = "open-api")]
+    OpenApi,
+    /// GraphQL import specification file.
+    Graphql,
+    /// Postman collection JSON file.
+    Postman,
+    /// OCI MCP package metadata file.
+    #[value(name = "oci-mcp-package", alias = "oci")]
+    OciMcpPackage,
 }
 
 /// `TrustCard` and CBOM advisory metadata commands.

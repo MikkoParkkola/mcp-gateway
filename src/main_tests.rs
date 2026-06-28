@@ -486,6 +486,58 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
 }
 
 #[test]
+fn cli_import_preview_parses_openapi_kind_and_json_format() {
+    let cli = parse_args(&[
+        "import",
+        "preview",
+        "--kind",
+        "openapi",
+        "fixtures/openapi.yaml",
+        "--source-name",
+        "users-api",
+        "--format",
+        "json",
+        "--context-integrity-profile",
+        "reviewed_import",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Import(mcp_gateway::cli::ProtocolImportCommand::Preview {
+            kind,
+            file,
+            source_name,
+            format,
+            context_integrity_profile,
+        })) => {
+            assert_eq!(kind, mcp_gateway::cli::ProtocolImportKind::OpenApi);
+            assert_eq!(file, std::path::PathBuf::from("fixtures/openapi.yaml"));
+            assert_eq!(source_name.as_deref(), Some("users-api"));
+            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+            assert_eq!(context_integrity_profile, "reviewed_import");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn cli_import_preview_accepts_oci_alias() {
+    let cli = parse_args(&["import", "preview", "--kind", "oci", "package.yaml"]).unwrap();
+    match cli.command {
+        Some(Command::Import(mcp_gateway::cli::ProtocolImportCommand::Preview {
+            kind,
+            file,
+            format,
+            ..
+        })) => {
+            assert_eq!(kind, mcp_gateway::cli::ProtocolImportKind::OciMcpPackage);
+            assert_eq!(file, std::path::PathBuf::from("package.yaml"));
+            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Table);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
 fn cli_plugin_search_requires_query_argument() {
     let result = parse_args(&["plugin", "search"]);
     assert!(result.is_err());

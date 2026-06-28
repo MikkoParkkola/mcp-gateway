@@ -21,6 +21,9 @@ The planner is intentionally broader than OpenAPI. It covers OpenAPI, selected G
 ## Quick Start
 
 ```bash
+# Preview a safe disabled import plan without writing files or enabling tools
+mcp-gateway import preview --kind openapi openapi.yaml --format table
+
 # Import from a local file
 mcp-gateway cap import openapi.yaml
 
@@ -64,6 +67,35 @@ capabilities/<name>.yaml (one per operation)
 The importer tries YAML parsing first, then falls back to JSON, so the file extension does not matter.
 
 ## CLI Reference
+
+### Safe Preview
+
+```
+mcp-gateway import preview --kind <KIND> [OPTIONS] <FILE>
+```
+
+Preview produces a deterministic `ImportPlan` with disabled drafts, TrustCard
+stubs, risk annotations, review gates, and safe policy defaults. It does not
+write capability files and does not enable generated tools.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<FILE>` | Yes | Source file to preview |
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--kind <KIND>` | Required | `openapi`, `graphql`, `postman`, or `oci-mcp-package` |
+| `--source-name <NAME>` | File stem | Source name for OpenAPI and GraphQL plan metadata |
+| `-f, --format <FORMAT>` | `table` | `table`, `json`, or `plain` |
+| `--context-integrity-profile <PROFILE>` | `imported_tool_baseline` | Policy profile attached to generated draft defaults |
+
+Use JSON output when reviewing diffs or storing evidence:
+
+```bash
+mcp-gateway import preview --kind graphql graphql-import.yaml --format json
+```
+
+### Direct OpenAPI Generation
 
 ```
 mcp-gateway cap import [OPTIONS] <SPEC>

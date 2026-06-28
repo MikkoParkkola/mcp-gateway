@@ -42,6 +42,9 @@ async fn main() -> ExitCode {
             with_examples,
         }) => commands::run_init_command(&output, with_examples, profile),
         Some(Command::Cap(cap_cmd)) => commands::run_cap_command(cap_cmd).await,
+        Some(Command::Import(import_cmd)) => {
+            commands::run_protocol_import_command(import_cmd).await
+        }
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
         Some(Command::Stats { url, price }) => commands::run_stats_command(&url, price).await,

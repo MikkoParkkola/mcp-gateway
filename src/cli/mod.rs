@@ -40,7 +40,8 @@ use crate::cli::output::OutputFormat;
 
 pub use skills::SkillsCommand;
 pub use subcommands::{
-    AuditCommand, CapCommand, PluginCommand, TlsCommand, TrustCommand, TrustLabCommand,
+    AuditCommand, CapCommand, PluginCommand, ProtocolImportCommand, ProtocolImportKind, TlsCommand,
+    TrustCommand, TrustLabCommand,
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
@@ -170,6 +171,13 @@ pub enum Command {
     /// Manage capability definitions (validate, test, import, install)
     #[command(subcommand, about = "Capability management commands")]
     Cap(CapCommand),
+
+    /// Preview safe protocol imports before writing or enabling generated tools
+    #[command(
+        subcommand,
+        about = "Preview safe imports from API and MCP package sources"
+    )]
+    Import(ProtocolImportCommand),
 
     /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
     #[command(
