@@ -1,10 +1,12 @@
 //! `TrustCard` and CBOM command handlers.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
+use chrono::Utc;
 use mcp_gateway::{
     capability::CapabilityLoader,
     cli::{TrustCommand, TrustLabCommand, output::OutputFormat},
@@ -17,7 +19,12 @@ use mcp_gateway::{
         },
     },
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+const TRUST_LAB_BASELINE_REGISTRY_VERSION: &str = "trust_lab.baseline_registry.v1";
+const TRUST_LAB_BASELINE_REGISTRY_MANIFEST: &str = "manifest.json";
+const TRUST_LAB_BASELINE_REGISTRY_DIR: &str = "baselines";
 
 /// Run a `trust` subcommand.
 pub async fn run_trust_command(cmd: TrustCommand) -> ExitCode {
@@ -104,6 +111,8 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
             enforce,
             baseline,
             write_baseline,
+            baseline_registry,
+            update_baseline_registry,
             baseline_id,
             minimum_score,
             certification_score,
@@ -122,6 +131,8 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
                 policy,
                 baseline.as_deref(),
                 write_baseline.as_deref(),
+                baseline_registry.as_deref(),
+                update_baseline_registry,
                 &baseline_id,
             )
             .await
@@ -129,6 +140,9 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
                 Ok(report) => {
                     if let Some(path) = report.written_baseline.as_ref() {
                         eprintln!("Wrote TrustLab baseline {}", path.display());
+                    }
+                    if let Some(path) = report.written_registry_baseline.as_ref() {
+                        eprintln!("Updated TrustLab baseline registry {}", path.display());
                     }
                     print_lab_evaluations(&report.evaluations, format);
                     lab_exit_code(&report.evaluations, enforce)
@@ -272,9 +286,11 @@ async fn evaluate_lab_from_capabilities(
     Ok(evaluate_lab_cards(&cards, policy, baseline))
 }
 
+#[derive(Debug)]
 struct LabEvaluationRun {
     evaluations: Vec<TrustLabEvaluation>,
     written_baseline: Option<PathBuf>,
+    written_registry_baseline: Option<PathBuf>,
 }
 
 async fn run_lab_evaluation(
@@ -283,12 +299,26 @@ async fn run_lab_evaluation(
     policy: TrustLabPolicy,
     baseline_path: Option<&Path>,
     write_baseline_path: Option<&Path>,
+    baseline_registry_path: Option<&Path>,
+    update_baseline_registry: bool,
     baseline_id: &str,
 ) -> Result<LabEvaluationRun, String> {
     let cards = select_cards(capabilities, name).await?;
     let baseline = match baseline_path {
         Some(path) => Some(read_lab_baseline(path).await?),
-        None => None,
+        None => match baseline_registry_path {
+            Some(path) => {
+                let baseline = read_lab_registry_baseline(path, baseline_id).await?;
+                if baseline.is_none() && !update_baseline_registry {
+                    return Err(format!(
+                        "no TrustLab baseline '{baseline_id}' found in registry {}; pass --update-baseline-registry to create it",
+                        path.display()
+                    ));
+                }
+                baseline
+            }
+            None => None,
+        },
     };
     let evaluations = evaluate_lab_cards(&cards, policy, baseline.as_ref());
     let written_baseline = match write_baseline_path {
@@ -299,10 +329,18 @@ async fn run_lab_evaluation(
         }
         None => None,
     };
+    let written_registry_baseline = match (baseline_registry_path, update_baseline_registry) {
+        (Some(path), true) => Some(write_lab_registry_baseline(path, baseline_id, &cards).await?),
+        (None, true) => {
+            return Err("--update-baseline-registry requires --baseline-registry".to_string());
+        }
+        _ => None,
+    };
 
     Ok(LabEvaluationRun {
         evaluations,
         written_baseline,
+        written_registry_baseline,
     })
 }
 
@@ -356,6 +394,159 @@ async fn write_lab_baseline(baseline: &TrustLabBaseline, output: &Path) -> Resul
                 output.display()
             )
         })
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct TrustLabBaselineRegistryManifest {
+    schema_version: String,
+    #[serde(default)]
+    entries: BTreeMap<String, TrustLabBaselineRegistryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct TrustLabBaselineRegistryEntry {
+    baseline_id: String,
+    file: String,
+    digest_sha256: String,
+    tool_schema_count: usize,
+    server_names: Vec<String>,
+    updated_at: String,
+}
+
+async fn read_lab_registry_baseline(
+    registry: &Path,
+    baseline_id: &str,
+) -> Result<Option<TrustLabBaseline>, String> {
+    let baseline_path = lab_registry_baseline_path(registry, baseline_id)?;
+    if !baseline_path.exists() {
+        return Ok(None);
+    }
+    read_lab_baseline(&baseline_path).await.map(Some)
+}
+
+async fn write_lab_registry_baseline(
+    registry: &Path,
+    baseline_id: &str,
+    cards: &[TrustCard],
+) -> Result<PathBuf, String> {
+    let baseline = lab_baseline_from_cards(baseline_id, cards);
+    let baseline_path = lab_registry_baseline_path(registry, baseline_id)?;
+    let Some(parent) = baseline_path.parent() else {
+        return Err(format!(
+            "failed to resolve TrustLab registry baseline parent for {}",
+            baseline_path.display()
+        ));
+    };
+    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+        format!(
+            "failed to create TrustLab baseline registry {}: {e}",
+            parent.display()
+        )
+    })?;
+    write_lab_baseline(&baseline, &baseline_path).await?;
+
+    let mut manifest = read_lab_registry_manifest(registry).await?;
+    manifest.schema_version = TRUST_LAB_BASELINE_REGISTRY_VERSION.to_string();
+    manifest.entries.insert(
+        baseline.baseline_id.clone(),
+        TrustLabBaselineRegistryEntry {
+            baseline_id: baseline.baseline_id.clone(),
+            file: lab_registry_baseline_relative_path(&baseline.baseline_id)?,
+            digest_sha256: lab_baseline_digest(&baseline)?,
+            tool_schema_count: baseline.tool_schema_digests.len(),
+            server_names: cards.iter().map(|card| card.server.name.clone()).collect(),
+            updated_at: Utc::now().to_rfc3339(),
+        },
+    );
+    write_lab_registry_manifest(registry, &manifest).await?;
+
+    Ok(baseline_path)
+}
+
+async fn read_lab_registry_manifest(
+    registry: &Path,
+) -> Result<TrustLabBaselineRegistryManifest, String> {
+    let manifest_path = registry.join(TRUST_LAB_BASELINE_REGISTRY_MANIFEST);
+    if !manifest_path.exists() {
+        return Ok(TrustLabBaselineRegistryManifest {
+            schema_version: TRUST_LAB_BASELINE_REGISTRY_VERSION.to_string(),
+            entries: BTreeMap::default(),
+        });
+    }
+    let content = tokio::fs::read_to_string(&manifest_path)
+        .await
+        .map_err(|e| {
+            format!(
+                "failed to read TrustLab baseline registry manifest {}: {e}",
+                manifest_path.display()
+            )
+        })?;
+    serde_json::from_str::<TrustLabBaselineRegistryManifest>(&content).map_err(|e| {
+        format!(
+            "failed to parse TrustLab baseline registry manifest {}: {e}",
+            manifest_path.display()
+        )
+    })
+}
+
+async fn write_lab_registry_manifest(
+    registry: &Path,
+    manifest: &TrustLabBaselineRegistryManifest,
+) -> Result<(), String> {
+    tokio::fs::create_dir_all(registry).await.map_err(|e| {
+        format!(
+            "failed to create TrustLab baseline registry {}: {e}",
+            registry.display()
+        )
+    })?;
+    let manifest_path = registry.join(TRUST_LAB_BASELINE_REGISTRY_MANIFEST);
+    let body = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("failed to serialize TrustLab baseline registry manifest: {e}"))?;
+    tokio::fs::write(&manifest_path, format!("{body}\n"))
+        .await
+        .map_err(|e| {
+            format!(
+                "failed to write TrustLab baseline registry manifest {}: {e}",
+                manifest_path.display()
+            )
+        })
+}
+
+fn lab_registry_baseline_path(registry: &Path, baseline_id: &str) -> Result<PathBuf, String> {
+    Ok(registry.join(lab_registry_baseline_relative_path(baseline_id)?))
+}
+
+fn lab_registry_baseline_relative_path(baseline_id: &str) -> Result<String, String> {
+    let file_name = lab_registry_baseline_file_name(baseline_id)?;
+    Ok(format!("{TRUST_LAB_BASELINE_REGISTRY_DIR}/{file_name}"))
+}
+
+fn lab_registry_baseline_file_name(baseline_id: &str) -> Result<String, String> {
+    if baseline_id.is_empty() || baseline_id == "." || baseline_id == ".." {
+        return Err("TrustLab baseline id must be non-empty and cannot be '.' or '..'".to_string());
+    }
+    if baseline_id.starts_with('.') {
+        return Err("TrustLab baseline id cannot start with '.'".to_string());
+    }
+    if !baseline_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(format!(
+            "TrustLab baseline id '{baseline_id}' is not registry-safe; use only ASCII letters, numbers, '.', '-', or '_'"
+        ));
+    }
+    Ok(format!("{baseline_id}.json"))
+}
+
+fn lab_baseline_digest(baseline: &TrustLabBaseline) -> Result<String, String> {
+    let value = serde_json::to_value(baseline)
+        .map_err(|e| format!("failed to serialize TrustLab baseline for digest: {e}"))?;
+    let canonical = serde_json::to_string(&value)
+        .map_err(|e| format!("failed to canonicalize TrustLab baseline for digest: {e}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn lab_baseline_from_cards(baseline_id: &str, cards: &[TrustCard]) -> TrustLabBaseline {
@@ -681,6 +872,8 @@ schema:
             TrustLabPolicy::default(),
             None,
             Some(&baseline_path),
+            None,
+            false,
             "weather-baseline",
         )
         .await
@@ -693,6 +886,100 @@ schema:
         let baseline = read_lab_baseline(&baseline_path).await.unwrap();
         assert_eq!(baseline.baseline_id, "weather-baseline");
         assert_eq!(baseline.tool_schema_digests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn lab_baseline_registry_updates_manifest_and_reads_named_baseline() {
+        let temp = TempDir::new().unwrap();
+        write_capability(temp.path(), "weather");
+        let registry = temp.path().join("trustlab-registry");
+
+        let write_report = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            TrustLabPolicy::default(),
+            None,
+            None,
+            Some(&registry),
+            true,
+            "weather-baseline",
+        )
+        .await
+        .unwrap();
+
+        let baseline_path = registry
+            .join(TRUST_LAB_BASELINE_REGISTRY_DIR)
+            .join("weather-baseline.json");
+        assert_eq!(
+            write_report.written_registry_baseline.as_deref(),
+            Some(baseline_path.as_path())
+        );
+
+        let manifest_path = registry.join(TRUST_LAB_BASELINE_REGISTRY_MANIFEST);
+        let manifest: TrustLabBaselineRegistryManifest =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        let entry = manifest.entries.get("weather-baseline").unwrap();
+        assert_eq!(manifest.schema_version, TRUST_LAB_BASELINE_REGISTRY_VERSION);
+        assert_eq!(entry.file, "baselines/weather-baseline.json");
+        assert_eq!(entry.tool_schema_count, 1);
+        assert_eq!(entry.server_names, vec!["weather".to_string()]);
+        assert_eq!(entry.digest_sha256.len(), 64);
+
+        let read_report = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            TrustLabPolicy::default(),
+            None,
+            None,
+            Some(&registry),
+            false,
+            "weather-baseline",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read_report.evaluations[0].input.baseline_id,
+            Some("weather-baseline".to_string())
+        );
+        assert!(
+            read_report.evaluations[0]
+                .input
+                .baseline_digest_sha256
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn lab_baseline_registry_requires_update_for_missing_entry() {
+        let temp = TempDir::new().unwrap();
+        write_capability(temp.path(), "weather");
+        let registry = temp.path().join("trustlab-registry");
+
+        let err = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            TrustLabPolicy::default(),
+            None,
+            None,
+            Some(&registry),
+            false,
+            "missing-baseline",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("no TrustLab baseline 'missing-baseline' found"));
+    }
+
+    #[test]
+    fn lab_baseline_registry_rejects_path_traversal_ids() {
+        assert!(lab_registry_baseline_file_name("../weather").is_err());
+        assert!(lab_registry_baseline_file_name("nested/weather").is_err());
+        assert!(lab_registry_baseline_file_name(".hidden").is_err());
+        assert_eq!(
+            lab_registry_baseline_file_name("weather-prod_1.0").unwrap(),
+            "weather-prod_1.0.json"
+        );
     }
 
     #[tokio::test]

@@ -441,6 +441,9 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
         "baseline.json",
         "--write-baseline",
         "next-baseline.json",
+        "--baseline-registry",
+        "fixtures/baselines",
+        "--update-baseline-registry",
         "--baseline-id",
         "weather-baseline",
         "--minimum-score",
@@ -459,6 +462,8 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
                 enforce,
                 baseline,
                 write_baseline,
+                baseline_registry,
+                update_baseline_registry,
                 baseline_id,
                 minimum_score,
                 certification_score,
@@ -476,6 +481,11 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
                 write_baseline.as_deref(),
                 Some(std::path::Path::new("next-baseline.json"))
             );
+            assert_eq!(
+                baseline_registry.as_deref(),
+                Some(std::path::Path::new("fixtures/baselines"))
+            );
+            assert!(update_baseline_registry);
             assert_eq!(baseline_id, "weather-baseline");
             assert_eq!(minimum_score, 80);
             assert_eq!(certification_score, 95);

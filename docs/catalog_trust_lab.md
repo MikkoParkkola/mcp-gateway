@@ -22,6 +22,7 @@ Free/core:
 - TrustLab schema and JSON evidence.
 - TrustCard/CBOM validation.
 - Baseline drift checks with local baseline files.
+- Managed local baseline registry with a manifest and safe baseline ids.
 - Safe fixture-call planning.
 - Isolated active-fixture evidence model for local or test runners.
 - Local CLI reports through `mcp-gateway trust lab evaluate`.
@@ -29,7 +30,7 @@ Free/core:
 Enterprise:
 
 - Continuous scheduled evaluations.
-- Fleet policy thresholds.
+- Fleet policy thresholds and centralized baseline governance.
 - Vendor scorecards.
 - Approval workflows.
 - Compliance evidence export.
@@ -84,7 +85,8 @@ This gives future RuntimeProvider integration one stable contract: execute the c
 ## Current Limits
 
 - No CLI-wired live candidate server execution yet.
-- No managed baseline registry yet; baseline support is local file read/write.
+- No centralized or multi-user baseline registry yet; the current registry is
+  local file-backed evidence.
 - No automatic config patch application yet; remediation plans are report evidence and review guidance.
 - No enterprise scheduler, approval workflow, or export sink yet.
 
@@ -115,6 +117,31 @@ mcp-gateway trust lab evaluate weather_current \
   --baseline trustlab-baseline.json \
   --enforce
 ```
+
+Create or update a managed local baseline registry entry:
+
+```bash
+mcp-gateway trust lab evaluate weather_current \
+  --capabilities capabilities \
+  --baseline-registry .mcp-gateway/trustlab-baselines \
+  --update-baseline-registry \
+  --baseline-id weather-current-v1
+```
+
+Evaluate against that managed baseline later:
+
+```bash
+mcp-gateway trust lab evaluate weather_current \
+  --capabilities capabilities \
+  --baseline-registry .mcp-gateway/trustlab-baselines \
+  --baseline-id weather-current-v1 \
+  --enforce
+```
+
+The registry stores each baseline under `baselines/<baseline-id>.json` and
+keeps `manifest.json` with the baseline digest, tool schema count, server names,
+and update timestamp. Baseline ids are restricted to ASCII letters, numbers,
+`.`, `-`, and `_` so registry writes cannot escape the registry directory.
 
 Focused validation:
 

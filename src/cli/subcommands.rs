@@ -346,6 +346,15 @@ pub enum TrustLabCommand {
         #[arg(long)]
         write_baseline: Option<PathBuf>,
 
+        /// Managed local baseline registry directory. When --baseline is not
+        /// set, the named baseline is loaded from this registry.
+        #[arg(long)]
+        baseline_registry: Option<PathBuf>,
+
+        /// Create or update the named baseline inside --baseline-registry.
+        #[arg(long)]
+        update_baseline_registry: bool,
+
         /// Baseline identifier used when --write-baseline is set.
         #[arg(long, default_value = "local-baseline")]
         baseline_id: String,
