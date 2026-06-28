@@ -30,6 +30,7 @@ RUN rm -rf src
 # Copy real source and build
 COPY src ./src
 COPY benches ./benches
+COPY capabilities ./capabilities
 RUN touch src/main.rs && cargo build --release
 
 # ---------------------------------------------------------------------------
