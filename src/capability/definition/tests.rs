@@ -352,6 +352,11 @@ fn capability_metadata_produces_consumes_chains_with_default_empty() {
     assert!(meta.produces.is_empty());
     assert!(meta.consumes.is_empty());
     assert!(meta.chains_with.is_empty());
+    assert_eq!(
+        meta.exposure,
+        crate::identity_grants::CapabilityExposure::Shared
+    );
+    assert!(meta.identity_owner.is_none());
 }
 
 #[test]

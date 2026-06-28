@@ -1,28 +1,43 @@
-# RuntimeProvider Planner
+# RuntimeProvider Planner and Apply Path
 
-MIK-6555 starts with a compile-only RuntimeProvider contract. It recommends a
-runtime provider, compiles least-privilege policy, lists preflight checks,
-records human confirmations, emits audit evidence, and describes rollback. It
-does not start processes or containers yet.
+MIK-6555 provides a RuntimeProvider contract that plans and can apply a
+least-privilege runtime start path. It recommends a runtime provider, compiles
+policy, lists preflight checks, records human confirmations, emits audit
+evidence, describes rollback, and exposes a structured apply command for
+providers that are ready to launch.
 
 ## Free/Core Baseline
 
 - `local_process` preserves existing direct execution compatibility.
-- `docker` and `podman` are modeled as containerized providers behind the same
-  policy interface.
+- `docker` and `podman` are containerized providers behind the same policy
+  interface.
 - Policies cover mounts, environment variable names, guarded names, network
   egress, resource limits, restart behavior, and privileged execution.
-- Plans are dry-run by default and include no apply command in this slice.
-- Plans include recommendation explanations, security tradeoffs, start command
-  hints, health checks, log hints, stop hints, and rollback instructions for the
-  selected provider.
+- Plans include recommendation explanations, security tradeoffs, structured
+  launch commands, display-only apply commands, health checks, log hints, stop
+  hints, and rollback instructions for the selected provider.
+- Docker and Podman launch commands use detached starts with restricted defaults:
+  no shell execution, `--network=none` unless policy says otherwise,
+  read-only root filesystem, `--cap-drop=ALL`, `no-new-privileges`, memory and
+  CPU limits, and a small process limit.
 
 ## Human Gates
 
 The planner pauses for human approval before host mounts, unrestricted egress,
-privileged execution, or guarded environment names. Host root and other hard
-blocked mounts fail closed. Recommendation text explains whether the provider
-was selected by operator preference, isolation needs, or compatibility fallback.
+privileged execution, or guarded environment names. Apply fails closed before a
+runner is invoked when the plan is denied or required confirmations are missing.
+Host root and other hard-blocked mounts fail closed. Recommendation text explains
+whether the provider was selected by operator preference, isolation needs, or
+compatibility fallback.
+
+## Apply Contract
+
+`RuntimePlan::apply_with` accepts an injectable command runner. The default
+runner uses `std::process::Command`; tests use a recording runner so Docker and
+Podman command construction can be validated without requiring a local daemon.
+Audit records include provider, policy id, command program, argument digest,
+approved confirmation ids, and environment variable names only. Environment
+values are not serialized into plans, apply results, or audit evidence.
 
 ## Enterprise Boundary
 
@@ -38,6 +53,7 @@ The focused test target is:
 cargo test runtime::provider::tests -- --nocapture
 ```
 
-The tests cover Docker recommendation, local compatibility fallback, lifecycle
-hints, guarded name handling, broad egress confirmation, forbidden mount denial,
-container image denial, and the shared LocalProcess/Docker provider contract.
+The tests cover Docker recommendation, local compatibility fallback, executable
+Docker lifecycle commands, guarded name handling, broad egress confirmation,
+forbidden mount denial, apply fail-closed behavior, container image denial, and
+the shared LocalProcess/Docker provider contract.

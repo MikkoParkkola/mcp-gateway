@@ -13,10 +13,15 @@ use tracing::{debug, warn};
 
 use crate::cache::ResponseCache;
 use crate::capability::validate_output;
+use crate::context_integrity::{
+    ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
+    ContextIntegrityInput, ContextProvenance, ContextTrustBoundary,
+};
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, enforce};
+use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
 use crate::playbook::PlaybookEngine;
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
@@ -584,6 +589,8 @@ impl MetaMcp {
                 prompt_cache_key.as_deref(),
                 want_full,
                 session_id,
+                api_key_name,
+                agent_id,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -869,6 +876,8 @@ impl MetaMcp {
             }
         }
 
+        result = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
         // `_cost_warnings` — active at ≥80% budget consumption (Notify tier).
@@ -1039,11 +1048,167 @@ impl MetaMcp {
             .collect()
     }
 
+    fn enforce_identity_grants(
+        &self,
+        cap_def: &crate::capability::CapabilityDefinition,
+        tool: &str,
+        api_key_name: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Result<()> {
+        let request = IdentityGrantRequest {
+            identity: Self::grant_subject_from_api_key(api_key_name),
+            agent_id: agent_id.map(str::to_string),
+            capability: cap_def.name.clone(),
+            tool: Some(tool.to_string()),
+            scope: GrantScope::Execute,
+            exposure: cap_def.metadata.exposure,
+            owner: cap_def.metadata.identity_owner.clone(),
+            now: chrono::Utc::now(),
+        };
+
+        let evaluation = self.identity_grants.read().evaluate(&request);
+        if evaluation.allowed {
+            return Ok(());
+        }
+
+        warn!(
+            capability = %cap_def.name,
+            tool,
+            agent_id = agent_id.unwrap_or("anonymous"),
+            reason = ?evaluation.reason,
+            "Identity grant denied personal capability dispatch"
+        );
+
+        Err(Error::json_rpc(
+            -32004,
+            format!(
+                "Identity grant denied for capability '{}': {:?}",
+                cap_def.name, evaluation.reason
+            ),
+        ))
+    }
+
+    fn grant_subject_from_api_key(api_key_name: Option<&str>) -> Option<GrantSubject> {
+        api_key_name
+            .filter(|name| !name.is_empty())
+            .map(|name| GrantSubject::new("api_key", name, Some(name.to_string())))
+    }
+
+    fn apply_context_integrity(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> Value {
+        let mut provenance = ContextProvenance::tool_result(
+            server,
+            tool,
+            trace_id,
+            ContextTrustBoundary::RemoteToolOutput,
+        );
+        provenance.subject = api_key_name.map(str::to_string);
+        provenance.origin = Some(format!("{server}:{tool}"));
+
+        let (read_only, destructive) = self.capability_context_flags(server, tool);
+        let mut input = ContextIntegrityInput::read_only_tool_result(provenance, result.clone());
+        input.read_only = read_only;
+        input.destructive = destructive;
+        input.action_risk = if destructive {
+            ContextActionRisk::High
+        } else if read_only {
+            ContextActionRisk::Low
+        } else {
+            ContextActionRisk::Medium
+        };
+
+        let evaluation = self.context_integrity_kernel.read().evaluate(input);
+        if evaluation.classification.findings.is_empty()
+            && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
+        {
+            return result;
+        }
+
+        let delivered = if evaluation.policy.enforcement_applied {
+            Self::context_integrity_delivered_result(&evaluation)
+        } else {
+            result
+        };
+        Self::attach_context_integrity_metadata(delivered, &evaluation)
+    }
+
+    fn capability_context_flags(&self, server: &str, tool: &str) -> (bool, bool) {
+        if let Some(capabilities) = self.get_capabilities()
+            && server == capabilities.name
+            && let Some(capability) = capabilities.get(tool)
+        {
+            let read_only = capability.metadata.read_only;
+            let destructive = capability.metadata.destructive.unwrap_or(!read_only);
+            return (read_only, destructive);
+        }
+
+        (false, false)
+    }
+
+    fn context_integrity_delivered_result(evaluation: &ContextIntegrityEvaluation) -> Value {
+        let Some(delivered) = evaluation.transformed.delivered.clone() else {
+            return json!({
+                "isError": true,
+                "content": [{
+                    "type": "text",
+                    "text": format!(
+                        "Tool result withheld by ContextIntegrityKernel: {}",
+                        evaluation.policy.rationale
+                    )
+                }]
+            });
+        };
+
+        if delivered.is_object() {
+            return delivered;
+        }
+
+        let text = delivered
+            .as_str()
+            .map_or_else(|| delivered.to_string(), str::to_string);
+        json!({
+            "isError": false,
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": delivered
+        })
+    }
+
+    fn attach_context_integrity_metadata(
+        mut result: Value,
+        evaluation: &ContextIntegrityEvaluation,
+    ) -> Value {
+        let metadata = json!({
+            "schema_version": &evaluation.schema_version,
+            "content_sha256": &evaluation.content_sha256,
+            "provenance": &evaluation.provenance,
+            "classification": &evaluation.classification,
+            "policy": &evaluation.policy,
+            "audit": &evaluation.audit,
+        });
+
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("_context_integrity".to_string(), metadata);
+            result
+        } else {
+            json!({
+                "structuredContent": result,
+                "_context_integrity": metadata
+            })
+        }
+    }
+
     /// Dispatch a `tools/call` to the capability backend or an MCP backend.
     ///
     /// Applies secret injection before forwarding. When `prompt_cache_key` is
     /// `Some`, it is injected into the request `_meta` field so that
     /// OpenAI-compatible backends can use it for prompt caching.
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch_to_backend(
         &self,
         server: &str,
@@ -1052,6 +1217,8 @@ impl MetaMcp {
         prompt_cache_key: Option<&str>,
         want_full: bool,
         session_id: Option<&str>,
+        api_key_name: Option<&str>,
+        agent_id: Option<&str>,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -1060,6 +1227,10 @@ impl MetaMcp {
             && server == cap.name
             && cap.has_capability(tool)
         {
+            let cap_def = cap
+                .get(tool)
+                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
+            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id)?;
             let result = cap.call_tool(tool, arguments).await?;
             let mut response = serde_json::to_value(result)?;
 
@@ -1074,10 +1245,7 @@ impl MetaMcp {
             //
             // `_full: true` (stripped earlier in invoke_tool_traced) bypasses
             // projection entirely.
-            if !want_full
-                && let Some(cap_def) = cap.get(tool)
-                && !cap_def.response_transform.is_empty()
-            {
+            if !want_full && !cap_def.response_transform.is_empty() {
                 let t = ResponseTransform::new(&cap_def.response_transform);
                 let inner =
                     extract_output_validation_target(&response).unwrap_or_else(|| response.clone());
@@ -1100,10 +1268,8 @@ impl MetaMcp {
                 response = apply_validated_output(&response, transformed);
             }
 
-            let cap_def = cap.get(tool);
-            let output_schema = cap_def
-                .as_ref()
-                .and_then(|c| (!c.schema.output.is_null()).then(|| c.schema.output.clone()));
+            let output_schema =
+                (!cap_def.schema.output.is_null()).then(|| cap_def.schema.output.clone());
 
             let validated = enforce_output_schema(server, tool, response, output_schema.as_ref());
 
@@ -1120,9 +1286,8 @@ impl MetaMcp {
             // contract; `on` always projects; `experimental` projects only the
             // treatment arm of a sticky per-session A/B split.
             let decision = crate::projection::projection_decision(self.projection_mode, session_id);
-            let spec_present = cap_def.as_ref().is_some_and(|c| c.projection.is_some());
+            let spec_present = cap_def.projection.is_some();
             let final_result = if decision.project
-                && let Some(cap_def) = cap_def.as_ref()
                 && let Some(spec) = cap_def.projection.as_ref()
             {
                 apply_capability_projection(validated, spec, want_full)

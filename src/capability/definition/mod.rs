@@ -5,6 +5,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
+use crate::identity_grants::{CapabilityExposure, GrantSubject};
 use crate::protocol::ToolAnnotations;
 use crate::transform::TransformConfig;
 
@@ -788,6 +789,17 @@ pub struct CapabilityMetadata {
     /// API capabilities default to open-world because they call REST services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_world: Option<bool>,
+
+    /// Identity exposure for dispatch authorization.
+    ///
+    /// Defaults to `shared` so existing capability files remain callable until
+    /// operators explicitly mark a tool as `personal`.
+    #[serde(default, skip_serializing_if = "CapabilityExposure::is_shared")]
+    pub exposure: CapabilityExposure,
+
+    /// Owner subject required when `exposure` is `personal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_owner: Option<GrantSubject>,
 
     /// Data types or entities this tool produces as output.
     ///

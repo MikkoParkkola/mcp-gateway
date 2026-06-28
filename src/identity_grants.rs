@@ -2,8 +2,9 @@
 //!
 //! This module is the MIK-6553 grant contract. It models who may use a
 //! capability, which agent may act for that subject, how long the permission is
-//! live, and why each decision was made. The first slice is deliberately
-//! independent of dispatch so existing single-user deployments stay unchanged.
+//! live, and why each decision was made. Gateway dispatch uses this contract
+//! to fail closed for explicitly personal capabilities while existing shared
+//! and public tools keep their backward-compatible behavior.
 
 use std::collections::BTreeMap;
 
@@ -64,15 +65,24 @@ impl GrantAgent {
 }
 
 /// Capability exposure class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityExposure {
     /// No caller identity is required. This preserves public-tool behavior.
     Public,
     /// Shared team or gateway capability.
+    #[default]
     Shared,
     /// Personal capability. Caller identity, matching ownership, and a live grant are required.
     Personal,
+}
+
+impl CapabilityExposure {
+    /// Whether this is the backward-compatible default exposure.
+    #[must_use]
+    pub const fn is_shared(&self) -> bool {
+        matches!(self, Self::Shared)
+    }
 }
 
 /// Action scope granted for a capability.

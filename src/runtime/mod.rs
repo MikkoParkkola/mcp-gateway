@@ -51,11 +51,14 @@ pub use descriptor::{
 pub use divergence::{DivergenceRecord, DivergenceRegistry, SubstrateTag};
 pub use r#override::OverrideHook;
 pub use provider::{
-    ContainerProvider, LocalProcessProvider, RuntimeAuditEvent, RuntimeAvailability,
+    ContainerProvider, LocalProcessProvider, RuntimeApplyAction, RuntimeApplyAuditEvent,
+    RuntimeApplyError, RuntimeApplyRequest, RuntimeApplyResult, RuntimeApplyStatus,
+    RuntimeAuditEvent, RuntimeAvailability, RuntimeCommandOutcome, RuntimeCommandRunner,
     RuntimeConfirmation, RuntimeConfirmationRisk, RuntimeDataClass, RuntimeDenial,
-    RuntimeDenyReason, RuntimeEnvironmentPolicy, RuntimeIntent, RuntimeLicenseTier,
-    RuntimeLifecyclePlan, RuntimeMount, RuntimeMountMode, RuntimeNetworkEgress, RuntimePlan,
-    RuntimePlanner, RuntimePolicy, RuntimePreflightCheck, RuntimeProvider, RuntimeProviderKind,
-    RuntimeProviderSelection, RuntimeRecommendation, RuntimeResourcePolicy, RuntimeRestartPolicy,
+    RuntimeDenyReason, RuntimeEnvironmentPolicy, RuntimeIntent, RuntimeLaunchCommand,
+    RuntimeLaunchMode, RuntimeLicenseTier, RuntimeLifecyclePlan, RuntimeMount, RuntimeMountMode,
+    RuntimeNetworkEgress, RuntimePlan, RuntimePlanner, RuntimePolicy, RuntimePreflightCheck,
+    RuntimeProvider, RuntimeProviderKind, RuntimeProviderSelection, RuntimeRecommendation,
+    RuntimeResourcePolicy, RuntimeRestartPolicy, StdRuntimeCommandRunner,
 };
 pub use substrate::Substrate;

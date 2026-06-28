@@ -5,10 +5,10 @@ capabilities. They define who may use a capability, which agent may act for that
 subject, which action scope is allowed, when the permission expires, and why the
 decision was made.
 
-The first implementation slice is a local contract and evaluator. It does not
-change live dispatch behavior yet. That keeps existing single-user deployments
-compatible while the gateway gains a stable decision surface for later routing,
-admin UI, and durable storage integration.
+The local evaluator is wired into gateway dispatch for capability tools that
+opt in with `metadata.exposure: personal`. Existing capability files default to
+`shared`, so current single-user deployments remain compatible while personal
+tools fail closed unless caller identity, owner evidence, and a live grant match.
 
 ## Model
 
@@ -31,16 +31,29 @@ reason code, matching grant id when present, and timestamp.
 
 - Public capabilities remain allowed without a personal grant.
 - Shared capabilities remain allowed without a personal grant.
+- Capability metadata defaults to `shared` exposure for backward compatibility.
 - Personal capabilities fail closed when the caller identity is missing.
 - Personal capabilities fail closed when owner evidence is missing.
 - Personal capabilities fail closed when owner and caller differ.
 - Expired or revoked grants do not allow access.
 - A live matching grant allows the request and records its grant id.
 
+Personal capability YAML uses the existing metadata block:
+
+```yaml
+metadata:
+  exposure: personal
+  identity_owner:
+    authority: api_key
+    subject: alice
+    label: Alice
+```
+
 ## Recommendations
 
 `LocalIdentityGrantStore::recommend` is a recommendation-only layer for
-automation-first UX. It does not change dispatch behavior. Given a caller,
+automation-first UX. It does not create, mutate, or activate grants by itself;
+live dispatch uses only the stored grant rows evaluated above. Given a caller,
 agent, capability, scope, data class, tool risk, owner, and request reason, it
 returns one of:
 
@@ -64,7 +77,7 @@ Free/core:
 
 - Local grant schema.
 - Local in-memory evaluator.
-- Fail-closed personal capability decision contract.
+- Fail-closed personal capability dispatch for local capability tools.
 - Audit-event shape.
 - Recommendation-only least-privilege lease suggestions for local workflows.
 
@@ -79,7 +92,11 @@ Enterprise:
 
 ## Integration Notes
 
-The contract is intentionally standalone. Live dispatch enforcement should wire
-the evaluator before personal capability execution and before any personal
-resource lookup. Control-plane mutation workflows should use the same grant row
-and audit-event shapes rather than creating a parallel authorization model.
+Dispatch enforcement runs before capability executor calls, so a denied personal
+tool cannot reach the upstream HTTP/GraphQL/JSON-RPC provider. Stdio and other
+callers without an authenticated API key fail closed for personal tools.
+
+Control-plane mutation workflows should use the same grant row and audit-event
+shapes rather than creating a parallel authorization model. Durable storage,
+OIDC/SCIM, delegated approvals, and fleet policy reconciliation remain
+enterprise follow-up work.

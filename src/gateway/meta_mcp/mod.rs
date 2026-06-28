@@ -24,6 +24,7 @@ use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::config::SurfacedToolConfig;
 use crate::config_reload::ReloadContext;
+use crate::context_integrity::ContextIntegrityKernel;
 use crate::cost_accounting::CostTracker;
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::enforcer::BudgetEnforcer;
@@ -31,6 +32,7 @@ use crate::cost_accounting::enforcer::BudgetEnforcer;
 use crate::cost_accounting::registry::CostRegistry;
 use crate::gateway::state::SessionStateStore;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
+use crate::identity_grants::LocalIdentityGrantStore;
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::{
@@ -202,6 +204,20 @@ pub struct MetaMcp {
     /// calls whose token is missing or invalid with JSON-RPC -32002. Ignored
     /// when `attestation_validator` is `None`.
     pub(super) attestation_mode: crate::attestation::AttestationMode,
+
+    /// Local identity grant evaluator for personal capability dispatch.
+    ///
+    /// Empty by default. Public and shared tools still evaluate as allowed, but
+    /// capabilities marked `personal` fail closed without matching caller,
+    /// owner, and live grant evidence.
+    pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
+
+    /// Tool-result boundary classifier and policy envelope.
+    ///
+    /// Defaults to monitor-only. Clean benign results are returned unchanged;
+    /// suspicious results receive `_context_integrity` audit metadata before
+    /// response caching, idempotency completion, signing, and delivery.
+    pub(super) context_integrity_kernel: RwLock<ContextIntegrityKernel>,
 }
 
 // ============================================================================
@@ -256,6 +272,8 @@ impl MetaMcp {
             response_contract: None,
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
+            identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
         }
     }
 
@@ -356,6 +374,20 @@ impl MetaMcp {
         self
     }
 
+    /// Attach a local identity grant store for personal capability dispatch.
+    #[must_use]
+    pub fn with_identity_grants(mut self, grants: LocalIdentityGrantStore) -> Self {
+        self.identity_grants = RwLock::new(grants);
+        self
+    }
+
+    /// Attach a context integrity kernel for live tool-result wrapping.
+    #[must_use]
+    pub fn with_context_integrity_kernel(mut self, kernel: ContextIntegrityKernel) -> Self {
+        self.context_integrity_kernel = RwLock::new(kernel);
+        self
+    }
+
     /// Attach a secret injector for credential brokering.
     #[must_use]
     pub fn with_secret_injector(
@@ -435,6 +467,16 @@ impl MetaMcp {
     /// Set the capability backend.
     pub fn set_capabilities(&self, capabilities: Arc<CapabilityBackend>) {
         *self.capabilities.write() = Some(capabilities);
+    }
+
+    /// Replace the local identity grant store.
+    pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
+        *self.identity_grants.write() = grants;
+    }
+
+    /// Replace the context integrity kernel.
+    pub fn set_context_integrity_kernel(&self, kernel: ContextIntegrityKernel) {
+        *self.context_integrity_kernel.write() = kernel;
     }
 
     /// Attach a [`ToolRegistry`] for O(1) tool schema resolution (consuming builder).

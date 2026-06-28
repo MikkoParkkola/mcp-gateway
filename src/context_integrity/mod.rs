@@ -3,7 +3,8 @@
 //! The kernel classifies gateway-routed tool output before that output is
 //! promoted into privileged agent context. It records provenance, trust
 //! boundary, classifier evidence, policy decisions, and monitor-only rollout
-//! metadata without changing the live dispatch path.
+//! metadata on risky live dispatch results before they are cached, signed, or
+//! returned to the caller.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

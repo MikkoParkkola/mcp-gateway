@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use super::{
     RuntimeAuditEvent, RuntimeAvailability, RuntimeConfirmation, RuntimeConfirmationRisk,
     RuntimeDataClass, RuntimeDenial, RuntimeDenyReason, RuntimeEnvironmentPolicy, RuntimeIntent,
-    RuntimeLifecyclePlan, RuntimeMount, RuntimeMountMode, RuntimeNetworkEgress, RuntimePlan,
-    RuntimePolicy, RuntimePreflightCheck, RuntimeProviderKind, RuntimeProviderSelection,
-    RuntimeRecommendation, RuntimeResourcePolicy, RuntimeRestartPolicy,
+    RuntimeLaunchCommand, RuntimeLaunchMode, RuntimeLifecyclePlan, RuntimeMount, RuntimeMountMode,
+    RuntimeNetworkEgress, RuntimePlan, RuntimePolicy, RuntimePreflightCheck, RuntimeProviderKind,
+    RuntimeProviderSelection, RuntimeRecommendation, RuntimeResourcePolicy, RuntimeRestartPolicy,
 };
 
 /// Runtime planner for provider recommendation and policy compilation.
@@ -86,6 +86,60 @@ pub(super) fn compile_provider_plan(
     policy: RuntimePolicy,
     availability: &RuntimeAvailability,
 ) -> RuntimePlan {
+    let (mut confirmations, denied) = review_policy_gates(provider, intent, &policy, availability);
+    dedupe_confirmations(&mut confirmations);
+    let confirmation_ids = confirmations
+        .iter()
+        .map(|confirmation| confirmation.id.clone())
+        .collect::<Vec<_>>();
+    let denied_reasons = denied
+        .iter()
+        .map(|denial| denial.reason)
+        .collect::<Vec<_>>();
+    let guarded_env_keys = policy.env.guarded_keys.clone();
+
+    let lifecycle = lifecycle_plan(provider, intent, &policy);
+    let launch_command = launch_command(provider, intent, &policy);
+    let health_command = health_command(provider, intent);
+    let logs_command = logs_command(provider, intent);
+    let stop_command = stop_command(provider, intent);
+    let apply_command = launch_command
+        .as_ref()
+        .map(RuntimeLaunchCommand::display_command);
+
+    RuntimePlan {
+        server_name: intent.server_name.clone(),
+        provider,
+        preflight_checks: preflight_checks(provider),
+        rollback_step: lifecycle.rollback_step.clone(),
+        launch_command,
+        health_command,
+        logs_command,
+        stop_command,
+        apply_command,
+        recommendation: recommendation_for(provider, intent, availability),
+        lifecycle,
+        audit: RuntimeAuditEvent {
+            server_name: intent.server_name.clone(),
+            provider,
+            policy_id: policy.id.clone(),
+            license_tier: provider.license_tier(),
+            confirmation_ids,
+            denied_reasons,
+            guarded_env_keys,
+        },
+        policy,
+        confirmations,
+        denied,
+    }
+}
+
+fn review_policy_gates(
+    provider: RuntimeProviderKind,
+    intent: &RuntimeIntent,
+    policy: &RuntimePolicy,
+    availability: &RuntimeAvailability,
+) -> (Vec<RuntimeConfirmation>, Vec<RuntimeDenial>) {
     let mut confirmations = Vec::new();
     let mut denied = Vec::new();
 
@@ -95,14 +149,12 @@ pub(super) fn compile_provider_plan(
             detail: format!("{provider:?} runtime is not available"),
         });
     }
-
     if provider.is_containerized() && intent.image.as_deref().unwrap_or_default().is_empty() {
         denied.push(RuntimeDenial {
             reason: RuntimeDenyReason::MissingContainerImage,
             detail: "containerized runtime requires an image reference".to_string(),
         });
     }
-
     if policy.resources.cpu_cores == 0
         || policy.resources.memory_mb == 0
         || policy.resources.timeout_secs == 0
@@ -112,7 +164,17 @@ pub(super) fn compile_provider_plan(
             detail: "cpu, memory, and timeout must all be positive".to_string(),
         });
     }
+    collect_mount_gates(policy, &mut confirmations, &mut denied);
+    collect_confirmation_gates(policy, &mut confirmations);
 
+    (confirmations, denied)
+}
+
+fn collect_mount_gates(
+    policy: &RuntimePolicy,
+    confirmations: &mut Vec<RuntimeConfirmation>,
+    denied: &mut Vec<RuntimeDenial>,
+) {
     for mount in &policy.mounts {
         if is_forbidden_mount(&mount.source) {
             denied.push(RuntimeDenial {
@@ -130,7 +192,12 @@ pub(super) fn compile_provider_plan(
             });
         }
     }
+}
 
+fn collect_confirmation_gates(
+    policy: &RuntimePolicy,
+    confirmations: &mut Vec<RuntimeConfirmation>,
+) {
     if policy.network_egress == RuntimeNetworkEgress::Full {
         confirmations.push(RuntimeConfirmation {
             id: "network.full_egress".to_string(),
@@ -138,7 +205,6 @@ pub(super) fn compile_provider_plan(
             risk: RuntimeConfirmationRisk::High,
         });
     }
-
     if policy.privileged {
         confirmations.push(RuntimeConfirmation {
             id: "runtime.privileged".to_string(),
@@ -146,48 +212,12 @@ pub(super) fn compile_provider_plan(
             risk: RuntimeConfirmationRisk::High,
         });
     }
-
     if !policy.env.guarded_keys.is_empty() {
         confirmations.push(RuntimeConfirmation {
             id: "environment.guarded_names".to_string(),
             reason: "guarded environment names require owner approval".to_string(),
             risk: RuntimeConfirmationRisk::Medium,
         });
-    }
-
-    dedupe_confirmations(&mut confirmations);
-    let confirmation_ids = confirmations
-        .iter()
-        .map(|confirmation| confirmation.id.clone())
-        .collect::<Vec<_>>();
-    let denied_reasons = denied
-        .iter()
-        .map(|denial| denial.reason)
-        .collect::<Vec<_>>();
-    let guarded_env_keys = policy.env.guarded_keys.clone();
-
-    let lifecycle = lifecycle_plan(provider, intent, &policy);
-
-    RuntimePlan {
-        server_name: intent.server_name.clone(),
-        provider,
-        preflight_checks: preflight_checks(provider),
-        rollback_step: lifecycle.rollback_step.clone(),
-        apply_command: None,
-        recommendation: recommendation_for(provider, intent, availability),
-        lifecycle,
-        audit: RuntimeAuditEvent {
-            server_name: intent.server_name.clone(),
-            provider,
-            policy_id: policy.id.clone(),
-            license_tier: provider.license_tier(),
-            confirmation_ids,
-            denied_reasons,
-            guarded_env_keys,
-        },
-        policy,
-        confirmations,
-        denied,
     }
 }
 
@@ -262,10 +292,7 @@ fn lifecycle_plan(
     intent: &RuntimeIntent,
     policy: &RuntimePolicy,
 ) -> RuntimeLifecyclePlan {
-    let runtime_name = format!(
-        "mcp-gateway-{}",
-        sanitize_policy_id(&intent.server_name).trim_matches('-')
-    );
+    let runtime_name = runtime_name(intent);
     match provider {
         RuntimeProviderKind::LocalProcess => RuntimeLifecyclePlan {
             start_command_hint: intent.executable.clone(),
@@ -277,7 +304,8 @@ fn lifecycle_plan(
                     .to_string(),
         },
         RuntimeProviderKind::Docker => RuntimeLifecyclePlan {
-            start_command_hint: container_start_command("docker", &runtime_name, intent, policy),
+            start_command_hint: launch_command(provider, intent, policy)
+                .map(|command| command.display_command()),
             health_check: format!(
                 "docker inspect {runtime_name} and perform MCP initialize through the configured endpoint"
             ),
@@ -288,7 +316,8 @@ fn lifecycle_plan(
             ),
         },
         RuntimeProviderKind::Podman => RuntimeLifecyclePlan {
-            start_command_hint: container_start_command("podman", &runtime_name, intent, policy),
+            start_command_hint: launch_command(provider, intent, policy)
+                .map(|command| command.display_command()),
             health_check: format!(
                 "podman inspect {runtime_name} and perform MCP initialize through the configured endpoint"
             ),
@@ -328,40 +357,148 @@ fn lifecycle_plan(
     }
 }
 
-fn container_start_command(
+fn launch_command(
+    provider: RuntimeProviderKind,
+    intent: &RuntimeIntent,
+    policy: &RuntimePolicy,
+) -> Option<RuntimeLaunchCommand> {
+    match provider {
+        RuntimeProviderKind::LocalProcess => {
+            intent
+                .executable
+                .as_ref()
+                .map(|program| RuntimeLaunchCommand {
+                    program: program.clone(),
+                    args: Vec::new(),
+                    mode: RuntimeLaunchMode::SpawnProcess,
+                })
+        }
+        RuntimeProviderKind::Docker => {
+            container_launch_command("docker", &runtime_name(intent), intent, policy)
+        }
+        RuntimeProviderKind::Podman => {
+            container_launch_command("podman", &runtime_name(intent), intent, policy)
+        }
+        RuntimeProviderKind::Systemd
+        | RuntimeProviderKind::Launchd
+        | RuntimeProviderKind::Kubernetes => None,
+    }
+}
+
+fn health_command(
+    provider: RuntimeProviderKind,
+    intent: &RuntimeIntent,
+) -> Option<RuntimeLaunchCommand> {
+    let runtime_name = runtime_name(intent);
+    match provider {
+        RuntimeProviderKind::Docker => Some(container_control_command(
+            "docker",
+            ["inspect", "--format", "{{.State.Running}}", &runtime_name],
+        )),
+        RuntimeProviderKind::Podman => Some(container_control_command(
+            "podman",
+            ["inspect", "--format", "{{.State.Running}}", &runtime_name],
+        )),
+        RuntimeProviderKind::LocalProcess
+        | RuntimeProviderKind::Systemd
+        | RuntimeProviderKind::Launchd
+        | RuntimeProviderKind::Kubernetes => None,
+    }
+}
+
+fn logs_command(
+    provider: RuntimeProviderKind,
+    intent: &RuntimeIntent,
+) -> Option<RuntimeLaunchCommand> {
+    let runtime_name = runtime_name(intent);
+    match provider {
+        RuntimeProviderKind::Docker => Some(container_control_command(
+            "docker",
+            ["logs", "--tail", "200", &runtime_name],
+        )),
+        RuntimeProviderKind::Podman => Some(container_control_command(
+            "podman",
+            ["logs", "--tail", "200", &runtime_name],
+        )),
+        RuntimeProviderKind::LocalProcess
+        | RuntimeProviderKind::Systemd
+        | RuntimeProviderKind::Launchd
+        | RuntimeProviderKind::Kubernetes => None,
+    }
+}
+
+fn stop_command(
+    provider: RuntimeProviderKind,
+    intent: &RuntimeIntent,
+) -> Option<RuntimeLaunchCommand> {
+    let runtime_name = runtime_name(intent);
+    match provider {
+        RuntimeProviderKind::Docker => {
+            Some(container_control_command("docker", ["stop", &runtime_name]))
+        }
+        RuntimeProviderKind::Podman => {
+            Some(container_control_command("podman", ["stop", &runtime_name]))
+        }
+        RuntimeProviderKind::LocalProcess
+        | RuntimeProviderKind::Systemd
+        | RuntimeProviderKind::Launchd
+        | RuntimeProviderKind::Kubernetes => None,
+    }
+}
+
+fn container_launch_command(
     binary: &str,
     runtime_name: &str,
     intent: &RuntimeIntent,
     policy: &RuntimePolicy,
-) -> Option<String> {
+) -> Option<RuntimeLaunchCommand> {
     let image = intent.image.as_deref()?;
-    let mut parts = vec![
-        binary.to_string(),
+    let mut args = vec![
         "run".to_string(),
         "--rm".to_string(),
+        "--detach".to_string(),
         "--name".to_string(),
         runtime_name.to_string(),
         format!("--cpus={}", policy.resources.cpu_cores),
         format!("--memory={}m", policy.resources.memory_mb),
+        "--read-only".to_string(),
+        "--cap-drop=ALL".to_string(),
+        "--security-opt=no-new-privileges".to_string(),
+        "--pids-limit=128".to_string(),
         container_network_flag(&policy.network_egress),
     ];
 
     for key in &policy.env.allowed_keys {
-        parts.push("--env".to_string());
-        parts.push(key.clone());
+        args.push("--env".to_string());
+        args.push(key.clone());
     }
 
     for mount in &policy.mounts {
-        parts.push("--mount".to_string());
-        parts.push(container_mount_arg(mount));
+        args.push("--mount".to_string());
+        args.push(container_mount_arg(mount));
     }
 
     if policy.privileged {
-        parts.push("--privileged".to_string());
+        args.push("--privileged".to_string());
     }
 
-    parts.push(image.to_string());
-    Some(parts.join(" "))
+    args.push(image.to_string());
+    Some(RuntimeLaunchCommand {
+        program: binary.to_string(),
+        args,
+        mode: RuntimeLaunchMode::RunToCompletion,
+    })
+}
+
+fn container_control_command<'a>(
+    binary: &str,
+    args: impl IntoIterator<Item = &'a str>,
+) -> RuntimeLaunchCommand {
+    RuntimeLaunchCommand {
+        program: binary.to_string(),
+        args: args.into_iter().map(ToString::to_string).collect(),
+        mode: RuntimeLaunchMode::RunToCompletion,
+    }
 }
 
 fn container_network_flag(network: &RuntimeNetworkEgress) -> String {
@@ -403,6 +540,13 @@ fn dedupe_confirmations(confirmations: &mut Vec<RuntimeConfirmation>) {
 
 fn is_forbidden_mount(source: &str) -> bool {
     matches!(source, "/" | "/etc" | "/System" | "/var/run/docker.sock")
+}
+
+fn runtime_name(intent: &RuntimeIntent) -> String {
+    format!(
+        "mcp-gateway-{}",
+        sanitize_policy_id(&intent.server_name).trim_matches('-')
+    )
 }
 
 fn sanitize_policy_id(server_name: &str) -> String {

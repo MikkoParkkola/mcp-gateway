@@ -1,8 +1,31 @@
 use super::{
-    ContainerProvider, LocalProcessProvider, RuntimeAvailability, RuntimeDataClass,
-    RuntimeDenyReason, RuntimeIntent, RuntimeMount, RuntimeMountMode, RuntimeNetworkEgress,
-    RuntimePlanner, RuntimeProvider, RuntimeProviderKind, RuntimeProviderSelection,
+    ContainerProvider, LocalProcessProvider, RuntimeApplyAction, RuntimeApplyError,
+    RuntimeApplyRequest, RuntimeApplyStatus, RuntimeAvailability, RuntimeCommandOutcome,
+    RuntimeCommandRunner, RuntimeDataClass, RuntimeDenyReason, RuntimeIntent, RuntimeLaunchCommand,
+    RuntimeMount, RuntimeMountMode, RuntimeNetworkEgress, RuntimePlanner, RuntimeProvider,
+    RuntimeProviderKind, RuntimeProviderSelection,
 };
+
+#[derive(Default)]
+struct RecordingRunner {
+    calls: Vec<(RuntimeLaunchCommand, Vec<String>)>,
+}
+
+impl RuntimeCommandRunner for RecordingRunner {
+    fn run(
+        &mut self,
+        command: &RuntimeLaunchCommand,
+        env_keys: &[String],
+    ) -> Result<RuntimeCommandOutcome, RuntimeApplyError> {
+        self.calls.push((command.clone(), env_keys.to_vec()));
+        Ok(RuntimeCommandOutcome {
+            external_id: Some("fixture-runtime-id".to_string()),
+            exit_code: Some(0),
+            stdout: "fixture-runtime-id\n".to_string(),
+            stderr: String::new(),
+        })
+    }
+}
 
 #[test]
 fn planner_prefers_docker_for_sensitive_server_when_available() {
@@ -45,7 +68,7 @@ fn planner_falls_back_to_local_process_when_container_is_unavailable() {
 }
 
 #[test]
-fn planner_emits_observe_only_docker_lifecycle_hints() {
+fn planner_emits_executable_docker_lifecycle_command() {
     let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
     let mut intent = RuntimeIntent::named("gmail");
     intent.image = Some("ghcr.io/example/gmail-mcp:1".to_string());
@@ -57,14 +80,46 @@ fn planner_emits_observe_only_docker_lifecycle_hints() {
 
     assert_eq!(plan.provider, RuntimeProviderKind::Docker);
     assert!(start.contains("docker run"));
+    assert!(start.contains("--detach"));
     assert!(start.contains("--network=none"));
+    assert!(start.contains("--read-only"));
+    assert!(start.contains("--cap-drop=ALL"));
+    assert!(start.contains("--security-opt=no-new-privileges"));
     assert!(start.contains("--env GMAIL_HANDLE"));
     assert!(plan.lifecycle.health_check.contains("docker inspect"));
     assert_eq!(
         plan.lifecycle.logs_hint.as_deref(),
         Some("docker logs mcp-gateway-gmail")
     );
-    assert!(plan.apply_command.is_none());
+    assert_eq!(plan.apply_command.as_deref(), Some(start));
+    assert_eq!(
+        plan.launch_command
+            .as_ref()
+            .map(|command| command.program.as_str()),
+        Some("docker")
+    );
+    assert_eq!(
+        plan.health_command.as_ref().map(|command| &command.args),
+        Some(&vec![
+            "inspect".to_string(),
+            "--format".to_string(),
+            "{{.State.Running}}".to_string(),
+            "mcp-gateway-gmail".to_string(),
+        ])
+    );
+    assert_eq!(
+        plan.logs_command.as_ref().map(|command| &command.args),
+        Some(&vec![
+            "logs".to_string(),
+            "--tail".to_string(),
+            "200".to_string(),
+            "mcp-gateway-gmail".to_string(),
+        ])
+    );
+    assert_eq!(
+        plan.stop_command.as_ref().map(|command| &command.args),
+        Some(&vec!["stop".to_string(), "mcp-gateway-gmail".to_string(),])
+    );
 }
 
 #[test]
@@ -82,7 +137,7 @@ fn local_lifecycle_preserves_existing_executable_hint() {
     );
     assert!(plan.lifecycle.health_check.contains("stdio"));
     assert!(plan.lifecycle.rollback_step.contains("direct-launch"));
-    assert!(plan.apply_command.is_none());
+    assert_eq!(plan.apply_command.as_deref(), Some("mcp-docs-server"));
 }
 
 #[test]
@@ -165,6 +220,141 @@ fn container_provider_requires_image() {
             .denied_reasons
             .contains(&RuntimeDenyReason::MissingContainerImage)
     );
+}
+
+#[test]
+fn docker_apply_invokes_runner_with_restricted_defaults_and_value_free_audit() {
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named("gmail");
+    intent.image = Some("ghcr.io/example/gmail-mcp:1".to_string());
+    intent.data_class = RuntimeDataClass::Sensitive;
+    intent.env_keys = vec!["GMAIL_HANDLE".to_string()];
+
+    let plan = planner.plan(&intent);
+    let mut runner = RecordingRunner::default();
+    let result = plan
+        .apply_with(&mut runner, &RuntimeApplyRequest::empty())
+        .expect("docker apply");
+
+    assert_eq!(runner.calls.len(), 1);
+    let (command, env_keys) = &runner.calls[0];
+    assert_eq!(command.program, "docker");
+    assert!(command.args.contains(&"run".to_string()));
+    assert!(command.args.contains(&"--detach".to_string()));
+    assert!(command.args.contains(&"--network=none".to_string()));
+    assert!(command.args.contains(&"--read-only".to_string()));
+    assert!(command.args.contains(&"--cap-drop=ALL".to_string()));
+    assert!(
+        command
+            .args
+            .contains(&"--security-opt=no-new-privileges".to_string())
+    );
+    assert!(command.args.contains(&"GMAIL_HANDLE".to_string()));
+    assert_eq!(env_keys, &vec!["GMAIL_HANDLE".to_string()]);
+    assert_eq!(result.audit.provider, RuntimeProviderKind::Docker);
+    assert_eq!(result.audit.env_keys, vec!["GMAIL_HANDLE".to_string()]);
+
+    let serialized = serde_json::to_string(&result).unwrap();
+    assert!(!serialized.contains("fixture-handle-value"));
+}
+
+#[test]
+fn docker_lifecycle_controls_use_same_runner_without_env_names() {
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named("gmail");
+    intent.image = Some("ghcr.io/example/gmail-mcp:1".to_string());
+    intent.data_class = RuntimeDataClass::Sensitive;
+    intent.env_keys = vec!["GMAIL_HANDLE".to_string()];
+
+    let plan = planner.plan(&intent);
+    let mut runner = RecordingRunner::default();
+    let request = RuntimeApplyRequest::empty();
+    let health = plan.health_with(&mut runner, &request).expect("health");
+    let logs = plan.logs_with(&mut runner, &request).expect("logs");
+    let stop = plan.stop_with(&mut runner, &request).expect("stop");
+
+    assert_eq!(runner.calls.len(), 3);
+    assert_eq!(runner.calls[0].0.program, "docker");
+    assert_eq!(runner.calls[0].0.args[0], "inspect");
+    assert_eq!(runner.calls[0].1, Vec::<String>::new());
+    assert_eq!(runner.calls[1].0.args[0], "logs");
+    assert_eq!(runner.calls[1].1, Vec::<String>::new());
+    assert_eq!(runner.calls[2].0.args[0], "stop");
+    assert_eq!(runner.calls[2].1, Vec::<String>::new());
+    assert_eq!(health.audit.action, RuntimeApplyAction::Health);
+    assert_eq!(health.audit.status, RuntimeApplyStatus::Healthy);
+    assert_eq!(logs.audit.action, RuntimeApplyAction::Logs);
+    assert_eq!(logs.audit.status, RuntimeApplyStatus::LogsCollected);
+    assert_eq!(stop.audit.action, RuntimeApplyAction::Stop);
+    assert_eq!(stop.audit.status, RuntimeApplyStatus::Stopped);
+}
+
+#[test]
+fn runtime_apply_fails_closed_for_denied_mount_before_runner() {
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named("dangerous-filesystem");
+    intent.image = Some("ghcr.io/example/filesystem:1".to_string());
+    intent.requested_mounts = vec![RuntimeMount {
+        source: "/".to_string(),
+        target: "/host".to_string(),
+        mode: RuntimeMountMode::ReadOnly,
+    }];
+
+    let plan = planner.plan(&intent);
+    let mut runner = RecordingRunner::default();
+    let error = plan
+        .apply_with(&mut runner, &RuntimeApplyRequest::empty())
+        .expect_err("denied apply");
+
+    assert!(
+        matches!(error, RuntimeApplyError::Denied(reasons) if reasons.contains(&RuntimeDenyReason::ForbiddenMount))
+    );
+    assert!(runner.calls.is_empty());
+}
+
+#[test]
+fn runtime_lifecycle_controls_fail_closed_for_denied_mount_before_runner() {
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named("dangerous-filesystem");
+    intent.image = Some("ghcr.io/example/filesystem:1".to_string());
+    intent.requested_mounts = vec![RuntimeMount {
+        source: "/".to_string(),
+        target: "/host".to_string(),
+        mode: RuntimeMountMode::ReadOnly,
+    }];
+
+    let plan = planner.plan(&intent);
+    let mut runner = RecordingRunner::default();
+    for result in [
+        plan.health_with(&mut runner, &RuntimeApplyRequest::empty()),
+        plan.logs_with(&mut runner, &RuntimeApplyRequest::empty()),
+        plan.stop_with(&mut runner, &RuntimeApplyRequest::empty()),
+    ] {
+        assert!(
+            matches!(result, Err(RuntimeApplyError::Denied(reasons)) if reasons.contains(&RuntimeDenyReason::ForbiddenMount))
+        );
+    }
+    assert!(runner.calls.is_empty());
+}
+
+#[test]
+fn runtime_apply_requires_confirmation_for_full_network_before_runner() {
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named("remote-search");
+    intent.image = Some("ghcr.io/example/search:1".to_string());
+    intent.data_class = RuntimeDataClass::Sensitive;
+    intent.requested_egress = RuntimeNetworkEgress::Full;
+
+    let plan = planner.plan(&intent);
+    let mut runner = RecordingRunner::default();
+    let error = plan
+        .apply_with(&mut runner, &RuntimeApplyRequest::empty())
+        .expect_err("confirmation required");
+
+    assert!(
+        matches!(error, RuntimeApplyError::ConfirmationRequired(ids) if ids.contains(&"network.full_egress".to_string()))
+    );
+    assert!(runner.calls.is_empty());
 }
 
 #[test]

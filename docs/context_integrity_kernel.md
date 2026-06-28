@@ -5,8 +5,11 @@ protection. It classifies content before it is promoted into privileged agent
 context and records provenance, trust boundary, classifier evidence, policy
 decision, and audit metadata.
 
-This first slice is a core contract plus tests. It does not change the live
-gateway dispatch path yet.
+The kernel is wired into live `gateway_invoke` dispatch after response contract
+checks and response inspection, and before cache storage, idempotency completion,
+transparency logging, signing, and delivery. Clean benign results are returned
+unchanged; risky results receive a `_context_integrity` envelope with provenance,
+classification, policy, and audit evidence.
 
 ## What It Covers
 
@@ -63,6 +66,7 @@ Free/core:
 - Local false-positive feedback disposition.
 - Existing response scanner and AX-010 tool-poisoning integration.
 - Local JSON evidence for tests and operator inspection.
+- Live monitor-only wrapping for risky gateway-routed tool output.
 
 Enterprise:
 
@@ -75,10 +79,12 @@ Enterprise:
 
 ## Integration Point
 
-The eventual live integration should sit after tool response transforms and
-schema validation, and before projected content is returned to the client or
-agent. That placement keeps existing redaction and schema behavior intact while
-ensuring untrusted tool output cannot silently become privileged prompt context.
+The live integration sits after capability response transforms, output-schema
+validation, canonical projection, response contract checks, and response
+inspection. It runs before response caching, idempotency completion,
+transparency logging, signing, and return to the client or agent. That placement
+keeps existing redaction and schema behavior intact while ensuring untrusted
+tool output cannot silently become privileged prompt context.
 
 ## Validation
 
@@ -86,8 +92,10 @@ Run:
 
 ```bash
 cargo test context_integrity::tests -- --nocapture
+cargo test --lib gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_output -- --nocapture
 ```
 
 The focused tests cover provenance metadata, baseline classifier coverage, all
 six policy decisions, monitor-only evidence, privilege-boundary protection, and
-AX-010 descriptor poisoning reuse.
+AX-010 descriptor poisoning reuse. The live gateway regression proves risky
+tool output receives `_context_integrity` metadata before return.
