@@ -4,15 +4,20 @@ use std::{
     collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     process::ExitCode,
+    process::{Command, Stdio},
 };
 
 use chrono::Utc;
 use mcp_gateway::{
     capability::CapabilityLoader,
     cli::{
-        TrustCommand, TrustLabCommand,
+        RuntimeProviderArg, TrustCommand, TrustLabCommand,
         invoke::{ToolCatalogue, execute_tool},
         output::OutputFormat,
+    },
+    runtime::{
+        RuntimeAvailability, RuntimeDataClass, RuntimeIntent, RuntimeNetworkEgress, RuntimePlan,
+        RuntimePlanner, RuntimeProviderKind,
     },
     trust::{
         TrustAssistantPrompt, TrustCard, TrustCardAssistant, TrustCardValidator,
@@ -20,7 +25,7 @@ use mcp_gateway::{
         lab::{
             CatalogTrustLab, TrustLabBaseline, TrustLabEvaluation, TrustLabFixtureCall,
             TrustLabFixtureExecution, TrustLabPolicy, TrustLabPolicyVerdict, TrustLabProfile,
-            TrustLabRuntimeEvidence,
+            TrustLabRuntimeEvidence, TrustLabRuntimeProviderPlanEvidence,
         },
     },
 };
@@ -120,6 +125,8 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
             update_baseline_registry,
             active_fixtures,
             execute_active_fixtures,
+            runtime_provider_plan,
+            runtime_image,
             baseline_id,
             minimum_score,
             certification_score,
@@ -147,6 +154,13 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
                     } else {
                         TrustLabActiveFixtureMode::DryRun
                     },
+                    runtime_provider: runtime_provider_plan.map(|provider| {
+                        TrustLabRuntimeProviderOptions {
+                            provider: runtime_provider_kind(provider),
+                            image: runtime_image.clone(),
+                            availability: detect_runtime_availability(),
+                        }
+                    }),
                     baseline_id: &baseline_id,
                 },
             )
@@ -316,7 +330,15 @@ struct LabEvaluationOptions<'a> {
     update_baseline_registry: bool,
     active_fixtures_path: Option<&'a Path>,
     active_fixture_mode: TrustLabActiveFixtureMode,
+    runtime_provider: Option<TrustLabRuntimeProviderOptions>,
     baseline_id: &'a str,
+}
+
+#[derive(Debug, Clone)]
+struct TrustLabRuntimeProviderOptions {
+    provider: RuntimeProviderKind,
+    image: Option<String>,
+    availability: RuntimeAvailability,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,6 +360,7 @@ async fn run_lab_evaluation(
         update_baseline_registry,
         active_fixtures_path,
         active_fixture_mode,
+        runtime_provider,
         baseline_id,
     } = options;
     if active_fixture_mode == TrustLabActiveFixtureMode::ExecuteLocal
@@ -373,6 +396,7 @@ async fn run_lab_evaluation(
         baseline.as_ref(),
         active_fixtures.as_ref(),
         active_fixture_mode,
+        runtime_provider.as_ref(),
     )
     .await?;
     let written_baseline = match write_baseline_path {
@@ -431,6 +455,7 @@ async fn evaluate_lab_cards(
         baseline,
         active_fixtures,
         TrustLabActiveFixtureMode::DryRun,
+        None,
     )
     .await
 }
@@ -442,6 +467,7 @@ async fn evaluate_lab_cards_with_mode(
     baseline: Option<&TrustLabBaseline>,
     active_fixtures: Option<&TrustLabActiveFixtureSpec>,
     active_fixture_mode: TrustLabActiveFixtureMode,
+    runtime_provider: Option<&TrustLabRuntimeProviderOptions>,
 ) -> Result<Vec<TrustLabEvaluation>, String> {
     let lab = CatalogTrustLab::new(policy);
     let mut evaluations = Vec::with_capacity(cards.len());
@@ -464,6 +490,15 @@ async fn evaluate_lab_cards_with_mode(
                     )
                     .await?
                 }
+            };
+            let runtime = if let Some(runtime_provider) = runtime_provider {
+                runtime.with_runtime_provider_plan(
+                    TrustLabRuntimeProviderPlanEvidence::from_runtime_plan(
+                        &compile_trustlab_runtime_plan(card, runtime_provider),
+                    ),
+                )
+            } else {
+                runtime
             };
             lab.evaluate_card_with_runtime_at(card, baseline, chrono::Utc::now(), runtime)
         } else {
@@ -545,6 +580,53 @@ async fn run_local_active_fixture_calls(
             })
         },
     ))
+}
+
+fn compile_trustlab_runtime_plan(
+    card: &TrustCard,
+    options: &TrustLabRuntimeProviderOptions,
+) -> RuntimePlan {
+    let mut intent = RuntimeIntent::named(format!("trustlab-{}", card.server.name));
+    intent.preferred_provider = Some(options.provider);
+    intent.image.clone_from(&options.image);
+    intent.data_class = RuntimeDataClass::Internal;
+    intent.requested_egress = RuntimeNetworkEgress::None;
+
+    let planner = RuntimePlanner::new(options.availability.clone());
+    let policy = planner.compile_default_policy(&intent);
+    planner.plan_with_policy(&intent, options.provider, policy)
+}
+
+fn detect_runtime_availability() -> RuntimeAvailability {
+    RuntimeAvailability {
+        local_process: true,
+        docker: command_succeeds("docker", &["info"]),
+        podman: command_succeeds("podman", &["info"]),
+        systemd: command_succeeds("systemctl", &["--user", "status"]),
+        launchd: command_succeeds("launchctl", &["print", "gui/$UID"]),
+        kubernetes: command_succeeds("kubectl", &["version", "--client"]),
+    }
+}
+
+fn command_succeeds(program: &str, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn runtime_provider_kind(provider: RuntimeProviderArg) -> RuntimeProviderKind {
+    match provider {
+        RuntimeProviderArg::LocalProcess => RuntimeProviderKind::LocalProcess,
+        RuntimeProviderArg::Docker => RuntimeProviderKind::Docker,
+        RuntimeProviderArg::Podman => RuntimeProviderKind::Podman,
+        RuntimeProviderArg::Systemd => RuntimeProviderKind::Systemd,
+        RuntimeProviderArg::Launchd => RuntimeProviderKind::Launchd,
+        RuntimeProviderArg::Kubernetes => RuntimeProviderKind::Kubernetes,
+    }
 }
 
 async fn read_active_fixture_spec(path: &Path) -> Result<TrustLabActiveFixtureSpec, String> {
@@ -1121,6 +1203,7 @@ schema:
                 update_baseline_registry: false,
                 active_fixtures_path: None,
                 active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
+                runtime_provider: None,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1153,6 +1236,7 @@ schema:
                 update_baseline_registry: true,
                 active_fixtures_path: None,
                 active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
+                runtime_provider: None,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1188,6 +1272,7 @@ schema:
                 update_baseline_registry: false,
                 active_fixtures_path: None,
                 active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
+                runtime_provider: None,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1222,6 +1307,7 @@ schema:
                 update_baseline_registry: false,
                 active_fixtures_path: None,
                 active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
+                runtime_provider: None,
                 baseline_id: "missing-baseline",
             },
         )
@@ -1269,6 +1355,7 @@ schema:
                 update_baseline_registry: false,
                 active_fixtures_path: Some(&fixtures_path),
                 active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
+                runtime_provider: None,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1321,6 +1408,7 @@ schema:
                 update_baseline_registry: false,
                 active_fixtures_path: None,
                 active_fixture_mode: TrustLabActiveFixtureMode::ExecuteLocal,
+                runtime_provider: None,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1365,6 +1453,7 @@ schema:
                 update_baseline_registry: false,
                 active_fixtures_path: Some(&fixtures_path),
                 active_fixture_mode: TrustLabActiveFixtureMode::ExecuteLocal,
+                runtime_provider: None,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1423,6 +1512,7 @@ schema:
                 update_baseline_registry: false,
                 active_fixtures_path: Some(&fixtures_path),
                 active_fixture_mode: TrustLabActiveFixtureMode::ExecuteLocal,
+                runtime_provider: None,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1451,6 +1541,131 @@ schema:
                 .iter()
                 .any(|finding| finding.code == "TRUSTLAB_ACTIVE_FIXTURE_FAILED")
         );
+    }
+
+    #[tokio::test]
+    async fn lab_runtime_provider_plan_attaches_docker_evidence() {
+        let temp = TempDir::new().unwrap();
+        write_capability(temp.path(), "weather");
+        let fixtures_path = temp.path().join("trustlab-fixtures.json");
+        std::fs::write(
+            &fixtures_path,
+            serde_json::json!({
+                "isolated": true,
+                "fixtures": [
+                    {
+                        "tool_name": "weather",
+                        "arguments": {"city": "Helsinki"},
+                        "declared_safe": true
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let report = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            LabEvaluationOptions {
+                policy: TrustLabPolicy::default(),
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: None,
+                update_baseline_registry: false,
+                active_fixtures_path: Some(&fixtures_path),
+                active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
+                runtime_provider: Some(TrustLabRuntimeProviderOptions {
+                    provider: RuntimeProviderKind::Docker,
+                    image: Some("ghcr.io/example/weather-fixture:latest".to_string()),
+                    availability: RuntimeAvailability::with_docker(),
+                }),
+                baseline_id: "weather-baseline",
+            },
+        )
+        .await
+        .unwrap();
+
+        let plan = report.evaluations[0]
+            .runtime
+            .runtime_provider_plan
+            .as_ref()
+            .expect("runtime provider plan evidence");
+        assert_eq!(plan.provider_kind, "docker");
+        assert_eq!(plan.license_tier, "free_core");
+        assert_eq!(plan.launch_program.as_deref(), Some("docker"));
+        assert_eq!(
+            plan.launch_args_digest_sha256.as_deref().map(str::len),
+            Some(64)
+        );
+        assert!(plan.denied_reasons.is_empty());
+        assert!(
+            plan.preflight_checks
+                .iter()
+                .any(|check| check == "docker info")
+        );
+    }
+
+    #[tokio::test]
+    async fn lab_runtime_provider_plan_denial_blocks_certification() {
+        let temp = TempDir::new().unwrap();
+        write_capability(temp.path(), "weather");
+        let fixtures_path = temp.path().join("trustlab-fixtures.json");
+        std::fs::write(
+            &fixtures_path,
+            serde_json::json!({
+                "isolated": true,
+                "fixtures": [
+                    {
+                        "tool_name": "weather",
+                        "arguments": {"city": "Helsinki"},
+                        "declared_safe": true
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let report = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            LabEvaluationOptions {
+                policy: TrustLabPolicy {
+                    advisory_only: false,
+                    ..TrustLabPolicy::default()
+                },
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: None,
+                update_baseline_registry: false,
+                active_fixtures_path: Some(&fixtures_path),
+                active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
+                runtime_provider: Some(TrustLabRuntimeProviderOptions {
+                    provider: RuntimeProviderKind::Docker,
+                    image: None,
+                    availability: RuntimeAvailability::with_docker(),
+                }),
+                baseline_id: "weather-baseline",
+            },
+        )
+        .await
+        .unwrap();
+
+        let evaluation = &report.evaluations[0];
+        let plan = evaluation
+            .runtime
+            .runtime_provider_plan
+            .as_ref()
+            .expect("runtime provider plan evidence");
+        assert_eq!(plan.denied_reasons, vec!["missing_container_image"]);
+        assert!(
+            evaluation
+                .findings
+                .iter()
+                .any(|finding| finding.code == "TRUSTLAB_RUNTIME_PROVIDER_PLAN_DENIED")
+        );
+        assert_eq!(evaluation.policy_verdict, TrustLabPolicyVerdict::Block);
     }
 
     #[test]
