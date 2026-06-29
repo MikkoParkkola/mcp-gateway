@@ -28,6 +28,8 @@ MCP Gateway sits between your AI client and your tools. Instead of loading hundr
 
 Public quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
 
+The public Trust Fabric execution plan is tracked in [docs/roadmap/mik-6550-trust-fabric-roadmap.md](docs/roadmap/mik-6550-trust-fabric-roadmap.md). It keeps implementation scope, license boundaries, dependency order, and validation checks public while non-public planning material stays outside tracked docs.
+
 ## What MCP Gateway is / is not
 
 MCP Gateway is a **tool and capability gateway**. It routes MCP tool/resource/prompt traffic to backend MCP servers and capability-backed REST APIs, and it can proxy MCP server-to-client requests like `sampling/createMessage`, `elicitation/create`, and `roots/list` back to the connected client over the existing gateway session.
