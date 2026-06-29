@@ -1,0 +1,25 @@
+services:
+  mcp-gateway:
+    image: ghcr.io/mikkoparkkola/mcp-gateway:latest
+    container_name: mcp-gateway
+    restart: unless-stopped
+    command: ["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]
+    ports:
+      - "127.0.0.1:39400:39400"
+    volumes:
+      - ${PWD}/gateway.yaml:/config.yaml:ro
+      - ${PWD}/capabilities:/capabilities:ro
+    environment:
+      MCP_GATEWAY_LOG_LEVEL: info
+      MCP_GATEWAY_LOG_FORMAT: json
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:39400/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"

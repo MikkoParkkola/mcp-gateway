@@ -246,6 +246,10 @@ docker run --rm -p 39400:39400 \
   ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml
 scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
 
+# Native service templates
+docker compose -f deploy/single-node/docker-compose.yaml config
+scripts/dev/service-template-smoke.sh  # repo checkout: systemd/launchd path + start smoke
+
 # Team-shared gateway
 mcp-gateway doctor --format json
 mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out ./tls
@@ -265,5 +269,5 @@ For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distr
 - **Enable caching**: Add `cache: { enabled: true, default_ttl: 60s }` to your config.
 - **Enable auth**: Add `auth: { enabled: true, bearer_token: "auto" }` for token-based access control.
 - **Install from registry**: Run `mcp-gateway cap search finance` and `mcp-gateway cap install stock_quote`.
-- **Check health**: `mcp-gateway doctor` diagnoses config, port, runtime health, MCP handshake, tool listing, env vars, and client config. Use `mcp-gateway doctor --format json` for automation-friendly results with fix hints, risk, confirmation, verification, and rollback metadata. In a repo checkout, `scripts/dev/usability-smoke.sh` verifies the local first-use path stays noninteractive by default and only uses backup/rollback for config mutation.
+- **Check health**: `mcp-gateway doctor` diagnoses config, port, runtime health, MCP handshake, tool listing, env vars, and client config. Use `mcp-gateway doctor --format json` for automation-friendly results with fix hints, risk, confirmation, verification, and rollback metadata. In a repo checkout, `scripts/dev/usability-smoke.sh` verifies the local first-use path stays noninteractive by default and only uses backup/rollback for config mutation, and `scripts/dev/service-template-smoke.sh` verifies the Docker Compose, systemd, and launchd templates consume the same generated config layout.
 - **Full config reference**: See the [README](../README.md) or [examples/gateway-full.yaml](../examples/gateway-full.yaml).

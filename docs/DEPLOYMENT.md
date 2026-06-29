@@ -36,9 +36,23 @@ cargo build --release --features metrics       # Add metrics
 cargo build --release --no-default-features    # Minimal (no web UI)
 ```
 
+## Single-Node Templates
+
+Reusable templates for Docker Compose, Linux systemd, and macOS launchd live in
+[`deploy/single-node`](../deploy/single-node/README.md). They all consume the
+same `gateway.yaml` and `capabilities/` directory emitted by
+`mcp-gateway init --profile local`.
+
+From a repo checkout, validate the template paths and native start behavior:
+
+```bash
+scripts/dev/service-template-smoke.sh
+```
+
 ## Docker Deployment
 
 ```bash
+mcp-gateway init --profile local
 docker build -t mcp-gateway:latest .
 
 docker run -d --name mcp-gateway \
@@ -84,6 +98,7 @@ mcp-gateway doctor --config gateway.yaml --format json
 curl -sf http://localhost:39400/health > /dev/null
 scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
 scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + routed tool call
+scripts/dev/service-template-smoke.sh  # repo checkout: service template paths + native start smoke
 ```
 
 Client configs are still generated on the host, not inside the container:
@@ -283,6 +298,14 @@ sudo chown -R mcp-gateway:mcp-gateway /etc/mcp-gateway
 sudo systemctl daemon-reload
 sudo systemctl enable --now mcp-gateway
 ```
+
+## macOS launchd
+
+The launch daemon template is
+[`deploy/single-node/com.mikkoparkkola.mcp-gateway.plist`](../deploy/single-node/com.mikkoparkkola.mcp-gateway.plist).
+It uses `/usr/local/etc/mcp-gateway/gateway.yaml` and starts from that
+directory, so the generated `capabilities/` directory works without editing
+the config.
 
 ## Client Configuration Safety
 

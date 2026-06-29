@@ -1,0 +1,28 @@
+[Unit]
+Description=MCP Gateway
+Documentation=https://github.com/MikkoParkkola/mcp-gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcp-gateway
+Group=mcp-gateway
+WorkingDirectory=/etc/mcp-gateway
+ExecStart=/usr/local/bin/mcp-gateway --config /etc/mcp-gateway/gateway.yaml --host 127.0.0.1 --port 39400
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+Environment=MCP_GATEWAY_LOG_LEVEL=info
+Environment=MCP_GATEWAY_LOG_FORMAT=json
+EnvironmentFile=-/etc/mcp-gateway/env
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/mcp-gateway
+LimitNOFILE=65536
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
