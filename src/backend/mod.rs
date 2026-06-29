@@ -20,7 +20,7 @@ use crate::protocol::{
     JsonRpcResponse, Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult, Tool, ToolAnnotations, ToolsListResult,
 };
-use crate::runtime::{RuntimePlan, RuntimeProviderKind};
+use crate::runtime::{RuntimeDenyReason, RuntimeLicenseTier, RuntimePlan, RuntimeProviderKind};
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
 
@@ -909,7 +909,41 @@ impl Backend {
             healthy: health.healthy,
             consecutive_failures: health.consecutive_failures,
             latency_p95_ms: health.latency_p95_ms,
+            runtime: self.runtime_status(),
         }
+    }
+
+    fn runtime_status(&self) -> Option<BackendRuntimeStatus> {
+        let plan = self.runtime_plan.as_ref()?;
+        let state = if plan.is_denied() {
+            BackendRuntimeState::Denied
+        } else if plan.requires_confirmation() {
+            BackendRuntimeState::ConfirmationRequired
+        } else {
+            BackendRuntimeState::Ready
+        };
+
+        Some(BackendRuntimeStatus {
+            profile: self
+                .config
+                .runtime_profile
+                .clone()
+                .unwrap_or_else(|| plan.policy.id.clone()),
+            provider: plan.provider,
+            policy_id: plan.policy.id.clone(),
+            license_tier: plan.audit.license_tier,
+            state,
+            denied_reasons: plan.denied.iter().map(|denial| denial.reason).collect(),
+            confirmation_ids: plan
+                .confirmations
+                .iter()
+                .map(|confirmation| confirmation.id.clone())
+                .collect(),
+            restart_max_attempts: plan.policy.restart.max_restarts,
+            restart_backoff_secs: plan.policy.restart.backoff_secs,
+            health_check: plan.lifecycle.health_check.clone(),
+            rollback_step: plan.rollback_step.clone(),
+        })
     }
 
     /// Get circuit breaker stats for this backend.
@@ -1047,6 +1081,50 @@ pub struct BackendStatus {
     pub consecutive_failures: u64,
     /// 95th percentile latency in milliseconds, if any samples exist.
     pub latency_p95_ms: Option<u64>,
+    /// Runtime profile lifecycle state for admin/operator surfaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<BackendRuntimeStatus>,
+}
+
+/// Runtime profile status information exposed through backend status.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct BackendRuntimeStatus {
+    /// Runtime profile selected by this backend.
+    pub profile: String,
+    /// Provider selected by the compiled runtime plan.
+    pub provider: RuntimeProviderKind,
+    /// Policy id used for audit correlation.
+    pub policy_id: String,
+    /// License tier that owns this runtime provider capability.
+    pub license_tier: RuntimeLicenseTier,
+    /// Whether the runtime plan is ready, denied, or waiting for approval.
+    pub state: BackendRuntimeState,
+    /// Fail-closed denial reasons, when any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_reasons: Vec<RuntimeDenyReason>,
+    /// Confirmation ids required before live start or provider apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub confirmation_ids: Vec<String>,
+    /// Maximum restart attempts from the compiled policy.
+    pub restart_max_attempts: u32,
+    /// Restart backoff from the compiled policy.
+    pub restart_backoff_secs: u64,
+    /// Provider-specific health check instruction or command.
+    pub health_check: String,
+    /// Rollback instruction for this runtime plan.
+    pub rollback_step: String,
+}
+
+/// Compiled runtime plan state for a backend.
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendRuntimeState {
+    /// Policy passed without pending human gates.
+    Ready,
+    /// Policy requires explicit human approval before execution.
+    ConfirmationRequired,
+    /// Policy denied execution and must fail closed.
+    Denied,
 }
 
 /// Backend registry - manages all backends
@@ -1386,6 +1464,105 @@ mod tests {
             backend.is_circuit_tripped(),
             "a failed probe must leave the breaker tripped"
         );
+    }
+
+    #[test]
+    fn backend_status_surfaces_ready_runtime_profile_lifecycle() {
+        let cfg = BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "mcp-docs-server --stdio".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            runtime_profile: Some("containerized".to_string()),
+            ..BackendConfig::default()
+        };
+
+        let mut runtime = crate::config::RuntimeConfig::default();
+        runtime.availability.docker = true;
+        runtime.profiles.insert(
+            "containerized".to_string(),
+            crate::config::RuntimeProfileConfig {
+                provider: Some(crate::runtime::RuntimeProviderKind::Docker),
+                image: Some("ghcr.io/example/docs-mcp:1".to_string()),
+                restart: crate::runtime::RuntimeRestartPolicy {
+                    max_restarts: 4,
+                    backoff_secs: 11,
+                },
+                ..crate::config::RuntimeProfileConfig::default()
+            },
+        );
+        let plan = runtime_plan_for_backend("docs", &cfg, &runtime).expect("runtime plan");
+        let backend = Backend::new_with_runtime_plan(
+            "docs",
+            cfg,
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+            Some(plan),
+        );
+
+        let status = backend.status();
+        let runtime = status.runtime.expect("runtime status");
+        assert_eq!(runtime.profile, "containerized");
+        assert_eq!(
+            runtime.provider,
+            crate::runtime::RuntimeProviderKind::Docker
+        );
+        assert_eq!(
+            runtime.license_tier,
+            crate::runtime::RuntimeLicenseTier::FreeCore
+        );
+        assert_eq!(runtime.state, BackendRuntimeState::Ready);
+        assert!(runtime.denied_reasons.is_empty());
+        assert!(runtime.confirmation_ids.is_empty());
+        assert_eq!(runtime.restart_max_attempts, 4);
+        assert_eq!(runtime.restart_backoff_secs, 11);
+        assert!(runtime.health_check.contains("docker inspect"));
+        assert!(runtime.rollback_step.contains("docker stop"));
+    }
+
+    #[test]
+    fn backend_status_surfaces_confirmation_required_runtime_profile() {
+        let cfg = BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "mcp-docs-server --stdio".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            runtime_profile: Some("local_privileged".to_string()),
+            ..BackendConfig::default()
+        };
+
+        let mut runtime = crate::config::RuntimeConfig::default();
+        runtime.profiles.insert(
+            "local_privileged".to_string(),
+            crate::config::RuntimeProfileConfig {
+                provider: Some(crate::runtime::RuntimeProviderKind::LocalProcess),
+                privileged: true,
+                ..crate::config::RuntimeProfileConfig::default()
+            },
+        );
+        let plan = runtime_plan_for_backend("docs", &cfg, &runtime).expect("runtime plan");
+        let backend = Backend::new_with_runtime_plan(
+            "docs",
+            cfg,
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+            Some(plan),
+        );
+
+        let status = backend.status();
+        let runtime = status.runtime.expect("runtime status");
+        assert_eq!(runtime.profile, "local_privileged");
+        assert_eq!(
+            runtime.provider,
+            crate::runtime::RuntimeProviderKind::LocalProcess
+        );
+        assert_eq!(runtime.state, BackendRuntimeState::ConfirmationRequired);
+        assert!(runtime.denied_reasons.is_empty());
+        assert_eq!(runtime.confirmation_ids, vec!["runtime.privileged"]);
+        assert!(runtime.health_check.contains("stdio"));
+        assert!(runtime.rollback_step.contains("direct-launch"));
     }
 
     #[tokio::test]

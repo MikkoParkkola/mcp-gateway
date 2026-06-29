@@ -825,6 +825,7 @@ mod health_predicate_tests {
             healthy,
             consecutive_failures: if healthy { 0 } else { 3 },
             latency_p95_ms: None,
+            runtime: None,
         }
     }
 

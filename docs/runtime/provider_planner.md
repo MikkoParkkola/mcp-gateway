@@ -83,6 +83,12 @@ launch binary. Runtime profile changes are treated as config reload changes for
 backends that reference a runtime profile, causing those backends to be replaced
 with a freshly compiled plan.
 
+Admin backend status includes the compiled runtime profile lifecycle under the
+optional `runtime` object. It reports the selected provider, policy id, license
+tier, ready/confirmation/denied state, denial and confirmation ids, restart
+policy, provider health check, and rollback instruction. Public `/health`
+callers still receive the redacted backend summary only.
+
 Current live lifecycle support is intentionally narrow: stdio backends accept
 `local_process` runtime plans that are not denied and do not require pending
 human confirmations. Container provider plans still fail closed in the live

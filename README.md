@@ -480,7 +480,7 @@ step-by-step walkthrough.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check with backend status |
+| `/health` | GET | Health check with backend status; authenticated admin callers also see per-backend runtime profile lifecycle state |
 | `/mcp` | POST | Meta-MCP mode (dynamic discovery) |
 | `/mcp/{backend}` | POST | Direct backend access |
 | `/ui` | GET | Web dashboard |

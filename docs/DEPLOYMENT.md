@@ -328,7 +328,7 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/health` | GET | No (public by default) | Backend status, circuit breaker state |
+| `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Depends on config | JSON API for dashboards |
 
 Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testing recovery).
