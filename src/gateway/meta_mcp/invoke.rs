@@ -52,6 +52,7 @@ async fn call_capability_tool_with_identity(
         arguments,
         crate::capability::CapabilityExecutionContext {
             caller_identity: caller_identity.cloned(),
+            allow_loopback_egress: false,
         },
     )
     .await

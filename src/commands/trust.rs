@@ -9,10 +9,10 @@ use std::{
 
 use chrono::Utc;
 use mcp_gateway::{
-    capability::CapabilityLoader,
+    capability::{CapabilityExecutionContext, CapabilityLoader},
     cli::{
         RuntimeProviderArg, TrustCommand, TrustLabCommand,
-        invoke::{ToolCatalogue, execute_tool},
+        invoke::{ToolCatalogue, execute_tool_with_context},
         output::OutputFormat,
     },
     runtime::{
@@ -560,13 +560,17 @@ async fn run_local_active_fixture_calls(
     })?;
     let mut executions = VecDeque::new();
     for fixture in fixtures.iter().filter(|fixture| fixture.declared_safe) {
-        let execution =
-            match execute_tool(&catalogue, &fixture.tool_name, fixture.arguments.clone()).await {
-                Ok(output) => TrustLabFixtureExecution::passed(output),
-                Err(e) => {
-                    TrustLabFixtureExecution::failed(format!("fixture execution failed: {e}"))
-                }
-            };
+        let execution = match execute_tool_with_context(
+            &catalogue,
+            &fixture.tool_name,
+            fixture.arguments.clone(),
+            CapabilityExecutionContext::default().with_isolated_loopback_egress(),
+        )
+        .await
+        {
+            Ok(output) => TrustLabFixtureExecution::passed(output),
+            Err(e) => TrustLabFixtureExecution::failed(format!("fixture execution failed: {e}")),
+        };
         executions.push_back(execution);
     }
 
@@ -1029,6 +1033,7 @@ mod tests {
         TrustAuthMode,
         lab::{TrustLabFixtureCallStatus, TrustLabScannerStatus},
     };
+    use std::io::{Read, Write};
     use tempfile::TempDir;
 
     fn write_capability(dir: &Path, name: &str) {
@@ -1079,6 +1084,80 @@ schema:
 "
         );
         std::fs::write(dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    fn write_loopback_executable_capability(dir: &Path, name: &str, base_url: &str) {
+        let yaml = format!(
+            r#"
+name: {name}
+description: Active fixture test capability
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: "{base_url}"
+      path: /fixture/{{city}}
+      method: GET
+auth:
+  required: false
+  type: none
+metadata:
+  read_only: true
+  destructive: false
+  idempotent: true
+  open_world: false
+schema:
+  input:
+    type: object
+    properties:
+      city:
+        type: string
+"#
+        );
+        std::fs::write(dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
+    fn spawn_loopback_fixture_server() -> (String, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buf = [0_u8; 1024];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let body = r#"{"forecast":"sunny","raw_fixture_payload":"do-not-store"}"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = stream.flush();
+                        let _ = tx.send(request);
+                        break;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            let _ = tx.send("timeout waiting for fixture request".to_string());
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(err) => {
+                        let _ = tx.send(format!("fixture server accept error: {err}"));
+                        break;
+                    }
+                }
+            }
+        });
+
+        (format!("http://{addr}"), rx)
     }
 
     #[tokio::test]
@@ -1475,6 +1554,93 @@ schema:
                 .iter()
                 .any(|finding| finding.code == "TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED")
         );
+    }
+
+    #[tokio::test]
+    async fn lab_execute_active_fixtures_runs_safe_loopback_fixture_when_isolated() {
+        let temp = TempDir::new().unwrap();
+        let (base_url, request_rx) = spawn_loopback_fixture_server();
+        write_loopback_executable_capability(temp.path(), "weather", &base_url);
+        let fixtures_path = temp.path().join("trustlab-fixtures.json");
+        std::fs::write(
+            &fixtures_path,
+            serde_json::json!({
+                "isolated": true,
+                "fixtures": [
+                    {
+                        "tool_name": "weather",
+                        "arguments": {"city": "Helsinki"},
+                        "declared_safe": true
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let report = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            LabEvaluationOptions {
+                policy: TrustLabPolicy {
+                    advisory_only: false,
+                    ..TrustLabPolicy::default()
+                },
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: None,
+                update_baseline_registry: false,
+                active_fixtures_path: Some(&fixtures_path),
+                active_fixture_mode: TrustLabActiveFixtureMode::ExecuteLocal,
+                runtime_provider: None,
+                baseline_id: "weather-baseline",
+            },
+        )
+        .await
+        .unwrap();
+
+        let request = request_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(
+            request.starts_with("GET /fixture/Helsinki "),
+            "fixture request should carry the substituted safe argument: {request}"
+        );
+
+        let evaluation = &report.evaluations[0];
+        assert!(evaluation.runtime.isolated);
+        assert!(evaluation.runtime.active_eval);
+        assert_eq!(evaluation.runtime.provider, "cli_local_capability_executor");
+        assert_eq!(evaluation.runtime.fixture_calls.len(), 1);
+        assert_eq!(
+            evaluation.runtime.fixture_calls[0].status,
+            TrustLabFixtureCallStatus::Passed
+        );
+        assert!(evaluation.runtime.fixture_calls[0].invoked);
+        assert_eq!(
+            evaluation.runtime.fixture_calls[0]
+                .result_digest_sha256
+                .as_deref()
+                .map(str::len),
+            Some(64)
+        );
+        assert!(evaluation.scanners.iter().any(|scanner| {
+            scanner.scanner_id == mcp_gateway::trust::lab::TRUST_LAB_ACTIVE_FIXTURE_SCANNER
+                && scanner.status == TrustLabScannerStatus::Pass
+        }));
+        assert!(!evaluation.findings.iter().any(|finding| {
+            matches!(
+                finding.code.as_str(),
+                "TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED"
+                    | "TRUSTLAB_ACTIVE_FIXTURE_DRY_RUN"
+                    | "TRUSTLAB_ACTIVE_FIXTURE_FAILED"
+            )
+        }));
+
+        let serialized = serde_json::to_string(evaluation).unwrap();
+        assert!(!serialized.contains("Helsinki"));
+        assert!(!serialized.contains("sunny"));
+        assert!(!serialized.contains("raw_fixture_payload"));
     }
 
     #[tokio::test]

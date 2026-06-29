@@ -195,7 +195,10 @@ Execution mode requires `--active-fixtures`, filters fixtures to the evaluated
 capability, skips anything not explicitly marked safe, and refuses to invoke
 fixtures when the fixture file says `isolated: false`. Failed safe fixture calls
 produce `TRUSTLAB_ACTIVE_FIXTURE_FAILED`; with `--enforce`, that blocks the
-policy verdict until the fixture passes in isolation.
+policy verdict until the fixture passes in isolation. For local sandboxed
+fixtures, TrustLab permits direct loopback IP egress only inside this isolated
+execution context, so use `127.0.0.1` or `[::1]` fixture endpoints rather than
+general private-network hosts.
 
 Attach RuntimeProvider planning evidence to the same report:
 

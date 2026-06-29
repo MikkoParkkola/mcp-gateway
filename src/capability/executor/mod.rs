@@ -36,7 +36,7 @@ use serde_json::Value;
 use super::response_cache::ResponseCache;
 use super::{
     CapabilityDefinition, CapabilityExecutionContext, ProviderConfig, RestConfig,
-    validate_personal_capability_identity,
+    validate_capability_url_for_context, validate_personal_capability_identity,
 };
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
@@ -392,7 +392,7 @@ impl CapabilityExecutor {
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
-        validate_url_not_ssrf(&url)?;
+        validate_capability_url_for_context(&url, context)?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 
         let method = config.method.parse::<Method>().map_err(|e| {
