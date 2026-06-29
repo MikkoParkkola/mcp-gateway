@@ -429,6 +429,7 @@ tr:hover td { background: var(--bg3); }
         <div class="card"><div class="label">Actor</div><div class="value" id="cp-actor" style="font-size:1.15rem">-</div></div>
         <div class="card"><div class="label">Decisions</div><div class="value" id="cp-decisions">-</div></div>
         <div class="card"><div class="label">Coverage</div><div class="value" id="cp-coverage-count">-</div></div>
+        <div class="card"><div class="label">Shadow MCPs</div><div class="value" id="cp-shadow-count">-</div></div>
         <div class="card"><div class="label">Mode</div><div class="value" id="cp-mode" style="font-size:1.15rem">-</div></div>
       </div>
 
@@ -451,6 +452,14 @@ tr:hover td { background: var(--bg3); }
             </table>
           </div>
         </div>
+      </div>
+
+      <h2>ShadowRadar</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Asset</th><th>Transport</th><th>Severity</th><th>Action</th><th>Review</th></tr></thead>
+          <tbody id="cp-shadow-tbody"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
+        </table>
       </div>
 
       <h2>Decision Queue</h2>
@@ -696,6 +705,26 @@ function healthBadge(health) {
   return '<span class="badge badge-running">Unknown</span>';
 }
 
+function severityBadge(severity) {
+  const s = (severity || 'unknown').toLowerCase();
+  if (s === 'critical' || s === 'high') {
+    return `<span class="badge badge-down">${esc(humanize(s))}</span>`;
+  }
+  if (s === 'medium') return '<span class="badge badge-halfopen">Medium</span>';
+  if (s === 'low') return '<span class="badge badge-healthy">Low</span>';
+  return '<span class="badge badge-running">Unknown</span>';
+}
+
+function actionBadge(action) {
+  const a = (action || 'review').toLowerCase();
+  if (a === 'quarantine' || a === 'disable') {
+    return `<span class="badge badge-down">${esc(humanize(a))}</span>`;
+  }
+  if (a === 'adopt_into_gateway') return '<span class="badge badge-healthy">Adopt</span>';
+  if (a === 'ignore_with_reason') return '<span class="badge badge-running">Document</span>';
+  return `<span class="badge badge-halfopen">${esc(humanize(a))}</span>`;
+}
+
 // Dashboard
 async function refreshDashboard() {
   try {
@@ -744,18 +773,23 @@ function renderControlPlane(d) {
   const decisions = d.decision_queue?.items || [];
   const route = d.route || {};
   const limits = d.current_limits || [];
+  const shadow = d.shadow_radar || {};
+  const shadowSummary = shadow.summary || {};
 
   document.getElementById('cp-actor').textContent =
     `${actor.display_name || '-'} / ${humanize(actor.role)}`;
   document.getElementById('cp-decisions').textContent = decisions.length;
   document.getElementById('cp-coverage-count').textContent =
     coverageEntries.length ? `${covered}/${coverageEntries.length}` : '-';
+  document.getElementById('cp-shadow-count').textContent =
+    shadowSummary.unmanaged_total ?? d.inventory_counts?.shadow_assets ?? '-';
   document.getElementById('cp-mode').innerHTML = route.read_only
     ? '<span class="badge badge-healthy">Read Only</span>'
     : '<span class="badge badge-open">Mutating</span>';
 
   renderControlPlaneServers(d.view?.servers || []);
   renderControlPlaneRuntime(d.view?.runtime_health || []);
+  renderControlPlaneShadow(shadow);
   renderControlPlaneDecisions(decisions);
   renderControlPlaneFeatures(d.features || []);
   renderControlPlaneRbac(d.authorizations || {});
@@ -786,6 +820,25 @@ function renderControlPlaneRuntime(runtimes) {
     <td>${esc(r.provider || '-')}</td>
     <td>${healthBadge(r.health)}</td>
   </tr>`).join('');
+}
+
+function renderControlPlaneShadow(shadow) {
+  const tbody = document.getElementById('cp-shadow-tbody');
+  const assets = shadow.control_plane_assets || [];
+  if (!assets.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">No shadow MCPs</td></tr>';
+    return;
+  }
+  tbody.innerHTML = assets.map(asset => {
+    const evidence = (asset.evidence_refs || []).slice(0, 2).join(' · ');
+    return `<tr>
+      <td><div class="row-main">${esc(asset.display_name)}</div><div class="row-sub mono">${esc(asset.asset_id)}</div>${evidence ? `<div class="row-sub">${esc(evidence)}</div>` : ''}</td>
+      <td><div>${esc(asset.transport_kind || '-')}</div><div class="row-sub">${asset.local_only ? 'Local only' : 'Network exposed'}</div></td>
+      <td>${severityBadge(asset.severity)}</td>
+      <td>${actionBadge(asset.recommended_action)}</td>
+      <td>${boolBadge(asset.confirmation_required, 'Required', 'Not required')}</td>
+    </tr>`;
+  }).join('');
 }
 
 function renderControlPlaneDecisions(decisions) {

@@ -299,6 +299,9 @@ async fn test_webui_embeds_control_plane_read_only_page() {
     assert!(html.contains("/ui/api/control-plane"));
     assert!(html.contains("Decision Queue"));
     assert!(html.contains("Feature Boundary"));
+    assert!(html.contains("ShadowRadar"));
+    assert!(html.contains("cp-shadow-tbody"));
+    assert!(html.contains("renderControlPlaneShadow"));
 }
 
 // ── Registry tests ────────────────────────────────────────────────────────────
@@ -324,6 +327,20 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     assert_eq!(body["coverage"]["runtime_health"], true);
     assert_eq!(body["inventory_counts"]["servers"], 1);
     assert_eq!(body["inventory_counts"]["runtime_health"], 1);
+    assert!(body["inventory_counts"]["shadow_assets"].is_u64());
+    assert!(body["inventory_counts"]["shadow_high_or_critical_assets"].is_u64());
+    assert_eq!(
+        body["shadow_radar"]["schema_version"],
+        "shadow_radar.handoff.v1"
+    );
+    assert_eq!(
+        body["shadow_radar"]["source_report_schema"],
+        "shadow_radar.v1"
+    );
+    assert_eq!(body["shadow_radar"]["source"], "local_passive_discovery");
+    assert_eq!(body["shadow_radar"]["passive"], true);
+    assert_eq!(body["shadow_radar"]["tools_invoked"], false);
+    assert!(body["shadow_radar"]["control_plane_assets"].is_array());
     assert_eq!(body["view"]["servers"][0]["name"], "docs");
     assert_eq!(body["view"]["runtime_health"][0]["health"], "unknown");
     assert_eq!(

@@ -120,10 +120,13 @@ configs, environment hints, and the local process table, but it does not
 handshake with discovered servers or invoke their tools.
 
 Code that renders TrustCards, doctor findings, or control-plane inventory
-should consume the derived `shadow_radar.handoff.v1` feed from
-`ShadowScanReport::consumer_handoff()`. The handoff keeps the scan passive,
-preserves stable asset IDs, and carries only human-safe evidence pointers such
-as sanitized endpoints, executable basenames, ports, and config paths.
+consumes the derived `shadow_radar.handoff.v1` feed from
+`ShadowScanReport::consumer_handoff()`. The `/ui/api/control-plane` response and
+Control Plane tab include the local passive ShadowRadar summary, unmanaged asset
+count, severity, recommended action, and human-review requirement. The handoff
+keeps the scan passive, preserves stable asset IDs, and carries only human-safe
+evidence pointers such as sanitized endpoints, executable basenames, ports, and
+config paths.
 
 For reviewed local findings, adoption is explicit:
 
