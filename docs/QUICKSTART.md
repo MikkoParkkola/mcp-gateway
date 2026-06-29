@@ -266,6 +266,7 @@ For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distr
 - **Import OpenAPI specs**: `mcp-gateway cap import stripe-openapi.yaml --output capabilities/`
 - **Add remote backends**: For a zero-auth remote backend you can try in seconds, see [Adding remote MCP backends](REMOTE_BACKENDS.md).
 - **Find unmanaged MCP servers**: `mcp-gateway cap discover --shadow --format json` emits a passive ShadowRadar report with stable finding IDs, ownership, transport exposure, trust status, data risk, recommended action, confidence, verification, and rollback. It does not invoke discovered tools. Add `--write-config` only after reviewing adoptable local findings.
+- **Inspect the local control plane**: Open `http://127.0.0.1:39400/ui#control-plane` for read-only inventory, runtime health, decision queue, RBAC, and license-boundary status.
 - **Enable caching**: Add `cache: { enabled: true, default_ttl: 60s }` to your config.
 - **Enable auth**: Add `auth: { enabled: true, bearer_token: "auto" }` for token-based access control.
 - **Install from registry**: Run `mcp-gateway cap search finance` and `mcp-gateway cap install stock_quote`.

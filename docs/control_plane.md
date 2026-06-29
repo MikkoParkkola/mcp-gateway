@@ -51,6 +51,17 @@ The local API derives server and runtime health from the in-process backend
 registry. It does not fetch tools over the network; it only reports tools already
 present in the backend cache.
 
+## Local Web UI
+
+The embedded `/ui` dashboard includes a `Control Plane` tab that consumes
+`GET /ui/api/control-plane`. It shows the local actor, inventory coverage,
+server inventory, runtime health, role-aware decision queue, RBAC projection, and
+free/core versus enterprise feature boundaries.
+
+The tab is intentionally read-only. It does not add grant or policy mutation
+controls, approval actions, persistence, evidence export, OIDC/SCIM integration,
+or SIEM/OTel sinks.
+
 ## Roles
 
 - `admin`: can read, review, approve, and mutate grants or policies.
@@ -67,6 +78,7 @@ Free/core:
 - Local read-only status.
 - Local inventory and evidence summaries.
 - `GET /ui/api/control-plane` local runtime snapshot.
+- `/ui#control-plane` local read-only control-plane tab.
 
 Enterprise:
 
@@ -78,7 +90,7 @@ Enterprise:
 
 ## Current Limits
 
-- No dedicated visual web UI page is served by this slice.
+- The visual web UI is local and read-only.
 - No database persistence is added.
 - No mutation API route is added.
 - No OIDC/SCIM integration is added.

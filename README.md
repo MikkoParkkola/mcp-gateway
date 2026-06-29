@@ -69,7 +69,7 @@ user-facing behavior, not internal roadmap scoring.
 | Runtime isolation | RuntimeProvider policy planning plus Docker/Podman/Kubernetes deployment paths | Container-first isolation is the core runtime model | Runs and manages MCP servers behind the gateway | Bridges existing server processes/transports rather than isolating arbitrary tools |
 | Trust metadata | TrustCard/CBOM generation, validation, TrustLab evidence, provenance stubs | Catalog packages carry image provenance and security update flow | Gateway inventory and observability focus | Protocol metadata bridge; trust metadata is not the primary product surface |
 | Discovery | Meta-MCP listing/search, ShadowRadar unmanaged-server inventory, capability registry | Docker MCP Catalog of packaged servers | Centralized discovery across configured servers | Exposes one bridged server surface at a time unless composed externally |
-| Policy and governance | Policy, grants, audit events, control-plane domain, enterprise evidence boundary | Docker org/catalog/profile policy model | Centralized access control for teams | No broad governance plane; use with another policy layer when needed |
+| Policy and governance | Policy, grants, audit events, read-only control-plane tab/API, enterprise evidence boundary | Docker org/catalog/profile policy model | Centralized access control for teams | No broad governance plane; use with another policy layer when needed |
 | Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
 | Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
 | Deployment | Local, team gateway, Docker Compose, systemd, launchd, and enterprise Kubernetes alpha manifests | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
@@ -421,7 +421,7 @@ Circuit breakers, retry with backoff, rate limiting, health checks, graceful shu
 
 ### Web Dashboard
 
-Embedded web UI at `/ui` -- live status, searchable tools, server health, config viewer. Operator dashboard at `/dashboard`. Cost tracking at `/ui#costs`. All served from the same binary and port, no frontend build step.
+Embedded web UI at `/ui` -- live status, searchable tools, server health, read-only control-plane view, config viewer. Operator dashboard at `/dashboard`. Cost tracking at `/ui#costs`. All served from the same binary and port, no frontend build step.
 
 ### Security & Governance
 
@@ -484,6 +484,7 @@ step-by-step walkthrough.
 | `/mcp` | POST | Meta-MCP mode (dynamic discovery) |
 | `/mcp/{backend}` | POST | Direct backend access |
 | `/ui` | GET | Web dashboard |
+| `/ui/api/control-plane` | GET | Read-only local control-plane projection for inventory, runtime health, decisions, RBAC, and license boundaries |
 | `/dashboard` | GET | Operator dashboard |
 | `/metrics` | GET | Prometheus metrics (with `--features metrics`) |
 

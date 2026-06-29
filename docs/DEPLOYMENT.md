@@ -368,7 +368,7 @@ Build with `--features metrics`, scrape `/metrics`:
 mcp-gateway stats --url http://127.0.0.1:39400 --price 15.0
 ```
 
-Built-in dashboards: `/ui` (tool list, health, config) and `/dashboard` (health matrix, cache rates, top tools). Auto-refresh every 5s.
+Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools). Auto-refresh every 5s.
 
 ## Authentication for Production
 

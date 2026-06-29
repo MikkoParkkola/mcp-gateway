@@ -275,6 +275,32 @@ fn register_http_backend(state: &Arc<AppState>, name: &str) {
     )));
 }
 
+#[tokio::test]
+async fn test_webui_embeds_control_plane_read_only_page() {
+    let state = make_app_state(None, None);
+    let router = create_router(state);
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/ui")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8(bytes.to_vec()).unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("data-page=\"control-plane\""));
+    assert!(html.contains("id=\"page-control-plane\""));
+    assert!(html.contains("refreshControlPlane()"));
+    assert!(html.contains("/ui/api/control-plane"));
+    assert!(html.contains("Decision Queue"));
+    assert!(html.contains("Feature Boundary"));
+}
+
 // ── Registry tests ────────────────────────────────────────────────────────────
 
 #[tokio::test]
