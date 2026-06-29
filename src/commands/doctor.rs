@@ -3,6 +3,7 @@
 //! Performs a series of diagnostic checks and prints a pass/fail/warn table.
 //! Exit code is `SUCCESS` when all required checks pass, `FAILURE` otherwise.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -13,7 +14,12 @@ use std::net::TcpListener;
 use mcp_gateway::{
     cli::output::OutputFormat,
     config::{Config, TransportConfig},
-    discovery::AutoDiscovery,
+    discovery::{
+        AutoDiscovery,
+        shadow::{
+            ShadowDoctorFinding, ShadowDoctorStatus, ShadowRemediationAction, ShadowScanReport,
+        },
+    },
 };
 use serde_json::{Value, json};
 
@@ -203,6 +209,9 @@ pub async fn run_doctor_command(
     // ── 6. AI client configuration ─────────────────────────────────────────
     results.push(check_ai_client_config(&config).await);
 
+    // ── 7. Passive ShadowRadar handoff ─────────────────────────────────────
+    results.extend(check_shadow_radar(&config, config_path).await);
+
     // ── Print and summarize ────────────────────────────────────────────────
     print_results(&results, format);
 
@@ -218,6 +227,95 @@ pub async fn run_doctor_command(
 }
 
 // ── Individual checks ──────────────────────────────────────────────────────────
+
+async fn check_shadow_radar(config: &Config, config_path: Option<&Path>) -> Vec<CheckResult> {
+    let discovery = AutoDiscovery::new();
+    let registered_names: HashSet<String> = config.backends.keys().cloned().collect();
+    let gateway_config_path = config_path.or_else(|| Some(Path::new("gateway.yaml")));
+
+    match discovery.discover_all().await {
+        Ok(discovered) => {
+            let report = ShadowScanReport::from_discovered(
+                &discovered,
+                &registered_names,
+                gateway_config_path,
+            );
+            let handoff = report.consumer_handoff();
+            if handoff.doctor_findings.is_empty() {
+                return vec![
+                    CheckResult::pass("ShadowRadar", "passive scan found no unmanaged MCP servers")
+                        .with_category("shadow_radar")
+                        .with_verification("mcp-gateway cap discover --shadow --format json"),
+                ];
+            }
+
+            handoff
+                .doctor_findings
+                .into_iter()
+                .map(shadow_finding_check_result)
+                .collect()
+        }
+        Err(e) => vec![
+            CheckResult::warn("ShadowRadar", format!("passive discovery unavailable: {e}"))
+                .with_category("shadow_radar")
+                .with_hint("Run mcp-gateway cap discover --shadow --format json for details")
+                .with_risk("shadow_discovery_unavailable")
+                .with_verification("mcp-gateway doctor --format json"),
+        ],
+    }
+}
+
+fn shadow_finding_check_result(finding: ShadowDoctorFinding) -> CheckResult {
+    let severity = shadow_doctor_status_label(&finding.status);
+    let action = shadow_remediation_label(&finding.remediation_action);
+    CheckResult::warn(
+        format!("ShadowRadar {}", finding.asset_id),
+        format!(
+            "{severity}: {} Category: {}. Recommended action: {action}.",
+            finding.detail, finding.category
+        ),
+    )
+    .with_category("shadow_radar")
+    .with_hint("Review unmanaged MCP discovery before trusting or adopting this server")
+    .with_manual_fix(shadow_manual_fix_command(&finding.remediation_action))
+    .with_risk("shadow_mcp_review")
+    .with_verification(finding.verification_step)
+    .with_rollback("Restore the previous gateway config backup or remove the adopted backend")
+}
+
+fn shadow_doctor_status_label(status: &ShadowDoctorStatus) -> &'static str {
+    match status {
+        ShadowDoctorStatus::Info => "info",
+        ShadowDoctorStatus::Warning => "warning",
+        ShadowDoctorStatus::Critical => "critical",
+    }
+}
+
+fn shadow_remediation_label(action: &ShadowRemediationAction) -> &'static str {
+    match action {
+        ShadowRemediationAction::AdoptIntoGateway => "adopt into gateway after review",
+        ShadowRemediationAction::Quarantine => "quarantine until owner and trust are known",
+        ShadowRemediationAction::RequestOwner => "request owner review",
+        ShadowRemediationAction::IgnoreWithReason => "document accepted risk",
+        ShadowRemediationAction::Disable => "disable unmanaged server after approval",
+        ShadowRemediationAction::EnterprisePolicyTicket => "open enterprise policy ticket",
+    }
+}
+
+fn shadow_manual_fix_command(action: &ShadowRemediationAction) -> &'static str {
+    match action {
+        ShadowRemediationAction::AdoptIntoGateway => {
+            "mcp-gateway cap discover --shadow --write-config"
+        }
+        ShadowRemediationAction::Quarantine
+        | ShadowRemediationAction::RequestOwner
+        | ShadowRemediationAction::IgnoreWithReason
+        | ShadowRemediationAction::Disable
+        | ShadowRemediationAction::EnterprisePolicyTicket => {
+            "mcp-gateway cap discover --shadow --format json"
+        }
+    }
+}
 
 fn check_config(path: Option<&Path>, _fix: bool) -> (CheckResult, Option<Config>) {
     let resolved = resolve_config_path(path);
@@ -685,6 +783,45 @@ mod tests {
         assert_eq!(
             value["checks"][1]["fixability"]["rollback"],
             "mcp-gateway setup export --rollback <backup-file>"
+        );
+    }
+
+    #[test]
+    fn shadow_doctor_finding_is_machine_readable_warning() {
+        let finding = ShadowDoctorFinding {
+            finding_id: "shadow-doctor:remote-weather".to_string(),
+            asset_id: "remote-weather".to_string(),
+            status: ShadowDoctorStatus::Critical,
+            category: "restricted_shadow_asset".to_string(),
+            detail: "remote-weather is unmanaged via streamable_http".to_string(),
+            remediation_action: ShadowRemediationAction::Quarantine,
+            verification_step: "mcp-gateway cap discover --shadow --format json".to_string(),
+        };
+
+        let result = shadow_finding_check_result(finding);
+        let value = check_result_json_value(&result);
+
+        assert_eq!(value["id"], "shadowradar_remote_weather");
+        assert_eq!(value["category"], "shadow_radar");
+        assert_eq!(value["status"], "warn");
+        assert!(
+            value["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("restricted_shadow_asset")
+        );
+        assert_eq!(value["fixability"]["auto_fixable"], false);
+        assert_eq!(value["fixability"]["safe_to_apply"], false);
+        assert_eq!(value["fixability"]["requires_user"], true);
+        assert_eq!(value["fixability"]["confirmation_required"], true);
+        assert_eq!(value["fixability"]["risk"], "shadow_mcp_review");
+        assert_eq!(
+            value["fixability"]["command"],
+            "mcp-gateway cap discover --shadow --format json"
+        );
+        assert_eq!(
+            value["fixability"]["verification"],
+            "mcp-gateway cap discover --shadow --format json"
         );
     }
 

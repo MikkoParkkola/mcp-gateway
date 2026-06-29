@@ -121,10 +121,13 @@ handshake with discovered servers or invoke their tools.
 
 Code that renders TrustCards, doctor findings, or control-plane inventory
 consumes the derived `shadow_radar.handoff.v1` feed from
-`ShadowScanReport::consumer_handoff()`. The `/ui/api/control-plane` response and
-Control Plane tab include the local passive ShadowRadar summary, unmanaged asset
-count, severity, recommended action, and human-review requirement. The handoff
-keeps the scan passive, preserves stable asset IDs, and carries only human-safe
+`ShadowScanReport::consumer_handoff()`. `mcp-gateway doctor --format json`
+includes passive ShadowRadar findings as advisory warnings with category, risk,
+manual review, verification, and rollback metadata; it does not trust, start, or
+invoke unmanaged servers. The `/ui/api/control-plane` response and Control Plane
+tab include the local passive ShadowRadar summary, unmanaged asset count,
+severity, recommended action, and human-review requirement. The handoff keeps
+the scan passive, preserves stable asset IDs, and carries only human-safe
 evidence pointers such as sanitized endpoints, executable basenames, ports, and
 config paths.
 
