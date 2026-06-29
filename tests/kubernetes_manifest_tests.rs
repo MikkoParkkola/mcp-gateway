@@ -248,6 +248,40 @@ fn reconcile_plan_emits_sensitive_free_enterprise_evidence_exports() {
 }
 
 #[test]
+fn controller_report_summarizes_reconcile_cycles_and_evidence_exports() {
+    use mcp_gateway::kubernetes::{
+        KUBERNETES_CONTROLLER_REPORT_SCHEMA, KubernetesControllerOptions,
+        KubernetesControllerShutdownReason, KubernetesPlanStatus,
+    };
+
+    let report = mcp_gateway::kubernetes::plan_controller_report(
+        KubernetesControllerOptions::bounded(
+            "mcp-gateway",
+            "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml",
+            30,
+            2,
+        ),
+        include_str!("../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"),
+    )
+    .expect("controller report should plan");
+
+    assert_eq!(report.schema_version, KUBERNETES_CONTROLLER_REPORT_SCHEMA);
+    assert_eq!(report.completed_cycles, 2);
+    assert_eq!(report.status, KubernetesPlanStatus::Ready);
+    assert_eq!(
+        report.shutdown_reason,
+        KubernetesControllerShutdownReason::CycleLimitReached
+    );
+    assert_eq!(report.last_plan.evidence_exports.len(), 4);
+    assert!(
+        report
+            .cycles
+            .iter()
+            .all(|cycle| cycle.evidence_export_count == 4)
+    );
+}
+
+#[test]
 fn dry_run_and_kind_scripts_are_gated_and_reversible() {
     assert!(SERVER_DRY_RUN.contains("--server-side --dry-run=server"));
     assert!(SERVER_DRY_RUN.contains("preflight.sh"));

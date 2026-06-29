@@ -255,6 +255,34 @@ pub enum KubernetesCommand {
         #[arg(short, long, default_value = "table", value_enum)]
         format: OutputFormat,
     },
+
+    /// Run the deterministic controller-manager reconcile loop.
+    #[command(about = "Run Kubernetes enterprise controller-manager reconciliation")]
+    Controller {
+        /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
+        #[arg(required = true)]
+        resources: PathBuf,
+
+        /// Target namespace.
+        #[arg(short, long, default_value = "mcp-gateway")]
+        namespace: String,
+
+        /// Seconds between reconcile cycles.
+        #[arg(long, default_value_t = 30)]
+        interval_seconds: u64,
+
+        /// Number of reconcile cycles to run when not watching continuously.
+        #[arg(long, default_value_t = 1)]
+        cycles: usize,
+
+        /// Keep reconciling until the process is stopped.
+        #[arg(long)]
+        watch: bool,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
 }
 
 /// `TrustCard` and CBOM advisory metadata commands.

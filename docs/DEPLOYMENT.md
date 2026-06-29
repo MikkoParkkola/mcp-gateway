@@ -103,12 +103,19 @@ It currently covers CRD shape, Helm-style values, least-privilege base
 resources, network policy defaults, HA probes, read-only preflight checks,
 local manifest tests, a deterministic reconcile plan, a server-side dry-run
 wrapper, a disposable kind smoke fixture, and sensitive-data-free evidence
-exports for Kubernetes status, Events, OTel, and SIEM adapters.
+exports for Kubernetes status, Events, OTel, and SIEM adapters. It also includes
+a deterministic controller-manager loop for bounded CI cycles or continuous
+operator reconciliation over a reviewed resource stream.
 
 ```bash
 mcp-gateway kubernetes plan \
   deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
   --namespace mcp-gateway
+
+mcp-gateway kubernetes controller \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --cycles 2
 
 deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh mcp-gateway
 deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
@@ -116,8 +123,8 @@ deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
 
 Free/core deployment remains Docker, Docker Compose, and single-node service
 templates. Kubernetes HA, cluster policy reconciliation, managed rollout,
-multi-tenant namespaces, kind-based cluster validation, and fleet evidence
-export adapters are enterprise scope.
+multi-tenant namespaces, controller-manager operation, kind-based cluster
+validation, and fleet evidence export adapters are enterprise scope.
 
 ## Configuration Loading Order
 

@@ -586,6 +586,47 @@ fn cli_kubernetes_plan_parses_resources_namespace_and_json_format() {
 }
 
 #[test]
+fn cli_kubernetes_controller_parses_cycles_interval_and_plain_format() {
+    let cli = parse_args(&[
+        "kubernetes",
+        "controller",
+        "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml",
+        "--namespace",
+        "gateway-prod",
+        "--interval-seconds",
+        "5",
+        "--cycles",
+        "2",
+        "--format",
+        "plain",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Kubernetes(mcp_gateway::cli::KubernetesCommand::Controller {
+            resources,
+            namespace,
+            interval_seconds,
+            cycles,
+            watch,
+            format,
+        })) => {
+            assert_eq!(
+                resources,
+                std::path::PathBuf::from(
+                    "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
+                )
+            );
+            assert_eq!(namespace, "gateway-prod");
+            assert_eq!(interval_seconds, 5);
+            assert_eq!(cycles, 2);
+            assert!(!watch);
+            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Plain);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
 fn cli_plugin_search_requires_query_argument() {
     let result = parse_args(&["plugin", "search"]);
     assert!(result.is_err());

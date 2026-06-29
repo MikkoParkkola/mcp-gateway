@@ -2,14 +2,17 @@
 
 This package is the first Kubernetes deployment contract for enterprise
 mcp-gateway installations. Operators can review, plan, dry-run, and validate
-the resources before a long-running controller manager is deployed.
+the resources with the same deterministic contract used by the controller
+manager.
 
-The shipped controller surface is a deterministic reconcile planner:
-`mcp-gateway kubernetes plan <resources.yaml>` parses reviewed custom
-resources, resolves references, emits status conditions, lists reconcile
-actions, provides server-side dry-run plus rollback handles, and builds
-sensitive-data-free evidence exports for Kubernetes status, Events, OTel, and
-SIEM adapters. A future controller manager must preserve this contract.
+The shipped controller surface has two parts. `mcp-gateway kubernetes plan
+<resources.yaml>` parses reviewed custom resources, resolves references, emits
+status conditions, lists reconcile actions, provides server-side dry-run plus
+rollback handles, and builds sensitive-data-free evidence exports for
+Kubernetes status, Events, OTel, and SIEM adapters. `mcp-gateway kubernetes
+controller <resources.yaml>` runs the deterministic controller-manager loop
+over that same resource stream, with bounded cycles for CI and continuous mode
+for operators.
 
 ## License Boundary
 
@@ -26,14 +29,17 @@ fleet evidence export.
 2. `plan`: run `mcp-gateway kubernetes plan base/example-gateway.yaml` to
    render reconcile actions, reference checks, status conditions, dry-run
    command, and rollback handles.
-3. `apply`: use server-side dry-run first, then apply only after human approval
+3. `controller`: run `mcp-gateway kubernetes controller
+   base/example-gateway.yaml --cycles 2` to exercise the same reconcile and
+   evidence contract as a controller-manager loop.
+4. `apply`: use server-side dry-run first, then apply only after human approval
    for namespace, ingress domain, protected value provider, tenancy, and policy
    exceptions.
-4. `verify`: wait for status conditions, probes, service endpoints, policy
+5. `verify`: wait for status conditions, probes, service endpoints, policy
    convergence, and gateway health.
-5. `explain`: show why every generated resource exists and which acceptance
+6. `explain`: show why every generated resource exists and which acceptance
    criterion it supports.
-6. `rollback`: use the previous release revision or previous custom resource
+7. `rollback`: use the previous release revision or previous custom resource
    generation, and require confirmation for destructive namespace changes.
 
 ## Included Files
@@ -71,6 +77,23 @@ mcp-gateway kubernetes plan \
 The command is local and non-mutating. It returns a blocked plan when required
 references such as `runtimeProfileRef`, `policyRef`, or `trustCardRef` do not
 resolve within the supplied custom-resource document stream.
+
+## Controller Manager
+
+```bash
+mcp-gateway kubernetes controller \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --cycles 2 \
+  --interval-seconds 30 \
+  --format table
+```
+
+The controller command runs the same planner in a reconcile loop and emits
+`kubernetes.controller_report.v1`. Bounded cycles are intended for CI and local
+acceptance evidence. `--watch` keeps reconciling until the process is stopped.
+Blocked plans stop the loop before a future cluster adapter could attempt
+mutating work.
 
 ## Evidence Exports
 
@@ -110,5 +133,5 @@ cluster, and runs the server-side dry-run wrapper. Set
 
 ## Current Gaps
 
-- No long-running controller manager yet; the current controller contract is
-  the deterministic reconcile plan.
+- No live cluster watch/apply adapter yet; the current controller manager runs
+  the deterministic resource-stream contract used by CI and operator review.

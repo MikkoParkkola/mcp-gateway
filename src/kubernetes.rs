@@ -1,15 +1,21 @@
 //! Kubernetes enterprise reconciliation planning.
 //!
 //! This module is the typed planning contract for the enterprise Kubernetes
-//! package. It does not run a controller manager; it turns reviewed custom
-//! resources into deterministic reconcile actions, status conditions,
-//! server-side dry-run commands, and rollback handles that a controller or
-//! operator workflow can execute.
+//! package. It turns reviewed custom resources into deterministic reconcile
+//! actions, status conditions, server-side dry-run commands, rollback handles,
+//! and controller-manager cycle reports that a cluster adapter or operator
+//! workflow can execute.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod controller;
 pub mod evidence;
 
+pub use controller::{
+    KUBERNETES_CONTROLLER_REPORT_SCHEMA, KubernetesControllerCycle, KubernetesControllerMode,
+    KubernetesControllerOptions, KubernetesControllerReport, KubernetesControllerShutdownReason,
+    plan_controller_report,
+};
 pub use evidence::{
     KUBERNETES_EVIDENCE_EXPORT_SCHEMA, KubernetesEvidenceDelivery, KubernetesEvidenceExport,
     KubernetesEvidencePayload, KubernetesEvidenceRedaction, KubernetesEvidenceSink,
