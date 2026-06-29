@@ -424,11 +424,7 @@ fn local_and_docker_providers_use_same_contract() {
 #[test]
 #[ignore = "requires a reachable Docker daemon; run scripts/dev/runtime-provider-docker-smoke.sh"]
 fn runtime_provider_real_docker_smoke_exercises_lifecycle() {
-    assert_eq!(
-        std::env::var("MCP_GATEWAY_RUNTIME_DOCKER_SMOKE").as_deref(),
-        Ok("1"),
-        "set MCP_GATEWAY_RUNTIME_DOCKER_SMOKE=1 or run scripts/dev/runtime-provider-docker-smoke.sh"
-    );
+    require_docker_smoke_gate();
 
     let image = std::env::var("MCP_GATEWAY_RUNTIME_DOCKER_IMAGE")
         .unwrap_or_else(|_| "docker.io/library/hello-world:latest".to_string());
@@ -486,6 +482,69 @@ fn runtime_provider_real_docker_smoke_exercises_lifecycle() {
     assert_eq!(stopped.audit.action, RuntimeApplyAction::Stop);
 }
 
+#[test]
+#[ignore = "requires a reachable Docker daemon; run scripts/dev/runtime-provider-docker-smoke.sh"]
+fn runtime_provider_real_docker_restart_policy_recovers_after_crash() {
+    require_docker_smoke_gate();
+
+    let image = std::env::var("MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE")
+        .unwrap_or_else(|_| "mcp-gateway/runtime-provider-restart-fixture:local".to_string());
+    let server_name = format!(
+        "docker-restart-smoke-{}-{}",
+        std::process::id(),
+        unix_timestamp_secs()
+    );
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named(server_name);
+    intent.image = Some(image);
+    intent.data_class = RuntimeDataClass::Sensitive;
+    let mut policy = planner.compile_default_policy(&intent);
+    policy.restart.max_restarts = 5;
+
+    let plan = planner.plan_with_policy(&intent, RuntimeProviderKind::Docker, policy);
+    let container_name = docker_container_name(&plan);
+    let _cleanup = DockerCleanup::new(&container_name);
+    let mut runner = StdRuntimeCommandRunner;
+    let request = RuntimeApplyRequest::empty();
+
+    let started = plan
+        .apply_with(&mut runner, &request)
+        .expect("docker start restart fixture");
+    assert_eq!(started.audit.action, RuntimeApplyAction::Start);
+    assert!(wait_for_docker_running(&container_name));
+
+    let logs = plan.logs_with(&mut runner, &request).expect("docker logs");
+    assert!(
+        logs.outcome
+            .stdout
+            .contains("runtime-provider-restart-fixture-ready"),
+        "restart fixture did not emit readiness marker: {:?}",
+        logs.outcome.stdout
+    );
+
+    let restart_count = wait_for_docker_restart_count(&container_name);
+    assert!(
+        restart_count >= 1,
+        "expected Docker restart policy to recover after non-zero fixture exit, restart_count={restart_count}"
+    );
+
+    let health = plan
+        .health_with(&mut runner, &request)
+        .expect("docker inspect after restart");
+    assert_eq!(health.outcome.stdout.trim(), "true");
+
+    let stopped = plan.stop_with(&mut runner, &request).expect("docker rm");
+    assert_eq!(stopped.audit.action, RuntimeApplyAction::Stop);
+}
+
+fn require_docker_smoke_gate() {
+    assert_eq!(
+        std::env::var("MCP_GATEWAY_RUNTIME_DOCKER_SMOKE").as_deref(),
+        Ok("1"),
+        "set MCP_GATEWAY_RUNTIME_DOCKER_SMOKE=1 or run scripts/dev/runtime-provider-docker-smoke.sh"
+    );
+}
+
 fn unix_timestamp_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -531,4 +590,49 @@ fn remove_docker_container(name: &str) {
     let _ = std::process::Command::new("docker")
         .args(["rm", "--force", name])
         .output();
+}
+
+fn run_docker_command(args: &[&str]) -> String {
+    let output = std::process::Command::new("docker")
+        .args(args)
+        .output()
+        .expect("docker command starts");
+    assert!(
+        output.status.success(),
+        "docker {:?} failed: stdout={} stderr={}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn docker_inspect(container_name: &str, format: &str) -> String {
+    run_docker_command(&["inspect", "--format", format, container_name])
+}
+
+fn wait_for_docker_running(container_name: &str) -> bool {
+    for _ in 0..20 {
+        if docker_inspect(container_name, "{{.State.Running}}") == "true" {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    false
+}
+
+fn wait_for_docker_restart_count(container_name: &str) -> u32 {
+    for _ in 0..40 {
+        let running = docker_inspect(container_name, "{{.State.Running}}");
+        let restart_count = docker_inspect(container_name, "{{.RestartCount}}")
+            .parse::<u32>()
+            .expect("restart count is numeric");
+        if running == "true" && restart_count > 0 {
+            return restart_count;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    docker_inspect(container_name, "{{.RestartCount}}")
+        .parse::<u32>()
+        .expect("restart count is numeric")
 }

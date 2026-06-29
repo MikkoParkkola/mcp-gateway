@@ -154,5 +154,10 @@ The smoke is ignored in normal test runs. It sets the explicit
 `docker.io/library/hello-world:latest` container through
 `StdRuntimeCommandRunner`, then exercises `inspect`, `logs`, `restart`, and
 `rm --force` through the same structured `RuntimePlan` lifecycle commands used
-by the provider contract. Override the image with
-`MCP_GATEWAY_RUNTIME_DOCKER_IMAGE` when a local registry mirror is required.
+by the provider contract. It also builds a tiny local BusyBox fixture image,
+starts it with the same least-privilege Docker defaults, lets the fixture exit
+non-zero, and verifies Docker's `on-failure` restart policy brings it back.
+Override the
+one-shot image with `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE` and the restart fixture
+image with `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE` when a local registry
+mirror is required.
