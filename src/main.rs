@@ -50,6 +50,7 @@ async fn main() -> ExitCode {
         }
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
+        Some(Command::Identity(identity_cmd)) => commands::run_identity_command(identity_cmd).await,
         Some(Command::Stats { url, price }) => commands::run_stats_command(&url, price).await,
         Some(Command::Validate {
             paths,

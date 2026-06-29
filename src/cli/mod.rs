@@ -26,6 +26,7 @@
 //! ```
 
 pub mod completion;
+pub mod identity;
 pub mod invoke;
 pub mod output;
 pub mod skills;
@@ -38,6 +39,7 @@ use clap_complete::Shell;
 
 use crate::cli::output::OutputFormat;
 
+pub use identity::{IdentityCommand, IdentityGrantScopeArg, IdentityGrantsCommand};
 pub use skills::SkillsCommand;
 pub use subcommands::{
     AuditCommand, CapCommand, KubernetesCommand, PluginCommand, ProtocolImportCommand,
@@ -193,6 +195,10 @@ pub enum Command {
     /// Generate, inspect, and validate `TrustCard` and CBOM metadata.
     #[command(subcommand, about = "TrustCard and CBOM metadata commands")]
     Trust(TrustCommand),
+
+    /// Manage caller identity and local personal-capability grants.
+    #[command(subcommand, about = "Identity and local grant administration")]
+    Identity(IdentityCommand),
 
     /// Generate a starter gateway.yaml with sensible defaults
     #[command(about = "Create a new gateway configuration file")]

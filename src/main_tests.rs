@@ -388,6 +388,90 @@ fn cli_plugin_list_accepts_plugin_dir_flag() {
 }
 
 #[test]
+fn cli_identity_grants_list_parses_file_and_json_format() {
+    let cli = parse_args(&[
+        "identity",
+        "grants",
+        "list",
+        "--file",
+        "identity-grants.yaml",
+        "--active-only",
+        "--format",
+        "json",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Identity(mcp_gateway::cli::IdentityCommand::Grants(
+            mcp_gateway::cli::IdentityGrantsCommand::List {
+                file,
+                active_only,
+                format,
+            },
+        ))) => {
+            assert_eq!(file, std::path::PathBuf::from("identity-grants.yaml"));
+            assert!(active_only);
+            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn cli_identity_grants_grant_parses_required_local_admin_fields() {
+    let cli = parse_args(&[
+        "identity",
+        "grants",
+        "grant",
+        "--file",
+        "identity-grants.yaml",
+        "--grant-id",
+        "grant-alice-calendar",
+        "--subject",
+        "local:alice",
+        "--agent",
+        "agent-a",
+        "--capability",
+        "personal_calendar",
+        "--tool",
+        "read_day",
+        "--scope",
+        "read",
+        "--ttl-seconds",
+        "3600",
+        "--reason",
+        "read calendar",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Identity(mcp_gateway::cli::IdentityCommand::Grants(
+            mcp_gateway::cli::IdentityGrantsCommand::Grant {
+                file,
+                grant_id,
+                subject,
+                agent,
+                capability,
+                tool,
+                scope,
+                ttl_seconds,
+                reason,
+                ..
+            },
+        ))) => {
+            assert_eq!(file, std::path::PathBuf::from("identity-grants.yaml"));
+            assert_eq!(grant_id, "grant-alice-calendar");
+            assert_eq!(subject, "local:alice");
+            assert_eq!(agent.as_deref(), Some("agent-a"));
+            assert_eq!(capability, "personal_calendar");
+            assert_eq!(tool.as_deref(), Some("read_day"));
+            assert_eq!(scope, mcp_gateway::cli::IdentityGrantScopeArg::Read);
+            assert_eq!(ttl_seconds, Some(3600));
+            assert_eq!(reason, "read calendar");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
 fn cli_trust_generate_parses_capabilities_and_json_format() {
     let cli = parse_args(&[
         "trust",

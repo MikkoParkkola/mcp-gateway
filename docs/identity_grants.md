@@ -113,13 +113,51 @@ metadata:
     label: Alice
 ```
 
+## Local CLI Administration
+
+Operators can manage the free/core local grant file without hand-writing YAML.
+The CLI writes the same `identity_grants.v1` schema that gateway startup loads:
+
+```bash
+mcp-gateway identity grants grant \
+  --file ~/.mcp-gateway/identity-grants.yaml \
+  --grant-id alice-calendar-read \
+  --subject local:alice \
+  --subject-label Alice \
+  --agent agent-a \
+  --capability personal_calendar \
+  --tool read_day \
+  --scope read \
+  --ttl-seconds 3600 \
+  --reason "Alice approved read-only calendar access for agent-a"
+```
+
+Use `--any-agent` only when the grant intentionally applies to any agent acting
+for the subject. The command rejects duplicate grant ids unless `--replace` is
+passed. If `--owner` is omitted, the owner defaults to the subject so the common
+"user grants access to their own personal capability" flow does not require
+extra fields.
+
+List and revoke grants with:
+
+```bash
+mcp-gateway identity grants list --file ~/.mcp-gateway/identity-grants.yaml
+mcp-gateway identity grants revoke \
+  --file ~/.mcp-gateway/identity-grants.yaml \
+  --grant-id alice-calendar-read
+```
+
+All three commands support `--format table|json|plain`. JSON is intended for
+automation; table output is for local operators.
+
 ## Recommendations
 
 `LocalIdentityGrantStore::recommend` is a recommendation-only layer for
 automation-first UX. It does not create, mutate, or activate grants by itself;
-live dispatch uses only the stored grant rows evaluated above. Given a caller,
-agent, capability, scope, data class, tool risk, owner, and request reason, it
-returns one of:
+live dispatch uses only the stored grant rows evaluated above. The CLI can write
+those stored rows only after an explicit local operator command. Given a caller,
+agent, capability, scope, data class, tool risk, owner, and request reason,
+recommendation returns one of:
 
 - Allow public or shared capability.
 - Reuse an existing live grant.
@@ -141,6 +179,7 @@ Free/core:
 
 - Local grant schema.
 - Local JSON/YAML grant-file loader and in-memory evaluator.
+- Local CLI list/grant/revoke commands for single-node operator workflows.
 - Fail-closed personal capability dispatch for local capability tools.
 - Audit-event shape.
 - Recommendation-only least-privilege lease suggestions for local workflows.
@@ -164,3 +203,8 @@ Control-plane mutation workflows should use the same grant row and audit-event
 shapes rather than creating a parallel authorization model. Durable storage,
 OIDC/SCIM, delegated approvals, and fleet policy reconciliation remain
 enterprise follow-up work.
+
+MIK-6207, MIK-6208, and MIK-6209 are consolidated into this identity-grant path:
+per-user personal capability access should use `IdentityGrant`, `GrantSubject`,
+and the local grant-file/enterprise control-plane split described here. Do not
+add a second ownership or grant model for those older tickets.

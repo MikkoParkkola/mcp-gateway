@@ -166,13 +166,13 @@ fn default_identity_grants_file_schema_version() -> String {
     IDENTITY_GRANTS_FILE_SCHEMA_VERSION.to_string()
 }
 
-/// Load local identity grants from a JSON or YAML file.
+/// Read a local identity-grants file as persisted rows.
 ///
 /// # Errors
 ///
 /// Returns an error if the file cannot be read, parsed, or uses an unsupported
 /// schema version.
-pub async fn load_identity_grants_file(path: &Path) -> Result<LocalIdentityGrantStore, String> {
+pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile, String> {
     let content = tokio::fs::read_to_string(path).await.map_err(|e| {
         format!(
             "failed to read identity grants file {}: {e}",
@@ -197,6 +197,17 @@ pub async fn load_identity_grants_file(path: &Path) -> Result<LocalIdentityGrant
         ));
     }
 
+    Ok(file)
+}
+
+/// Load local identity grants from a JSON or YAML file.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, parsed, or uses an unsupported
+/// schema version.
+pub async fn load_identity_grants_file(path: &Path) -> Result<LocalIdentityGrantStore, String> {
+    let file = read_identity_grants_file(path).await?;
     Ok(LocalIdentityGrantStore::from_grants(file.grants))
 }
 
