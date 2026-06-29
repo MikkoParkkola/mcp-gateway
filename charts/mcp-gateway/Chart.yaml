@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Enterprise Edition — mcp-gateway Helm Chart
+apiVersion: v2
+name: mcp-gateway
+description: >
+  Kubernetes Helm chart for mcp-gateway — Enterprise Edition.
+  Includes CRDs for Gateway, MCPServer, Policy, TrustCardReference, and RuntimeProfile.
+  Free/core users should use Docker Compose for single-node deployments.
+type: application
+version: 0.1.0
+appVersion: "2.19.0"
+keywords:
+  - mcp
+  - gateway
+  - kubernetes
+  - operator
+  - enterprise
+maintainers:
+  - name: Mikko Parkkola
+    email: mikko.parkkola@iki.fi
+sources:
+  - https://github.com/MikkoParkkola/mcp-gateway

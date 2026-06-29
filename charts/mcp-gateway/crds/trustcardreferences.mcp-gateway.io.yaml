@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Enterprise Edition — mcp-gateway Kubernetes CRDs
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: trustcardreferences.mcp-gateway.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: mcp-gateway.io
+  names:
+    kind: TrustCardReference
+    listKind: TrustCardReferenceList
+    plural: trustcardreferences
+    singular: trustcardreference
+    shortNames:
+      - tcr
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: TrustCardReference binds a trust identity card to a Gateway for caller attestation — Enterprise Edition
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              properties:
+                gatewayRef:
+                  type: object
+                  description: Reference to the Gateway this trust card applies to.
+                  properties:
+                    name:
+                      type: string
+                issuer:
+                  type: string
+                  description: OIDC issuer URL that vouches for the caller identity.
+                audiences:
+                  type: array
+                  description: Expected token audiences.
+                  items:
+                    type: string
+                subjectPattern:
+                  type: string
+                  description: Regex pattern for allowed subject claims.
+                claimsMapping:
+                  type: object
+                  description: Mapping of JWT claims to gateway identity fields.
+                  x-kubernetes-preserve-unknown-fields: true
+                secretRef:
+                  type: object
+                  description: Reference to a Kubernetes Secret containing JWKS or verification keys.
+                  properties:
+                    name:
+                      type: string
+                    key:
+                      type: string
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                        description: "Condition type: Ready, PolicyAccepted, PolicyViolation"
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+      additionalPrinterColumns:
+        - name: Issuer
+          type: string
+          jsonPath: .spec.issuer
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
