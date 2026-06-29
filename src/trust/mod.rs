@@ -5,7 +5,9 @@
 //! planes. This module is advisory metadata only; enforcement consumers must
 //! opt in explicitly.
 
+pub mod generator;
 pub mod lab;
+pub mod schema;
 
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +67,13 @@ impl TrustCard {
     pub fn from_tool(server_name: impl Into<String>, tool: &Tool) -> Self {
         let server_name = server_name.into();
         let trust_tool = TrustTool::from_tool(tool);
+        let cbom_tool = CbomTool::from_trust_tool(&trust_tool);
+        let cbom_annotation = CbomAnnotation::from_trust_tool(&trust_tool);
+        let provenance = CbomProvenance::observed(
+            CbomSubjectKind::Tool,
+            trust_tool.name.clone(),
+            "protocol.tools/list",
+        );
         Self {
             schema_version: TRUST_CARD_SCHEMA_VERSION.to_string(),
             server: TrustServer {
@@ -83,6 +92,12 @@ impl TrustCard {
             },
             cbom: CapabilityBom {
                 schema_version: CBOM_SCHEMA_VERSION.to_string(),
+                tools: vec![cbom_tool],
+                prompts: Vec::new(),
+                resources: Vec::new(),
+                annotations: vec![cbom_annotation],
+                dependencies: Vec::new(),
+                provenance: vec![provenance],
                 components: vec![trust_tool.into_component(&server_name)],
             },
             evaluation_status: TrustEvaluationStatus::NotEvaluated,
@@ -100,6 +115,27 @@ impl TrustCard {
         card.server.auth_mode = TrustAuthMode::from_capability(capability);
         card.server.source_uri = source_uri_from_capability(capability);
         card.server.evidence = TrustEvidenceKind::Inferred;
+        if let Some(source_uri) = card.server.source_uri.clone() {
+            for tool in &mut card.cbom.tools {
+                tool.source_uri = Some(source_uri.clone());
+            }
+            for component in &mut card.cbom.components {
+                component.source_uri = Some(source_uri.clone());
+            }
+            card.cbom.provenance.push(CbomProvenance::inferred(
+                CbomSubjectKind::Server,
+                capability.name.clone(),
+                source_uri,
+            ));
+        }
+        card.cbom.dependencies.push(CbomDependency {
+            name: capability.name.clone(),
+            version: Some(capability.fulcrum.clone()),
+            source_uri: card.server.source_uri.clone(),
+            digest_sha256: None,
+            license: None,
+            evidence: TrustEvidenceKind::Inferred,
+        });
         card
     }
 
@@ -242,9 +278,212 @@ impl From<Option<&ToolAnnotations>> for TrustToolAnnotations {
 pub struct CapabilityBom {
     /// Schema version.
     pub schema_version: String,
+    /// Tool entries with schema digests and inferred policy surfaces.
+    #[serde(default)]
+    pub tools: Vec<CbomTool>,
+    /// Prompt entries with schema or content digests when known.
+    #[serde(default)]
+    pub prompts: Vec<CbomPrompt>,
+    /// Resource entries with URI and digest metadata when known.
+    #[serde(default)]
+    pub resources: Vec<CbomResource>,
+    /// Annotation records captured from protocol descriptors.
+    #[serde(default)]
+    pub annotations: Vec<CbomAnnotation>,
+    /// Package, runtime, or source dependencies.
+    #[serde(default)]
+    pub dependencies: Vec<CbomDependency>,
+    /// Provenance records for how CBOM fields were declared, observed, or inferred.
+    #[serde(default)]
+    pub provenance: Vec<CbomProvenance>,
     /// Components in the bill of materials.
     #[serde(default)]
     pub components: Vec<CbomComponent>,
+}
+
+/// One tool entry in a capability bill of materials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CbomTool {
+    /// Tool name.
+    pub name: String,
+    /// Optional description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional source URI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_uri: Option<String>,
+    /// Optional SPDX-style license expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// SHA-256 digest of the canonical input schema JSON.
+    pub input_schema_sha256: String,
+    /// SHA-256 digest of the canonical output schema JSON, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema_sha256: Option<String>,
+    /// Inferred permissions.
+    #[serde(default)]
+    pub permissions: Vec<TrustPermission>,
+    /// Inferred data classes.
+    #[serde(default)]
+    pub data_classes: Vec<TrustDataClass>,
+    /// Coarse risk classification.
+    pub risk_class: TrustRiskClass,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
+}
+
+impl CbomTool {
+    fn from_trust_tool(tool: &TrustTool) -> Self {
+        Self {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            source_uri: None,
+            license: None,
+            input_schema_sha256: tool.input_schema_sha256.clone(),
+            output_schema_sha256: tool.output_schema_sha256.clone(),
+            permissions: tool.permissions.clone(),
+            data_classes: tool.data_classes.clone(),
+            risk_class: tool.risk_class,
+            evidence: tool.evidence,
+        }
+    }
+}
+
+/// One prompt entry in a capability bill of materials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CbomPrompt {
+    /// Prompt name.
+    pub name: String,
+    /// Optional description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional digest for the prompt definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest_sha256: Option<String>,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
+}
+
+/// One resource entry in a capability bill of materials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CbomResource {
+    /// Resource URI or URI template.
+    pub uri: String,
+    /// Optional name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Optional MIME type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Optional digest for the resource descriptor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest_sha256: Option<String>,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
+}
+
+/// Protocol annotation evidence attached to a CBOM subject.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CbomAnnotation {
+    /// Subject kind.
+    pub subject_kind: CbomSubjectKind,
+    /// Subject name.
+    pub subject_name: String,
+    /// Captured tool annotations.
+    pub annotations: TrustToolAnnotations,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
+}
+
+impl CbomAnnotation {
+    fn from_trust_tool(tool: &TrustTool) -> Self {
+        Self {
+            subject_kind: CbomSubjectKind::Tool,
+            subject_name: tool.name.clone(),
+            annotations: tool.annotations.clone(),
+            evidence: tool.evidence,
+        }
+    }
+}
+
+/// Dependency evidence attached to a capability bill of materials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CbomDependency {
+    /// Dependency name.
+    pub name: String,
+    /// Optional version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Optional source URI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_uri: Option<String>,
+    /// Optional digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest_sha256: Option<String>,
+    /// Optional SPDX-style license expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
+}
+
+/// Provenance evidence attached to a capability bill of materials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CbomProvenance {
+    /// Subject kind.
+    pub subject_kind: CbomSubjectKind,
+    /// Subject name.
+    pub subject_name: String,
+    /// Source URI or source label.
+    pub source_uri: String,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
+}
+
+impl CbomProvenance {
+    fn observed(
+        subject_kind: CbomSubjectKind,
+        subject_name: impl Into<String>,
+        source_uri: impl Into<String>,
+    ) -> Self {
+        Self {
+            subject_kind,
+            subject_name: subject_name.into(),
+            source_uri: source_uri.into(),
+            evidence: TrustEvidenceKind::Observed,
+        }
+    }
+
+    fn inferred(
+        subject_kind: CbomSubjectKind,
+        subject_name: impl Into<String>,
+        source_uri: impl Into<String>,
+    ) -> Self {
+        Self {
+            subject_kind,
+            subject_name: subject_name.into(),
+            source_uri: source_uri.into(),
+            evidence: TrustEvidenceKind::Inferred,
+        }
+    }
+}
+
+/// CBOM subject kind for annotations and provenance records.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CbomSubjectKind {
+    /// Server subject.
+    Server,
+    /// Tool subject.
+    Tool,
+    /// Prompt subject.
+    Prompt,
+    /// Resource subject.
+    Resource,
+    /// Runtime subject.
+    Runtime,
+    /// Dependency subject.
+    Dependency,
 }
 
 /// One CBOM component.

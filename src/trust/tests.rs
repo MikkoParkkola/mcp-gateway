@@ -31,6 +31,38 @@ fn trust_card_from_tool_has_deterministic_cbom_digest() {
 }
 
 #[test]
+fn trust_card_cbom_exposes_explicit_policy_surfaces() {
+    let tool = tool_with_annotations(
+        "search_docs",
+        Some(ToolAnnotations {
+            title: None,
+            read_only_hint: Some(true),
+            destructive_hint: Some(false),
+            idempotent_hint: None,
+            open_world_hint: Some(false),
+        }),
+    );
+
+    let card = TrustCard::from_tool("server", &tool);
+
+    assert_eq!(card.cbom.tools.len(), 1);
+    assert_eq!(card.cbom.tools[0].name, "search_docs");
+    assert_eq!(
+        card.cbom.tools[0].input_schema_sha256,
+        card.cbom.components[0].digest_sha256.clone().unwrap()
+    );
+    assert_eq!(card.cbom.annotations.len(), 1);
+    assert_eq!(card.cbom.annotations[0].subject_name, "search_docs");
+    assert_eq!(card.cbom.annotations[0].annotations.read_only, Some(true));
+    assert!(
+        card.cbom
+            .provenance
+            .iter()
+            .any(|entry| entry.source_uri == "protocol.tools/list")
+    );
+}
+
+#[test]
 fn validator_warns_for_missing_publisher_license_and_source() {
     let tool = tool_with_annotations("search_docs", None);
     let card = TrustCard::from_tool("server", &tool);
@@ -187,6 +219,15 @@ schema:
     assert_eq!(card.server.auth_mode, TrustAuthMode::OAuth);
     assert_eq!(card.evaluation_status, TrustEvaluationStatus::Warning);
     assert_eq!(card.cbom.components.len(), 1);
+    assert_eq!(card.cbom.tools.len(), 1);
+    assert_eq!(card.cbom.dependencies.len(), 1);
+    assert_eq!(card.cbom.dependencies[0].name, "weather_lookup");
+    assert!(
+        card.cbom
+            .provenance
+            .iter()
+            .any(|entry| entry.subject_name == "weather_lookup")
+    );
 }
 
 #[test]

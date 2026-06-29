@@ -5,6 +5,9 @@ machine-readable capability bill of materials for tools, prompts, resources,
 runtime profiles, dependencies, permissions, data classes, provenance, and
 evaluation status.
 
+The Rust schema facade is `mcp_gateway::trust::schema`, with generation helpers
+under `mcp_gateway::trust::generator`.
+
 The first implementation slice is advisory and local:
 
 - Generate TrustCard metadata from protocol tool definitions and local
@@ -24,6 +27,18 @@ The first implementation slice is advisory and local:
 - Project digest-only TrustCard references into live `tools/list`
   descriptors so protocol clients can correlate each advertised tool with the
   local TrustCard and CBOM evidence that produced it.
+
+The CBOM JSON root is versioned as `cbom.v1` and exposes:
+
+- `tools`: tool names, schema digests, permissions, data classes, risk, source,
+  license, and evidence.
+- `prompts`: prompt descriptors and digests when available.
+- `resources`: resource URIs, names, MIME types, and descriptor digests.
+- `annotations`: captured protocol annotations for each subject.
+- `dependencies`: package, runtime, or source dependencies.
+- `provenance`: observed, declared, or inferred source evidence.
+- `components`: the compatibility list consumed by existing TrustLab and
+  control-plane code.
 
 ## Live Descriptor Projection
 
@@ -55,6 +70,10 @@ growth while giving policy engines, control-plane views, and clients a stable
 join key. Free/core owns this local descriptor projection. Signed TrustCards,
 organization policy overlays, continuous rescoring, approval workflows, and
 evidence export remain enterprise scope.
+
+ShadowRadar can attach unmanaged-server discovery evidence to a TrustCard.
+ControlPlaneUI can render TrustCard, CBOM, and validation evidence in read-only
+views before enterprise mutation workflows are enabled.
 
 ## TrustCard Assistant
 
