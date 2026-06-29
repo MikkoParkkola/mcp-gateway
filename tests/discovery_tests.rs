@@ -3,8 +3,9 @@
 use mcp_gateway::discovery::{
     AutoDiscovery, DiscoverySource,
     shadow::{
-        ShadowAuthExposure, ShadowDataRisk, ShadowDoctorStatus, ShadowRemediationAction,
-        ShadowRiskSeverity, ShadowScanReport,
+        ShadowAuthExposure, ShadowDataRisk, ShadowDoctorStatus, ShadowEnterpriseCapability,
+        ShadowLicenseTier, ShadowRemediationAction, ShadowRiskSeverity, ShadowScanActivity,
+        ShadowScanCapability, ShadowScanMode, ShadowScanReport,
     },
 };
 
@@ -433,6 +434,124 @@ fn shadow_consumer_handoff_projects_report_for_product_surfaces() {
     assert_eq!(handoff.trustcard_inputs.len(), report.assets.len());
     assert_eq!(handoff.doctor_findings.len(), report.assets.len());
     assert_eq!(handoff.control_plane_assets.len(), report.assets.len());
+
+    let boundary = &handoff.enterprise_boundary;
+    assert_eq!(
+        boundary.schema_version,
+        "shadow_radar.enterprise_boundary.v1"
+    );
+    assert_eq!(
+        boundary.free_core_scan.license_tier,
+        ShadowLicenseTier::FreeCore
+    );
+    assert_eq!(boundary.free_core_scan.mode, ShadowScanMode::LocalPassive);
+    assert_eq!(
+        boundary.free_core_scan.activity,
+        ShadowScanActivity::Passive
+    );
+    assert!(boundary.free_core_scan.allowed_capabilities.is_empty());
+    assert!(
+        boundary
+            .free_core_scan
+            .denied_capabilities
+            .contains(&ShadowScanCapability::NetworkRangeScan)
+    );
+    assert!(
+        boundary
+            .free_core_scan
+            .denied_capabilities
+            .contains(&ShadowScanCapability::ScheduledScan)
+    );
+    assert!(
+        boundary
+            .free_core_scan
+            .denied_capabilities
+            .contains(&ShadowScanCapability::FleetScope)
+    );
+    assert!(
+        boundary
+            .free_core_scan
+            .denied_capabilities
+            .contains(&ShadowScanCapability::ToolInvocation)
+    );
+    assert!(
+        boundary
+            .free_core_scan
+            .denied_capabilities
+            .contains(&ShadowScanCapability::ConfigMutation)
+    );
+    assert_eq!(
+        boundary.enterprise_scan.license_tier,
+        ShadowLicenseTier::Enterprise
+    );
+    assert_eq!(
+        boundary.enterprise_scan.mode,
+        ShadowScanMode::EnterpriseFleet
+    );
+    assert_eq!(
+        boundary.enterprise_scan.activity,
+        ShadowScanActivity::Passive
+    );
+    assert!(
+        boundary
+            .enterprise_scan
+            .allowed_capabilities
+            .contains(&ShadowScanCapability::NetworkRangeScan)
+    );
+    assert!(
+        boundary
+            .enterprise_scan
+            .allowed_capabilities
+            .contains(&ShadowScanCapability::ScheduledScan)
+    );
+    assert!(
+        boundary
+            .enterprise_scan
+            .allowed_capabilities
+            .contains(&ShadowScanCapability::FleetScope)
+    );
+    assert!(
+        boundary
+            .enterprise_scan
+            .denied_capabilities
+            .contains(&ShadowScanCapability::ToolInvocation)
+    );
+    assert!(
+        boundary
+            .enterprise_scan
+            .denied_capabilities
+            .contains(&ShadowScanCapability::ConfigMutation)
+    );
+    assert!(
+        boundary
+            .enterprise_capabilities
+            .contains(&ShadowEnterpriseCapability::SiemExport)
+    );
+    assert!(
+        boundary
+            .enterprise_capabilities
+            .contains(&ShadowEnterpriseCapability::DriftEvidence)
+    );
+    assert!(
+        boundary
+            .evidence_exports
+            .iter()
+            .all(|export| export.requires_enterprise_license)
+    );
+    assert!(
+        boundary
+            .evidence_exports
+            .iter()
+            .all(|export| !export.sensitive_values_included)
+    );
+    assert_eq!(
+        boundary.local_unmanaged_total,
+        report.summary.unmanaged_total
+    );
+    assert_eq!(
+        boundary.local_network_exposed_total,
+        report.summary.network_exposed_total
+    );
 
     let local_card = handoff
         .trustcard_inputs

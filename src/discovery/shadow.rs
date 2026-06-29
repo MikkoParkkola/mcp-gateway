@@ -25,6 +25,9 @@ pub const SHADOW_REPORT_SCHEMA_VERSION: &str = "shadow_radar.v1";
 /// Stable schema version for derived consumer handoff feeds.
 pub const SHADOW_HANDOFF_SCHEMA_VERSION: &str = "shadow_radar.handoff.v1";
 
+/// Stable schema version for the enterprise-boundary contract.
+pub const SHADOW_ENTERPRISE_BOUNDARY_SCHEMA_VERSION: &str = "shadow_radar.enterprise_boundary.v1";
+
 /// Passive local `ShadowRadar` report.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShadowScanReport {
@@ -285,6 +288,105 @@ pub struct ShadowConsumerHandoff {
     pub doctor_findings: Vec<ShadowDoctorFinding>,
     /// Control-plane inventory rows keyed by `ShadowRadar` asset id.
     pub control_plane_assets: Vec<ShadowControlPlaneAsset>,
+    /// Enterprise-only extension boundary for fleet and SIEM consumers.
+    pub enterprise_boundary: ShadowEnterpriseBoundary,
+}
+
+/// Explicit free/core versus enterprise separation for `ShadowRadar`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShadowEnterpriseBoundary {
+    /// Stable boundary schema.
+    pub schema_version: String,
+    /// Current local scan contract.
+    pub free_core_scan: ShadowScanBoundary,
+    /// Enterprise scan contract for fleet-wide operation.
+    pub enterprise_scan: ShadowScanBoundary,
+    /// Enterprise-only capabilities intentionally absent from local scans.
+    pub enterprise_capabilities: Vec<ShadowEnterpriseCapability>,
+    /// Machine-readable evidence export contracts.
+    pub evidence_exports: Vec<ShadowEvidenceExportContract>,
+    /// Local passive unmanaged asset count copied from the source report.
+    pub local_unmanaged_total: usize,
+    /// Local passive network-exposed asset count copied from the source report.
+    pub local_network_exposed_total: usize,
+    /// True when enterprise policy automation must create an auditable event.
+    pub audit_required: bool,
+    /// True when remediation still needs owner or admin confirmation.
+    pub human_approval_required: bool,
+}
+
+/// Scan behavior allowed at a license boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShadowScanBoundary {
+    /// License tier that owns this scan behavior.
+    pub license_tier: ShadowLicenseTier,
+    /// Scan mode.
+    pub mode: ShadowScanMode,
+    /// Passive or active scan activity.
+    pub activity: ShadowScanActivity,
+    /// Capabilities available at this boundary.
+    pub allowed_capabilities: Vec<ShadowScanCapability>,
+    /// Capabilities intentionally unavailable at this boundary.
+    pub denied_capabilities: Vec<ShadowScanCapability>,
+}
+
+/// Whether a scan is passive or may actively probe.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowScanActivity {
+    /// Reads already-observed evidence only.
+    Passive,
+}
+
+/// Scan capability used in the license-boundary contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowScanCapability {
+    /// Enumerate configured network ranges.
+    NetworkRangeScan,
+    /// Run on an automatic schedule.
+    ScheduledScan,
+    /// Aggregate more than one host or user.
+    FleetScope,
+    /// Invoke tools on discovered servers.
+    ToolInvocation,
+    /// Change gateway config or runtime state.
+    ConfigMutation,
+}
+
+/// Enterprise-only `ShadowRadar` capability.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowEnterpriseCapability {
+    /// Scan configured network ranges or fleet endpoints.
+    NetworkRangeScan,
+    /// Run inventory scans on an org-wide schedule.
+    ScheduledFleetInventory,
+    /// Record drift between repeated fleet scans.
+    DriftEvidence,
+    /// Export detection evidence to SIEM or WAF tooling.
+    SiemExport,
+    /// Assign findings to owners or groups.
+    OwnerAssignment,
+    /// Open or update policy remediation workflows.
+    PolicyRemediation,
+}
+
+/// Evidence export contract for enterprise consumers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShadowEvidenceExportContract {
+    /// Export capability.
+    pub capability: ShadowEnterpriseCapability,
+    /// Export schema or destination contract.
+    pub schema_version: String,
+    /// Export target class.
+    pub target: String,
+    /// True when this export is enterprise licensed.
+    pub requires_enterprise_license: bool,
+    /// True if export payloads can include sensitive values.
+    pub sensitive_values_included: bool,
+    /// Payload fields allowed by the contract.
+    pub payload_scope: Vec<String>,
 }
 
 /// `ShadowRadar` fields needed to render a `TrustCard`.
@@ -455,6 +557,94 @@ impl ShadowScanReport {
                 .iter()
                 .map(ShadowControlPlaneAsset::from_asset)
                 .collect(),
+            enterprise_boundary: self.enterprise_boundary(),
+        }
+    }
+
+    /// Return the enterprise-only extension contract for this local report.
+    #[must_use]
+    pub fn enterprise_boundary(&self) -> ShadowEnterpriseBoundary {
+        ShadowEnterpriseBoundary::local_passive(&self.summary)
+    }
+}
+
+impl ShadowEnterpriseBoundary {
+    /// Build an enterprise boundary from a local passive report summary.
+    #[must_use]
+    pub fn local_passive(summary: &ShadowScanSummary) -> Self {
+        Self {
+            schema_version: SHADOW_ENTERPRISE_BOUNDARY_SCHEMA_VERSION.to_string(),
+            free_core_scan: ShadowScanBoundary {
+                license_tier: ShadowLicenseTier::FreeCore,
+                mode: ShadowScanMode::LocalPassive,
+                activity: ShadowScanActivity::Passive,
+                allowed_capabilities: Vec::new(),
+                denied_capabilities: vec![
+                    ShadowScanCapability::NetworkRangeScan,
+                    ShadowScanCapability::ScheduledScan,
+                    ShadowScanCapability::FleetScope,
+                    ShadowScanCapability::ToolInvocation,
+                    ShadowScanCapability::ConfigMutation,
+                ],
+            },
+            enterprise_scan: ShadowScanBoundary {
+                license_tier: ShadowLicenseTier::Enterprise,
+                mode: ShadowScanMode::EnterpriseFleet,
+                activity: ShadowScanActivity::Passive,
+                allowed_capabilities: vec![
+                    ShadowScanCapability::NetworkRangeScan,
+                    ShadowScanCapability::ScheduledScan,
+                    ShadowScanCapability::FleetScope,
+                ],
+                denied_capabilities: vec![
+                    ShadowScanCapability::ToolInvocation,
+                    ShadowScanCapability::ConfigMutation,
+                ],
+            },
+            enterprise_capabilities: vec![
+                ShadowEnterpriseCapability::NetworkRangeScan,
+                ShadowEnterpriseCapability::ScheduledFleetInventory,
+                ShadowEnterpriseCapability::DriftEvidence,
+                ShadowEnterpriseCapability::SiemExport,
+                ShadowEnterpriseCapability::OwnerAssignment,
+                ShadowEnterpriseCapability::PolicyRemediation,
+            ],
+            evidence_exports: vec![
+                ShadowEvidenceExportContract {
+                    capability: ShadowEnterpriseCapability::SiemExport,
+                    schema_version: "shadow_radar.siem_export.v1".to_string(),
+                    target: "siem".to_string(),
+                    requires_enterprise_license: true,
+                    sensitive_values_included: false,
+                    payload_scope: vec![
+                        "asset_id".to_string(),
+                        "severity".to_string(),
+                        "risk_reasons".to_string(),
+                        "sanitized_endpoint".to_string(),
+                        "owner_or_group".to_string(),
+                        "evidence_refs".to_string(),
+                    ],
+                },
+                ShadowEvidenceExportContract {
+                    capability: ShadowEnterpriseCapability::DriftEvidence,
+                    schema_version: "shadow_radar.drift_evidence.v1".to_string(),
+                    target: "control_plane".to_string(),
+                    requires_enterprise_license: true,
+                    sensitive_values_included: false,
+                    payload_scope: vec![
+                        "asset_id".to_string(),
+                        "previous_report_digest".to_string(),
+                        "current_report_digest".to_string(),
+                        "first_seen".to_string(),
+                        "last_seen".to_string(),
+                        "state_change".to_string(),
+                    ],
+                },
+            ],
+            local_unmanaged_total: summary.unmanaged_total,
+            local_network_exposed_total: summary.network_exposed_total,
+            audit_required: true,
+            human_approval_required: true,
         }
     }
 }

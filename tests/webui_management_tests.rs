@@ -409,6 +409,66 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     assert_eq!(body["shadow_radar"]["passive"], true);
     assert_eq!(body["shadow_radar"]["tools_invoked"], false);
     assert!(body["shadow_radar"]["control_plane_assets"].is_array());
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["schema_version"],
+        "shadow_radar.enterprise_boundary.v1"
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["free_core_scan"]["license_tier"],
+        "free_core"
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["free_core_scan"]["activity"],
+        "passive"
+    );
+    let free_denied =
+        body["shadow_radar"]["enterprise_boundary"]["free_core_scan"]["denied_capabilities"]
+            .as_array()
+            .expect("free/core denied capabilities should be an array");
+    assert!(
+        free_denied
+            .iter()
+            .any(|capability| capability.as_str() == Some("network_range_scan"))
+    );
+    assert!(
+        free_denied
+            .iter()
+            .any(|capability| capability.as_str() == Some("scheduled_scan"))
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["enterprise_scan"]["license_tier"],
+        "enterprise"
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["enterprise_scan"]["activity"],
+        "passive"
+    );
+    let enterprise_allowed =
+        body["shadow_radar"]["enterprise_boundary"]["enterprise_scan"]["allowed_capabilities"]
+            .as_array()
+            .expect("enterprise allowed capabilities should be an array");
+    assert!(
+        enterprise_allowed
+            .iter()
+            .any(|capability| capability.as_str() == Some("network_range_scan"))
+    );
+    assert!(
+        enterprise_allowed
+            .iter()
+            .any(|capability| capability.as_str() == Some("scheduled_scan"))
+    );
+    assert!(
+        enterprise_allowed
+            .iter()
+            .any(|capability| capability.as_str() == Some("fleet_scope"))
+    );
+    let exports = body["shadow_radar"]["enterprise_boundary"]["evidence_exports"]
+        .as_array()
+        .expect("enterprise evidence exports should be an array");
+    assert!(exports.iter().all(|export| {
+        export["requires_enterprise_license"] == true
+            && export["sensitive_values_included"] == false
+    }));
     assert_eq!(body["view"]["servers"][0]["name"], "docs");
     assert_eq!(body["view"]["tools"][0]["name"], "search_docs");
     assert_eq!(body["view"]["trust_cards"][0]["server_id"], "backend:docs");

@@ -23,7 +23,7 @@ use crate::control_plane::{
 use crate::discovery::AutoDiscovery;
 use crate::discovery::shadow::{
     SHADOW_HANDOFF_SCHEMA_VERSION, SHADOW_REPORT_SCHEMA_VERSION, ShadowControlPlaneAsset,
-    ShadowScanReport, ShadowScanSummary,
+    ShadowEnterpriseBoundary, ShadowScanReport, ShadowScanSummary,
 };
 use crate::hashing::canonical_json_sha256;
 use crate::trust::TrustCard;
@@ -288,6 +288,7 @@ struct ControlPlaneShadowRadar {
     tools_invoked: bool,
     summary: ShadowScanSummary,
     control_plane_assets: Vec<ShadowControlPlaneAsset>,
+    enterprise_boundary: ShadowEnterpriseBoundary,
     trustcard_input_count: usize,
     doctor_finding_count: usize,
 }
@@ -305,12 +306,22 @@ impl ControlPlaneShadowRadar {
             tools_invoked: handoff.tools_invoked,
             summary,
             control_plane_assets: handoff.control_plane_assets,
+            enterprise_boundary: handoff.enterprise_boundary,
             trustcard_input_count: handoff.trustcard_inputs.len(),
             doctor_finding_count: handoff.doctor_findings.len(),
         }
     }
 
     fn scan_unavailable() -> Self {
+        let summary = ShadowScanSummary {
+            discovered_total: 0,
+            managed_total: 0,
+            unmanaged_total: 0,
+            high_or_critical_total: 0,
+            adoptable_total: 0,
+            network_exposed_total: 0,
+        };
+        let enterprise_boundary = ShadowEnterpriseBoundary::local_passive(&summary);
         Self {
             schema_version: SHADOW_HANDOFF_SCHEMA_VERSION.to_string(),
             source_report_schema: SHADOW_REPORT_SCHEMA_VERSION.to_string(),
@@ -318,15 +329,9 @@ impl ControlPlaneShadowRadar {
             scan_status: "unavailable",
             passive: true,
             tools_invoked: false,
-            summary: ShadowScanSummary {
-                discovered_total: 0,
-                managed_total: 0,
-                unmanaged_total: 0,
-                high_or_critical_total: 0,
-                adoptable_total: 0,
-                network_exposed_total: 0,
-            },
+            summary,
             control_plane_assets: Vec::new(),
+            enterprise_boundary,
             trustcard_input_count: 0,
             doctor_finding_count: 0,
         }

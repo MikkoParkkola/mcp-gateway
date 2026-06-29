@@ -131,6 +131,18 @@ the scan passive, preserves stable asset IDs, and carries only human-safe
 evidence pointers such as sanitized endpoints, executable basenames, ports, and
 config paths.
 
+The same handoff also carries `shadow_radar.enterprise_boundary.v1`, an
+explicit contract for the dual-license split. `free_core_scan` is always local,
+passive, and lists network-range discovery, scheduled scans, fleet scope, tool
+invocation, and config mutation under `denied_capabilities`. `enterprise_scan`
+allows network-range discovery, scheduled scans, and fleet scope while still
+denying tool invocation and config mutation; drift evidence, SIEM export, owner
+assignment, and policy remediation remain enterprise capabilities. Evidence
+export contracts are marked
+`requires_enterprise_license: true` and `sensitive_values_included: false` so
+downstream control planes can automate routing without carrying sensitive
+values or turning local discovery into a network scanner.
+
 For reviewed local findings, adoption is explicit:
 
 ```bash
@@ -138,8 +150,8 @@ mcp-gateway cap discover --shadow --write-config
 ```
 
 Free/core includes local passive inventory and risk hints. Enterprise fleet
-features are scheduled org-wide inventory, drift evidence, SIEM export, owner
-assignment, and policy remediation.
+features are scheduled org-wide inventory, network-range discovery, drift
+evidence, SIEM export, owner assignment, and policy remediation.
 
 ## Authenticated remote backends
 
