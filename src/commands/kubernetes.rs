@@ -52,6 +52,7 @@ fn print_plan(plan: &KubernetesReconcilePlan, format: OutputFormat) {
             println!("status={:?}", plan.status);
             println!("resources={}", plan.resource_count);
             println!("actions={}", plan.actions.len());
+            println!("evidence_exports={}", plan.evidence_exports.len());
             println!(
                 "server_side_dry_run={}",
                 plan.server_side_dry_run.command.join(" ")
@@ -59,8 +60,11 @@ fn print_plan(plan: &KubernetesReconcilePlan, format: OutputFormat) {
         }
         OutputFormat::Table => {
             println!(
-                "STATUS: {:?}  NAMESPACE: {}  RESOURCES: {}",
-                plan.status, plan.namespace, plan.resource_count
+                "STATUS: {:?}  NAMESPACE: {}  RESOURCES: {}  EVIDENCE_EXPORTS: {}",
+                plan.status,
+                plan.namespace,
+                plan.resource_count,
+                plan.evidence_exports.len()
             );
             println!("{:<24}  {:<18}  {:<26}  REASON", "ACTION", "KIND", "NAME");
             println!("{}", "-".repeat(96));

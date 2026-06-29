@@ -8,6 +8,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod evidence;
+
+pub use evidence::{
+    KUBERNETES_EVIDENCE_EXPORT_SCHEMA, KubernetesEvidenceDelivery, KubernetesEvidenceExport,
+    KubernetesEvidencePayload, KubernetesEvidenceRedaction, KubernetesEvidenceSink,
+    KubernetesEvidenceTransport, plan_evidence_exports,
+};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 
@@ -73,7 +80,7 @@ impl KubernetesReconcilePlanner {
             KubernetesPlanStatus::Ready
         };
 
-        Ok(KubernetesReconcilePlan {
+        let mut plan = KubernetesReconcilePlan {
             schema_version: KUBERNETES_RECONCILE_PLAN_SCHEMA.to_string(),
             namespace: namespace.to_string(),
             source: source.to_string(),
@@ -111,7 +118,10 @@ impl KubernetesReconcilePlanner {
             },
             actions,
             conditions,
-        })
+            evidence_exports: Vec::new(),
+        };
+        plan.evidence_exports = plan_evidence_exports(&plan);
+        Ok(plan)
     }
 }
 
@@ -148,6 +158,9 @@ pub struct KubernetesReconcilePlan {
     pub actions: Vec<KubernetesReconcileAction>,
     /// Status conditions the controller would publish.
     pub conditions: Vec<KubernetesStatusCondition>,
+    /// Sensitive-data-free evidence export payloads for status, event, `OTel`,
+    /// and SIEM consumers.
+    pub evidence_exports: Vec<KubernetesEvidenceExport>,
 }
 
 /// Server-side dry-run command metadata.
@@ -628,6 +641,16 @@ mod tests {
             plan.conditions
                 .iter()
                 .any(|condition| condition.reason == "K8S_REFERENCE_RESOLVED")
+        );
+        assert!(
+            plan.evidence_exports
+                .iter()
+                .any(|export| export.sink == KubernetesEvidenceSink::OpenTelemetry)
+        );
+        assert!(
+            plan.evidence_exports
+                .iter()
+                .all(|export| !export.contains_sensitive_material)
         );
     }
 

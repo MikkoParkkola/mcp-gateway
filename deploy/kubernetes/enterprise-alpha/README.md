@@ -7,8 +7,9 @@ the resources before a long-running controller manager is deployed.
 The shipped controller surface is a deterministic reconcile planner:
 `mcp-gateway kubernetes plan <resources.yaml>` parses reviewed custom
 resources, resolves references, emits status conditions, lists reconcile
-actions, and provides server-side dry-run plus rollback handles. A future
-controller manager must preserve this contract.
+actions, provides server-side dry-run plus rollback handles, and builds
+sensitive-data-free evidence exports for Kubernetes status, Events, OTel, and
+SIEM adapters. A future controller manager must preserve this contract.
 
 ## License Boundary
 
@@ -71,6 +72,23 @@ The command is local and non-mutating. It returns a blocked plan when required
 references such as `runtimeProfileRef`, `policyRef`, or `trustCardRef` do not
 resolve within the supplied custom-resource document stream.
 
+## Evidence Exports
+
+The plan includes `evidence_exports` with schema
+`kubernetes.evidence_export.v1`. The current adapter contract emits four
+targets:
+
+- Gateway status subresource.
+- Kubernetes Event.
+- OpenTelemetry collector/exporter path.
+- SIEM webhook adapter path.
+
+The payload contains low-cardinality plan attributes, action/condition reason
+codes, counts, namespace, source, and rollout-safety flags. It does not include
+raw manifests, protected-value material, or sensitive values. Status and Event
+exports are command previews for a future controller to execute; OTel and SIEM
+exports are adapter payloads with empty command vectors.
+
 ## Server-Side Dry-Run
 
 ```bash
@@ -94,4 +112,3 @@ cluster, and runs the server-side dry-run wrapper. Set
 
 - No long-running controller manager yet; the current controller contract is
   the deterministic reconcile plan.
-- No external evidence export adapter yet.

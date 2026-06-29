@@ -102,7 +102,8 @@ The enterprise-alpha Kubernetes package lives in
 It currently covers CRD shape, Helm-style values, least-privilege base
 resources, network policy defaults, HA probes, read-only preflight checks,
 local manifest tests, a deterministic reconcile plan, a server-side dry-run
-wrapper, and a disposable kind smoke fixture.
+wrapper, a disposable kind smoke fixture, and sensitive-data-free evidence
+exports for Kubernetes status, Events, OTel, and SIEM adapters.
 
 ```bash
 mcp-gateway kubernetes plan \
@@ -116,7 +117,7 @@ deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
 Free/core deployment remains Docker, Docker Compose, and single-node service
 templates. Kubernetes HA, cluster policy reconciliation, managed rollout,
 multi-tenant namespaces, kind-based cluster validation, and fleet evidence
-export are enterprise scope.
+export adapters are enterprise scope.
 
 ## Configuration Loading Order
 

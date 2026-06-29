@@ -175,6 +175,79 @@ fn reconcile_plan_resolves_example_resources_and_keeps_dry_run_non_mutating() {
 }
 
 #[test]
+fn reconcile_plan_emits_sensitive_free_enterprise_evidence_exports() {
+    use mcp_gateway::kubernetes::{KubernetesEvidenceSink, KubernetesEvidenceTransport};
+
+    let plan = mcp_gateway::kubernetes::plan_reconciliation(
+        "mcp-gateway",
+        "example-gateway.yaml",
+        include_str!("../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"),
+    )
+    .expect("example resources should plan");
+
+    let sinks: Vec<KubernetesEvidenceSink> = plan
+        .evidence_exports
+        .iter()
+        .map(|export| export.sink)
+        .collect();
+    assert!(sinks.contains(&KubernetesEvidenceSink::StatusSubresource));
+    assert!(sinks.contains(&KubernetesEvidenceSink::KubernetesEvent));
+    assert!(sinks.contains(&KubernetesEvidenceSink::OpenTelemetry));
+    assert!(sinks.contains(&KubernetesEvidenceSink::SiemWebhook));
+
+    assert!(
+        plan.evidence_exports
+            .iter()
+            .all(|export| export.requires_enterprise_license)
+    );
+    assert!(
+        plan.evidence_exports
+            .iter()
+            .all(|export| !export.contains_sensitive_material)
+    );
+    assert!(plan.evidence_exports.iter().all(|export| {
+        !export.redaction.raw_manifests_included
+            && !export.redaction.sensitive_values_included
+            && !export.redaction.protected_values_included
+    }));
+
+    let status_export = plan
+        .evidence_exports
+        .iter()
+        .find(|export| export.sink == KubernetesEvidenceSink::StatusSubresource)
+        .expect("status export");
+    assert_eq!(
+        status_export.delivery.transport,
+        KubernetesEvidenceTransport::KubernetesStatusPatch
+    );
+    assert!(status_export.delivery.modifies_cluster);
+    assert!(
+        status_export
+            .delivery
+            .command
+            .contains(&"--subresource=status".to_string())
+    );
+
+    let otel_export = plan
+        .evidence_exports
+        .iter()
+        .find(|export| export.sink == KubernetesEvidenceSink::OpenTelemetry)
+        .expect("otel export");
+    assert_eq!(
+        otel_export.delivery.transport,
+        KubernetesEvidenceTransport::Otlp
+    );
+    assert!(!otel_export.delivery.modifies_cluster);
+    assert!(otel_export.delivery.command.is_empty());
+    assert!(
+        otel_export
+            .payload
+            .reason_codes
+            .contains(&"K8S_MCP_SERVER_RECONCILE".to_string())
+    );
+}
+
+#[test]
 fn dry_run_and_kind_scripts_are_gated_and_reversible() {
     assert!(SERVER_DRY_RUN.contains("--server-side --dry-run=server"));
     assert!(SERVER_DRY_RUN.contains("preflight.sh"));
