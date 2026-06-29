@@ -99,13 +99,24 @@ Applied exports print any backup file and a rollback command. Use that rollback 
 
 The enterprise-alpha Kubernetes package lives in
 [`deploy/kubernetes/enterprise-alpha`](../deploy/kubernetes/enterprise-alpha/README.md).
-It is manifest-first and currently covers CRD shape, Helm-style values,
-least-privilege base resources, network policy defaults, HA probes, read-only
-preflight checks, and local manifest tests.
+It currently covers CRD shape, Helm-style values, least-privilege base
+resources, network policy defaults, HA probes, read-only preflight checks,
+local manifest tests, a deterministic reconcile plan, a server-side dry-run
+wrapper, and a disposable kind smoke fixture.
+
+```bash
+mcp-gateway kubernetes plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway
+
+deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh mcp-gateway
+deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
+```
 
 Free/core deployment remains Docker, Docker Compose, and single-node service
 templates. Kubernetes HA, cluster policy reconciliation, managed rollout,
-multi-tenant namespaces, and fleet evidence export are enterprise scope.
+multi-tenant namespaces, kind-based cluster validation, and fleet evidence
+export are enterprise scope.
 
 ## Configuration Loading Order
 

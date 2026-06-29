@@ -51,6 +51,7 @@ pub mod idempotency;
 pub mod identity_grants;
 pub mod key_server;
 pub mod kill_switch;
+pub mod kubernetes;
 #[cfg(feature = "metrics")]
 pub mod metrics;
 pub mod mtls;

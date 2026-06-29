@@ -237,6 +237,26 @@ pub enum ProtocolImportKind {
     OciMcpPackage,
 }
 
+/// Kubernetes enterprise deployment commands.
+#[derive(Subcommand, Debug)]
+pub enum KubernetesCommand {
+    /// Build a non-mutating reconcile plan from enterprise custom resources.
+    #[command(about = "Plan Kubernetes enterprise reconciliation without mutating the cluster")]
+    Plan {
+        /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
+        #[arg(required = true)]
+        resources: PathBuf,
+
+        /// Target namespace.
+        #[arg(short, long, default_value = "mcp-gateway")]
+        namespace: String,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+}
+
 /// `TrustCard` and CBOM advisory metadata commands.
 #[derive(Subcommand, Debug)]
 pub enum TrustCommand {

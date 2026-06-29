@@ -9,6 +9,10 @@ const DEPLOYMENT: &str = include_str!("../deploy/kubernetes/enterprise-alpha/bas
 const VALUES: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/values.enterprise.example.yaml");
 const PREFLIGHT: &str = include_str!("../deploy/kubernetes/enterprise-alpha/scripts/preflight.sh");
+const SERVER_DRY_RUN: &str =
+    include_str!("../deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh");
+const KIND_SMOKE: &str =
+    include_str!("../deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh");
 
 fn docs(input: &str) -> Vec<Value> {
     serde_yaml::Deserializer::from_str(input)
@@ -137,4 +141,46 @@ fn preflight_is_read_only_and_reports_required_capabilities() {
     assert!(PREFLIGHT.contains("networking.k8s.io"));
     assert!(!PREFLIGHT.contains(" apply "));
     assert!(!PREFLIGHT.contains(" delete "));
+}
+
+#[test]
+fn reconcile_plan_resolves_example_resources_and_keeps_dry_run_non_mutating() {
+    let plan = mcp_gateway::kubernetes::plan_reconciliation(
+        "mcp-gateway",
+        "example-gateway.yaml",
+        include_str!("../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"),
+    )
+    .expect("example resources should plan");
+
+    assert_eq!(
+        plan.status,
+        mcp_gateway::kubernetes::KubernetesPlanStatus::Ready
+    );
+    assert!(
+        plan.server_side_dry_run
+            .command
+            .contains(&"--dry-run=server".to_string())
+    );
+    assert!(!plan.server_side_dry_run.modifies_cluster);
+    assert!(
+        plan.actions
+            .iter()
+            .any(|action| action.reason_code == "K8S_MCP_SERVER_RECONCILE")
+    );
+    assert!(
+        plan.conditions
+            .iter()
+            .all(|condition| condition.reason != "K8S_REFERENCE_MISSING")
+    );
+}
+
+#[test]
+fn dry_run_and_kind_scripts_are_gated_and_reversible() {
+    assert!(SERVER_DRY_RUN.contains("--server-side --dry-run=server"));
+    assert!(SERVER_DRY_RUN.contains("preflight.sh"));
+    assert!(SERVER_DRY_RUN.contains("mcpgateway.io"));
+    assert!(KIND_SMOKE.contains("create cluster --name"));
+    assert!(KIND_SMOKE.contains("trap cleanup EXIT"));
+    assert!(KIND_SMOKE.contains("MCP_GATEWAY_KIND_KEEP"));
+    assert!(KIND_SMOKE.contains("server-dry-run.sh"));
 }

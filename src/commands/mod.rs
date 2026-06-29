@@ -11,6 +11,7 @@ mod config_export;
 #[cfg(feature = "discovery")]
 pub(crate) mod discover;
 mod doctor;
+mod kubernetes;
 pub mod paths;
 mod plugin;
 mod protocol_import;
@@ -26,6 +27,7 @@ pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
 pub use config_export::run_config_export;
 pub use doctor::{run_doctor_command, run_doctor_shadow_command};
+pub use kubernetes::run_kubernetes_command;
 pub use plugin::{run_plugin_install, run_plugin_list, run_plugin_search, run_plugin_uninstall};
 pub use protocol_import::run_protocol_import_command;
 pub use setup::run_setup_command;

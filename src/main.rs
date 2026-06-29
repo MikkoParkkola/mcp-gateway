@@ -45,6 +45,9 @@ async fn main() -> ExitCode {
         Some(Command::Import(import_cmd)) => {
             commands::run_protocol_import_command(import_cmd).await
         }
+        Some(Command::Kubernetes(kubernetes_cmd)) => {
+            commands::run_kubernetes_command(kubernetes_cmd)
+        }
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
         Some(Command::Stats { url, price }) => commands::run_stats_command(&url, price).await,

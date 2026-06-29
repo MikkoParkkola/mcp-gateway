@@ -40,8 +40,8 @@ use crate::cli::output::OutputFormat;
 
 pub use skills::SkillsCommand;
 pub use subcommands::{
-    AuditCommand, CapCommand, PluginCommand, ProtocolImportCommand, ProtocolImportKind, TlsCommand,
-    TrustCommand, TrustLabCommand,
+    AuditCommand, CapCommand, KubernetesCommand, PluginCommand, ProtocolImportCommand,
+    ProtocolImportKind, TlsCommand, TrustCommand, TrustLabCommand,
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
@@ -178,6 +178,10 @@ pub enum Command {
         about = "Preview safe imports from API and MCP package sources"
     )]
     Import(ProtocolImportCommand),
+
+    /// Plan enterprise Kubernetes reconciliation and validation.
+    #[command(subcommand, about = "Kubernetes enterprise deployment commands")]
+    Kubernetes(KubernetesCommand),
 
     /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
     #[command(
