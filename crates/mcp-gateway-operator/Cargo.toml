@@ -1,0 +1,31 @@
+[package]
+name = "mcp-gateway-operator"
+version = "2.19.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
+description = "Kubernetes operator for mcp-gateway Enterprise Edition"
+license = "PolyForm-Noncommercial-1.0.0"
+homepage = "https://github.com/MikkoParkkola/mcp-gateway"
+repository = "https://github.com/MikkoParkkola/mcp-gateway"
+
+[dependencies]
+tokio = { version = "1.52", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+kube = { version = "0.99", features = ["runtime", "derive", "client"] }
+k8s-openapi = { version = "0.24", features = ["v1_32"] }
+schemars = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2.0"
+anyhow = "1.0"
+futures = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[lints.rust]
+unsafe_code = "deny"

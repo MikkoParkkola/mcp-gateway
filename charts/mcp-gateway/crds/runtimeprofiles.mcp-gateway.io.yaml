@@ -1,0 +1,129 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: runtimeprofiles.mcp-gateway.io
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway
+    app.kubernetes.io/managed-by: mcp-gateway-operator
+spec:
+  group: mcp-gateway.io
+  names:
+    kind: RuntimeProfile
+    listKind: RuntimeProfileList
+    plural: runtimeprofiles
+    singular: runtimeprofile
+    shortNames:
+      - rp
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - runtime
+              properties:
+                runtime:
+                  type: string
+                  enum:
+                    - docker
+                    - kubernetes
+                    - wasm
+                image:
+                  type: string
+                resources:
+                  type: object
+                  properties:
+                    requests:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    limits:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                env:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                      valueFrom:
+                        type: object
+                        properties:
+                          secretKeyRef:
+                            type: object
+                            required:
+                              - name
+                              - key
+                            properties:
+                              name:
+                                type: string
+                              key:
+                                type: string
+                securityContext:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                gatewayRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - Ready
+                          - DriftDetected
+                          - PolicyAccepted
+                          - PolicyViolation
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                observedGeneration:
+                  type: integer
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Ready')].status
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtime
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

@@ -1,0 +1,21 @@
+apiVersion: v2
+name: mcp-gateway
+description: Enterprise Edition Helm chart for mcp-gateway Kubernetes operator
+type: application
+version: 2.19.0
+appVersion: "2.19.0"
+keywords:
+  - mcp
+  - gateway
+  - model-context-protocol
+  - ai
+  - enterprise
+home: https://github.com/MikkoParkkola/mcp-gateway
+sources:
+  - https://github.com/MikkoParkkola/mcp-gateway
+maintainers:
+  - name: Mikko Parkkola
+    email: mikko.parkkola@iki.fi
+annotations:
+  license: PolyForm-Noncommercial-1.0.0
+  category: Enterprise Edition

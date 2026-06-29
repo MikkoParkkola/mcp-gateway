@@ -1,0 +1,166 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gateways.mcp-gateway.io
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway
+    app.kubernetes.io/managed-by: mcp-gateway-operator
+spec:
+  group: mcp-gateway.io
+  names:
+    kind: Gateway
+    listKind: GatewayList
+    plural: gateways
+    singular: gateway
+    shortNames:
+      - gw
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  description: Container image for the gateway
+                replicas:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                config:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: Gateway configuration (YAML)
+                env:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                      valueFrom:
+                        type: object
+                        properties:
+                          secretKeyRef:
+                            type: object
+                            required:
+                              - name
+                              - key
+                            properties:
+                              name:
+                                type: string
+                              key:
+                                type: string
+                resources:
+                  type: object
+                  properties:
+                    requests:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    limits:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                securityContext:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                serviceAccountName:
+                  type: string
+                networkPolicy:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                    ingressRules:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                probes:
+                  type: object
+                  properties:
+                    readiness:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    liveness:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    startup:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                serviceMonitor:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                podDisruptionBudget:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                    minAvailable:
+                      type: integer
+                rollingUpdate:
+                  type: object
+                  properties:
+                    maxUnavailable:
+                      type: integer
+                    maxSurge:
+                      type: integer
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - Ready
+                          - DriftDetected
+                          - PolicyAccepted
+                          - PolicyViolation
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                observedGeneration:
+                  type: integer
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Ready')].status
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicas
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
