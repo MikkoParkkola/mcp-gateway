@@ -294,6 +294,108 @@ fn ranking_explanation_does_not_echo_query_payload() {
     assert!(ranked[0].signals.relevance > 0.0);
 }
 
+fn offline_eval_cases(query: &str) -> Vec<RankingEvalCase> {
+    vec![
+        RankingEvalCase {
+            id: "unsafe_exact_match".to_string(),
+            query: "delete file".to_string(),
+            expected_top_tool: "safe_delete".to_string(),
+            candidates: vec![
+                serde_json::json!({
+                    "server": "s",
+                    "tool": "delete_file",
+                    "description": "Delete file without confirmation",
+                    "risk_level": "critical"
+                }),
+                serde_json::json!({
+                    "server": "s",
+                    "tool": "safe_delete",
+                    "description": "Delete files after confirmation [keywords: delete, file]",
+                    "authorized": true,
+                    "trust_score": 0.95
+                }),
+            ],
+        },
+        RankingEvalCase {
+            id: "weather_literal".to_string(),
+            query: "weather forecast".to_string(),
+            expected_top_tool: "weather_forecast".to_string(),
+            candidates: vec![
+                serde_json::json!({
+                    "server": "s",
+                    "tool": "weather_forecast",
+                    "description": "Get weather forecast"
+                }),
+                serde_json::json!({
+                    "server": "s",
+                    "tool": "weather_history",
+                    "description": "Get historical weather"
+                }),
+            ],
+        },
+        RankingEvalCase {
+            id: "company_discovery".to_string(),
+            query: query.to_string(),
+            expected_top_tool: "company_search".to_string(),
+            candidates: vec![
+                serde_json::json!({
+                    "server": "s",
+                    "tool": "company_search",
+                    "description": "Find companies and organizations [keywords: search, companies]"
+                }),
+                serde_json::json!({
+                    "server": "s",
+                    "tool": "person_search",
+                    "description": "Find people and saved contacts"
+                }),
+            ],
+        },
+    ]
+}
+
+#[test]
+fn offline_evaluation_compares_baseline_and_reports_targets() {
+    let search_ranker = SearchRanker::new();
+    let report = search_ranker.evaluate_offline(&offline_eval_cases("find companies"));
+
+    assert_eq!(report.case_count, 3);
+    assert_eq!(report.top1_hits, 3);
+    assert_eq!(report.baseline_top1_hits, 2);
+    assert_eq!(report.improvements_over_baseline, 1);
+    assert_eq!(report.regressions_vs_baseline, 0);
+    assert_eq!(report.filtered_candidates, 1);
+    assert!(report.top1_hit_rate > report.baseline_top1_hit_rate);
+    assert!(report.improvement_targets.iter().any(|target| {
+        target.kind == RankingImprovementTargetKind::ExpandFixtureCorpus
+            && (target.current - 3.0).abs() < f64::EPSILON
+            && (target.target - 10.0).abs() < f64::EPSILON
+    }));
+
+    let unsafe_case = report
+        .cases
+        .iter()
+        .find(|case| case.id == "unsafe_exact_match")
+        .unwrap();
+    assert_eq!(
+        unsafe_case.baseline_top_tool.as_deref(),
+        Some("delete_file")
+    );
+    assert_eq!(unsafe_case.actual_top_tool.as_deref(), Some("safe_delete"));
+    assert!(unsafe_case.top1_hit);
+    assert!(!unsafe_case.baseline_top1_hit);
+}
+
+#[test]
+fn offline_evaluation_report_does_not_echo_query_payload() {
+    let search_ranker = SearchRanker::new();
+    let report = search_ranker.evaluate_offline(&offline_eval_cases("find companies ACME-12345"));
+    let report_json = serde_json::to_string(&report).unwrap();
+
+    assert!(!report_json.contains("ACME-12345"));
+    assert!(!report_json.contains("find companies"));
+    assert!(report_json.contains("company_discovery"));
+}
+
 // ── score_text_relevance ─────────────────────────────────────────────
 
 fn sr(tool: &str, description: &str) -> SearchResult {

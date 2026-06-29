@@ -167,6 +167,98 @@ pub enum RankingExclusionKind {
     Untrusted,
 }
 
+/// One deterministic offline ranking evaluation case.
+///
+/// The query is consumed only while evaluating the fixture. Reports reference
+/// `id` instead of echoing query text so fixtures can model sensitive prompts
+/// without leaking them through evaluation output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingEvalCase {
+    /// Stable fixture identifier, for example `unsafe_exact_match`.
+    pub id: String,
+    /// Search query used by the fixture.
+    pub query: String,
+    /// Expected top tool after policy prefilters and adaptive ranking.
+    pub expected_top_tool: String,
+    /// Candidate JSON objects accepted by [`json_to_search_result`].
+    pub candidates: Vec<Value>,
+}
+
+/// Per-case offline ranking result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingEvalCaseResult {
+    /// Stable fixture identifier copied from [`RankingEvalCase::id`].
+    pub id: String,
+    /// Expected top tool for the fixture.
+    pub expected_top_tool: String,
+    /// Adaptive ranker top tool after policy prefilters.
+    pub actual_top_tool: Option<String>,
+    /// Text-only baseline top tool before adaptive signals and prefilters.
+    pub baseline_top_tool: Option<String>,
+    /// Whether the adaptive ranker selected the expected top tool.
+    pub top1_hit: bool,
+    /// Whether the text-only baseline selected the expected top tool.
+    pub baseline_top1_hit: bool,
+    /// Number of valid candidates removed by adaptive policy prefilters.
+    pub filtered_candidates: usize,
+    /// Number of malformed candidate objects ignored for this case.
+    pub invalid_candidates: usize,
+}
+
+/// Measurable improvement target surfaced by offline ranking evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingImprovementTarget {
+    /// Stable machine-readable target kind.
+    pub kind: RankingImprovementTargetKind,
+    /// Current measured value.
+    pub current: f64,
+    /// Target value for the next evaluation tranche.
+    pub target: f64,
+    /// Static explanation that does not include query or candidate payloads.
+    pub reason: String,
+}
+
+/// Improvement target categories emitted by offline ranking evaluation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RankingImprovementTargetKind {
+    /// Add more fixture cases before treating the suite as representative.
+    ExpandFixtureCorpus,
+    /// Improve top-1 quality for cases that miss the expected tool.
+    ImproveTop1Quality,
+    /// Add challenger cases where adaptive signals beat text-only ranking.
+    AddChallengerCases,
+    /// Add policy-filter cases for unsafe, unauthorized, unhealthy, or low-trust tools.
+    AddPolicyPrefilterCases,
+}
+
+/// Aggregate offline ranking evaluation report.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingEvalReport {
+    /// Number of fixture cases evaluated.
+    pub case_count: usize,
+    /// Number of cases where adaptive ranking selected the expected tool.
+    pub top1_hits: usize,
+    /// Number of cases where the text-only baseline selected the expected tool.
+    pub baseline_top1_hits: usize,
+    /// Cases where adaptive ranking hit and the text-only baseline missed.
+    pub improvements_over_baseline: usize,
+    /// Cases where the text-only baseline hit and adaptive ranking missed.
+    pub regressions_vs_baseline: usize,
+    /// Total valid candidates suppressed by policy prefilters.
+    pub filtered_candidates: usize,
+    /// Total malformed candidate objects ignored.
+    pub invalid_candidates: usize,
+    /// Adaptive top-1 hit rate in `0.0..=1.0`.
+    pub top1_hit_rate: f64,
+    /// Text-only baseline top-1 hit rate in `0.0..=1.0`.
+    pub baseline_top1_hit_rate: f64,
+    /// Per-case results without query payloads.
+    pub cases: Vec<RankingEvalCaseResult>,
+    /// Measurable next improvement targets.
+    pub improvement_targets: Vec<RankingImprovementTarget>,
+}
+
 /// Search ranker with usage-based weighting
 pub struct SearchRanker {
     /// Usage counts per tool (key = "server:tool")
@@ -267,6 +359,40 @@ impl SearchRanker {
         results
     }
 
+    /// Evaluate ranking quality against deterministic offline fixtures.
+    ///
+    /// The comparison baseline is text-only relevance with original-order
+    /// tie-breaking. It intentionally ignores adaptive signals and policy
+    /// prefilters so the report can quantify safety and trust lift.
+    #[must_use]
+    pub fn evaluate_offline(&self, cases: &[RankingEvalCase]) -> RankingEvalReport {
+        let mut report = RankingEvalReport::empty(cases.len());
+
+        for case in cases {
+            let candidates: Vec<SearchResult> = case
+                .candidates
+                .iter()
+                .filter_map(json_to_search_result)
+                .collect();
+            let invalid_candidates = case.candidates.len().saturating_sub(candidates.len());
+            let baseline_top_tool = baseline_top_tool(&candidates, &case.query);
+            let ranked = self.rank(candidates.clone(), &case.query);
+            let actual_top_tool = ranked.first().map(|result| result.tool.clone());
+            let filtered_candidates = candidates.len().saturating_sub(ranked.len());
+
+            let case_result = build_eval_case_result(
+                case,
+                actual_top_tool,
+                baseline_top_tool,
+                filtered_candidates,
+                invalid_candidates,
+            );
+            report.record_case(case_result);
+        }
+
+        report.finish()
+    }
+
     /// Save usage counts to JSON file
     ///
     /// # Errors
@@ -319,6 +445,41 @@ impl Default for SearchRanker {
     }
 }
 
+impl RankingEvalReport {
+    fn empty(case_count: usize) -> Self {
+        Self {
+            case_count,
+            top1_hits: 0,
+            baseline_top1_hits: 0,
+            improvements_over_baseline: 0,
+            regressions_vs_baseline: 0,
+            filtered_candidates: 0,
+            invalid_candidates: 0,
+            top1_hit_rate: 0.0,
+            baseline_top1_hit_rate: 0.0,
+            cases: Vec::with_capacity(case_count),
+            improvement_targets: Vec::new(),
+        }
+    }
+
+    fn record_case(&mut self, case: RankingEvalCaseResult) {
+        self.top1_hits += usize::from(case.top1_hit);
+        self.baseline_top1_hits += usize::from(case.baseline_top1_hit);
+        self.improvements_over_baseline += usize::from(case.top1_hit && !case.baseline_top1_hit);
+        self.regressions_vs_baseline += usize::from(!case.top1_hit && case.baseline_top1_hit);
+        self.filtered_candidates += case.filtered_candidates;
+        self.invalid_candidates += case.invalid_candidates;
+        self.cases.push(case);
+    }
+
+    fn finish(mut self) -> Self {
+        self.top1_hit_rate = ratio(self.top1_hits, self.case_count);
+        self.baseline_top1_hit_rate = ratio(self.baseline_top1_hits, self.case_count);
+        self.improvement_targets = improvement_targets_for(&self);
+        self
+    }
+}
+
 /// Usage entry for serialization
 #[derive(Debug, Serialize, Deserialize)]
 struct UsageEntry {
@@ -337,6 +498,50 @@ pub fn json_to_search_result(value: &Value) -> Option<SearchResult> {
     );
     result.signals = RankingSignals::from_json(value);
     Some(result)
+}
+
+fn build_eval_case_result(
+    case: &RankingEvalCase,
+    actual_top_tool: Option<String>,
+    baseline_top_tool: Option<String>,
+    filtered_candidates: usize,
+    invalid_candidates: usize,
+) -> RankingEvalCaseResult {
+    let top1_hit = actual_top_tool.as_deref() == Some(case.expected_top_tool.as_str());
+    let baseline_top1_hit = baseline_top_tool.as_deref() == Some(case.expected_top_tool.as_str());
+
+    RankingEvalCaseResult {
+        id: case.id.clone(),
+        expected_top_tool: case.expected_top_tool.clone(),
+        actual_top_tool,
+        baseline_top_tool,
+        top1_hit,
+        baseline_top1_hit,
+        filtered_candidates,
+        invalid_candidates,
+    }
+}
+
+fn baseline_top_tool(candidates: &[SearchResult], query: &str) -> Option<String> {
+    let query_lower = query.to_lowercase();
+    let words: Vec<&str> = query_lower.split_whitespace().collect();
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(index, result)| {
+            (
+                index,
+                result.tool.clone(),
+                score_text_relevance(&result.tool, &result.description, &query_lower, &words),
+            )
+        })
+        .max_by(|left, right| {
+            left.2
+                .partial_cmp(&right.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.0.cmp(&left.0))
+        })
+        .map(|(_, tool, _)| tool)
 }
 
 fn explanation_for(result: &SearchResult) -> RankingExplanation {
@@ -496,6 +701,61 @@ fn parse_latency_signal(value: &Value) -> f64 {
         return (1.0 / (1.0 + (latency_ms / 1000.0))).clamp(0.0, 1.0);
     }
     1.0
+}
+
+fn ratio(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            numerator as f64 / denominator as f64
+        }
+    }
+}
+
+fn improvement_targets_for(report: &RankingEvalReport) -> Vec<RankingImprovementTarget> {
+    const MIN_FIXTURE_CASES: usize = 10;
+    let mut targets = Vec::new();
+
+    if report.case_count < MIN_FIXTURE_CASES {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::ExpandFixtureCorpus,
+            current: count_as_metric(report.case_count),
+            target: count_as_metric(MIN_FIXTURE_CASES),
+            reason: "fixture_corpus_below_minimum".to_string(),
+        });
+    }
+    if report.top1_hit_rate < 1.0 {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::ImproveTop1Quality,
+            current: report.top1_hit_rate,
+            target: 1.0,
+            reason: "adaptive_top1_hit_rate_below_target".to_string(),
+        });
+    }
+    if report.improvements_over_baseline == 0 {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::AddChallengerCases,
+            current: 0.0,
+            target: 1.0,
+            reason: "no_fixture_demonstrates_adaptive_lift".to_string(),
+        });
+    }
+    if report.filtered_candidates == 0 {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::AddPolicyPrefilterCases,
+            current: 0.0,
+            target: 1.0,
+            reason: "no_fixture_exercises_policy_prefilters".to_string(),
+        });
+    }
+
+    targets
+}
+
+fn count_as_metric(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]

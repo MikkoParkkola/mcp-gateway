@@ -28,6 +28,27 @@ Ranking explanations use static reason labels such as `intent_match`,
 `cost_downgraded`, `latency_downgraded`, `trust_ok`, and
 `local_feedback_boost`. They do not echo query text or tool arguments.
 
+Offline evaluation reports follow the same boundary. Fixture cases include
+queries so the ranker can evaluate them, but the emitted report references only
+case IDs, expected tool names, actual tool names, baseline tool names, aggregate
+hit rates, filtered-candidate counts, and static improvement target labels.
+
+## Offline Evaluation
+
+`SearchRanker::evaluate_offline` accepts deterministic fixture cases and
+compares adaptive ranking against a text-only baseline. The baseline uses the
+same relevance scorer without safety, grant, health, trust, cost, latency,
+freshness, or feedback signals. This makes the report useful for proving:
+
+- no regression against current text relevance behavior;
+- safety or trust lift when adaptive prefilters suppress risky exact matches;
+- measurable next targets such as fixture-corpus size, top-1 hit rate,
+  challenger-case coverage, and policy-prefilter coverage.
+
+The initial fixture tests cover a literal relevance case, a semantic discovery
+case, and an unsafe exact-match case where adaptive ranking correctly selects a
+safe tool that the text-only baseline would not rank first.
+
 ## Licensing Boundary
 
 | Capability | Free/core | Enterprise license category |
@@ -36,12 +57,14 @@ Ranking explanations use static reason labels such as `intent_match`,
 | Safety, grant, trust, health, cost, latency, freshness signals | Included | Included |
 | Per-result explanations | Included | Included |
 | Local usage feedback | Included | Included |
+| Local offline fixture evaluation | Included | Included |
 | Organization policy weights | Not included | Included |
 | Fleet telemetry, evaluation dashboards, A/B tests | Not included | Included |
 | Governed feedback promotion and audit export | Not included | Included |
 
 ## Current Scope
 
-This slice upgrades the core ranker and search-result JSON conversion. Follow-up
-work should wire organization policy weights, fleet telemetry, controlled
-feedback promotion, and offline evaluation dashboards.
+This slice upgrades the core ranker, search-result JSON conversion, and local
+offline evaluation. Follow-up work should wire organization policy weights,
+fleet telemetry, controlled feedback promotion, and enterprise evaluation
+dashboards.
