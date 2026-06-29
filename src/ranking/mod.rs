@@ -71,18 +71,30 @@ pub struct RankingSignals {
     pub relevance: f64,
     /// Safety score. `0.0` suppresses the candidate.
     pub safety: f64,
+    /// Risk-fit score where `1.0` means low risk and `0.0` suppresses the candidate.
+    pub risk: f64,
     /// Trust score. Very low trust suppresses the candidate.
     pub trust: f64,
     /// Grant/authorization fit. `0.0` suppresses the candidate.
     pub grant: f64,
+    /// Policy fit. `0.0` suppresses the candidate.
+    pub policy_fit: f64,
+    /// Permission fit derived from identity, scope, and grant metadata.
+    pub permission_fit: f64,
     /// Runtime health score. `0.0` suppresses the candidate.
     pub runtime_health: f64,
     /// Cost-efficiency score.
     pub cost_efficiency: f64,
     /// Latency score.
     pub latency: f64,
+    /// Historical success-rate score.
+    pub success_rate: f64,
     /// Freshness score.
     pub freshness: f64,
+    /// User preference score.
+    pub user_preference: f64,
+    /// Organization preference score.
+    pub organization_preference: f64,
     /// Local feedback boost derived from safe usage counters.
     pub user_feedback: f64,
     /// Local usage count used to compute feedback.
@@ -94,12 +106,18 @@ impl Default for RankingSignals {
         Self {
             relevance: 0.0,
             safety: 1.0,
+            risk: 1.0,
             trust: 1.0,
             grant: 1.0,
+            policy_fit: 1.0,
+            permission_fit: 1.0,
             runtime_health: 1.0,
             cost_efficiency: 1.0,
             latency: 1.0,
+            success_rate: 1.0,
             freshness: 1.0,
+            user_preference: 1.0,
+            organization_preference: 1.0,
             user_feedback: 0.0,
             usage_count: 0,
         }
@@ -107,15 +125,40 @@ impl Default for RankingSignals {
 }
 
 impl RankingSignals {
-    fn from_json(value: &Value) -> Self {
+    pub(crate) fn from_json(value: &Value) -> Self {
+        let grant = parse_grant_signal(value);
         Self {
             safety: parse_safety_signal(value),
+            risk: parse_risk_signal(value),
             trust: parse_numeric_signal(value, &["trust_score", "trust"], 1.0),
-            grant: parse_grant_signal(value),
+            grant,
+            policy_fit: parse_policy_fit_signal(value),
+            permission_fit: parse_permission_fit_signal(value, grant),
             runtime_health: parse_runtime_health_signal(value),
             cost_efficiency: parse_cost_efficiency_signal(value),
             latency: parse_latency_signal(value),
+            success_rate: parse_success_rate_signal(value),
             freshness: parse_numeric_signal(value, &["freshness_score", "freshness"], 1.0),
+            user_preference: parse_numeric_signal(
+                value,
+                &[
+                    "user_preference_score",
+                    "user_preference",
+                    "personal_preference_score",
+                    "personal_preference",
+                ],
+                1.0,
+            ),
+            organization_preference: parse_numeric_signal(
+                value,
+                &[
+                    "organization_preference_score",
+                    "organization_preference",
+                    "org_preference_score",
+                    "org_preference",
+                ],
+                1.0,
+            ),
             ..Self::default()
         }
     }
@@ -123,14 +166,20 @@ impl RankingSignals {
     fn multiplier(&self) -> f64 {
         // Relevance remains dominant. Non-text signals gently reorder safe
         // candidates without letting popularity override a poor intent match.
-        let weighted = (self.safety * 0.24)
-            + (self.trust * 0.18)
-            + (self.grant * 0.18)
-            + (self.runtime_health * 0.14)
-            + (self.cost_efficiency * 0.10)
-            + (self.latency * 0.06)
-            + (self.freshness * 0.04)
-            + (self.user_feedback.min(1.0) * 0.06);
+        let weighted = (self.safety * 0.16)
+            + (self.risk * 0.12)
+            + (self.trust * 0.12)
+            + (self.policy_fit * 0.12)
+            + (self.permission_fit * 0.12)
+            + (self.grant * 0.08)
+            + (self.runtime_health * 0.08)
+            + (self.success_rate * 0.07)
+            + (self.cost_efficiency * 0.05)
+            + (self.latency * 0.04)
+            + (self.freshness * 0.02)
+            + (self.user_preference * 0.01)
+            + (self.organization_preference * 0.01)
+            + (self.user_feedback.min(1.0) * 0.02);
         weighted.clamp(0.0, 1.25)
     }
 }
@@ -161,6 +210,8 @@ pub enum RankingExclusionKind {
     Unsafe,
     /// Missing or denied grant.
     Unauthorized,
+    /// Candidate is denied by policy or license constraints.
+    PolicyDenied,
     /// Unhealthy or disabled runtime.
     Unhealthy,
     /// Trust signal is below the safe threshold.
@@ -557,6 +608,21 @@ fn explanation_for(result: &SearchResult) -> RankingExplanation {
     if result.signals.grant >= 1.0 {
         reasons.push("grant_ok".to_string());
     }
+    if result.signals.risk < 0.75 {
+        reasons.push("risk_downgraded".to_string());
+    } else {
+        reasons.push("risk_fit".to_string());
+    }
+    if result.signals.policy_fit < 0.75 {
+        reasons.push("policy_downgraded".to_string());
+    } else {
+        reasons.push("policy_fit".to_string());
+    }
+    if result.signals.permission_fit < 0.75 {
+        reasons.push("permission_downgraded".to_string());
+    } else {
+        reasons.push("permission_fit".to_string());
+    }
     if result.signals.trust < 0.75 {
         reasons.push("trust_downgraded".to_string());
     } else {
@@ -571,6 +637,21 @@ fn explanation_for(result: &SearchResult) -> RankingExplanation {
         reasons.push("latency_downgraded".to_string());
     } else {
         reasons.push("latency_fit".to_string());
+    }
+    if result.signals.success_rate < 0.75 {
+        reasons.push("success_rate_downgraded".to_string());
+    } else {
+        reasons.push("success_rate_fit".to_string());
+    }
+    if result.signals.user_preference < 0.75 {
+        reasons.push("user_preference_downgraded".to_string());
+    } else {
+        reasons.push("user_preference_fit".to_string());
+    }
+    if result.signals.organization_preference < 0.75 {
+        reasons.push("organization_preference_downgraded".to_string());
+    } else {
+        reasons.push("organization_preference_fit".to_string());
     }
     if result.signals.user_feedback > 0.0 {
         reasons.push("local_feedback_boost".to_string());
@@ -589,10 +670,28 @@ fn exclusion_for(signals: &RankingSignals) -> Option<RankingExclusion> {
             reason: "suppressed_unsafe".to_string(),
         });
     }
+    if signals.risk <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unsafe,
+            reason: "suppressed_high_risk".to_string(),
+        });
+    }
     if signals.grant <= 0.0 {
         return Some(RankingExclusion {
             kind: RankingExclusionKind::Unauthorized,
             reason: "suppressed_unauthorized".to_string(),
+        });
+    }
+    if signals.permission_fit <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unauthorized,
+            reason: "suppressed_permission_denied".to_string(),
+        });
+    }
+    if signals.policy_fit <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::PolicyDenied,
+            reason: "suppressed_policy".to_string(),
         });
     }
     if signals.runtime_health <= 0.0 {
@@ -611,10 +710,13 @@ fn exclusion_for(signals: &RankingSignals) -> Option<RankingExclusion> {
 }
 
 fn parse_numeric_signal(value: &Value, keys: &[&str], default: f64) -> f64 {
+    parse_optional_numeric_signal(value, keys).unwrap_or(default)
+}
+
+fn parse_optional_numeric_signal(value: &Value, keys: &[&str]) -> Option<f64> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_f64))
-        .unwrap_or(default)
-        .clamp(0.0, 1.0)
+        .map(|score| score.clamp(0.0, 1.0))
 }
 
 fn parse_safety_signal(value: &Value) -> f64 {
@@ -636,6 +738,32 @@ fn parse_safety_signal(value: &Value) -> f64 {
     parse_numeric_signal(value, &["safety_score", "safety"], 1.0)
 }
 
+fn parse_risk_signal(value: &Value) -> f64 {
+    if let Some(level) = value
+        .get("risk_level")
+        .or_else(|| value.get("risk"))
+        .and_then(Value::as_str)
+    {
+        return match level.to_ascii_lowercase().as_str() {
+            "critical" | "high" | "unsafe" | "blocked" => 0.0,
+            "medium" | "elevated" => 0.65,
+            "low" => 0.9,
+            _ => 1.0,
+        };
+    }
+    if let Some(fit) =
+        parse_optional_numeric_signal(value, &["risk_fit_score", "risk_fit", "risk_safety_score"])
+    {
+        return fit;
+    }
+    if let Some(score) = value.get("risk_score").and_then(Value::as_f64) {
+        // `risk_score` is interpreted as risk severity, where higher means
+        // riskier. `risk_fit` aliases above represent the inverse.
+        return (1.0 - score).clamp(0.0, 1.0);
+    }
+    1.0
+}
+
 fn parse_grant_signal(value: &Value) -> f64 {
     if value.get("authorized").and_then(Value::as_bool) == Some(false) {
         return 0.0;
@@ -649,6 +777,65 @@ fn parse_grant_signal(value: &Value) -> f64 {
         return 0.0;
     }
     parse_numeric_signal(value, &["grant_score", "grant"], 1.0)
+}
+
+fn parse_permission_fit_signal(value: &Value, grant_default: f64) -> f64 {
+    if value.get("authorized").and_then(Value::as_bool) == Some(false) {
+        return 0.0;
+    }
+    if value
+        .get("permission_status")
+        .or_else(|| value.get("grant_status"))
+        .or_else(|| value.get("permission"))
+        .or_else(|| value.get("grant"))
+        .and_then(Value::as_str)
+        .is_some_and(|grant| matches!(grant, "denied" | "missing" | "unauthorized"))
+    {
+        return 0.0;
+    }
+    parse_optional_numeric_signal(
+        value,
+        &[
+            "permission_fit_score",
+            "permission_fit",
+            "permission_score",
+            "grant_score",
+            "grant",
+        ],
+    )
+    .unwrap_or(grant_default)
+}
+
+fn parse_policy_fit_signal(value: &Value) -> f64 {
+    if value
+        .get("policy_denied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return 0.0;
+    }
+    if let Some(verdict) = value
+        .get("policy_verdict")
+        .or_else(|| value.get("policy_decision"))
+        .or_else(|| value.get("policy"))
+        .and_then(Value::as_str)
+    {
+        return match verdict.to_ascii_lowercase().as_str() {
+            "deny" | "denied" | "block" | "blocked" | "quarantine" | "rejected" => 0.0,
+            "warn" | "warning" | "advisory" | "review" => 0.65,
+            _ => 1.0,
+        };
+    }
+    parse_numeric_signal(
+        value,
+        &[
+            "policy_fit_score",
+            "policy_fit",
+            "policy_score",
+            "license_policy_fit",
+        ],
+        1.0,
+    )
 }
 
 fn parse_runtime_health_signal(value: &Value) -> f64 {
@@ -668,6 +855,30 @@ fn parse_runtime_health_signal(value: &Value) -> f64 {
         return 0.0;
     }
     parse_numeric_signal(value, &["runtime_health", "health_score"], 1.0)
+}
+
+fn parse_success_rate_signal(value: &Value) -> f64 {
+    if let Some(rate) = parse_optional_numeric_signal(
+        value,
+        &["success_rate", "success_score", "reliability_score"],
+    ) {
+        return rate;
+    }
+    if let Some(percent) = value.get("success_rate_percent").and_then(Value::as_f64) {
+        return (percent / 100.0).clamp(0.0, 1.0);
+    }
+    let successes = value.get("success_count").and_then(Value::as_u64);
+    let failures = value.get("failure_count").and_then(Value::as_u64);
+    if let (Some(successes), Some(failures)) = (successes, failures) {
+        let total = successes.saturating_add(failures);
+        if total > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                return (successes as f64 / total as f64).clamp(0.0, 1.0);
+            }
+        }
+    }
+    1.0
 }
 
 fn parse_cost_efficiency_signal(value: &Value) -> f64 {

@@ -119,7 +119,12 @@ fn test_json_to_search_result() {
     let value = serde_json::json!({
         "server": "test-server",
         "tool": "test-tool",
-        "description": "Test description"
+        "description": "Test description",
+        "policy_verdict": "allow",
+        "permission_fit": 0.9,
+        "success_rate": 0.98,
+        "user_preference": 0.85,
+        "org_preference": 0.8
     });
 
     let result = json_to_search_result(&value).unwrap();
@@ -127,6 +132,11 @@ fn test_json_to_search_result() {
     assert_eq!(result.tool, "test-tool");
     assert_eq!(result.description, "Test description");
     assert!(result.score < f64::EPSILON);
+    assert!((result.signals.policy_fit - 1.0).abs() < f64::EPSILON);
+    assert!((result.signals.permission_fit - 0.9).abs() < f64::EPSILON);
+    assert!((result.signals.success_rate - 0.98).abs() < f64::EPSILON);
+    assert!((result.signals.user_preference - 0.85).abs() < f64::EPSILON);
+    assert!((result.signals.organization_preference - 0.8).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -223,6 +233,41 @@ fn ranking_suppresses_unsafe_unauthorized_unhealthy_and_untrusted_tools() {
 }
 
 #[test]
+fn ranking_suppresses_policy_denied_and_high_risk_tools() {
+    let search_ranker = SearchRanker::new();
+    let candidates = vec![
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "policy_blocked_search",
+            "description": "Search everything",
+            "policy_verdict": "block"
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "risk_blocked_search",
+            "description": "Search everything",
+            "risk_score": 1.0
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "safe_policy_search",
+            "description": "Search everything",
+            "policy_verdict": "allow",
+            "risk_level": "low"
+        }))
+        .unwrap(),
+    ];
+
+    let ranked = search_ranker.rank(candidates, "search");
+
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].tool, "safe_policy_search");
+    assert!(ranked[0].explanation.included);
+}
+
+#[test]
 fn ranking_uses_cost_latency_trust_and_feedback_as_safe_downgrades() {
     let search_ranker = SearchRanker::new();
     search_ranker.record_use("s", "cheap_fast_search");
@@ -270,6 +315,73 @@ fn ranking_uses_cost_latency_trust_and_feedback_as_safe_downgrades() {
             .explanation
             .reasons
             .contains(&"trust_downgraded".to_string())
+    );
+}
+
+#[test]
+fn ranking_uses_policy_permission_success_and_preferences_as_explainable_signals() {
+    let search_ranker = SearchRanker::new();
+    let candidates = vec![
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "preferred_search",
+            "description": "Search documents",
+            "policy_fit": 1.0,
+            "permission_fit": 1.0,
+            "success_rate": 0.99,
+            "user_preference": 1.0,
+            "organization_preference": 1.0
+        }))
+        .unwrap(),
+        json_to_search_result(&serde_json::json!({
+            "server": "s",
+            "tool": "downgraded_search",
+            "description": "Search documents",
+            "policy_fit": 0.65,
+            "permission_fit": 0.6,
+            "success_rate": 0.5,
+            "user_preference": 0.5,
+            "organization_preference": 0.4
+        }))
+        .unwrap(),
+    ];
+
+    let ranked = search_ranker.rank(candidates, "search documents");
+
+    assert_eq!(ranked[0].tool, "preferred_search");
+    let downgraded = ranked
+        .iter()
+        .find(|result| result.tool == "downgraded_search")
+        .unwrap();
+    assert!(
+        downgraded
+            .explanation
+            .reasons
+            .contains(&"policy_downgraded".to_string())
+    );
+    assert!(
+        downgraded
+            .explanation
+            .reasons
+            .contains(&"permission_downgraded".to_string())
+    );
+    assert!(
+        downgraded
+            .explanation
+            .reasons
+            .contains(&"success_rate_downgraded".to_string())
+    );
+    assert!(
+        downgraded
+            .explanation
+            .reasons
+            .contains(&"user_preference_downgraded".to_string())
+    );
+    assert!(
+        downgraded
+            .explanation
+            .reasons
+            .contains(&"organization_preference_downgraded".to_string())
     );
 }
 

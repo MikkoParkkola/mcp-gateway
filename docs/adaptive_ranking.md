@@ -9,18 +9,45 @@ The ranker keeps relevance as the primary signal, then safely adjusts ranking
 with coarse metadata:
 
 - Safety and risk markers.
+- License and local policy fit.
 - Grant and authorization status.
 - Runtime health.
 - Trust score.
 - Cost tier or cost score.
 - Latency score.
+- Historical success rate.
 - Freshness score.
+- User and organization preference scores.
 - Local usage feedback.
 
-Unsafe, unauthorized, unhealthy, and very low-trust tools are suppressed before
-relevance scoring can promote them. Included tools carry a `ranking` payload
-with deterministic reasons and numeric signals so users can inspect why a tool
-was included or downgraded.
+Unsafe, high-risk, policy-denied, unauthorized, unhealthy, and very low-trust
+tools are suppressed before relevance scoring can promote them. Included tools
+carry a `ranking` payload with deterministic reasons and numeric signals so
+users can inspect why a tool was included or downgraded.
+
+## Signal Schema
+
+Every included result exposes the coarse `ranking.signals` object. Scores are
+normalized to `0.0..=1.0` unless noted.
+
+| Signal | Meaning | Default |
+|--------|---------|---------|
+| `relevance` | Text, keyword, synonym, and schema-field match strength | `0.0` |
+| `safety` | Hard safety fit; `0.0` suppresses output | `1.0` |
+| `risk` | Inverse risk fit; `1.0` is low risk, `0.0` suppresses output | `1.0` |
+| `trust` | TrustCard/TrustLab or metadata trust score | `1.0` |
+| `grant` | Backward-compatible grant/authorization fit | `1.0` |
+| `policy_fit` | License and local policy fit; `0.0` suppresses output | `1.0` |
+| `permission_fit` | Identity, scope, and permission fit | `1.0` |
+| `runtime_health` | Backend/runtime health; `0.0` suppresses output | `1.0` |
+| `cost_efficiency` | Cost fit, including cost tier aliases | `1.0` |
+| `latency` | Latency fit, including latency-ms conversion | `1.0` |
+| `success_rate` | Historical success or reliability rate | `1.0` |
+| `freshness` | Metadata or TrustCard freshness | `1.0` |
+| `user_preference` | Local user preference fit | `1.0` |
+| `organization_preference` | Organization preference fit | `1.0` |
+| `user_feedback` | Local usage feedback boost derived from server/tool counters only | `0.0` |
+| `usage_count` | Local usage count for the server/tool pair; no query or payload text | `0` |
 
 ## Privacy Boundary
 

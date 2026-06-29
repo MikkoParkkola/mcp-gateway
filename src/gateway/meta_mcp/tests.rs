@@ -49,6 +49,28 @@ fn augment_with_trace_does_not_modify_non_object_values() {
     assert!(augmented.is_null());
 }
 
+#[test]
+fn code_mode_search_result_parser_preserves_ranking_policy_signals() {
+    let result = support::json_to_code_mode_search_result(&json!({
+        "tool": "srv:search_docs",
+        "description": "Search documents",
+        "status": "disabled",
+        "policy_verdict": "block",
+        "permission_fit": 0.0,
+        "success_rate": 0.7,
+        "organization_preference": 0.4
+    }))
+    .unwrap();
+
+    assert_eq!(result.server, "srv");
+    assert_eq!(result.tool, "search_docs");
+    assert!((result.signals.runtime_health - 0.0).abs() < f64::EPSILON);
+    assert!((result.signals.policy_fit - 0.0).abs() < f64::EPSILON);
+    assert!((result.signals.permission_fit - 0.0).abs() < f64::EPSILON);
+    assert!((result.signals.success_rate - 0.7).abs() < f64::EPSILON);
+    assert!((result.signals.organization_preference - 0.4).abs() < f64::EPSILON);
+}
+
 // ── augment_with_predictions ──────────────────────────────────────────
 
 #[test]
