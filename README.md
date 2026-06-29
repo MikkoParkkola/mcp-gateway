@@ -551,6 +551,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
+| [Trust Fabric Roadmap](docs/roadmap/mik-6550-trust-fabric-roadmap.md) | Identity, isolation, governance, HA, and adaptive routing roadmap |
 | [vs Anthropic MCP Tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose (different layers, complementary) |
 
 ## Troubleshooting
