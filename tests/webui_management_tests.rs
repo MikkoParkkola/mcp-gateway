@@ -25,11 +25,13 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use axum::routing::post;
+use axum::{Json, Router};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
-use axum::Router;
 use mcp_gateway::backend::{Backend, BackendRegistry};
 use mcp_gateway::config::{
     ApiKeyConfig, AuthConfig, BackendConfig, Config, FailsafeConfig, TransportConfig,
@@ -259,12 +261,20 @@ metadata:
 "#;
 
 fn register_http_backend(state: &Arc<AppState>, name: &str) {
-    state.backends.register(Arc::new(Backend::new(
+    register_http_backend_with_url(state, name, format!("http://127.0.0.1:9/{name}"));
+}
+
+fn register_http_backend_with_url(
+    state: &Arc<AppState>,
+    name: &str,
+    http_url: String,
+) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
         name,
         BackendConfig {
             transport: TransportConfig::Http {
-                http_url: format!("http://127.0.0.1:9/{name}"),
-                streamable_http: false,
+                http_url,
+                streamable_http: true,
                 protocol_version: None,
             },
             enabled: true,
@@ -272,7 +282,57 @@ fn register_http_backend(state: &Arc<AppState>, name: &str) {
         },
         &FailsafeConfig::default(),
         Duration::from_secs(60),
-    )));
+    ));
+    state.backends.register(Arc::clone(&backend));
+    backend
+}
+
+async fn spawn_mcp_tools_fixture() -> (String, JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/mcp", post(mcp_tools_fixture_handler));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}/mcp"), server)
+}
+
+async fn mcp_tools_fixture_handler(Json(body): Json<Value>) -> Json<Value> {
+    let id = body.get("id").cloned().unwrap_or_else(|| json!(1));
+    let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+    let result = match method {
+        "initialize" => json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": { "tools": { "listChanged": false } },
+            "serverInfo": { "name": "docs-fixture", "version": "test" }
+        }),
+        "tools/list" => json!({
+            "tools": [{
+                "name": "search_docs",
+                "description": "Search local documentation",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"]
+                },
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                }
+            }]
+        }),
+        _ => {
+            return Json(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32601, "message": "Method not found" }
+            }));
+        }
+    };
+
+    Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
 #[tokio::test]
@@ -299,6 +359,9 @@ async fn test_webui_embeds_control_plane_read_only_page() {
     assert!(html.contains("/ui/api/control-plane"));
     assert!(html.contains("Decision Queue"));
     assert!(html.contains("Feature Boundary"));
+    assert!(html.contains("TrustCards"));
+    assert!(html.contains("cp-trustcards-tbody"));
+    assert!(html.contains("renderControlPlaneTrustCards"));
     assert!(html.contains("ShadowRadar"));
     assert!(html.contains("cp-shadow-tbody"));
     assert!(html.contains("renderControlPlaneShadow"));
@@ -309,7 +372,9 @@ async fn test_webui_embeds_control_plane_read_only_page() {
 #[tokio::test]
 async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     let state = make_app_state(None, None);
-    register_http_backend(&state, "docs");
+    let (backend_url, server) = spawn_mcp_tools_fixture().await;
+    let backend = register_http_backend_with_url(&state, "docs", backend_url);
+    backend.get_tools_shared().await.unwrap();
     let router = create_router(state);
 
     let (status, body) = send_json(&router, Method::GET, "/ui/api/control-plane", None).await;
@@ -324,8 +389,11 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     assert_eq!(body["features"][0]["license_tier"], "free_core");
     assert_eq!(body["features"][0]["available_in_this_route"], true);
     assert_eq!(body["coverage"]["servers"], true);
+    assert_eq!(body["coverage"]["trust_cards"], true);
     assert_eq!(body["coverage"]["runtime_health"], true);
     assert_eq!(body["inventory_counts"]["servers"], 1);
+    assert_eq!(body["inventory_counts"]["tools"], 1);
+    assert_eq!(body["inventory_counts"]["trust_cards"], 1);
     assert_eq!(body["inventory_counts"]["runtime_health"], 1);
     assert!(body["inventory_counts"]["shadow_assets"].is_u64());
     assert!(body["inventory_counts"]["shadow_high_or_critical_assets"].is_u64());
@@ -342,22 +410,27 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     assert_eq!(body["shadow_radar"]["tools_invoked"], false);
     assert!(body["shadow_radar"]["control_plane_assets"].is_array());
     assert_eq!(body["view"]["servers"][0]["name"], "docs");
-    assert_eq!(body["view"]["runtime_health"][0]["health"], "unknown");
+    assert_eq!(body["view"]["tools"][0]["name"], "search_docs");
+    assert_eq!(body["view"]["trust_cards"][0]["server_id"], "backend:docs");
+    assert_eq!(
+        body["view"]["trust_cards"][0]["schema_version"],
+        "trust_card.v1"
+    );
+    let digest = body["view"]["trust_cards"][0]["trust_card_digest_sha256"]
+        .as_str()
+        .expect("trust card digest should be a string");
+    assert_eq!(digest.len(), 64);
+    assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
+    assert_eq!(body["view"]["runtime_health"][0]["health"], "healthy");
     assert_eq!(
         body["authorizations"]["mutate_policy"]["audit_required"],
         true
     );
     assert_eq!(body["current_limits"][0], "read_only_api");
 
-    let decisions = body["decision_queue"]["items"]
-        .as_array()
-        .expect("decision queue items must be an array");
-    assert!(
-        decisions
-            .iter()
-            .any(|item| item["reason_code"] == "CONTROL_DECISION_RUNTIME_HEALTH_REVIEW"),
-        "runtime health decision should be present: {body}"
-    );
+    assert!(body["decision_queue"]["items"].is_array());
+
+    server.abort();
 }
 
 #[tokio::test]

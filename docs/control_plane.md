@@ -51,12 +51,17 @@ The local API derives server and runtime health from the in-process backend
 registry. It does not fetch tools over the network; it only reports tools already
 present in the backend cache.
 
+When cached tool metadata is present, the local API also derives local
+TrustCard references for Control Plane consumers. The projection includes the
+server id, TrustCard schema version, and canonical TrustCard SHA-256 digest.
+
 ## Local Web UI
 
 The embedded `/ui` dashboard includes a `Control Plane` tab that consumes
 `GET /ui/api/control-plane`. It shows the local actor, inventory coverage,
-server inventory, runtime health, role-aware decision queue, RBAC projection, and
-free/core versus enterprise feature boundaries.
+server inventory, TrustCard digest references, runtime health, role-aware
+decision queue, RBAC projection, and free/core versus enterprise feature
+boundaries.
 
 The tab is intentionally read-only. It does not add grant or policy mutation
 controls, approval actions, persistence, evidence export, OIDC/SCIM integration,

@@ -430,6 +430,7 @@ tr:hover td { background: var(--bg3); }
         <div class="card"><div class="label">Decisions</div><div class="value" id="cp-decisions">-</div></div>
         <div class="card"><div class="label">Coverage</div><div class="value" id="cp-coverage-count">-</div></div>
         <div class="card"><div class="label">Shadow MCPs</div><div class="value" id="cp-shadow-count">-</div></div>
+        <div class="card"><div class="label">TrustCards</div><div class="value" id="cp-trustcards-count">-</div></div>
         <div class="card"><div class="label">Mode</div><div class="value" id="cp-mode" style="font-size:1.15rem">-</div></div>
       </div>
 
@@ -452,6 +453,14 @@ tr:hover td { background: var(--bg3); }
             </table>
           </div>
         </div>
+      </div>
+
+      <h2>TrustCards</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Server</th><th>Digest</th><th>Schema</th></tr></thead>
+          <tbody id="cp-trustcards-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+        </table>
       </div>
 
       <h2>ShadowRadar</h2>
@@ -775,6 +784,7 @@ function renderControlPlane(d) {
   const limits = d.current_limits || [];
   const shadow = d.shadow_radar || {};
   const shadowSummary = shadow.summary || {};
+  const trustCards = d.view?.trust_cards || [];
 
   document.getElementById('cp-actor').textContent =
     `${actor.display_name || '-'} / ${humanize(actor.role)}`;
@@ -783,12 +793,15 @@ function renderControlPlane(d) {
     coverageEntries.length ? `${covered}/${coverageEntries.length}` : '-';
   document.getElementById('cp-shadow-count').textContent =
     shadowSummary.unmanaged_total ?? d.inventory_counts?.shadow_assets ?? '-';
+  document.getElementById('cp-trustcards-count').textContent =
+    d.inventory_counts?.trust_cards ?? trustCards.length;
   document.getElementById('cp-mode').innerHTML = route.read_only
     ? '<span class="badge badge-healthy">Read Only</span>'
     : '<span class="badge badge-open">Mutating</span>';
 
   renderControlPlaneServers(d.view?.servers || []);
   renderControlPlaneRuntime(d.view?.runtime_health || []);
+  renderControlPlaneTrustCards(trustCards);
   renderControlPlaneShadow(shadow);
   renderControlPlaneDecisions(decisions);
   renderControlPlaneFeatures(d.features || []);
@@ -819,6 +832,19 @@ function renderControlPlaneRuntime(runtimes) {
     <td class="mono">${esc(r.server_id)}</td>
     <td>${esc(r.provider || '-')}</td>
     <td>${healthBadge(r.health)}</td>
+  </tr>`).join('');
+}
+
+function renderControlPlaneTrustCards(cards) {
+  const tbody = document.getElementById('cp-trustcards-tbody');
+  if (!cards.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No TrustCards generated from cached tools</td></tr>';
+    return;
+  }
+  tbody.innerHTML = cards.map(card => `<tr>
+    <td class="mono">${esc(card.server_id || '-')}</td>
+    <td><code>${esc((card.trust_card_digest_sha256 || '').slice(0, 16))}</code><div class="row-sub mono">${esc(card.trust_card_digest_sha256 || '-')}</div></td>
+    <td>${esc(card.schema_version || '-')}</td>
   </tr>`).join('');
 }
 

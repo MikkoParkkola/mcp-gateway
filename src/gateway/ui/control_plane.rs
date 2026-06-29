@@ -18,13 +18,15 @@ use crate::control_plane::{
     ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrantStatus, ControlPlaneHealth,
     ControlPlaneLicenseTier, ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole,
     ControlPlaneRuntimeHealth, ControlPlaneServer, ControlPlaneServerStatus, ControlPlaneSnapshot,
-    ControlPlaneTool, ControlPlaneUser,
+    ControlPlaneTool, ControlPlaneTrustCard, ControlPlaneUser,
 };
 use crate::discovery::AutoDiscovery;
 use crate::discovery::shadow::{
     SHADOW_HANDOFF_SCHEMA_VERSION, SHADOW_REPORT_SCHEMA_VERSION, ShadowControlPlaneAsset,
     ShadowScanReport, ShadowScanSummary,
 };
+use crate::hashing::canonical_json_sha256;
+use crate::trust::TrustCard;
 
 /// Build the read-only control-plane API router.
 pub fn control_plane_router() -> Router<Arc<AppState>> {
@@ -115,8 +117,9 @@ fn local_runtime_snapshot(
         }
 
         let status = backend.status();
+        let server_id = format!("backend:{}", status.name);
         snapshot.servers.push(ControlPlaneServer {
-            server_id: format!("backend:{}", status.name),
+            server_id: server_id.clone(),
             name: status.name.clone(),
             owner_group_id: actor
                 .group_ids
@@ -127,7 +130,7 @@ fn local_runtime_snapshot(
         });
 
         snapshot.runtime_health.push(ControlPlaneRuntimeHealth {
-            server_id: format!("backend:{}", status.name),
+            server_id: server_id.clone(),
             provider: status.transport.clone(),
             health: runtime_health_from_backend(&status),
         });
@@ -135,14 +138,25 @@ fn local_runtime_snapshot(
         for tool in backend.get_cached_tools_snapshot().iter() {
             snapshot.tools.push(ControlPlaneTool {
                 tool_id: format!("backend:{}:tool:{}", status.name, tool.name),
-                server_id: format!("backend:{}", status.name),
+                server_id: server_id.clone(),
                 name: tool.name.clone(),
                 high_impact: is_high_impact_tool(tool),
+            });
+            let trust_card = TrustCard::from_tool(&status.name, tool).with_validation();
+            snapshot.trust_cards.push(ControlPlaneTrustCard {
+                server_id: server_id.clone(),
+                trust_card_digest_sha256: trust_card_digest_sha256(&trust_card),
+                schema_version: trust_card.schema_version,
             });
         }
     }
 
     snapshot
+}
+
+fn trust_card_digest_sha256(card: &TrustCard) -> String {
+    let json_value = serde_json::to_value(card).unwrap_or(serde_json::Value::Null);
+    canonical_json_sha256(&json_value)
 }
 
 async fn local_shadow_radar(state: &AppState) -> ControlPlaneShadowRadar {
