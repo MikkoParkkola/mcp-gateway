@@ -252,7 +252,7 @@ async fn send_heartbeat(payload: &HeartbeatPayload) {
 /// consumers that do not go through `run_server` never trigger a heartbeat.
 pub async fn maybe_send_heartbeat(telemetry_enabled: bool) {
     let env = EnvSnapshot::from_env();
-    maybe_send_heartbeat_inner(telemetry_enabled, cfg!(debug_assertions), cfg!(test), &env).await
+    maybe_send_heartbeat_inner(telemetry_enabled, cfg!(debug_assertions), cfg!(test), &env).await;
 }
 
 /// Inner implementation with explicit opt-out flags for testability.
@@ -418,11 +418,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn not_suppressed_in_release_without_opt_outs() {
         // Use a temp dir so a real ~/.mcp-gateway/telemetry/last_heartbeat
         // doesn't interfere with this test.
         let dir = tempfile::TempDir::new().unwrap();
-        std::env::set_var("MCP_GATEWAY_CONFIG_DIR", dir.path());
+        // SAFETY: single-threaded test context
+        unsafe { std::env::set_var("MCP_GATEWAY_CONFIG_DIR", dir.path()); }
         let env = EnvSnapshot::default();
         assert!(!should_suppress(true, false, false, &env));
     }

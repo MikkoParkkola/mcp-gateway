@@ -150,11 +150,13 @@ fn payload_minimal_no_ip_under_2kb() {
 #[tokio::test]
 async fn heartbeat_once_per_day() {
     let (_temp_dir, temp_path) = setup_temp_telemetry_dir();
-    std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path);
+    // SAFETY: single-threaded test context, no other threads access these env vars
+    unsafe { std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path); }
 
     let state = Arc::new(CollectorState::default());
     let (collector_url, _handle) = start_collector(Arc::clone(&state)).await;
-    std::env::set_var(TELEMETRY_URL_ENV, &collector_url);
+    // SAFETY: single-threaded test context
+    unsafe { std::env::set_var(TELEMETRY_URL_ENV, &collector_url); }
 
     let env = EnvSnapshot::default();
 
@@ -198,11 +200,13 @@ async fn heartbeat_once_per_day() {
 #[tokio::test]
 async fn opt_out_suppresses_all_channels() {
     let (_temp_dir, temp_path) = setup_temp_telemetry_dir();
-    std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path);
+    // SAFETY: single-threaded test context
+    unsafe { std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path); }
 
     let state = Arc::new(CollectorState::default());
     let (collector_url, _handle) = start_collector(Arc::clone(&state)).await;
-    std::env::set_var(TELEMETRY_URL_ENV, &collector_url);
+    // SAFETY: single-threaded test context
+    unsafe { std::env::set_var(TELEMETRY_URL_ENV, &collector_url); }
 
     // Helper: count requests after a maybe-send.
     async fn assert_no_request(
@@ -276,7 +280,8 @@ async fn opt_out_suppresses_all_channels() {
 #[tokio::test]
 async fn timeout_and_5xx_are_failure_open() {
     let (_temp_dir, temp_path) = setup_temp_telemetry_dir();
-    std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path);
+    // SAFETY: single-threaded test context
+    unsafe { std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path); }
 
     let env = EnvSnapshot::default();
 
@@ -285,7 +290,8 @@ async fn timeout_and_5xx_are_failure_open() {
         let state = Arc::new(CollectorState::default());
         *state.return_status.lock() = 500;
         let (collector_url, _handle) = start_collector(Arc::clone(&state)).await;
-        std::env::set_var(TELEMETRY_URL_ENV, &collector_url);
+        // SAFETY: single-threaded test context
+        unsafe { std::env::set_var(TELEMETRY_URL_ENV, &collector_url); }
 
         // Should not panic or return an error.
         maybe_send_heartbeat_inner(true, false, false, &env).await;
@@ -303,7 +309,8 @@ async fn timeout_and_5xx_are_failure_open() {
         let state = Arc::new(CollectorState::default());
         *state.return_status.lock() = 404;
         let (collector_url, _handle) = start_collector(Arc::clone(&state)).await;
-        std::env::set_var(TELEMETRY_URL_ENV, &collector_url);
+        // SAFETY: single-threaded test context
+        unsafe { std::env::set_var(TELEMETRY_URL_ENV, &collector_url); }
 
         maybe_send_heartbeat_inner(true, false, false, &env).await;
         // Function returned successfully.
@@ -312,8 +319,10 @@ async fn timeout_and_5xx_are_failure_open() {
     // Test 3: Connection refused (invalid port) is swallowed.
     {
         let (_temp_dir2, temp_path2) = setup_temp_telemetry_dir();
-        std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path2);
-        std::env::set_var(TELEMETRY_URL_ENV, "http://127.0.0.1:1/collect");
+        // SAFETY: single-threaded test context
+        unsafe { std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path2); }
+        // SAFETY: single-threaded test context
+        unsafe { std::env::set_var(TELEMETRY_URL_ENV, "http://127.0.0.1:1/collect"); }
 
         // Should not panic — failure-open.
         maybe_send_heartbeat_inner(true, false, false, &env).await;
@@ -329,11 +338,13 @@ async fn timeout_and_5xx_are_failure_open() {
 #[tokio::test]
 async fn happy_path_send_asserts_post_body() {
     let (_temp_dir, temp_path) = setup_temp_telemetry_dir();
-    std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path);
+    // SAFETY: single-threaded test context
+    unsafe { std::env::set_var("MCP_GATEWAY_CONFIG_DIR", &temp_path); }
 
     let state = Arc::new(CollectorState::default());
     let (collector_url, _handle) = start_collector(Arc::clone(&state)).await;
-    std::env::set_var(TELEMETRY_URL_ENV, &collector_url);
+    // SAFETY: single-threaded test context
+    unsafe { std::env::set_var(TELEMETRY_URL_ENV, &collector_url); }
 
     let env = EnvSnapshot::default();
     maybe_send_heartbeat_inner(true, false, false, &env).await;
