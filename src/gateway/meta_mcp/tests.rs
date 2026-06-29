@@ -174,6 +174,22 @@ fn handle_tools_list_code_mode_disabled_returns_meta_tools() {
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert!(names.contains(&"gateway_invoke"));
     assert!(names.contains(&"gateway_search_tools"));
+    let gateway_invoke = tools
+        .iter()
+        .find(|tool| tool["name"] == "gateway_invoke")
+        .expect("gateway_invoke should be present");
+    assert_eq!(
+        gateway_invoke["trustCard"]["schemaVersion"],
+        "trust_card.v1"
+    );
+    assert_eq!(gateway_invoke["trustCard"]["serverId"], "gateway:meta");
+    assert_eq!(
+        gateway_invoke["trustCard"]["trustCardDigestSha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
     assert!(
         !names.contains(&"gateway_search"),
         "gateway_search should NOT appear in traditional mode"

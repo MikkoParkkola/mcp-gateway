@@ -54,6 +54,10 @@ present in the backend cache.
 When cached tool metadata is present, the local API also derives local
 TrustCard references for Control Plane consumers. The projection includes the
 server id, TrustCard schema version, and canonical TrustCard SHA-256 digest.
+The same digest source is projected into live `tools/list` descriptors as a
+small `trustCard` reference so Control Plane rows, protocol clients, and policy
+consumers can correlate a tool descriptor with its local TrustCard evidence
+without embedding the full TrustCard in every descriptor.
 
 ## Local Web UI
 

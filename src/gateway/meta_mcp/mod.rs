@@ -35,15 +35,17 @@ use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
-use crate::protocol::{
-    JsonRpcResponse, LoggingLevel, RequestId, ToolsListResult, negotiate_version,
-};
+use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
 use crate::stats::UsageStats;
 use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
+use crate::trust::{
+    project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
+    tools_list_result_with_trust_cards,
+};
 use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
@@ -769,7 +771,7 @@ impl MetaMcp {
         id: RequestId,
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
-        let mut tools = if self.code_mode_enabled {
+        let tools = if self.code_mode_enabled {
             build_code_mode_tools()
         } else {
             let (tool_count, server_count) = self.backend_counts();
@@ -782,12 +784,23 @@ impl MetaMcp {
                 server_count,
             )
         };
+        let mut tool_descriptors =
+            project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
 
         // Append surfaced tools (skip in Code Mode — it uses a fixed 2-tool schema).
         if !self.code_mode_enabled {
             for surfaced in &self.surfaced_tools {
                 if let Some(tool) = self.resolve_surfaced_tool(surfaced, session_id) {
-                    tools.push(tool);
+                    let server_id = if self.backends.get(&surfaced.server).is_some() {
+                        format!("backend:{}", surfaced.server)
+                    } else {
+                        format!("capability:{}", surfaced.server)
+                    };
+                    tool_descriptors.push(project_tool_descriptor_trust_card(
+                        server_id,
+                        &surfaced.server,
+                        &tool,
+                    ));
                 }
             }
         }
@@ -799,18 +812,20 @@ impl MetaMcp {
         if !self.code_mode_enabled {
             let promoted = self.promoted_tools_for_session(session_id);
             for tool in promoted {
-                let already_present = tools.iter().any(|t| t.name == tool.name);
+                let already_present = tool_descriptors
+                    .iter()
+                    .any(|t| t.get("name").and_then(Value::as_str) == Some(tool.name.as_str()));
                 if !already_present {
-                    tools.push(tool);
+                    tool_descriptors.push(project_tool_descriptor_trust_card(
+                        "gateway:promoted",
+                        "mcp-gateway",
+                        &tool,
+                    ));
                 }
             }
         }
 
-        let result = ToolsListResult {
-            tools,
-            next_cursor: None,
-        };
-        JsonRpcResponse::success_serialized(id, result)
+        JsonRpcResponse::success(id, tools_list_result_with_trust_cards(tool_descriptors))
     }
 
     /// Dispatch the `tools/list` request with optional params — entry point for the router.
@@ -852,11 +867,13 @@ impl MetaMcp {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
             // URL-activated Code Mode: return the two fixed tools directly.
-            let result = ToolsListResult {
-                tools: build_code_mode_tools(),
-                next_cursor: None,
-            };
-            return JsonRpcResponse::success_serialized(id, result);
+            let tools = build_code_mode_tools();
+            let tool_descriptors =
+                project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
+            return JsonRpcResponse::success(
+                id,
+                tools_list_result_with_trust_cards(tool_descriptors),
+            );
         }
         // No override (or static config already handles it): follow normal path.
         self.handle_tools_list_with_params(id, params, session_id)

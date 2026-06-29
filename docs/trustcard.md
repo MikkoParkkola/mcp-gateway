@@ -21,6 +21,40 @@ The first implementation slice is advisory and local:
   - `mcp-gateway trust inspect weather_current --capabilities capabilities`
   - `mcp-gateway trust validate --capabilities capabilities`
   - `mcp-gateway trust validate --file trustcard.json --strict`
+- Project digest-only TrustCard references into live `tools/list`
+  descriptors so protocol clients can correlate each advertised tool with the
+  local TrustCard and CBOM evidence that produced it.
+
+## Live Descriptor Projection
+
+Every gateway-generated `tools/list` response now includes an additive
+`trustCard` object on each tool descriptor. The direct backend proxy path also
+adds the same object after normalizing MCP tool annotations. The extension is
+protocol-compatible because clients that do not know the field can ignore it.
+
+The descriptor projection is intentionally small:
+
+```json
+{
+  "name": "search_docs",
+  "inputSchema": { "type": "object" },
+  "trustCard": {
+    "schemaVersion": "trust_card.v1",
+    "serverId": "backend:docs",
+    "toolName": "search_docs",
+    "trustCardDigestSha256": "64-hex-character digest",
+    "cbomDigestSha256": "64-hex-character digest",
+    "evaluationStatus": "warning"
+  }
+}
+```
+
+The full TrustCard stays in local generation and validation workflows. Live
+descriptors carry only references and status, avoiding large prompt-context
+growth while giving policy engines, control-plane views, and clients a stable
+join key. Free/core owns this local descriptor projection. Signed TrustCards,
+organization policy overlays, continuous rescoring, approval workflows, and
+evidence export remain enterprise scope.
 
 ## TrustCard Assistant
 

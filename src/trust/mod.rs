@@ -16,11 +16,17 @@ use crate::{
 };
 
 mod assistant;
+mod descriptor;
 mod inference;
 
 pub use assistant::{
     TrustAssistantAutomationAction, TrustAssistantAutomationStatus, TrustAssistantPrompt,
     TrustAssistantPromptKind, TrustCardAssistant, TrustCardAssistantPlan,
+};
+pub use descriptor::{
+    TOOL_DESCRIPTOR_TRUST_CARD_KEY, ToolDescriptorTrustCard, cbom_digest_sha256,
+    project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
+    tools_list_result_with_trust_cards, trust_card_digest_sha256,
 };
 
 use inference::{

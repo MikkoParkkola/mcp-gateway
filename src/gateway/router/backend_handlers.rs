@@ -22,6 +22,7 @@ use crate::protocol::{JsonRpcResponse, RequestId, Tool};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{sanitize_json_value, validate_tool_name};
+use crate::trust::project_tool_descriptors_trust_cards;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Option<Result<Option<Value>, BackendRejection>>;
@@ -158,6 +159,9 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     };
 
     normalize_tool_annotations(backend_name, &mut tools);
+
+    let server_id = format!("backend:{backend_name}");
+    let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
 
     match serde_json::to_value(tools) {
         Ok(normalized_tools) => *tools_value = normalized_tools,
@@ -483,6 +487,22 @@ mod tests {
         assert_eq!(search["destructiveHint"], false);
         assert_eq!(search["idempotentHint"], true);
         assert_eq!(search["openWorldHint"], true);
+        assert_eq!(
+            result["tools"][0]["trustCard"]["schemaVersion"],
+            "trust_card.v1"
+        );
+        assert_eq!(
+            result["tools"][0]["trustCard"]["serverId"],
+            "backend:beeper"
+        );
+        assert_eq!(result["tools"][0]["trustCard"]["toolName"], "search");
+        assert_eq!(
+            result["tools"][0]["trustCard"]["trustCardDigestSha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
 
         let archive = &result["tools"][1]["annotations"];
         assert_eq!(archive["readOnlyHint"], false);
