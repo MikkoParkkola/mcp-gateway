@@ -48,6 +48,7 @@ async fn main() -> ExitCode {
         Some(Command::Kubernetes(kubernetes_cmd)) => {
             commands::run_kubernetes_command(kubernetes_cmd)
         }
+        Some(Command::Ranking(ranking_cmd)) => commands::run_ranking_command(ranking_cmd),
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
         Some(Command::Identity(identity_cmd)) => commands::run_identity_command(identity_cmd).await,

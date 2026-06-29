@@ -16,6 +16,7 @@ mod kubernetes;
 pub mod paths;
 mod plugin;
 mod protocol_import;
+mod ranking;
 mod setup;
 mod skills;
 mod stats;
@@ -32,6 +33,7 @@ pub use identity::run_identity_command;
 pub use kubernetes::run_kubernetes_command;
 pub use plugin::{run_plugin_install, run_plugin_list, run_plugin_search, run_plugin_uninstall};
 pub use protocol_import::run_protocol_import_command;
+pub use ranking::run_ranking_command;
 pub use setup::run_setup_command;
 pub use skills::{
     run_skills_generate, run_skills_import, run_skills_list, run_skills_remove, run_skills_search,

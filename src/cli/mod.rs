@@ -43,7 +43,8 @@ pub use identity::{IdentityCommand, IdentityGrantScopeArg, IdentityGrantsCommand
 pub use skills::SkillsCommand;
 pub use subcommands::{
     AuditCommand, CapCommand, KubernetesCommand, PluginCommand, ProtocolImportCommand,
-    ProtocolImportKind, RuntimeProviderArg, TlsCommand, TrustCommand, TrustLabCommand,
+    ProtocolImportKind, RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand,
+    TrustLabCommand,
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
@@ -184,6 +185,10 @@ pub enum Command {
     /// Plan enterprise Kubernetes reconciliation and validation.
     #[command(subcommand, about = "Kubernetes enterprise deployment commands")]
     Kubernetes(KubernetesCommand),
+
+    /// Evaluate deterministic adaptive ranking fixtures.
+    #[command(subcommand, about = "Adaptive ranking evaluation commands")]
+    Ranking(RankingCommand),
 
     /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
     #[command(

@@ -254,6 +254,22 @@ pub enum ProtocolImportCommand {
     },
 }
 
+/// Adaptive ranking evaluation subcommands.
+#[derive(Subcommand, Debug)]
+pub enum RankingCommand {
+    /// Evaluate deterministic offline ranking fixtures.
+    #[command(about = "Evaluate adaptive ranking against a fixture corpus")]
+    Eval {
+        /// JSON file containing a fixture array or an object with a cases array.
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+}
+
 /// Protocol source formats accepted by the safe import preview command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ProtocolImportKind {
@@ -349,7 +365,8 @@ mod tests {
     use clap::Parser;
 
     use crate::cli::{
-        Cli, Command, ProtocolImportCommand, ProtocolImportKind, output::OutputFormat,
+        Cli, Command, ProtocolImportCommand, ProtocolImportKind, RankingCommand,
+        output::OutputFormat,
     };
 
     fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
@@ -393,6 +410,26 @@ mod tests {
                 assert_eq!(source_name.as_deref(), Some("users-api"));
                 assert_eq!(format, OutputFormat::Plain);
                 assert!(force);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ranking_eval_parses_fixture_path_and_format() {
+        let cli = parse_args(&[
+            "ranking",
+            "eval",
+            "fixtures/ranking-eval.json",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Ranking(RankingCommand::Eval { file, format })) => {
+                assert_eq!(file, std::path::PathBuf::from("fixtures/ranking-eval.json"));
+                assert_eq!(format, OutputFormat::Json);
             }
             other => panic!("unexpected: {other:?}"),
         }

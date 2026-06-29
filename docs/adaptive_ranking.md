@@ -76,6 +76,29 @@ The initial fixture tests cover a literal relevance case, a semantic discovery
 case, and an unsafe exact-match case where adaptive ranking correctly selects a
 safe tool that the text-only baseline would not rank first.
 
+Run the same evaluator from the CLI when you need reproducible evidence:
+
+```bash
+mcp-gateway ranking eval ranking-fixtures.json --format json
+```
+
+The input can be either a JSON array of cases or an object with a `cases`
+array. Each case uses a stable `id`, the private `query` consumed during
+evaluation, the `expected_top_tool`, and candidate objects with the same
+`server`, `name`, `description`, and signal fields returned by gateway search.
+The emitted `ranking-eval.v1` report intentionally omits query text and
+candidate payloads; it contains only aggregate rates, case IDs, expected and
+actual top tools, baseline top tools, filtered/invalid counts, and static
+improvement targets.
+
+Use the CLI gate for local or CI evidence:
+
+- `top1_hit_rate` should stay at or above the ticket target for the fixture set.
+- `regressions_vs_baseline` should be zero unless the case is explicitly
+  accepted as a safety-driven tradeoff.
+- `improvements_over_baseline` and `filtered_candidates` prove safety/trust lift
+  when risky exact matches are suppressed.
+
 ## Licensing Boundary
 
 | Capability | Free/core | Enterprise license category |
@@ -84,7 +107,7 @@ safe tool that the text-only baseline would not rank first.
 | Safety, grant, trust, health, cost, latency, freshness signals | Included | Included |
 | Per-result explanations | Included | Included |
 | Local usage feedback | Included | Included |
-| Local offline fixture evaluation | Included | Included |
+| Local offline fixture evaluation and `ranking eval` CLI | Included | Included |
 | Organization policy weights | Not included | Included |
 | Fleet telemetry, evaluation dashboards, A/B tests | Not included | Included |
 | Governed feedback promotion and audit export | Not included | Included |
