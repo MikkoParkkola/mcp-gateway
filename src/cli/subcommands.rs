@@ -283,6 +283,29 @@ pub enum KubernetesCommand {
         #[arg(short, long, default_value = "table", value_enum)]
         format: OutputFormat,
     },
+
+    /// Build a gated live-cluster apply command plan.
+    #[command(
+        name = "apply-plan",
+        about = "Plan Kubernetes enterprise cluster apply commands with explicit mutation gates"
+    )]
+    ApplyPlan {
+        /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
+        #[arg(required = true)]
+        resources: PathBuf,
+
+        /// Target namespace.
+        #[arg(short, long, default_value = "mcp-gateway")]
+        namespace: String,
+
+        /// Enable mutating apply, evidence, verify, and rollback commands in the plan.
+        #[arg(long)]
+        approve_apply: bool,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
 }
 
 /// `TrustCard` and CBOM advisory metadata commands.

@@ -8,9 +8,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod cluster;
 pub mod controller;
 pub mod evidence;
 
+pub use cluster::{
+    KUBERNETES_CLUSTER_APPLY_PLAN_SCHEMA, KubernetesClusterApplyIntent,
+    KubernetesClusterApplyOptions, KubernetesClusterApplyPlan, KubernetesClusterCommandStep,
+    KubernetesClusterStepKind, plan_cluster_apply,
+};
 pub use controller::{
     KUBERNETES_CONTROLLER_REPORT_SCHEMA, KubernetesControllerCycle, KubernetesControllerMode,
     KubernetesControllerOptions, KubernetesControllerReport, KubernetesControllerShutdownReason,

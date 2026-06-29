@@ -627,6 +627,40 @@ fn cli_kubernetes_controller_parses_cycles_interval_and_plain_format() {
 }
 
 #[test]
+fn cli_kubernetes_apply_plan_parses_approval_and_json_format() {
+    let cli = parse_args(&[
+        "kubernetes",
+        "apply-plan",
+        "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml",
+        "--namespace",
+        "gateway-prod",
+        "--approve-apply",
+        "--format",
+        "json",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Kubernetes(mcp_gateway::cli::KubernetesCommand::ApplyPlan {
+            resources,
+            namespace,
+            approve_apply,
+            format,
+        })) => {
+            assert_eq!(
+                resources,
+                std::path::PathBuf::from(
+                    "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
+                )
+            );
+            assert_eq!(namespace, "gateway-prod");
+            assert!(approve_apply);
+            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
 fn cli_plugin_search_requires_query_argument() {
     let result = parse_args(&["plugin", "search"]);
     assert!(result.is_err());

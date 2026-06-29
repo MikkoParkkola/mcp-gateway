@@ -282,6 +282,67 @@ fn controller_report_summarizes_reconcile_cycles_and_evidence_exports() {
 }
 
 #[test]
+fn cluster_apply_plan_gates_mutation_until_approval() {
+    use mcp_gateway::kubernetes::{
+        KUBERNETES_CLUSTER_APPLY_PLAN_SCHEMA, KubernetesClusterApplyIntent,
+        KubernetesClusterApplyOptions, KubernetesClusterStepKind,
+    };
+
+    let plan = mcp_gateway::kubernetes::plan_cluster_apply(
+        KubernetesClusterApplyOptions::dry_run(
+            "mcp-gateway",
+            "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml",
+        ),
+        include_str!("../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"),
+    )
+    .expect("cluster apply plan should render");
+
+    assert_eq!(plan.schema_version, KUBERNETES_CLUSTER_APPLY_PLAN_SCHEMA);
+    assert_eq!(plan.intent, KubernetesClusterApplyIntent::DryRun);
+    assert!(!plan.mutation_allowed);
+    assert!(plan.steps.iter().any(|step| {
+        step.step == KubernetesClusterStepKind::ServerSideDryRun
+            && step.enabled
+            && !step.modifies_cluster
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.step == KubernetesClusterStepKind::Apply
+            && !step.enabled
+            && step.modifies_cluster
+            && step.requires_human_confirmation
+    }));
+}
+
+#[test]
+fn cluster_apply_plan_approval_enables_apply_evidence_and_rollback_handles() {
+    use mcp_gateway::kubernetes::{KubernetesClusterApplyOptions, KubernetesClusterStepKind};
+
+    let plan = mcp_gateway::kubernetes::plan_cluster_apply(
+        KubernetesClusterApplyOptions::approved(
+            "mcp-gateway",
+            "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml",
+        ),
+        include_str!("../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"),
+    )
+    .expect("cluster apply plan should render");
+
+    assert!(plan.mutation_allowed);
+    assert!(plan.steps.iter().any(|step| {
+        step.step == KubernetesClusterStepKind::Apply && step.enabled && step.modifies_cluster
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.step == KubernetesClusterStepKind::EvidenceExport
+            && step.enabled
+            && step.modifies_cluster
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.step == KubernetesClusterStepKind::Rollback
+            && step.enabled
+            && step.requires_human_confirmation
+    }));
+}
+
+#[test]
 fn dry_run_and_kind_scripts_are_gated_and_reversible() {
     assert!(SERVER_DRY_RUN.contains("--server-side --dry-run=server"));
     assert!(SERVER_DRY_RUN.contains("preflight.sh"));

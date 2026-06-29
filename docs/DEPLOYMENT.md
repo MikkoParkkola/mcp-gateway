@@ -105,7 +105,9 @@ local manifest tests, a deterministic reconcile plan, a server-side dry-run
 wrapper, a disposable kind smoke fixture, and sensitive-data-free evidence
 exports for Kubernetes status, Events, OTel, and SIEM adapters. It also includes
 a deterministic controller-manager loop for bounded CI cycles or continuous
-operator reconciliation over a reviewed resource stream.
+operator reconciliation over a reviewed resource stream, plus a gated cluster
+apply command plan for preflight, server-side dry-run, apply, verification,
+evidence export, and rollback.
 
 ```bash
 mcp-gateway kubernetes plan \
@@ -117,14 +119,19 @@ mcp-gateway kubernetes controller \
   --namespace mcp-gateway \
   --cycles 2
 
+mcp-gateway kubernetes apply-plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway
+
 deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh mcp-gateway
 deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
 ```
 
 Free/core deployment remains Docker, Docker Compose, and single-node service
 templates. Kubernetes HA, cluster policy reconciliation, managed rollout,
-multi-tenant namespaces, controller-manager operation, kind-based cluster
-validation, and fleet evidence export adapters are enterprise scope.
+multi-tenant namespaces, controller-manager operation, gated cluster apply
+planning, kind-based cluster validation, and fleet evidence export adapters are
+enterprise scope.
 
 ## Configuration Loading Order
 

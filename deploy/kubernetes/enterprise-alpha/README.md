@@ -32,14 +32,17 @@ fleet evidence export.
 3. `controller`: run `mcp-gateway kubernetes controller
    base/example-gateway.yaml --cycles 2` to exercise the same reconcile and
    evidence contract as a controller-manager loop.
-4. `apply`: use server-side dry-run first, then apply only after human approval
+4. `apply-plan`: run `mcp-gateway kubernetes apply-plan
+   base/example-gateway.yaml` to render preflight, server-side dry-run, gated
+   apply, verify, evidence export, and rollback commands.
+5. `apply`: execute mutating commands only after human approval
    for namespace, ingress domain, protected value provider, tenancy, and policy
    exceptions.
-5. `verify`: wait for status conditions, probes, service endpoints, policy
+6. `verify`: wait for status conditions, probes, service endpoints, policy
    convergence, and gateway health.
-6. `explain`: show why every generated resource exists and which acceptance
+7. `explain`: show why every generated resource exists and which acceptance
    criterion it supports.
-7. `rollback`: use the previous release revision or previous custom resource
+8. `rollback`: use the previous release revision or previous custom resource
    generation, and require confirmation for destructive namespace changes.
 
 ## Included Files
@@ -95,6 +98,22 @@ acceptance evidence. `--watch` keeps reconciling until the process is stopped.
 Blocked plans stop the loop before a future cluster adapter could attempt
 mutating work.
 
+## Cluster Apply Plan
+
+```bash
+mcp-gateway kubernetes apply-plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --format table
+```
+
+The apply plan emits `kubernetes.cluster_apply_plan.v1`. By default, preflight
+and server-side dry-run are enabled while mutating apply, status evidence,
+event evidence, verification, and rollback commands are present but disabled.
+Passing `--approve-apply` enables the mutating command handles in the plan, but
+the CLI still does not execute `kubectl`; an operator or future runner must
+execute the reviewed commands.
+
 ## Evidence Exports
 
 The plan includes `evidence_exports` with schema
@@ -133,5 +152,5 @@ cluster, and runs the server-side dry-run wrapper. Set
 
 ## Current Gaps
 
-- No live cluster watch/apply adapter yet; the current controller manager runs
-  the deterministic resource-stream contract used by CI and operator review.
+- No built-in `kubectl` command runner yet; the current live-cluster adapter is
+  a gated command plan used by CI, operator review, and future runners.

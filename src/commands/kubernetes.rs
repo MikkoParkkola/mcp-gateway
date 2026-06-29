@@ -5,8 +5,10 @@ use std::{path::Path, process::ExitCode, thread, time::Duration};
 use mcp_gateway::{
     cli::{KubernetesCommand, output::OutputFormat},
     kubernetes::{
+        KubernetesClusterApplyOptions, KubernetesClusterApplyPlan, KubernetesClusterStepKind,
         KubernetesControllerMode, KubernetesControllerOptions, KubernetesControllerReport,
-        KubernetesPlanStatus, KubernetesReconcilePlan, plan_controller_report, plan_reconciliation,
+        KubernetesPlanStatus, KubernetesReconcilePlan, plan_cluster_apply, plan_controller_report,
+        plan_reconciliation,
     },
 };
 
@@ -46,6 +48,25 @@ pub fn run_kubernetes_command(command: KubernetesCommand) -> ExitCode {
             watch,
             format,
         ),
+        KubernetesCommand::ApplyPlan {
+            resources,
+            namespace,
+            approve_apply,
+            format,
+        } => match read_cluster_apply_plan(&resources, &namespace, approve_apply) {
+            Ok(plan) => {
+                print_cluster_apply_plan(&plan, format);
+                if plan.status == KubernetesPlanStatus::Blocked {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                }
+            }
+            Err(error) => {
+                eprintln!("Error: {error}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 
@@ -54,6 +75,22 @@ fn read_plan(resources: &Path, namespace: &str) -> Result<KubernetesReconcilePla
         .map_err(|error| format!("failed to read {}: {error}", resources.display()))?;
     plan_reconciliation(namespace, &resources.display().to_string(), &content)
         .map_err(|error| error.to_string())
+}
+
+fn read_cluster_apply_plan(
+    resources: &Path,
+    namespace: &str,
+    approve_apply: bool,
+) -> Result<KubernetesClusterApplyPlan, String> {
+    let content = std::fs::read_to_string(resources)
+        .map_err(|error| format!("failed to read {}: {error}", resources.display()))?;
+    let source = resources.display().to_string();
+    let options = if approve_apply {
+        KubernetesClusterApplyOptions::approved(namespace, source)
+    } else {
+        KubernetesClusterApplyOptions::dry_run(namespace, source)
+    };
+    plan_cluster_apply(options, &content).map_err(|error| error.to_string())
 }
 
 fn read_controller_report(
@@ -236,6 +273,65 @@ fn print_controller_report(report: &KubernetesControllerReport, format: OutputFo
                 );
             }
         }
+    }
+}
+
+fn print_cluster_apply_plan(plan: &KubernetesClusterApplyPlan, format: OutputFormat) {
+    match format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(plan).unwrap_or_else(|_| "{}".to_string())
+            );
+        }
+        OutputFormat::Plain => {
+            println!("schema={}", plan.schema_version);
+            println!("namespace={}", plan.namespace);
+            println!("intent={:?}", plan.intent);
+            println!("status={:?}", plan.status);
+            println!("mutation_allowed={}", plan.mutation_allowed);
+            println!("steps={}", plan.steps.len());
+            println!(
+                "enabled_mutating_steps={}",
+                plan.steps
+                    .iter()
+                    .filter(|step| step.enabled && step.modifies_cluster)
+                    .count()
+            );
+            println!("blocked_reasons={}", plan.blocked_reasons.len());
+        }
+        OutputFormat::Table => {
+            println!(
+                "APPLY_PLAN: {:?}  STATUS: {:?}  NAMESPACE: {}  MUTATION_ALLOWED: {}",
+                plan.intent, plan.status, plan.namespace, plan.mutation_allowed
+            );
+            println!(
+                "{:<18}  {:<7}  {:<6}  {:<8}  COMMAND",
+                "STEP", "ENABLED", "MUTATE", "CONFIRM"
+            );
+            println!("{}", "-".repeat(110));
+            for step in &plan.steps {
+                println!(
+                    "{:<18}  {:<7}  {:<6}  {:<8}  {}",
+                    cluster_step_label(step.step),
+                    step.enabled,
+                    step.modifies_cluster,
+                    step.requires_human_confirmation,
+                    truncate(&step.command.join(" "), 58)
+                );
+            }
+        }
+    }
+}
+
+fn cluster_step_label(step: KubernetesClusterStepKind) -> &'static str {
+    match step {
+        KubernetesClusterStepKind::Preflight => "preflight",
+        KubernetesClusterStepKind::ServerSideDryRun => "server_dry_run",
+        KubernetesClusterStepKind::Apply => "apply",
+        KubernetesClusterStepKind::Verify => "verify",
+        KubernetesClusterStepKind::EvidenceExport => "evidence_export",
+        KubernetesClusterStepKind::Rollback => "rollback",
     }
 }
 
