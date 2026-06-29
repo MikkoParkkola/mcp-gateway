@@ -127,7 +127,7 @@ pub struct CapabilityDraft {
     pub input_schema: Value,
     /// Output schema projected for the generated tool.
     pub output_schema: Value,
-    /// TrustCard-oriented provenance stub.
+    /// TrustCard-oriented provenance and activation-review summary.
     pub trust_card: TrustCardDraft,
     /// Risk annotations surfaced to the user.
     pub risks: Vec<ImportRisk>,
@@ -156,7 +156,7 @@ pub struct DraftRoute {
     pub operation: Option<String>,
 }
 
-/// Minimal `TrustCard` stub generated during import preview.
+/// `TrustCard` summary generated during import preview.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrustCardDraft {
     /// Source name.
@@ -178,6 +178,8 @@ pub struct TrustCardDraft {
     pub provenance: Option<String>,
     /// Evidence quality for generated metadata.
     pub evidence: TrustEvidenceLevel,
+    /// Activation review summary derived from risks and gates.
+    pub activation_review: TrustCardActivationReview,
 }
 
 /// Evidence level for generated `TrustCard` metadata.
@@ -188,6 +190,40 @@ pub enum TrustEvidenceLevel {
     Generated,
     /// Verified by policy or package metadata.
     Verified,
+}
+
+/// Activation review summary embedded in generated `TrustCard` metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustCardActivationReview {
+    /// Whether the generated draft is enabled by default.
+    pub enabled_by_default: bool,
+    /// Stable risk verdict for activation decisions.
+    pub verdict: TrustCardRiskVerdict,
+    /// Highest risk level observed on the draft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highest_risk_level: Option<ImportRiskLevel>,
+    /// Number of risk annotations on the draft.
+    pub risk_count: usize,
+    /// Number of review gates on the draft.
+    pub review_gate_count: usize,
+    /// Number of gates requiring a non-inferable human decision.
+    pub manual_review_gate_count: usize,
+    /// Number of gates with an automated resolver path.
+    pub auto_resolvable_gate_count: usize,
+    /// Whether a human must review before activation.
+    pub human_review_required: bool,
+}
+
+/// Stable activation verdict for generated `TrustCard` metadata.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustCardRiskVerdict {
+    /// No generated risk or review gate blocks activation.
+    Ready,
+    /// Activation needs human or automated review before enablement.
+    NeedsReview,
+    /// Activation is blocked until a critical risk is remediated.
+    Blocked,
 }
 
 /// Risk level for generated import annotations.

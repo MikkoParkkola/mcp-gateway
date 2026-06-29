@@ -68,6 +68,24 @@ fn openapi_plan_creates_disabled_drafts_with_review_gates() {
         ReviewAction::Confirm,
         "mutating imported operations must be confirm-gated"
     );
+    assert_eq!(
+        create.trust_card.activation_review.verdict,
+        TrustCardRiskVerdict::NeedsReview
+    );
+    assert_eq!(
+        create.trust_card.activation_review.highest_risk_level,
+        Some(ImportRiskLevel::High)
+    );
+    assert_eq!(
+        create.trust_card.activation_review.risk_count,
+        create.risks.len()
+    );
+    assert_eq!(
+        create.trust_card.activation_review.review_gate_count,
+        create.review_gates.len()
+    );
+    assert!(create.trust_card.activation_review.human_review_required);
+    assert!(!create.trust_card.activation_review.enabled_by_default);
 }
 
 #[test]
@@ -210,6 +228,16 @@ fn oci_package_preserves_license_and_verified_provenance() {
 
     assert_eq!(draft.trust_card.license.as_deref(), Some("Apache-2.0"));
     assert_eq!(draft.trust_card.evidence, TrustEvidenceLevel::Verified);
+    assert_eq!(
+        draft.trust_card.activation_review.verdict,
+        TrustCardRiskVerdict::NeedsReview
+    );
+    assert_eq!(
+        draft.trust_card.activation_review.highest_risk_level,
+        Some(ImportRiskLevel::Medium)
+    );
+    assert_eq!(draft.trust_card.activation_review.review_gate_count, 0);
+    assert!(!draft.trust_card.activation_review.human_review_required);
     assert!(!draft.risks.iter().any(|risk| {
         matches!(
             risk.kind,
@@ -250,4 +278,12 @@ fn oci_package_missing_metadata_is_review_gated() {
     assert!(plan.review_gates.iter().any(|gate| {
         gate.kind == ImportReviewGateKind::ProvenanceVerification && gate.can_auto_resolve
     }));
+    let review = &plan.drafts[0].trust_card.activation_review;
+    assert_eq!(review.verdict, TrustCardRiskVerdict::NeedsReview);
+    assert_eq!(review.highest_risk_level, Some(ImportRiskLevel::High));
+    assert_eq!(review.risk_count, plan.drafts[0].risks.len());
+    assert_eq!(review.review_gate_count, plan.drafts[0].review_gates.len());
+    assert!(review.human_review_required);
+    assert!(review.manual_review_gate_count > 0);
+    assert!(review.auto_resolvable_gate_count > 0);
 }

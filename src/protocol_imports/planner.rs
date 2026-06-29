@@ -5,7 +5,8 @@ use crate::{Error, Result, capability::OpenApiConverter, hashing::sha256_hex};
 use super::{
     CapabilityDraft, DraftRoute, GraphqlImportSpec, GraphqlOperationImport, GraphqlOperationType,
     ImportPlan, ImportRisk, ImportRiskKind, ImportRiskLevel, ImportSafeDefaults, ImportSource,
-    ImportSourceKind, OciMcpPackageImport, OciToolImport, TrustCardDraft, TrustEvidenceLevel,
+    ImportSourceKind, OciMcpPackageImport, OciToolImport, TrustCardActivationReview,
+    TrustCardDraft, TrustCardRiskVerdict, TrustEvidenceLevel,
     helpers::{
         PostmanRequest, aggregate_gates, classify_route_risks, classify_schema_risks,
         collect_postman_requests, digest_for, empty_object_schema, gates_for_risks, human_title,
@@ -415,6 +416,8 @@ impl ProtocolImportPlanner {
             &self.context_integrity_profile,
             &review_gates,
         );
+        let activation_review =
+            activation_review_for(self.safe_defaults.drafts_enabled, &risks, &review_gates);
         let id = format!("{}:{}", source_kind_slug(source.kind), slugify(name));
         let digest_input = serde_json::to_vec(&json!({
             "source_digest_sha256": source_digest,
@@ -450,6 +453,7 @@ impl ProtocolImportPlanner {
                 } else {
                     TrustEvidenceLevel::Generated
                 },
+                activation_review,
             },
             risks,
             review_gates,
@@ -477,5 +481,36 @@ impl ProtocolImportPlanner {
             safe_defaults: self.safe_defaults.clone(),
             reversible: true,
         }
+    }
+}
+
+fn activation_review_for(
+    enabled_by_default: bool,
+    risks: &[ImportRisk],
+    gates: &[super::ImportReviewGate],
+) -> TrustCardActivationReview {
+    let highest_risk_level = risks.iter().map(|risk| risk.level).max();
+    let manual_review_gate_count = gates.iter().filter(|gate| gate.non_inferable).count();
+    let auto_resolvable_gate_count = gates.iter().filter(|gate| gate.can_auto_resolve).count();
+    let human_review_required = gates
+        .iter()
+        .any(|gate| gate.non_inferable || !gate.can_auto_resolve);
+    let verdict = if highest_risk_level == Some(ImportRiskLevel::Critical) {
+        TrustCardRiskVerdict::Blocked
+    } else if human_review_required || !gates.is_empty() || !risks.is_empty() {
+        TrustCardRiskVerdict::NeedsReview
+    } else {
+        TrustCardRiskVerdict::Ready
+    };
+
+    TrustCardActivationReview {
+        enabled_by_default,
+        verdict,
+        highest_risk_level,
+        risk_count: risks.len(),
+        review_gate_count: gates.len(),
+        manual_review_gate_count,
+        auto_resolvable_gate_count,
+        human_review_required,
     }
 }

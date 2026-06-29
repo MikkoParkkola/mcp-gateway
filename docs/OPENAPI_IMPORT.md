@@ -7,14 +7,14 @@ Convert any OpenAPI 3.0/3.1 (or Swagger 2.0) specification into gateway capabili
 The canonical import path now has two layers:
 
 1. `cap import` keeps the existing direct OpenAPI-to-capability workflow for local development.
-2. The protocol import planner produces disabled `CapabilityDraft` records first, with TrustCard provenance stubs, risk annotations, safe policy defaults, deterministic plan digests, and review gates before any active routing changes.
+2. The protocol import planner produces disabled `CapabilityDraft` records first, with TrustCard provenance and activation-review summaries, risk annotations, safe policy defaults, deterministic plan digests, and review gates before any active routing changes.
 
 The planner is intentionally broader than OpenAPI. It covers OpenAPI, selected GraphQL operations, Postman collections, and OCI MCP package metadata. Drafts are reversible until applied, and mutating, broad, ambiguous-auth, unbounded-query, missing-license, and missing-provenance cases are gated for review.
 
 | Area | Free/core | Enterprise license category |
 |------|-----------|-----------------------------|
 | Local OpenAPI import | Generate and validate capability files | Organization import policies and approval workflows |
-| Protocol import planner | Disabled drafts, deterministic diffs, TrustCard stubs, risk annotations | Private registry sync, OCI package policy, centralized review evidence |
+| Protocol import planner | Disabled drafts, deterministic diffs, TrustCard activation-review summaries, risk annotations | Private registry sync, OCI package policy, centralized review evidence |
 | GraphQL/Postman/OCI metadata planning | Local preview and safe draft generation | Org templates, package provenance enforcement, fleet rollout controls |
 | Rollback | Reversible pre-activation drafts | Audited rollback and change-control integrations |
 
@@ -75,8 +75,16 @@ mcp-gateway import preview --kind <KIND> [OPTIONS] <FILE>
 ```
 
 Preview produces a deterministic `ImportPlan` with disabled drafts, TrustCard
-stubs, risk annotations, review gates, and safe policy defaults. It does not
-write capability files and does not enable generated tools.
+activation-review summaries, risk annotations, review gates, and safe policy
+defaults. It does not write capability files and does not enable generated
+tools.
+
+JSON preview output includes `draft.trust_card.activation_review` with stable
+policy-consumer fields: `enabled_by_default`, `verdict`,
+`highest_risk_level`, `risk_count`, `review_gate_count`,
+`manual_review_gate_count`, `auto_resolvable_gate_count`, and
+`human_review_required`. This lets local review tools and enterprise approval
+systems reason about the generated draft without re-parsing every risk entry.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
