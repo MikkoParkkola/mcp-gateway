@@ -21,6 +21,7 @@
 //!   POST /ui/api/import/openapi         — import tools from inline spec
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -29,8 +30,10 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use axum::Router;
-use mcp_gateway::backend::BackendRegistry;
-use mcp_gateway::config::Config;
+use mcp_gateway::backend::{Backend, BackendRegistry};
+use mcp_gateway::config::{
+    ApiKeyConfig, AuthConfig, BackendConfig, Config, FailsafeConfig, TransportConfig,
+};
 use mcp_gateway::config_reload::{LiveConfig, ReloadContext};
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
@@ -92,6 +95,14 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         firewall: None,
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
     })
+}
+
+fn make_app_state_with_auth_config(auth_config: &AuthConfig) -> Arc<AppState> {
+    let mut state = make_app_state(None, None);
+    Arc::get_mut(&mut state)
+        .expect("test AppState should be uniquely owned")
+        .auth_config = Arc::new(ResolvedAuthConfig::from_config(auth_config));
+    state
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -247,7 +258,109 @@ metadata:
   read_only: true
 "#;
 
+fn register_http_backend(state: &Arc<AppState>, name: &str) {
+    state.backends.register(Arc::new(Backend::new(
+        name,
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: format!("http://127.0.0.1:9/{name}"),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            enabled: true,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )));
+}
+
 // ── Registry tests ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
+    let state = make_app_state(None, None);
+    register_http_backend(&state, "docs");
+    let router = create_router(state);
+
+    let (status, body) = send_json(&router, Method::GET, "/ui/api/control-plane", None).await;
+
+    assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
+    assert_eq!(body["schema_version"], "control_plane.api.v1");
+    assert_eq!(body["source"], "local_runtime_snapshot");
+    assert_eq!(body["route"]["read_only"], true);
+    assert_eq!(body["route"]["mutation_endpoint"], false);
+    assert_eq!(body["actor"]["role"], "admin");
+    assert_eq!(body["features"][0]["feature"], "local_status");
+    assert_eq!(body["features"][0]["license_tier"], "free_core");
+    assert_eq!(body["features"][0]["available_in_this_route"], true);
+    assert_eq!(body["coverage"]["servers"], true);
+    assert_eq!(body["coverage"]["runtime_health"], true);
+    assert_eq!(body["inventory_counts"]["servers"], 1);
+    assert_eq!(body["inventory_counts"]["runtime_health"], 1);
+    assert_eq!(body["view"]["servers"][0]["name"], "docs");
+    assert_eq!(body["view"]["runtime_health"][0]["health"], "unknown");
+    assert_eq!(
+        body["authorizations"]["mutate_policy"]["audit_required"],
+        true
+    );
+    assert_eq!(body["current_limits"][0], "read_only_api");
+
+    let decisions = body["decision_queue"]["items"]
+        .as_array()
+        .expect("decision queue items must be an array");
+    assert!(
+        decisions
+            .iter()
+            .any(|item| item["reason_code"] == "CONTROL_DECISION_RUNTIME_HEALTH_REVIEW"),
+        "runtime health decision should be present: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
+    let auth_config = AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![ApiKeyConfig {
+            key: "auditor-key".to_string(),
+            name: "auditor-client".to_string(),
+            rate_limit: 0,
+            backends: vec!["docs".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }],
+        public_paths: vec!["/health".to_string()],
+        client_circuit_breaker: None,
+    };
+    let state = make_app_state_with_auth_config(&auth_config);
+    register_http_backend(&state, "docs");
+    let router = create_router(state);
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/ui/api/control-plane")
+        .header("authorization", "Bearer auditor-key")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
+    assert_eq!(body["route"]["read_only"], true);
+    assert_eq!(body["actor"]["role"], "auditor");
+    assert_eq!(body["actor"]["display_name"], "auditor-client");
+    assert_eq!(body["view"]["servers"][0]["name"], "docs");
+    assert_eq!(body["authorizations"]["read_inventory"]["allowed"], true);
+    assert_eq!(body["authorizations"]["read_evidence"]["allowed"], true);
+    assert_eq!(body["authorizations"]["mutate_policy"]["allowed"], false);
+    assert_eq!(body["authorizations"]["mutate_grant"]["allowed"], false);
+}
 
 #[tokio::test]
 async fn test_registry_list_returns_entries() {

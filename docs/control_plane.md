@@ -1,6 +1,9 @@
 # Control Plane
 
-The control plane is the enterprise governance surface for mcp-gateway. The first implementation slice is a backend domain model, not a full UI: it defines the objects, RBAC checks, read-only inventory projection, mutation guard, audit event, rollback requirement, and license boundary that future API and web UI work must use.
+The control plane is the governance surface for mcp-gateway. It defines the
+objects, RBAC checks, read-only inventory projection, mutation guard, audit
+event, rollback requirement, and license boundary that API and web UI work must
+use.
 
 ## Domain Model
 
@@ -14,7 +17,9 @@ The model covers:
 - Runtime health.
 - Audit events and rollback plans.
 
-The read-only projection intentionally excludes grant and policy mutation helpers. This lets inventory and evidence views ship before editing workflows are enabled.
+The read-only projection intentionally excludes grant and policy mutation
+helpers. This lets inventory and evidence views ship before editing workflows are
+enabled.
 
 The decision queue is the UI/API-ready projection for the next control-plane
 surface. It turns pending approvals, requested grants, non-enforced policies,
@@ -22,6 +27,29 @@ low-trust evaluations, and unhealthy runtimes into role-aware human decision
 items with a reason code, suggested next step, required role, license tier, and
 per-actor `can_act` flag. It does not mutate state; grant and policy changes
 still require the audited mutation contract below.
+
+## Local API
+
+`GET /ui/api/control-plane` returns the current read-only control-plane
+projection for the local gateway process. It is served by the authenticated web
+UI API router and does not mutate state.
+
+The response includes:
+
+- `schema_version`: currently `control_plane.api.v1`.
+- `source`: currently `local_runtime_snapshot`.
+- `route`: confirms the route is read-only and is not a mutation endpoint.
+- `actor`: the authenticated client projected into a control-plane role.
+- `features`: free/core versus enterprise feature boundaries.
+- `authorizations`: RBAC decisions for read, review, and mutation actions.
+- `coverage` and `inventory_counts`: which domains are represented in the local snapshot.
+- `view`: read-only server, tool, trust evidence, runtime health, and audit evidence projection.
+- `decision_queue`: human-gated items derived from policy, trust, server, grant, and runtime state.
+- `current_limits`: machine-readable limitations of this slice.
+
+The local API derives server and runtime health from the in-process backend
+registry. It does not fetch tools over the network; it only reports tools already
+present in the backend cache.
 
 ## Roles
 
@@ -38,6 +66,7 @@ Free/core:
 
 - Local read-only status.
 - Local inventory and evidence summaries.
+- `GET /ui/api/control-plane` local runtime snapshot.
 
 Enterprise:
 
@@ -49,10 +78,9 @@ Enterprise:
 
 ## Current Limits
 
-- No web UI pages are served by this slice.
-- No API routes are wired yet; the decision queue is the backend response
-  contract that those routes should expose.
+- No dedicated visual web UI page is served by this slice.
 - No database persistence is added.
+- No mutation API route is added.
 - No OIDC/SCIM integration is added.
 - No SIEM or OTel export sink is added.
 

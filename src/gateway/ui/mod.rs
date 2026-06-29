@@ -10,6 +10,7 @@
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+pub mod control_plane;
 mod errors;
 pub mod import;
 
@@ -57,6 +58,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/ui/api/reload", post(reload))
         .route("/dashboard", get(dashboard_handler))
         .merge(capabilities::capabilities_router())
+        .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
         .merge(import::import_router());
 
