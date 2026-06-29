@@ -24,7 +24,7 @@ fi
 
 "$KUBECTL" config use-context "kind-$CLUSTER" >/dev/null
 "$KUBECTL" create namespace "$NAMESPACE" --dry-run=client -o yaml | "$KUBECTL" apply -f -
-"$KUBECTL" apply -f "$ROOT_DIR/crds/mcpgateway.io.yaml"
+"$KUBECTL" apply --server-side -f "$ROOT_DIR/crds/mcpgateway.io.yaml"
 
 KUBECTL="$KUBECTL" "$ROOT_DIR/scripts/server-dry-run.sh" "$NAMESPACE"
 

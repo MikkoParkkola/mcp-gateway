@@ -137,6 +137,8 @@ fn values_expose_enterprise_boundary_human_gates_and_protected_value_provider() 
 #[test]
 fn preflight_is_read_only_and_reports_required_capabilities() {
     assert!(PREFLIGHT.contains("auth can-i"));
+    assert!(PREFLIGHT.contains("get namespace"));
+    assert!(PREFLIGHT.contains("create namespaces"));
     assert!(PREFLIGHT.contains("api-resources"));
     assert!(PREFLIGHT.contains("networking.k8s.io"));
     assert!(!PREFLIGHT.contains(" apply "));
@@ -348,6 +350,7 @@ fn dry_run_and_kind_scripts_are_gated_and_reversible() {
     assert!(SERVER_DRY_RUN.contains("preflight.sh"));
     assert!(SERVER_DRY_RUN.contains("mcpgateway.io"));
     assert!(KIND_SMOKE.contains("create cluster --name"));
+    assert!(KIND_SMOKE.contains("apply --server-side"));
     assert!(KIND_SMOKE.contains("trap cleanup EXIT"));
     assert!(KIND_SMOKE.contains("MCP_GATEWAY_KIND_KEEP"));
     assert!(KIND_SMOKE.contains("server-dry-run.sh"));

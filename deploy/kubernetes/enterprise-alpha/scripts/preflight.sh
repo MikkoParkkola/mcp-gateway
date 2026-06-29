@@ -17,12 +17,17 @@ check() {
   fi
 }
 
+namespace_can_be_read_or_created() {
+  "$KUBECTL" get namespace "$NAMESPACE" >/dev/null 2>&1 \
+    || "$KUBECTL" auth can-i create namespaces >/dev/null 2>&1
+}
+
 printf 'mcp-gateway Kubernetes enterprise preflight\n'
 printf 'namespace: %s\n' "$NAMESPACE"
 
 check "kubectl is available" command -v "$KUBECTL"
 check "cluster is reachable" "$KUBECTL" version --client=false
-check "namespace can be read or created" "$KUBECTL" auth can-i get namespace "$NAMESPACE"
+check "namespace can be read or created" namespace_can_be_read_or_created
 check "deployments can be managed" "$KUBECTL" auth can-i create deployments.apps -n "$NAMESPACE"
 check "services can be managed" "$KUBECTL" auth can-i create services -n "$NAMESPACE"
 check "configmaps can be managed" "$KUBECTL" auth can-i create configmaps -n "$NAMESPACE"
