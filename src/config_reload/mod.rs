@@ -50,8 +50,8 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::Result;
-use crate::backend::{Backend, BackendRegistry};
-use crate::config::{BackendConfig, Config, ServerConfig};
+use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
+use crate::config::{BackendConfig, Config, RuntimeConfig, ServerConfig};
 
 // ============================================================================
 // Public types
@@ -318,6 +318,7 @@ struct MetaFields {
     mtls: String,
     key_server: String,
     agent_auth: String,
+    runtime: String,
     marketplace: String,
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
@@ -341,6 +342,7 @@ impl MetaFields {
             mtls: canonical_json(&c.mtls),
             key_server: canonical_json(&c.key_server),
             agent_auth: canonical_json(&c.agent_auth),
+            runtime: canonical_json(&c.runtime),
             marketplace: canonical_json(&c.marketplace),
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
@@ -350,6 +352,7 @@ impl MetaFields {
 
 /// Partition backends into added / removed / modified buckets.
 fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPatch) {
+    let runtime_changed = canonical_json(&old.runtime) != canonical_json(&new.runtime);
     let old_enabled: std::collections::HashMap<&str, &BackendConfig> = old
         .backends
         .iter()
@@ -383,7 +386,8 @@ fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPatch) {
     // Modified: in both but config differs
     for (name, new_cfg) in &new_enabled {
         if let Some(old_cfg) = old_enabled.get(name)
-            && backend_config_changed(old_cfg, new_cfg)
+            && (backend_config_changed(old_cfg, new_cfg)
+                || (runtime_changed && new_cfg.runtime_profile.is_some()))
         {
             patch
                 .backends_modified
@@ -422,13 +426,21 @@ pub async fn apply_patch(
     registry: &BackendRegistry,
     failsafe_config: &crate::config::FailsafeConfig,
     cache_ttl: Duration,
+    runtime_config: &RuntimeConfig,
 ) {
     if patch.restart_required() {
         warn!("Config reload: server host/port changed — restart required to apply this change");
     }
 
     for (name, cfg) in &patch.backends_added {
-        let backend = Arc::new(Backend::new(name, cfg.clone(), failsafe_config, cache_ttl));
+        let runtime_plan = runtime_plan_for_backend(name, cfg, runtime_config);
+        let backend = Arc::new(Backend::new_with_runtime_plan(
+            name,
+            cfg.clone(),
+            failsafe_config,
+            cache_ttl,
+            runtime_plan,
+        ));
         registry.register(Arc::clone(&backend));
         info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend added");
     }
@@ -451,7 +463,14 @@ pub async fn apply_patch(
             warn!(backend = %name, error = %e, "Config reload: error stopping modified backend");
         }
         // Register replacement.
-        let backend = Arc::new(Backend::new(name, cfg.clone(), failsafe_config, cache_ttl));
+        let runtime_plan = runtime_plan_for_backend(name, cfg, runtime_config);
+        let backend = Arc::new(Backend::new_with_runtime_plan(
+            name,
+            cfg.clone(),
+            failsafe_config,
+            cache_ttl,
+            runtime_plan,
+        ));
         registry.register(Arc::clone(&backend));
         info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend updated");
     }
@@ -759,7 +778,14 @@ async fn reload_once(
 
     info!(changes = %patch.summary(), "Config reload: applying patch");
 
-    apply_patch(&patch, registry, failsafe_cfg, cache_ttl).await;
+    apply_patch(
+        &patch,
+        registry,
+        failsafe_cfg,
+        cache_ttl,
+        &new_config.runtime,
+    )
+    .await;
 
     // Swap live config after patch is applied so readers see a consistent view.
     live_config.set(new_config);
@@ -836,6 +862,7 @@ impl ReloadContext {
             &self.registry,
             &self.failsafe_config,
             self.cache_ttl,
+            &new_config.runtime,
         )
         .await;
         self.live_config.set(new_config);

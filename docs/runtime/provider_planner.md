@@ -57,6 +57,39 @@ limits, malformed environment names, empty allowlist entries, and malformed moun
 targets. Availability is declarative and does not probe Docker or Podman during
 config load; runtime plans still emit preflight checks such as `docker info`.
 
+Backends can opt into a declared runtime profile with `runtime_profile`. The
+gateway compiles that profile during startup and config reload, then gates live
+stdio backend starts before spawning the child process.
+
+```yaml
+runtime:
+  profiles:
+    local_safe:
+      provider: local_process
+      network_egress: none
+
+backends:
+  docs:
+    enabled: true
+    transport:
+      type: stdio
+      command: node server.js
+    runtime_profile: local_safe
+```
+
+Reusable backend profiles inherit the executable from the stdio command when
+the profile does not set `executable`, so operators do not need to duplicate the
+launch binary. Runtime profile changes are treated as config reload changes for
+backends that reference a runtime profile, causing those backends to be replaced
+with a freshly compiled plan.
+
+Current live lifecycle support is intentionally narrow: stdio backends accept
+`local_process` runtime plans that are not denied and do not require pending
+human confirmations. Container provider plans still fail closed in the live
+stdio adapter until the endpoint wiring can replace direct stdio spawning. The
+planner and audit contract remain usable for doctor, TrustLab, and future
+containerized lifecycle flows.
+
 ## Human Gates
 
 The planner pauses for human approval before host mounts, unrestricted egress,

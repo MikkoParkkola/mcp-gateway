@@ -67,15 +67,28 @@ impl RuntimeConfig {
     /// Plan a named profile without launching the runtime.
     #[must_use]
     pub fn plan_profile(&self, profile_name: &str, server_name: &str) -> Option<RuntimePlan> {
-        let intent = self.intent_for_profile(profile_name, server_name)?;
-        let policy = self.policy_for_profile(profile_name, server_name)?;
+        self.plan_backend_profile(profile_name, server_name, None)
+    }
+
+    /// Plan a named profile for a backend, using the backend executable when
+    /// the reusable profile does not declare one itself.
+    #[must_use]
+    pub fn plan_backend_profile(
+        &self,
+        profile_name: &str,
+        server_name: &str,
+        executable_hint: Option<&str>,
+    ) -> Option<RuntimePlan> {
         let profile = self.profiles.get(profile_name)?;
+        let provider = self.provider_for(profile);
+        let mut intent = profile.intent(server_name, provider);
+        if intent.executable.is_none() {
+            intent.executable = executable_hint.map(ToString::to_string);
+        }
+        let policy = profile.policy(&intent, self.runtime_availability());
         Some(
-            RuntimePlanner::new(self.runtime_availability()).plan_with_policy(
-                &intent,
-                self.provider_for(profile),
-                policy,
-            ),
+            RuntimePlanner::new(self.runtime_availability())
+                .plan_with_policy(&intent, provider, policy),
         )
     }
 

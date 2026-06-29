@@ -13,13 +13,14 @@ use serde_json::Value;
 use tokio::sync::{Mutex, Semaphore, watch};
 use tracing::{debug, info, warn};
 
-use crate::config::{BackendConfig, TransportConfig};
+use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::failsafe::{Failsafe, with_retry};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::protocol::{
     JsonRpcResponse, Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult, Tool, ToolAnnotations, ToolsListResult,
 };
+use crate::runtime::{RuntimePlan, RuntimeProviderKind};
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
 
@@ -153,12 +154,33 @@ impl<T> CachedMetadata<T> {
     }
 }
 
+/// Compile the runtime profile selected by a backend into a live-start plan.
+#[must_use]
+pub fn runtime_plan_for_backend(
+    name: &str,
+    config: &BackendConfig,
+    runtime_config: &RuntimeConfig,
+) -> Option<RuntimePlan> {
+    let profile_name = config.runtime_profile.as_deref()?;
+    let executable_hint = stdio_executable_hint(&config.transport);
+    runtime_config.plan_backend_profile(profile_name, name, executable_hint.as_deref())
+}
+
+fn stdio_executable_hint(transport: &TransportConfig) -> Option<String> {
+    let TransportConfig::Stdio { command, .. } = transport else {
+        return None;
+    };
+    shlex::split(command)?.into_iter().next()
+}
+
 /// MCP Backend - manages connection to a single MCP server
 pub struct Backend {
     /// Backend name
     pub name: String,
     /// Configuration
     config: BackendConfig,
+    /// Runtime plan compiled from the backend's configured runtime profile.
+    runtime_plan: Option<RuntimePlan>,
     /// Transport
     transport: RwLock<Option<Arc<dyn Transport>>>,
     /// Serializes backend startup so concurrent warm-start/client requests do
@@ -193,9 +215,22 @@ impl Backend {
         failsafe_config: &crate::config::FailsafeConfig,
         cache_ttl: Duration,
     ) -> Self {
+        Self::new_with_runtime_plan(name, config, failsafe_config, cache_ttl, None)
+    }
+
+    /// Create a new backend with an optional precompiled runtime plan.
+    #[must_use]
+    pub fn new_with_runtime_plan(
+        name: &str,
+        config: BackendConfig,
+        failsafe_config: &crate::config::FailsafeConfig,
+        cache_ttl: Duration,
+        runtime_plan: Option<RuntimePlan>,
+    ) -> Self {
         Self {
             name: name.to_string(),
             config,
+            runtime_plan,
             transport: RwLock::new(None),
             start_lock: Mutex::new(()),
             failsafe: Failsafe::new(name, failsafe_config),
@@ -260,6 +295,7 @@ impl Backend {
                 cwd,
                 protocol_version,
             } => {
+                self.enforce_stdio_runtime_plan()?;
                 let transport = StdioTransport::new(
                     command,
                     self.config.env.clone(),
@@ -350,6 +386,50 @@ impl Backend {
         );
 
         Ok(Some(oauth))
+    }
+
+    fn enforce_stdio_runtime_plan(&self) -> Result<()> {
+        let Some(plan) = self.runtime_plan.as_ref() else {
+            return Ok(());
+        };
+        if plan.provider != RuntimeProviderKind::LocalProcess {
+            return Err(Error::Config(format!(
+                "backend '{}' runtime profile selected {:?}, but live stdio backend lifecycle currently supports only local_process",
+                self.name, plan.provider
+            )));
+        }
+        if plan.is_denied() {
+            let reasons = plan
+                .denied
+                .iter()
+                .map(|denial| format!("{:?}", denial.reason))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::Config(format!(
+                "backend '{}' runtime profile '{}' denied by policy: {reasons}",
+                self.name, plan.policy.id
+            )));
+        }
+        if plan.requires_confirmation() {
+            let confirmations = plan
+                .confirmations
+                .iter()
+                .map(|confirmation| confirmation.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::Config(format!(
+                "backend '{}' runtime profile '{}' requires confirmations before live start: {confirmations}",
+                self.name, plan.policy.id
+            )));
+        }
+
+        info!(
+            backend = %self.name,
+            provider = ?plan.provider,
+            policy_id = %plan.policy.id,
+            "RuntimeProvider profile accepted before stdio backend start"
+        );
+        Ok(())
     }
 
     /// Stop the backend
@@ -1305,6 +1385,90 @@ mod tests {
         assert!(
             backend.is_circuit_tripped(),
             "a failed probe must leave the breaker tripped"
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_backend_rejects_container_runtime_plan_before_spawn() {
+        let cfg = BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "definitely-not-a-real-mcp-server".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            runtime_profile: Some("containerized".to_string()),
+            ..BackendConfig::default()
+        };
+
+        let mut runtime = crate::config::RuntimeConfig::default();
+        runtime.availability.docker = true;
+        runtime.profiles.insert(
+            "containerized".to_string(),
+            crate::config::RuntimeProfileConfig {
+                provider: Some(crate::runtime::RuntimeProviderKind::Docker),
+                image: Some("ghcr.io/example/server:latest".to_string()),
+                ..crate::config::RuntimeProfileConfig::default()
+            },
+        );
+        let plan = runtime_plan_for_backend("docs", &cfg, &runtime).expect("runtime plan");
+        let backend = Backend::new_with_runtime_plan(
+            "docs",
+            cfg,
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+            Some(plan),
+        );
+
+        let err = backend.start().await.expect_err("container plan rejected");
+        assert!(
+            err.to_string().contains("supports only local_process"),
+            "containerized stdio plan should fail closed before spawn: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_backend_requires_runtime_confirmations_before_spawn() {
+        let cfg = BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "definitely-not-a-real-mcp-server".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            runtime_profile: Some("local_privileged".to_string()),
+            ..BackendConfig::default()
+        };
+
+        let mut runtime = crate::config::RuntimeConfig::default();
+        runtime.profiles.insert(
+            "local_privileged".to_string(),
+            crate::config::RuntimeProfileConfig {
+                provider: Some(crate::runtime::RuntimeProviderKind::LocalProcess),
+                privileged: true,
+                ..crate::config::RuntimeProfileConfig::default()
+            },
+        );
+        let plan = runtime_plan_for_backend("docs", &cfg, &runtime).expect("runtime plan");
+        assert_eq!(
+            plan.launch_command
+                .as_ref()
+                .map(|command| command.program.as_str()),
+            Some("definitely-not-a-real-mcp-server")
+        );
+        let backend = Backend::new_with_runtime_plan(
+            "docs",
+            cfg,
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+            Some(plan),
+        );
+
+        let err = backend
+            .start()
+            .await
+            .expect_err("missing runtime confirmation rejected");
+        assert!(
+            err.to_string().contains("requires confirmations"),
+            "confirmation-required runtime plan should fail closed before spawn: {err}"
         );
     }
 

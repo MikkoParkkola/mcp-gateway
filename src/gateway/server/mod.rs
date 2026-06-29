@@ -19,7 +19,7 @@ use super::proxy::ProxyManager;
 use super::router::{AppState, create_router};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
-use crate::backend::{Backend, BackendRegistry};
+use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
 use crate::config::Config;
@@ -143,11 +143,13 @@ impl Gateway {
 
         // Register backends
         for (name, backend_config) in config.enabled_backends() {
-            let backend = Backend::new(
+            let runtime_plan = runtime_plan_for_backend(name, backend_config, &config.runtime);
+            let backend = Backend::new_with_runtime_plan(
                 name,
                 backend_config.clone(),
                 &config.failsafe,
                 config.meta_mcp.cache_ttl,
+                runtime_plan,
             );
             backends.register(Arc::new(backend));
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");

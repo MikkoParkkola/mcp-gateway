@@ -158,6 +158,43 @@ runtime:
 }
 
 #[test]
+fn backend_runtime_profile_deserializes_and_validates() {
+    let yaml = r#"
+runtime:
+  profiles:
+    local_safe:
+      provider: local_process
+      network_egress: none
+backends:
+  docs:
+    command: "node server.js"
+    runtime_profile: local_safe
+"#;
+    let config: Config = serde_yaml::from_str(yaml).expect("config");
+    let backend = config.backends.get("docs").expect("backend");
+    assert_eq!(backend.runtime_profile.as_deref(), Some("local_safe"));
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn validate_rejects_unknown_backend_runtime_profile() {
+    let yaml = r#"
+backends:
+  docs:
+    command: "node server.js"
+    runtime_profile: missing
+"#;
+    let config: Config = serde_yaml::from_str(yaml).expect("config");
+    let result = config.validate();
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("backends.docs.runtime_profile"),
+        "error should cite backend runtime profile: {msg}"
+    );
+}
+
+#[test]
 fn validate_rejects_container_runtime_profile_without_image() {
     let yaml = r"
 runtime:
