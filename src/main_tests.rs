@@ -446,6 +446,10 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
         "--update-baseline-registry",
         "--active-fixtures",
         "fixtures/active-fixtures.json",
+        "--runtime-provider-plan",
+        "docker",
+        "--runtime-image",
+        "ghcr.io/example/weather-fixture:latest",
         "--baseline-id",
         "weather-baseline",
         "--minimum-score",
@@ -468,6 +472,8 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
                 update_baseline_registry,
                 active_fixtures,
                 execute_active_fixtures,
+                runtime_provider_plan,
+                runtime_image,
                 baseline_id,
                 minimum_score,
                 certification_score,
@@ -495,6 +501,14 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
                 Some(std::path::Path::new("fixtures/active-fixtures.json"))
             );
             assert!(!execute_active_fixtures);
+            assert_eq!(
+                runtime_provider_plan,
+                Some(mcp_gateway::cli::RuntimeProviderArg::Docker)
+            );
+            assert_eq!(
+                runtime_image.as_deref(),
+                Some("ghcr.io/example/weather-fixture:latest")
+            );
             assert_eq!(baseline_id, "weather-baseline");
             assert_eq!(minimum_score, 80);
             assert_eq!(certification_score, 95);

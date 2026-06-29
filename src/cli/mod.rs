@@ -41,7 +41,7 @@ use crate::cli::output::OutputFormat;
 pub use skills::SkillsCommand;
 pub use subcommands::{
     AuditCommand, CapCommand, KubernetesCommand, PluginCommand, ProtocolImportCommand,
-    ProtocolImportKind, TlsCommand, TrustCommand, TrustLabCommand,
+    ProtocolImportKind, RuntimeProviderArg, TlsCommand, TrustCommand, TrustLabCommand,
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────

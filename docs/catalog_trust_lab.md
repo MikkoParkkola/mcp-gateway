@@ -12,7 +12,7 @@ CatalogTrustLab is the advisory evaluation layer for candidate MCP servers. It t
 - Safe active-eval planning and execution evidence: only fixture calls explicitly marked safe may be invoked, and only when the runtime is reported as isolated.
 - Remediation plans that map findings to enable, fix, block, or quarantine outcomes.
 
-The default CLI implementation remains static/advisory unless active fixtures are supplied. The core TrustLab evaluator supports active fixture execution evidence through an injected runner: declared-safe fixtures are executed only when runtime isolation is present, non-isolated runs are skipped and blocked by evidence, and failed safe fixtures block enablement. The CLI attaches dry-run fixture evidence with `--active-fixtures` by default, or executes declared-safe matching fixtures through the local capability executor with `--execute-active-fixtures`. Execution mode is fail-closed and records only argument/result digests and errors, but it does not provision a sandbox by itself; run it inside a disposable container, CI job, or RuntimeProvider-managed environment and set `isolated: true` only for that environment. Fully automated RuntimeProvider provisioning and enterprise scheduling remain follow-up work.
+The default CLI implementation remains static/advisory unless active fixtures are supplied. The core TrustLab evaluator supports active fixture execution evidence through an injected runner: declared-safe fixtures are executed only when runtime isolation is present, non-isolated runs are skipped and blocked by evidence, and failed safe fixtures block enablement. The CLI attaches dry-run fixture evidence with `--active-fixtures` by default, or executes declared-safe matching fixtures through the local capability executor with `--execute-active-fixtures`. Execution mode is fail-closed and records only argument/result digests and errors. `--runtime-provider-plan` attaches RuntimeProvider policy, preflight, launch-command digest, denial, confirmation, health, rollback, and license-tier evidence to the report, but it does not provision the sandbox by itself; run live fixtures inside a disposable container, CI job, or RuntimeProvider-managed environment and set `isolated: true` only for that environment. Fully automated RuntimeProvider apply/start/stop orchestration and enterprise scheduling remain follow-up work.
 
 ## License Split
 
@@ -26,6 +26,7 @@ Free/core:
 - Safe fixture-call planning.
 - CLI dry-run fixture evidence from JSON/YAML files.
 - Explicit CLI execution of declared-safe fixtures through the local capability executor.
+- RuntimeProvider planning evidence for active fixture runs, including fail-closed denial and confirmation findings.
 - Isolated active-fixture evidence model for local or test runners.
 - Local CLI reports through `mcp-gateway trust lab evaluate`.
 
@@ -52,7 +53,8 @@ Integrate:
 
 - Existing mcp-gateway AX-010 tool-poisoning scanner.
 - Future scanner adapters for dependency audit, SBOM, signature verification, and external MCP safety scanners.
-- RuntimeProvider for isolated active evaluation once live execution is wired.
+- RuntimeProvider planning for active fixture execution.
+- Future RuntimeProvider apply/start/stop orchestration for managed sandbox execution.
 
 ## Policy Verdicts
 
@@ -80,14 +82,16 @@ Active fixture evaluation is fail-closed:
 - Declared-safe fixtures are not invoked unless the runtime evidence says isolation is enabled.
 - Non-isolated active evaluation attempts produce `TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED` and block enablement.
 - CLI dry-run fixture files produce `TRUSTLAB_ACTIVE_FIXTURE_DRY_RUN` warnings and provisional certification until a live isolated runner executes them.
+- RuntimeProvider plan denials produce `TRUSTLAB_RUNTIME_PROVIDER_PLAN_DENIED` and block certification.
+- RuntimeProvider confirmation requirements produce `TRUSTLAB_RUNTIME_PROVIDER_CONFIRMATION_REQUIRED` and block certification until approved.
 - Failed declared-safe fixture calls produce `TRUSTLAB_ACTIVE_FIXTURE_FAILED` and block enablement.
 - Passing fixture calls record a digest of the captured output rather than raw output-dependent policy.
 
-This gives future RuntimeProvider integration one stable contract: execute the candidate server in isolation, call only reviewed safe fixtures, then attach the resulting `TrustLabRuntimeEvidence` to the evaluation.
+This gives future RuntimeProvider apply/start integration one stable contract: compile a fail-closed runtime plan, execute the candidate server in isolation, call only reviewed safe fixtures, then attach the resulting `TrustLabRuntimeEvidence` to the evaluation.
 
 ## Current Limits
 
-- No CLI-wired live candidate server execution yet.
+- RuntimeProvider planning evidence is wired, but automatic RuntimeProvider apply/start/stop lifecycle is not yet wired into TrustLab.
 - No centralized or multi-user baseline registry yet; the current registry is
   local file-backed evidence.
 - No automatic config patch application yet; remediation plans are report evidence and review guidance.
@@ -192,6 +196,24 @@ capability, skips anything not explicitly marked safe, and refuses to invoke
 fixtures when the fixture file says `isolated: false`. Failed safe fixture calls
 produce `TRUSTLAB_ACTIVE_FIXTURE_FAILED`; with `--enforce`, that blocks the
 policy verdict until the fixture passes in isolation.
+
+Attach RuntimeProvider planning evidence to the same report:
+
+```bash
+mcp-gateway trust lab evaluate weather_current \
+  --capabilities capabilities \
+  --active-fixtures trustlab-fixtures.yaml \
+  --runtime-provider-plan docker \
+  --runtime-image ghcr.io/example/weather-fixture:latest \
+  --format json
+```
+
+The report includes `runtime.runtime_provider_plan` with provider kind, license
+tier, policy id, selection path, preflight checks, confirmation ids, denial
+reason codes, launch program, launch argument digest, health check, and
+rollback step. Missing images, unavailable runtimes, risky mounts, privileged
+execution, guarded environment variables, or other unapproved policy gates are
+reported as machine-readable findings instead of silent warnings.
 
 Focused validation:
 

@@ -441,6 +441,16 @@ pub enum TrustLabCommand {
         #[arg(long, requires = "active_fixtures")]
         execute_active_fixtures: bool,
 
+        /// Attach `RuntimeProvider` planning evidence for active fixture
+        /// execution. This does not provision the runtime yet.
+        #[arg(long, value_enum, requires = "active_fixtures")]
+        runtime_provider_plan: Option<RuntimeProviderArg>,
+
+        /// Container image reference used when planning Docker or Podman
+        /// active fixture execution.
+        #[arg(long, requires = "runtime_provider_plan")]
+        runtime_image: Option<String>,
+
         /// Baseline identifier used when --write-baseline is set.
         #[arg(long, default_value = "local-baseline")]
         baseline_id: String,
@@ -457,6 +467,23 @@ pub enum TrustLabCommand {
         #[arg(short, long, default_value = "table", value_enum)]
         format: OutputFormat,
     },
+}
+
+/// Runtime provider families exposed by `TrustLab` planning flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum RuntimeProviderArg {
+    /// Existing direct local process path.
+    LocalProcess,
+    /// Docker container runtime.
+    Docker,
+    /// Podman container runtime.
+    Podman,
+    /// Linux systemd user service runtime.
+    Systemd,
+    /// macOS launchd runtime.
+    Launchd,
+    /// Kubernetes workload runtime.
+    Kubernetes,
 }
 
 /// Plugin marketplace subcommands
