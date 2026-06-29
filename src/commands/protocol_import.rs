@@ -1,12 +1,12 @@
-//! Safe protocol import preview command handlers.
+//! Safe protocol import preview and draft-apply command handlers.
 
 use std::{path::Path, process::ExitCode};
 
 use mcp_gateway::{
     cli::{ProtocolImportCommand, ProtocolImportKind, output::OutputFormat},
     protocol_imports::{
-        GraphqlImportSpec, ImportPlan, ImportRiskLevel, ImportSourceKind, OciMcpPackageImport,
-        ProtocolImportPlanner,
+        CapabilityDraft, GraphqlImportSpec, ImportPlan, ImportRiskLevel, ImportSourceKind,
+        OciMcpPackageImport, ProtocolImportPlanner,
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -33,7 +33,77 @@ pub async fn run_protocol_import_command(cmd: ProtocolImportCommand) -> ExitCode
                 }
             }
         }
+        ProtocolImportCommand::Apply {
+            kind,
+            file,
+            output,
+            source_name,
+            format,
+            context_integrity_profile,
+            force,
+        } => {
+            match apply_plan_from_file(
+                kind,
+                &file,
+                &output,
+                source_name,
+                context_integrity_profile,
+                force,
+            )
+            .await
+            {
+                Ok(report) => {
+                    print_apply_report(&report, format);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
+}
+
+#[derive(Debug, Serialize)]
+struct ImportApplyReport {
+    schema_version: &'static str,
+    source_name: String,
+    source_kind: &'static str,
+    source_digest_sha256: String,
+    plan_digest_sha256: String,
+    output_dir: String,
+    manifest_path: String,
+    activation_state: &'static str,
+    review_gate_count: usize,
+    written: Vec<AppliedDraft>,
+    skipped: Vec<SkippedDraft>,
+    rollback: ImportApplyRollback,
+    next_steps: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AppliedDraft {
+    draft_id: String,
+    name: String,
+    path: String,
+    draft_digest_sha256: String,
+    enabled: bool,
+    risk_count: usize,
+    review_gate_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SkippedDraft {
+    draft_id: String,
+    name: String,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ImportApplyRollback {
+    command: String,
+    files: Vec<String>,
 }
 
 async fn preview_plan_from_file(
@@ -75,6 +145,211 @@ async fn preview_plan_from_file(
     }
 }
 
+async fn apply_plan_from_file(
+    kind: ProtocolImportKind,
+    file: &Path,
+    output: &Path,
+    source_name: Option<String>,
+    context_integrity_profile: String,
+    force: bool,
+) -> Result<ImportApplyReport, String> {
+    let plan = preview_plan_from_file(kind, file, source_name, context_integrity_profile).await?;
+    apply_plan_to_directory(&plan, output, force).await
+}
+
+async fn apply_plan_to_directory(
+    plan: &ImportPlan,
+    output: &Path,
+    force: bool,
+) -> Result<ImportApplyReport, String> {
+    let manifest_path = output.join(manifest_file_name(plan));
+    let mut writable = Vec::new();
+    let mut skipped = Vec::new();
+
+    for draft in &plan.drafts {
+        let Some(generated_yaml) = draft.generated_yaml.as_deref() else {
+            skipped.push(SkippedDraft {
+                draft_id: draft.id.clone(),
+                name: draft.name.clone(),
+                reason: format!(
+                    "{} drafts do not yet have a reversible capability YAML projection",
+                    source_kind_label(draft.source_kind)
+                ),
+            });
+            continue;
+        };
+
+        let path = output.join(format!("{}.yaml", draft.name));
+        writable.push((draft, generated_yaml, path));
+    }
+
+    if writable.is_empty() {
+        return Err(
+            "import plan has no reversible capability YAML drafts to apply yet; use preview output for review evidence"
+                .to_string(),
+        );
+    }
+
+    if !force {
+        if manifest_path.exists() {
+            return Err(format!(
+                "refusing to overwrite existing manifest {}; pass --force to replace it",
+                manifest_path.display()
+            ));
+        }
+        if let Some((_, _, path)) = writable.iter().find(|(_, _, path)| path.exists()) {
+            return Err(format!(
+                "refusing to overwrite existing draft {}; pass --force to replace it",
+                path.display()
+            ));
+        }
+    }
+
+    tokio::fs::create_dir_all(output).await.map_err(|e| {
+        format!(
+            "failed to create output directory {}: {e}",
+            output.display()
+        )
+    })?;
+
+    let mut written = Vec::new();
+    for (draft, generated_yaml, path) in writable {
+        let body = render_applied_draft_yaml(plan, draft, generated_yaml);
+        write_atomic(&path, &body, force).await?;
+        written.push(AppliedDraft {
+            draft_id: draft.id.clone(),
+            name: draft.name.clone(),
+            path: path.display().to_string(),
+            draft_digest_sha256: draft.trust_card.draft_digest_sha256.clone(),
+            enabled: draft.enabled,
+            risk_count: draft.risks.len(),
+            review_gate_count: draft.review_gates.len(),
+        });
+    }
+
+    let report = build_apply_report(plan, output, &manifest_path, written, skipped);
+    let manifest_body = serde_json::to_string_pretty(&report)
+        .map_err(|e| format!("failed to serialize apply manifest: {e}"))?;
+    write_atomic(&manifest_path, &format!("{manifest_body}\n"), force).await?;
+
+    Ok(report)
+}
+
+fn build_apply_report(
+    plan: &ImportPlan,
+    output: &Path,
+    manifest_path: &Path,
+    written: Vec<AppliedDraft>,
+    skipped: Vec<SkippedDraft>,
+) -> ImportApplyReport {
+    let rollback_files = written
+        .iter()
+        .map(|draft| draft.path.clone())
+        .chain(std::iter::once(manifest_path.display().to_string()))
+        .collect::<Vec<_>>();
+
+    ImportApplyReport {
+        schema_version: "protocol_import.apply_report.v1",
+        source_name: plan.source.name.clone(),
+        source_kind: source_kind_label(plan.source.kind),
+        source_digest_sha256: plan.source_digest_sha256.clone(),
+        plan_digest_sha256: plan.plan_digest_sha256.clone(),
+        output_dir: output.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+        activation_state: "inactive_draft_directory",
+        review_gate_count: plan.review_gates.len(),
+        written,
+        skipped,
+        rollback: ImportApplyRollback {
+            command: rollback_command(&rollback_files),
+            files: rollback_files,
+        },
+        next_steps: vec![
+            "Review each draft YAML and the risk gates in this manifest.".to_string(),
+            "Run mcp-gateway cap validate <draft-file> after any manual edits.".to_string(),
+            "Move reviewed files into a configured capability directory only after human approval."
+                .to_string(),
+            "Reload capabilities only after review; import apply never changes active routing."
+                .to_string(),
+        ],
+    }
+}
+
+fn render_applied_draft_yaml(
+    plan: &ImportPlan,
+    draft: &CapabilityDraft,
+    generated_yaml: &str,
+) -> String {
+    format!(
+        "# mcp-gateway protocol import draft\n\
+         # inactive until this file is reviewed and moved into a configured capability directory\n\
+         # source: {} ({})\n\
+         # plan_digest_sha256: {}\n\
+         # draft_digest_sha256: {}\n\
+         # review_gates: {}\n\
+         # risks: {}\n\n{}",
+        plan.source.name,
+        source_kind_label(plan.source.kind),
+        plan.plan_digest_sha256,
+        draft.trust_card.draft_digest_sha256,
+        draft.review_gates.len(),
+        draft.risks.len(),
+        generated_yaml
+    )
+}
+
+async fn write_atomic(path: &Path, content: &str, force: bool) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("invalid output path {}", path.display()))?;
+    let tmp = parent.join(format!(".{file_name}.tmp"));
+
+    tokio::fs::write(&tmp, content)
+        .await
+        .map_err(|e| format!("failed to write temp file {}: {e}", tmp.display()))?;
+    if force && path.exists() {
+        tokio::fs::remove_file(path)
+            .await
+            .map_err(|e| format!("failed to replace {}: {e}", path.display()))?;
+    }
+    tokio::fs::rename(&tmp, path).await.map_err(|e| {
+        format!(
+            "failed to move {} to {}: {e}",
+            tmp.display(),
+            path.display()
+        )
+    })
+}
+
+fn manifest_file_name(plan: &ImportPlan) -> String {
+    let digest = plan.plan_digest_sha256.chars().take(12).collect::<String>();
+    format!("import-plan-{digest}.manifest.json")
+}
+
+fn rollback_command(files: &[String]) -> String {
+    format!(
+        "rm -- {}",
+        files
+            .iter()
+            .map(|path| shell_quote(path))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn parse_document<T: DeserializeOwned>(
     label: &str,
     file: &Path,
@@ -103,6 +378,60 @@ fn print_import_plan(plan: &ImportPlan, format: OutputFormat) {
         OutputFormat::Json => print_json(plan),
         OutputFormat::Plain => print_plain(plan),
         OutputFormat::Table => print_table(plan),
+    }
+}
+
+fn print_apply_report(report: &ImportApplyReport, format: OutputFormat) {
+    match format {
+        OutputFormat::Json => print_json(report),
+        OutputFormat::Plain => print_apply_plain(report),
+        OutputFormat::Table => print_apply_table(report),
+    }
+}
+
+fn print_apply_plain(report: &ImportApplyReport) {
+    println!("source={}", report.source_name);
+    println!("kind={}", report.source_kind);
+    println!("written={}", report.written.len());
+    println!("skipped={}", report.skipped.len());
+    println!("activation_state={}", report.activation_state);
+    println!("output_dir={}", report.output_dir);
+    println!("manifest={}", report.manifest_path);
+    println!("rollback={}", report.rollback.command);
+}
+
+fn print_apply_table(report: &ImportApplyReport) {
+    println!(
+        "APPLIED: {} ({})  WRITTEN: {}  SKIPPED: {}  ACTIVE: no",
+        report.source_name,
+        report.source_kind,
+        report.written.len(),
+        report.skipped.len()
+    );
+    println!("MANIFEST: {}", report.manifest_path);
+    println!("ROLLBACK: {}", report.rollback.command);
+
+    if !report.written.is_empty() {
+        println!();
+        println!("{:<28}  {:<8}  {:<5}  FILE", "DRAFT", "ENABLED", "GATES");
+        println!("{}", "-".repeat(82));
+        for draft in &report.written {
+            println!(
+                "{:<28}  {:<8}  {:<5}  {}",
+                truncate(&draft.name, 28),
+                draft.enabled,
+                draft.review_gate_count,
+                draft.path
+            );
+        }
+    }
+
+    if !report.skipped.is_empty() {
+        println!();
+        println!("Skipped drafts:");
+        for draft in &report.skipped {
+            println!("  {}: {}", draft.name, draft.reason);
+        }
     }
 }
 
@@ -302,5 +631,95 @@ tools:
                 .iter()
                 .any(|risk| risk.kind == ImportRiskKind::SupplyChainProvenance)
         }));
+    }
+
+    #[tokio::test]
+    async fn apply_openapi_file_writes_inactive_drafts_and_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("pets.yaml");
+        let output = dir.path().join("capability-drafts");
+        tokio::fs::write(&spec, OPENAPI_SPEC)
+            .await
+            .expect("write spec");
+
+        let report = apply_plan_from_file(
+            ProtocolImportKind::OpenApi,
+            &spec,
+            &output,
+            Some("petstore".to_string()),
+            "imported_tool_baseline".to_string(),
+            false,
+        )
+        .await
+        .expect("apply plan");
+
+        assert_eq!(report.activation_state, "inactive_draft_directory");
+        assert!(!report.written.is_empty());
+        assert!(report.skipped.is_empty());
+        assert!(
+            report
+                .written
+                .iter()
+                .all(|draft| !draft.enabled && draft.path.contains("capability-drafts"))
+        );
+
+        let first_draft = &report.written[0];
+        let draft_yaml = tokio::fs::read_to_string(&first_draft.path)
+            .await
+            .expect("draft yaml");
+        assert!(draft_yaml.contains("# mcp-gateway protocol import draft"));
+        assert!(draft_yaml.contains("# inactive until this file is reviewed"));
+        assert!(draft_yaml.contains("fulcrum: \"1.0\""));
+
+        let manifest = tokio::fs::read_to_string(&report.manifest_path)
+            .await
+            .expect("manifest");
+        let value: serde_json::Value = serde_json::from_str(&manifest).expect("manifest json");
+        assert_eq!(value["schema_version"], "protocol_import.apply_report.v1");
+        assert_eq!(value["activation_state"], "inactive_draft_directory");
+        assert_eq!(
+            value["written"].as_array().unwrap().len(),
+            report.written.len()
+        );
+        assert!(
+            value["rollback"]["command"]
+                .as_str()
+                .unwrap()
+                .contains(&first_draft.path)
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_oci_package_without_reversible_yaml_fails_closed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("package.yaml");
+        tokio::fs::write(
+            &spec,
+            r"
+name: demo-tools
+image_ref: ghcr.io/example/demo-tools:latest
+tools:
+  - name: export_data
+    description: Export account data
+    input_schema:
+      type: object
+",
+        )
+        .await
+        .expect("write package");
+
+        let err = apply_plan_from_file(
+            ProtocolImportKind::OciMcpPackage,
+            &spec,
+            &dir.path().join("drafts"),
+            None,
+            "imported_tool_baseline".to_string(),
+            false,
+        )
+        .await
+        .expect_err("unsupported apply should fail closed");
+
+        assert!(err.contains("no reversible capability YAML drafts"));
+        assert!(!dir.path().join("drafts").exists());
     }
 }

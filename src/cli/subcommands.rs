@@ -220,6 +220,38 @@ pub enum ProtocolImportCommand {
         #[arg(long, default_value = "imported_tool_baseline")]
         context_integrity_profile: String,
     },
+
+    /// Write reviewed import drafts to an inactive draft directory.
+    #[command(about = "Apply reversible import drafts to disk without enabling tools")]
+    Apply {
+        /// Source format to import.
+        #[arg(long, value_enum)]
+        kind: ProtocolImportKind,
+
+        /// Source file to apply.
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Directory to write generated draft files into.
+        #[arg(short, long, default_value = "capability-drafts")]
+        output: PathBuf,
+
+        /// Source name used in generated plan metadata for OpenAPI/GraphQL.
+        #[arg(long)]
+        source_name: Option<String>,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+
+        /// Context-integrity profile attached to generated draft policy defaults.
+        #[arg(long, default_value = "imported_tool_baseline")]
+        context_integrity_profile: String,
+
+        /// Overwrite existing draft files and manifest.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Protocol source formats accepted by the safe import preview command.
@@ -310,6 +342,61 @@ pub enum KubernetesCommand {
         #[arg(short, long, default_value = "table", value_enum)]
         format: OutputFormat,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::cli::{
+        Cli, Command, ProtocolImportCommand, ProtocolImportKind, output::OutputFormat,
+    };
+
+    fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut raw_args = Vec::with_capacity(args.len() + 1);
+        raw_args.push("mcp-gateway");
+        raw_args.extend(args.iter().copied());
+        Cli::try_parse_from(raw_args)
+    }
+
+    #[test]
+    fn import_apply_parses_inactive_output_dir_and_force() {
+        let cli = parse_args(&[
+            "import",
+            "apply",
+            "--kind",
+            "openapi",
+            "fixtures/openapi.yaml",
+            "--output",
+            "capability-drafts/review",
+            "--source-name",
+            "users-api",
+            "--format",
+            "plain",
+            "--force",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Import(ProtocolImportCommand::Apply {
+                kind,
+                file,
+                output,
+                source_name,
+                format,
+                force,
+                ..
+            })) => {
+                assert_eq!(kind, ProtocolImportKind::OpenApi);
+                assert_eq!(file, std::path::PathBuf::from("fixtures/openapi.yaml"));
+                assert_eq!(output, std::path::PathBuf::from("capability-drafts/review"));
+                assert_eq!(source_name.as_deref(), Some("users-api"));
+                assert_eq!(format, OutputFormat::Plain);
+                assert!(force);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
 }
 
 /// `TrustCard` and CBOM advisory metadata commands.

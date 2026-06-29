@@ -103,6 +103,47 @@ Use JSON output when reviewing diffs or storing evidence:
 mcp-gateway import preview --kind graphql graphql-import.yaml --format json
 ```
 
+### Safe Draft Apply
+
+```
+mcp-gateway import apply --kind <KIND> [OPTIONS] <FILE>
+```
+
+Apply reruns the same deterministic planner and writes only reversible draft
+capability YAML to disk. The default output directory is `capability-drafts/`,
+which is intentionally outside the default active `capabilities/` directory.
+Generated tools are not loaded, routed, or enabled by this command.
+
+`import apply` also writes a JSON manifest with the plan digest, source digest,
+written files, skipped drafts, review-gate counts, next review steps, and a
+simple rollback command. Today, OpenAPI drafts carry reversible capability YAML.
+GraphQL, Postman, and OCI MCP package drafts are still preview/review evidence
+unless a reversible YAML projection exists, so apply records them as skipped
+rather than pretending incomplete adapters are executable.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<FILE>` | Yes | Source file to apply |
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--kind <KIND>` | Required | `openapi`, `graphql`, `postman`, or `oci-mcp-package` |
+| `-o, --output <DIR>` | `capability-drafts` | Inactive draft directory for generated YAML and the manifest |
+| `--source-name <NAME>` | File stem | Source name for OpenAPI and GraphQL plan metadata |
+| `-f, --format <FORMAT>` | `table` | `table`, `json`, or `plain` |
+| `--context-integrity-profile <PROFILE>` | `imported_tool_baseline` | Policy profile attached to generated draft defaults |
+| `--force` | Off | Replace existing draft files and manifest |
+
+Example:
+
+```bash
+mcp-gateway import apply --kind openapi petstore.yaml --output capability-drafts/petstore
+```
+
+Review the generated files and manifest before moving any draft into a
+configured capability directory. After manual edits, validate each file with
+`mcp-gateway cap validate <draft-file>` before activation.
+
 ### Direct OpenAPI Generation
 
 ```
