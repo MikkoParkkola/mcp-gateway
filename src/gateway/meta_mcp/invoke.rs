@@ -309,12 +309,20 @@ impl MetaMcp {
         session_id: Option<&str>,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
+        caller_identity: Option<GrantSubject>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, api_key_name, agent_id, &trace_id_clone)
-                .await
+            self.invoke_tool_traced(
+                args,
+                session_id,
+                api_key_name,
+                agent_id,
+                caller_identity.as_ref(),
+                &trace_id_clone,
+            )
+            .await
         })
         .await
     }
@@ -327,6 +335,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
+        caller_identity: Option<&GrantSubject>,
         trace_id: &str,
     ) -> Result<Value> {
         let server = extract_required_str(args, "server")?;
@@ -591,6 +600,7 @@ impl MetaMcp {
                 session_id,
                 api_key_name,
                 agent_id,
+                caller_identity,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -1054,9 +1064,12 @@ impl MetaMcp {
         tool: &str,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
+        caller_identity: Option<&GrantSubject>,
     ) -> Result<()> {
         let request = IdentityGrantRequest {
-            identity: Self::grant_subject_from_api_key(api_key_name),
+            identity: caller_identity
+                .cloned()
+                .or_else(|| Self::grant_subject_from_api_key(api_key_name)),
             agent_id: agent_id.map(str::to_string),
             capability: cap_def.name.clone(),
             tool: Some(tool.to_string()),
@@ -1219,6 +1232,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
+        caller_identity: Option<&GrantSubject>,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -1230,7 +1244,7 @@ impl MetaMcp {
             let cap_def = cap
                 .get(tool)
                 .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
-            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id)?;
+            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
             let result = cap.call_tool(tool, arguments).await?;
             let mut response = serde_json::to_value(result)?;
 

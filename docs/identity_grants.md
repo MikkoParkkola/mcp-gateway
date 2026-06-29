@@ -20,12 +20,29 @@ security:
     enabled: true
     path: ~/.mcp-gateway/identity-grants.yaml
     fail_on_error: true
+    trust_caller_identity_headers: false
 ```
 
 `fail_on_error` defaults to `true`. If the operator explicitly enables local
 grants but the file is missing, unreadable, malformed, or uses an unsupported
 schema version, gateway startup fails instead of silently running with an empty
 grant store.
+
+`trust_caller_identity_headers` defaults to `false`. Enable it only when the
+gateway is reachable solely through a trusted edge or bridge that authenticates
+the caller and strips or overwrites inbound identity headers. When enabled, the
+gateway accepts:
+
+- `X-Gateway-Identity-Subject` or `X-Gateway-Identity`
+- Optional `X-Gateway-Identity-Authority`
+- Optional `X-Gateway-Identity-Label`
+- Cloudflare Access fallback: `Cf-Access-Authenticated-User-Id` or
+  `Cf-Access-Authenticated-User-Email`
+
+Validated OIDC temporary-token identities take precedence over trusted headers.
+Trusted headers take precedence over mTLS and agent-JWT identities. If none are
+present, dispatch falls back to the authenticated API key name as the local
+grant subject.
 
 Grant files are JSON or YAML:
 

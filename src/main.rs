@@ -202,7 +202,7 @@ async fn main() -> ExitCode {
         Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd),
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
-        Some(Command::Serve { stdio: true }) => run_stdio_server(cli).await,
+        Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
         Some(Command::Serve { stdio: false }) | None => run_server(cli).await,
     }
 }

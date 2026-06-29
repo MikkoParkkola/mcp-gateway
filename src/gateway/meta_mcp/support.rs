@@ -157,7 +157,7 @@ impl ToolInvoker for MetaMcpInvoker<'_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         let args = internal_invoke_args(server, tool, arguments);
         // Playbook steps are internal invocations with no caller agent.
-        self.meta.invoke_tool(&args, None, None, None).await
+        self.meta.invoke_tool(&args, None, None, None, None).await
     }
 }
 

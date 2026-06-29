@@ -370,8 +370,7 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
             "gateway_search",
             args,
             None,
-            None,
-            None,
+            MetaMcpCallerContext::default(),
         )
         .await;
     // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
@@ -504,6 +503,7 @@ providers:
             Some("session-1"),
             Some("alice"),
             Some("agent-1"),
+            None,
         )
         .await
         .unwrap();
@@ -512,6 +512,106 @@ providers:
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("Identity grant denied"));
     assert!(text.contains("OwnerMismatch"));
+}
+
+#[tokio::test]
+async fn personal_capability_accepts_propagated_identity_before_schema_validation() {
+    use crate::{
+        capability::{CapabilityBackend, CapabilityExecutor},
+        identity_grants::{
+            GrantAgent, GrantScope, GrantSubject, IdentityGrant, LocalIdentityGrantStore,
+        },
+    };
+    use tempfile::TempDir;
+
+    let subject = GrantSubject::new(
+        "cloudflare_access",
+        "user-123",
+        Some("owner@example.com".to_string()),
+    );
+    let grant = IdentityGrant {
+        grant_id: "grant-user-123-calendar".to_string(),
+        subject: subject.clone(),
+        agent: GrantAgent::Exact("agent-1".to_string()),
+        capability: "calendar_read".to_string(),
+        tool: Some("calendar_read".to_string()),
+        scope: GrantScope::Execute,
+        owner: Some(subject.clone()),
+        expires_at: Some(chrono::Utc::now() + chrono::Duration::minutes(5)),
+        revoked_at: None,
+        provenance: "unit-test".to_string(),
+        reason: "prove propagated caller identity grants personal dispatch".to_string(),
+    };
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("calendar_read.yaml");
+    std::fs::write(
+        &path,
+        r#"
+fulcrum: "1.0"
+name: calendar_read
+description: Read a personal calendar
+schema:
+  input:
+    type: object
+    properties:
+      day:
+        type: string
+    required: [day]
+  output:
+    type: object
+    properties:
+      ok:
+        type: boolean
+metadata:
+  exposure: personal
+  identity_owner:
+    authority: cloudflare_access
+    subject: user-123
+    label: owner@example.com
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: "https://example.invalid"
+      path: /calendar
+      method: GET
+"#,
+    )
+    .unwrap();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "personal_caps",
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_identity_grants(LocalIdentityGrantStore::from_grants(vec![grant]));
+    meta.set_capabilities(cap_backend);
+
+    let result = meta
+        .invoke_tool(
+            &json!({
+                "server": "personal_caps",
+                "tool": "calendar_read",
+                "arguments": {}
+            }),
+            Some("session-1"),
+            Some("shared-api-key"),
+            Some("agent-1"),
+            Some(subject),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result["isError"], true, "{result:#}");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(!text.contains("Identity grant denied"), "{result:#}");
+    assert!(text.contains("day"), "{result:#}");
 }
 
 #[tokio::test]
@@ -550,6 +650,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
             Some("session-1"),
             Some("alice"),
             Some("agent-1"),
+            None,
         )
         .await
         .unwrap();
@@ -687,8 +788,7 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
             "gateway_execute",
             args,
             None,
-            None,
-            None,
+            MetaMcpCallerContext::default(),
         )
         .await;
     // THEN: returns an error (not -32601 unknown tool)
@@ -922,8 +1022,7 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             "gateway_reload_config",
             json!({}),
             None,
-            None,
-            None,
+            MetaMcpCallerContext::default(),
         )
         .await;
 
@@ -1184,8 +1283,7 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
             "pinned_tool",
             json!({"arg": "val"}),
             None,
-            None,
-            None,
+            MetaMcpCallerContext::default(),
         )
         .await;
 
@@ -1218,8 +1316,7 @@ async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
             "totally_unknown_xyz",
             json!({}),
             None,
-            None,
-            None,
+            MetaMcpCallerContext::default(),
         )
         .await;
 
@@ -1245,8 +1342,7 @@ async fn tools_call_surfaced_tool_name_bypasses_meta_tool_dispatch() {
             "my_surfaced_tool",
             json!({}),
             None,
-            None,
-            None,
+            MetaMcpCallerContext::default(),
         )
         .await;
 
@@ -1279,8 +1375,7 @@ async fn colliding_name_is_dispatched_as_meta_tool_not_proxy() {
             "gateway_list_servers",
             json!({}),
             None,
-            None,
-            None,
+            MetaMcpCallerContext::default(),
         )
         .await;
 

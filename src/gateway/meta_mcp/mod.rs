@@ -32,7 +32,7 @@ use crate::cost_accounting::enforcer::BudgetEnforcer;
 use crate::cost_accounting::registry::CostRegistry;
 use crate::gateway::state::SessionStateStore;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
-use crate::identity_grants::LocalIdentityGrantStore;
+use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::{
@@ -75,6 +75,37 @@ pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerpri
 /// Configurable in future; hard-coded for Phase 3 initial implementation.
 #[cfg(feature = "spec-preview")]
 const MAX_PROMOTED_PER_SESSION: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CallerIdentityHeaderTrust {
+    Disabled,
+    Enabled,
+}
+
+impl CallerIdentityHeaderTrust {
+    const fn from_enabled(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+
+    pub(super) const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+/// Authenticated caller context for a `tools/call` dispatch.
+#[derive(Debug, Clone, Default)]
+pub struct MetaMcpCallerContext<'a> {
+    /// Static or temporary API-key name, used for accounting and fallback grants.
+    pub api_key_name: Option<&'a str>,
+    /// Optional caller agent identifier.
+    pub agent_id: Option<&'a str>,
+    /// Verified caller subject for identity-grant evaluation.
+    pub grant_subject: Option<GrantSubject>,
+}
 
 // ============================================================================
 // MetaMcp struct
@@ -212,6 +243,11 @@ pub struct MetaMcp {
     /// owner, and live grant evidence.
     pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
 
+    /// Trust caller identity headers from an authenticated edge proxy.
+    ///
+    /// Disabled by default because direct clients can otherwise spoof headers.
+    pub(super) caller_identity_header_trust: CallerIdentityHeaderTrust,
+
     /// Tool-result boundary classifier and policy envelope.
     ///
     /// Defaults to monitor-only. Clean benign results are returned unchanged;
@@ -273,6 +309,7 @@ impl MetaMcp {
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
         }
     }
@@ -381,6 +418,13 @@ impl MetaMcp {
         self
     }
 
+    /// Enable or disable trusted caller identity headers.
+    #[must_use]
+    pub fn with_trusted_identity_headers(mut self, enabled: bool) -> Self {
+        self.caller_identity_header_trust = CallerIdentityHeaderTrust::from_enabled(enabled);
+        self
+    }
+
     /// Attach a context integrity kernel for live tool-result wrapping.
     #[must_use]
     pub fn with_context_integrity_kernel(mut self, kernel: ContextIntegrityKernel) -> Self {
@@ -472,6 +516,12 @@ impl MetaMcp {
     /// Replace the local identity grant store.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
         *self.identity_grants.write() = grants;
+    }
+
+    /// Return whether trusted caller identity headers are enabled.
+    #[must_use]
+    pub const fn trust_caller_identity_headers(&self) -> bool {
+        self.caller_identity_header_trust.is_enabled()
     }
 
     /// Replace the context integrity kernel.
@@ -826,8 +876,7 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         session_id: Option<&str>,
-        api_key_name: Option<&str>,
-        agent_id: Option<&str>,
+        caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
         if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
@@ -837,7 +886,13 @@ impl MetaMcp {
                 "arguments": arguments,
             });
             let result = self
-                .invoke_tool(&invoke_args, session_id, api_key_name, agent_id)
+                .invoke_tool(
+                    &invoke_args,
+                    session_id,
+                    caller.api_key_name,
+                    caller.agent_id,
+                    caller.grant_subject.clone(),
+                )
                 .await;
             return match result {
                 // `invoke_tool` already returns a complete MCP tools/call result
@@ -860,8 +915,14 @@ impl MetaMcp {
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
             "gateway_invoke" => {
-                self.invoke_tool(&arguments, session_id, api_key_name, agent_id)
-                    .await
+                self.invoke_tool(
+                    &arguments,
+                    session_id,
+                    caller.api_key_name,
+                    caller.agent_id,
+                    caller.grant_subject,
+                )
+                .await
             }
             "gateway_get_stats" => self.get_stats(&arguments).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id).await,

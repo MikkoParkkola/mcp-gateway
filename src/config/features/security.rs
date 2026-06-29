@@ -209,6 +209,11 @@ pub struct IdentityGrantsConfig {
     /// Fail startup if the configured file cannot be read or parsed. Default:
     /// `true` so operators do not silently run with an empty grant store.
     pub fail_on_error: bool,
+    /// Trust caller identity headers from an already-authenticated edge proxy.
+    ///
+    /// Default: `false`. Enable only when direct clients cannot reach the
+    /// gateway and the edge strips or overwrites these headers.
+    pub trust_caller_identity_headers: bool,
 }
 
 impl Default for IdentityGrantsConfig {
@@ -217,6 +222,7 @@ impl Default for IdentityGrantsConfig {
             enabled: false,
             path: "~/.mcp-gateway/identity-grants.yaml".to_string(),
             fail_on_error: true,
+            trust_caller_identity_headers: false,
         }
     }
 }

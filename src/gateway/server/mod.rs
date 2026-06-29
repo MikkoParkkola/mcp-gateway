@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
 use super::auth::ResolvedAuthConfig;
-use super::meta_mcp::MetaMcp;
+use super::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
 use super::proxy::ProxyManager;
 use super::router::{AppState, create_router};
@@ -258,7 +258,13 @@ impl Gateway {
         .with_code_mode(self.config.code_mode.enabled)
         .with_projection_mode(self.config.meta_mcp.projection_mode)
         .with_secret_injector(secret_injector)
-        .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone());
+        .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone())
+        .with_trusted_identity_headers(
+            self.config
+                .security
+                .identity_grants
+                .trust_caller_identity_headers,
+        );
 
         #[cfg(feature = "cost-governance")]
         if let (Some(registry), Some(enforcer)) = (cost_registry_opt, budget_enforcer_opt) {
@@ -1127,7 +1133,13 @@ impl Gateway {
                 }
 
                 meta_mcp
-                    .handle_tools_call(id, &tool_name, arguments, Some(session_id), None, None)
+                    .handle_tools_call(
+                        id,
+                        &tool_name,
+                        arguments,
+                        Some(session_id),
+                        MetaMcpCallerContext::default(),
+                    )
                     .await
             }
             "prompts/list" => meta_mcp.handle_prompts_list(id, params.as_ref()).await,
@@ -1273,6 +1285,7 @@ mod tests {
             enabled: true,
             path: path.display().to_string(),
             fail_on_error: true,
+            trust_caller_identity_headers: false,
         };
         let (loaded_path, store) = load_configured_identity_grants(&config)
             .await
@@ -1291,6 +1304,7 @@ mod tests {
             enabled: true,
             path: missing.display().to_string(),
             fail_on_error: true,
+            trust_caller_identity_headers: false,
         };
 
         let err = load_configured_identity_grants(&config).await.unwrap_err();

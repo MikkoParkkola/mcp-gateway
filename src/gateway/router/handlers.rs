@@ -25,13 +25,101 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::destructive_confirmation::{
     ConfirmationOutcome, is_destructive_meta_tool, require_destructive_confirmation,
 };
+use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::streaming::create_sse_response;
+use crate::identity_grants::GrantSubject;
+use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
+
+const HEADER_GATEWAY_IDENTITY: &str = "x-gateway-identity";
+const HEADER_GATEWAY_IDENTITY_AUTHORITY: &str = "x-gateway-identity-authority";
+const HEADER_GATEWAY_IDENTITY_LABEL: &str = "x-gateway-identity-label";
+const HEADER_GATEWAY_IDENTITY_SUBJECT: &str = "x-gateway-identity-subject";
+const HEADER_CF_ACCESS_EMAIL: &str = "cf-access-authenticated-user-email";
+const HEADER_CF_ACCESS_USER_ID: &str = "cf-access-authenticated-user-id";
+const HEADER_IDENTITY_MAX_LEN: usize = 512;
+
+fn caller_grant_subject(
+    verified_identity: Option<&VerifiedIdentity>,
+    headers: &HeaderMap,
+    trust_identity_headers: bool,
+    cert_identity: Option<&CertIdentity>,
+    oauth_agent_identity: Option<&OAuthAgentIdentity>,
+) -> Option<GrantSubject> {
+    verified_identity
+        .and_then(grant_subject_from_verified_identity)
+        .or_else(|| {
+            trust_identity_headers
+                .then(|| grant_subject_from_trusted_headers(headers))
+                .flatten()
+        })
+        .or_else(|| cert_identity.and_then(grant_subject_from_cert_identity))
+        .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent))
+}
+
+fn grant_subject_from_verified_identity(identity: &VerifiedIdentity) -> Option<GrantSubject> {
+    let subject = trimmed_non_empty(&identity.subject)?;
+    let authority = trimmed_non_empty(&identity.issuer).unwrap_or_else(|| "oidc".to_string());
+    let label = trimmed_non_empty(&identity.email)
+        .or_else(|| identity.name.as_deref().and_then(trimmed_non_empty));
+
+    Some(GrantSubject::new(authority, subject, label))
+}
+
+fn grant_subject_from_trusted_headers(headers: &HeaderMap) -> Option<GrantSubject> {
+    let explicit_subject = header_text(headers, HEADER_GATEWAY_IDENTITY_SUBJECT)
+        .or_else(|| header_text(headers, HEADER_GATEWAY_IDENTITY));
+    let cloudflare_subject = header_text(headers, HEADER_CF_ACCESS_USER_ID)
+        .or_else(|| header_text(headers, HEADER_CF_ACCESS_EMAIL));
+
+    let subject = explicit_subject.or(cloudflare_subject)?;
+    let authority = header_text(headers, HEADER_GATEWAY_IDENTITY_AUTHORITY)
+        .unwrap_or_else(|| "trusted_header".to_string());
+    let label = header_text(headers, HEADER_GATEWAY_IDENTITY_LABEL)
+        .or_else(|| header_text(headers, HEADER_CF_ACCESS_EMAIL));
+
+    Some(GrantSubject::new(authority, subject, label))
+}
+
+fn grant_subject_from_cert_identity(identity: &CertIdentity) -> Option<GrantSubject> {
+    let subject = identity
+        .san_uris
+        .first()
+        .and_then(|value| trimmed_non_empty(value))
+        .or_else(|| identity.common_name.as_deref().and_then(trimmed_non_empty))
+        .or_else(|| trimmed_non_empty(&identity.display_name))?;
+    let label = trimmed_non_empty(&identity.display_name);
+
+    Some(GrantSubject::new("mtls", subject, label))
+}
+
+fn grant_subject_from_oauth_agent(identity: &OAuthAgentIdentity) -> Option<GrantSubject> {
+    let subject = trimmed_non_empty(&identity.client_id)?;
+    let label = trimmed_non_empty(&identity.agent_name);
+
+    Some(GrantSubject::new("agent_oauth", subject, label))
+}
+
+fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(trimmed_non_empty)
+}
+
+fn trimmed_non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(HEADER_IDENTITY_MAX_LEN).collect())
+    }
+}
 
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
@@ -249,6 +337,7 @@ pub(super) async fn meta_mcp_handler(
         .extensions()
         .get::<OAuthAgentIdentity>()
         .cloned();
+    let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
 
     // === OWASP ASI03: per-agent identity extraction ===
     //
@@ -485,6 +574,13 @@ pub(super) async fn meta_mcp_handler(
 
             let api_key_name = client.as_ref().map(|c| c.name.as_str());
             let agent_id = agent_identity.as_ref().map(|a| a.id.as_str());
+            let grant_subject = caller_grant_subject(
+                verified_identity.as_ref(),
+                &headers,
+                state.meta_mcp.trust_caller_identity_headers(),
+                cert_identity.as_ref(),
+                oauth_agent_identity.as_ref(),
+            );
 
             // OWASP ASI09 — destructive meta-tool confirmation gate.
             //
@@ -520,8 +616,11 @@ pub(super) async fn meta_mcp_handler(
                     tool_name,
                     arguments,
                     Some(session_id.as_str()),
-                    api_key_name,
-                    agent_id,
+                    MetaMcpCallerContext {
+                        api_key_name,
+                        agent_id,
+                        grant_subject,
+                    },
                 )
                 .await;
 
@@ -757,5 +856,62 @@ mod health_predicate_tests {
             status("b", "Closed", false),
         ]);
         assert!(!backends_overall_healthy(&m));
+    }
+}
+
+#[cfg(test)]
+mod caller_identity_tests {
+    use super::*;
+
+    #[test]
+    fn trusted_identity_headers_are_ignored_until_enabled() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HEADER_GATEWAY_IDENTITY, "user-123".parse().unwrap());
+
+        let subject = caller_grant_subject(None, &headers, false, None, None);
+
+        assert!(subject.is_none());
+    }
+
+    #[test]
+    fn trusted_identity_headers_build_grant_subject_when_enabled() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HEADER_GATEWAY_IDENTITY_SUBJECT, "user-123".parse().unwrap());
+        headers.insert(
+            HEADER_GATEWAY_IDENTITY_AUTHORITY,
+            "cloudflare_access".parse().unwrap(),
+        );
+        headers.insert(
+            HEADER_GATEWAY_IDENTITY_LABEL,
+            "owner@example.com".parse().unwrap(),
+        );
+
+        let subject = caller_grant_subject(None, &headers, true, None, None).unwrap();
+
+        assert_eq!(subject.authority, "cloudflare_access");
+        assert_eq!(subject.subject, "user-123");
+        assert_eq!(subject.label.as_deref(), Some("owner@example.com"));
+    }
+
+    #[test]
+    fn verified_identity_precedes_trusted_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_GATEWAY_IDENTITY_SUBJECT,
+            "spoofed-user".parse().unwrap(),
+        );
+        let verified = VerifiedIdentity {
+            subject: "oidc-subject".to_string(),
+            email: "owner@example.com".to_string(),
+            name: Some("Owner".to_string()),
+            groups: Vec::new(),
+            issuer: "https://issuer.example".to_string(),
+        };
+
+        let subject = caller_grant_subject(Some(&verified), &headers, true, None, None).unwrap();
+
+        assert_eq!(subject.authority, "https://issuer.example");
+        assert_eq!(subject.subject, "oidc-subject");
+        assert_eq!(subject.label.as_deref(), Some("owner@example.com"));
     }
 }
