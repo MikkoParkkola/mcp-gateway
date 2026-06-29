@@ -13,9 +13,11 @@ pub mod controller;
 pub mod evidence;
 
 pub use cluster::{
-    KUBERNETES_CLUSTER_APPLY_PLAN_SCHEMA, KubernetesClusterApplyIntent,
-    KubernetesClusterApplyOptions, KubernetesClusterApplyPlan, KubernetesClusterCommandStep,
-    KubernetesClusterStepKind, plan_cluster_apply,
+    KUBERNETES_CLUSTER_APPLY_PLAN_SCHEMA, KUBERNETES_CLUSTER_EXECUTION_REPORT_SCHEMA,
+    KubernetesClusterApplyIntent, KubernetesClusterApplyOptions, KubernetesClusterApplyPlan,
+    KubernetesClusterCommandOutcome, KubernetesClusterCommandStep,
+    KubernetesClusterExecutionReport, KubernetesClusterExecutionStatus, KubernetesClusterStepKind,
+    KubernetesClusterStepRunStatus, execute_cluster_apply_plan, plan_cluster_apply,
 };
 pub use controller::{
     KUBERNETES_CONTROLLER_REPORT_SCHEMA, KubernetesControllerCycle, KubernetesControllerMode,

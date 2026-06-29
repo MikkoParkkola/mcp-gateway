@@ -644,6 +644,7 @@ fn cli_kubernetes_apply_plan_parses_approval_and_json_format() {
             resources,
             namespace,
             approve_apply,
+            execute,
             format,
         })) => {
             assert_eq!(
@@ -654,7 +655,34 @@ fn cli_kubernetes_apply_plan_parses_approval_and_json_format() {
             );
             assert_eq!(namespace, "gateway-prod");
             assert!(approve_apply);
+            assert!(!execute);
             assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn cli_kubernetes_apply_plan_parses_execute_gate() {
+    let cli = parse_args(&[
+        "kubernetes",
+        "apply-plan",
+        "deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml",
+        "--execute",
+        "--format",
+        "plain",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Kubernetes(mcp_gateway::cli::KubernetesCommand::ApplyPlan {
+            execute,
+            approve_apply,
+            format,
+            ..
+        })) => {
+            assert!(execute);
+            assert!(!approve_apply);
+            assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Plain);
         }
         other => panic!("unexpected: {other:?}"),
     }

@@ -302,6 +302,10 @@ pub enum KubernetesCommand {
         #[arg(long)]
         approve_apply: bool,
 
+        /// Execute enabled non-rollback commands after building the reviewed plan.
+        #[arg(long)]
+        execute: bool,
+
         /// Output format.
         #[arg(short, long, default_value = "table", value_enum)]
         format: OutputFormat,

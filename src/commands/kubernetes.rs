@@ -1,14 +1,21 @@
 //! Kubernetes enterprise command handlers.
 
-use std::{path::Path, process::ExitCode, thread, time::Duration};
+use std::{
+    path::Path,
+    process::{Command as ProcessCommand, ExitCode},
+    thread,
+    time::Duration,
+};
 
 use mcp_gateway::{
     cli::{KubernetesCommand, output::OutputFormat},
     kubernetes::{
-        KubernetesClusterApplyOptions, KubernetesClusterApplyPlan, KubernetesClusterStepKind,
-        KubernetesControllerMode, KubernetesControllerOptions, KubernetesControllerReport,
-        KubernetesPlanStatus, KubernetesReconcilePlan, plan_cluster_apply, plan_controller_report,
-        plan_reconciliation,
+        KubernetesClusterApplyOptions, KubernetesClusterApplyPlan, KubernetesClusterCommandOutcome,
+        KubernetesClusterCommandStep, KubernetesClusterExecutionReport,
+        KubernetesClusterExecutionStatus, KubernetesClusterStepKind, KubernetesControllerMode,
+        KubernetesControllerOptions, KubernetesControllerReport, KubernetesPlanStatus,
+        KubernetesReconcilePlan, execute_cluster_apply_plan, plan_cluster_apply,
+        plan_controller_report, plan_reconciliation,
     },
 };
 
@@ -52,14 +59,25 @@ pub fn run_kubernetes_command(command: KubernetesCommand) -> ExitCode {
             resources,
             namespace,
             approve_apply,
+            execute,
             format,
         } => match read_cluster_apply_plan(&resources, &namespace, approve_apply) {
             Ok(plan) => {
-                print_cluster_apply_plan(&plan, format);
-                if plan.status == KubernetesPlanStatus::Blocked {
-                    ExitCode::FAILURE
+                if execute {
+                    let report = execute_cluster_apply_plan_with_processes(&plan);
+                    print_cluster_execution_report(&report, format);
+                    if report.status == KubernetesClusterExecutionStatus::Succeeded {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::FAILURE
+                    }
                 } else {
-                    ExitCode::SUCCESS
+                    print_cluster_apply_plan(&plan, format);
+                    if plan.status == KubernetesPlanStatus::Blocked {
+                        ExitCode::FAILURE
+                    } else {
+                        ExitCode::SUCCESS
+                    }
                 }
             }
             Err(error) => {
@@ -91,6 +109,35 @@ fn read_cluster_apply_plan(
         KubernetesClusterApplyOptions::dry_run(namespace, source)
     };
     plan_cluster_apply(options, &content).map_err(|error| error.to_string())
+}
+
+fn execute_cluster_apply_plan_with_processes(
+    plan: &KubernetesClusterApplyPlan,
+) -> KubernetesClusterExecutionReport {
+    execute_cluster_apply_plan(plan, run_cluster_step)
+}
+
+fn run_cluster_step(step: &KubernetesClusterCommandStep) -> KubernetesClusterCommandOutcome {
+    let Some(program) = step.command.first() else {
+        return KubernetesClusterCommandOutcome::failed(None, "command vector is empty");
+    };
+
+    match ProcessCommand::new(program)
+        .args(&step.command[1..])
+        .status()
+    {
+        Ok(status) if status.success() => {
+            KubernetesClusterCommandOutcome::success(status.code().unwrap_or(0))
+        }
+        Ok(status) => KubernetesClusterCommandOutcome::failed(
+            status.code(),
+            format!("{program} exited with non-zero status"),
+        ),
+        Err(error) => KubernetesClusterCommandOutcome::failed(
+            None,
+            format!("failed to start {program}: {error}"),
+        ),
+    }
 }
 
 fn read_controller_report(
@@ -318,6 +365,49 @@ fn print_cluster_apply_plan(plan: &KubernetesClusterApplyPlan, format: OutputFor
                     step.modifies_cluster,
                     step.requires_human_confirmation,
                     truncate(&step.command.join(" "), 58)
+                );
+            }
+        }
+    }
+}
+
+fn print_cluster_execution_report(report: &KubernetesClusterExecutionReport, format: OutputFormat) {
+    match format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string())
+            );
+        }
+        OutputFormat::Plain => {
+            println!("schema={}", report.schema_version);
+            println!("namespace={}", report.namespace);
+            println!("status={:?}", report.status);
+            println!("plan_status={:?}", report.plan_status);
+            println!("mutation_allowed={}", report.mutation_allowed);
+            println!("executed_steps={}", report.executed_steps);
+            println!("skipped_steps={}", report.skipped_steps);
+            println!("failed_step={:?}", report.failed_step);
+        }
+        OutputFormat::Table => {
+            println!(
+                "EXECUTION: {:?}  PLAN_STATUS: {:?}  NAMESPACE: {}  MUTATION_ALLOWED: {}",
+                report.status, report.plan_status, report.namespace, report.mutation_allowed
+            );
+            println!(
+                "{:<18}  {:<24}  {:<6}  {:<10}  MESSAGE",
+                "STEP", "STATUS", "EXIT", "MUTATE"
+            );
+            println!("{}", "-".repeat(110));
+            for step in &report.steps {
+                println!(
+                    "{:<18}  {:<24}  {:<6}  {:<10}  {}",
+                    cluster_step_label(step.step),
+                    format!("{:?}", step.status),
+                    step.exit_code
+                        .map_or_else(|| "-".to_string(), |code| code.to_string()),
+                    step.modifies_cluster,
+                    truncate(step.message.as_deref().unwrap_or(""), 44)
                 );
             }
         }

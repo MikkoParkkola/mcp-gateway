@@ -34,7 +34,8 @@ fleet evidence export.
    evidence contract as a controller-manager loop.
 4. `apply-plan`: run `mcp-gateway kubernetes apply-plan
    base/example-gateway.yaml` to render preflight, server-side dry-run, gated
-   apply, verify, evidence export, and rollback commands.
+   apply, verify, evidence export, and rollback commands. Add `--execute` to
+   run enabled non-rollback commands after the plan is reviewed.
 5. `apply`: execute mutating commands only after human approval
    for namespace, ingress domain, protected value provider, tenancy, and policy
    exceptions.
@@ -110,9 +111,12 @@ mcp-gateway kubernetes apply-plan \
 The apply plan emits `kubernetes.cluster_apply_plan.v1`. By default, preflight
 and server-side dry-run are enabled while mutating apply, status evidence,
 event evidence, verification, and rollback commands are present but disabled.
-Passing `--approve-apply` enables the mutating command handles in the plan, but
-the CLI still does not execute `kubectl`; an operator or future runner must
-execute the reviewed commands.
+Passing `--execute` runs only enabled, non-rollback commands and emits
+`kubernetes.cluster_execution_report.v1`; without `--approve-apply`, that means
+only preflight and server-side dry-run execute. Passing both `--approve-apply`
+and `--execute` lets a Ready plan run apply, verification, and enabled evidence
+export commands. Blocked plans invoke no commands, and rollback remains a
+human-confirmed recovery handle rather than an automatic final step.
 
 ## Evidence Exports
 
@@ -152,5 +156,6 @@ cluster, and runs the server-side dry-run wrapper. Set
 
 ## Current Gaps
 
-- No built-in `kubectl` command runner yet; the current live-cluster adapter is
-  a gated command plan used by CI, operator review, and future runners.
+- No long-lived in-cluster controller deployment yet; the current live-cluster
+  adapter is a gated CLI execution path used by CI, operator review, and
+  operator-run apply workflows.
