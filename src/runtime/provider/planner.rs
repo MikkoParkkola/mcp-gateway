@@ -103,6 +103,7 @@ pub(super) fn compile_provider_plan(
     let health_command = health_command(provider, intent);
     let logs_command = logs_command(provider, intent);
     let stop_command = stop_command(provider, intent);
+    let restart_command = restart_command(provider, intent);
     let apply_command = launch_command
         .as_ref()
         .map(RuntimeLaunchCommand::display_command);
@@ -116,6 +117,7 @@ pub(super) fn compile_provider_plan(
         health_command,
         logs_command,
         stop_command,
+        restart_command,
         apply_command,
         recommendation: recommendation_for(provider, intent, availability),
         lifecycle,
@@ -299,6 +301,7 @@ fn lifecycle_plan(
             health_check: "perform MCP initialize over the managed stdio session".to_string(),
             logs_hint: Some("inspect gateway-managed process stdout and stderr".to_string()),
             stop_command_hint: Some("terminate the gateway-managed child process".to_string()),
+            restart_command_hint: Some("restart the gateway-managed child process".to_string()),
             rollback_step:
                 "Keep runtime.provider unset or restore the previous direct-launch config."
                     .to_string(),
@@ -310,9 +313,10 @@ fn lifecycle_plan(
                 "docker inspect {runtime_name} and perform MCP initialize through the configured endpoint"
             ),
             logs_hint: Some(format!("docker logs {runtime_name}")),
-            stop_command_hint: Some(format!("docker stop {runtime_name}")),
+            stop_command_hint: Some(format!("docker rm --force {runtime_name}")),
+            restart_command_hint: Some(format!("docker restart {runtime_name}")),
             rollback_step: format!(
-                "docker stop {runtime_name}, then restore the previous gateway config"
+                "docker rm --force {runtime_name}, then restore the previous gateway config"
             ),
         },
         RuntimeProviderKind::Podman => RuntimeLifecyclePlan {
@@ -322,9 +326,10 @@ fn lifecycle_plan(
                 "podman inspect {runtime_name} and perform MCP initialize through the configured endpoint"
             ),
             logs_hint: Some(format!("podman logs {runtime_name}")),
-            stop_command_hint: Some(format!("podman stop {runtime_name}")),
+            stop_command_hint: Some(format!("podman rm --force {runtime_name}")),
+            restart_command_hint: Some(format!("podman restart {runtime_name}")),
             rollback_step: format!(
-                "podman stop {runtime_name}, then restore the previous gateway config"
+                "podman rm --force {runtime_name}, then restore the previous gateway config"
             ),
         },
         RuntimeProviderKind::Systemd => RuntimeLifecyclePlan {
@@ -332,6 +337,7 @@ fn lifecycle_plan(
             health_check: format!("systemctl --user is-active {runtime_name}.service"),
             logs_hint: Some(format!("journalctl --user -u {runtime_name}.service")),
             stop_command_hint: Some(format!("systemctl --user stop {runtime_name}.service")),
+            restart_command_hint: Some(format!("systemctl --user restart {runtime_name}.service")),
             rollback_step: format!(
                 "systemctl --user stop {runtime_name}.service, then restore the previous gateway config"
             ),
@@ -341,6 +347,9 @@ fn lifecycle_plan(
             health_check: format!("launchctl print gui/$UID/{runtime_name}"),
             logs_hint: Some("inspect the configured launchd stdout and stderr paths".to_string()),
             stop_command_hint: Some(format!("launchctl bootout gui/$UID/{runtime_name}")),
+            restart_command_hint: Some(format!(
+                "launchctl bootout gui/$UID/{runtime_name} && launchctl bootstrap gui/$UID {runtime_name}.plist"
+            )),
             rollback_step: format!(
                 "launchctl bootout gui/$UID/{runtime_name}, then restore the previous gateway config"
             ),
@@ -350,6 +359,9 @@ fn lifecycle_plan(
             health_check: format!("kubectl rollout status deployment/{runtime_name}"),
             logs_hint: Some(format!("kubectl logs deployment/{runtime_name}")),
             stop_command_hint: Some(format!("kubectl delete -f {runtime_name}.runtime.yaml")),
+            restart_command_hint: Some(format!(
+                "kubectl rollout restart deployment/{runtime_name}"
+            )),
             rollback_step: format!(
                 "kubectl delete -f {runtime_name}.runtime.yaml, then restore the previous gateway config"
             ),
@@ -433,12 +445,35 @@ fn stop_command(
 ) -> Option<RuntimeLaunchCommand> {
     let runtime_name = runtime_name(intent);
     match provider {
-        RuntimeProviderKind::Docker => {
-            Some(container_control_command("docker", ["stop", &runtime_name]))
-        }
-        RuntimeProviderKind::Podman => {
-            Some(container_control_command("podman", ["stop", &runtime_name]))
-        }
+        RuntimeProviderKind::Docker => Some(container_control_command(
+            "docker",
+            ["rm", "--force", &runtime_name],
+        )),
+        RuntimeProviderKind::Podman => Some(container_control_command(
+            "podman",
+            ["rm", "--force", &runtime_name],
+        )),
+        RuntimeProviderKind::LocalProcess
+        | RuntimeProviderKind::Systemd
+        | RuntimeProviderKind::Launchd
+        | RuntimeProviderKind::Kubernetes => None,
+    }
+}
+
+fn restart_command(
+    provider: RuntimeProviderKind,
+    intent: &RuntimeIntent,
+) -> Option<RuntimeLaunchCommand> {
+    let runtime_name = runtime_name(intent);
+    match provider {
+        RuntimeProviderKind::Docker => Some(container_control_command(
+            "docker",
+            ["restart", &runtime_name],
+        )),
+        RuntimeProviderKind::Podman => Some(container_control_command(
+            "podman",
+            ["restart", &runtime_name],
+        )),
         RuntimeProviderKind::LocalProcess
         | RuntimeProviderKind::Systemd
         | RuntimeProviderKind::Launchd
@@ -455,7 +490,6 @@ fn container_launch_command(
     let image = intent.image.as_deref()?;
     let mut args = vec![
         "run".to_string(),
-        "--rm".to_string(),
         "--detach".to_string(),
         "--name".to_string(),
         runtime_name.to_string(),
@@ -467,6 +501,15 @@ fn container_launch_command(
         "--pids-limit=128".to_string(),
         container_network_flag(&policy.network_egress),
     ];
+
+    if policy.restart.max_restarts == 0 {
+        args.push("--rm".to_string());
+    } else {
+        args.push(format!(
+            "--restart=on-failure:{}",
+            policy.restart.max_restarts
+        ));
+    }
 
     for key in &policy.env.allowed_keys {
         args.push("--env".to_string());

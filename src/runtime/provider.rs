@@ -428,6 +428,9 @@ pub struct RuntimeLifecyclePlan {
     /// Stop command hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_command_hint: Option<String>,
+    /// Restart command hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_command_hint: Option<String>,
     /// Rollback instruction.
     pub rollback_step: String,
 }
@@ -439,6 +442,7 @@ impl Default for RuntimeLifecyclePlan {
             health_check: "provider-specific health check unavailable".to_string(),
             logs_hint: None,
             stop_command_hint: None,
+            restart_command_hint: None,
             rollback_step: "Restore the previous gateway config.".to_string(),
         }
     }
@@ -508,6 +512,8 @@ pub enum RuntimeApplyAction {
     Start,
     /// Stop the runtime.
     Stop,
+    /// Restart the runtime.
+    Restart,
     /// Check runtime health.
     Health,
     /// Collect runtime logs.
@@ -522,6 +528,8 @@ pub enum RuntimeApplyStatus {
     Started,
     /// Provider stop command completed.
     Stopped,
+    /// Provider restart command completed.
+    Restarted,
     /// Provider health command completed.
     Healthy,
     /// Provider log command completed.
@@ -721,6 +729,9 @@ pub struct RuntimePlan {
     /// Structured stop command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_command: Option<RuntimeLaunchCommand>,
+    /// Structured restart command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_command: Option<RuntimeLaunchCommand>,
     /// Apply command display string. This is review output, not shell input.
     #[serde(default)]
     pub apply_command: Option<String>,
@@ -801,6 +812,22 @@ impl RuntimePlan {
             RuntimeApplyAction::Stop,
             RuntimeApplyStatus::Stopped,
             self.stop_command.as_ref(),
+            false,
+        )
+    }
+
+    /// Run the provider restart command after policy and confirmation gates.
+    pub fn restart_with<R: RuntimeCommandRunner>(
+        &self,
+        runner: &mut R,
+        request: &RuntimeApplyRequest,
+    ) -> Result<RuntimeApplyResult, RuntimeApplyError> {
+        self.run_lifecycle_command(
+            runner,
+            request,
+            RuntimeApplyAction::Restart,
+            RuntimeApplyStatus::Restarted,
+            self.restart_command.as_ref(),
             false,
         )
     }

@@ -15,11 +15,14 @@ providers that are ready to launch.
   egress, resource limits, restart behavior, and privileged execution.
 - Plans include recommendation explanations, security tradeoffs, structured
   launch commands, display-only apply commands, health checks, log hints, stop
-  hints, and rollback instructions for the selected provider.
+  hints, restart hints, and rollback instructions for the selected provider.
 - Docker and Podman launch commands use detached starts with restricted defaults:
   no shell execution, `--network=none` unless policy says otherwise,
   read-only root filesystem, `--cap-drop=ALL`, `no-new-privileges`, memory and
-  CPU limits, and a small process limit.
+  CPU limits, a small process limit, and `--restart=on-failure:N` when the
+  profile allows restart attempts.
+- Docker and Podman use `--rm` only when `restart.max_restarts` is `0`, because
+  container restart policies and automatic removal conflict in real runtimes.
 
 ## Gateway Config
 
@@ -86,8 +89,8 @@ with a freshly compiled plan.
 Admin backend status includes the compiled runtime profile lifecycle under the
 optional `runtime` object. It reports the selected provider, policy id, license
 tier, ready/confirmation/denied state, denial and confirmation ids, restart
-policy, provider health check, and rollback instruction. Public `/health`
-callers still receive the redacted backend summary only.
+policy, provider health check, restart hint, and rollback instruction. Public
+`/health` callers still receive the redacted backend summary only.
 
 Current live lifecycle support is intentionally narrow: stdio backends accept
 `local_process` runtime plans that are not denied and do not require pending
@@ -114,6 +117,12 @@ Audit records include provider, policy id, command program, argument digest,
 approved confirmation ids, and environment variable names only. Environment
 values are not serialized into plans, apply results, or audit evidence.
 
+`RuntimePlan::restart_with` uses the same gate and audit path as start, health,
+logs, and stop. Container plans expose `docker restart NAME` or
+`podman restart NAME` as structured commands, while stop/rollback use
+`rm --force NAME` so a deterministic runtime name can be reused on the next
+apply.
+
 ## Enterprise Boundary
 
 Kubernetes, fleet policy, advanced hardened runtime packs, tenant placement,
@@ -129,6 +138,7 @@ cargo test runtime::provider::tests -- --nocapture
 ```
 
 The tests cover Docker recommendation, local compatibility fallback, executable
-Docker lifecycle commands, guarded name handling, broad egress confirmation,
-forbidden mount denial, apply fail-closed behavior, container image denial, and
-the shared LocalProcess/Docker provider contract.
+Docker lifecycle commands, restart-policy-aware launch flags, restart command
+audit, guarded name handling, broad egress confirmation, forbidden mount denial,
+apply fail-closed behavior, container image denial, and the shared
+LocalProcess/Docker provider contract.

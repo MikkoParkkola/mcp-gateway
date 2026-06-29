@@ -82,6 +82,8 @@ fn planner_emits_executable_docker_lifecycle_command() {
     assert!(start.contains("docker run"));
     assert!(start.contains("--detach"));
     assert!(start.contains("--network=none"));
+    assert!(start.contains("--restart=on-failure:2"));
+    assert!(!start.contains("--rm"));
     assert!(start.contains("--read-only"));
     assert!(start.contains("--cap-drop=ALL"));
     assert!(start.contains("--security-opt=no-new-privileges"));
@@ -90,6 +92,10 @@ fn planner_emits_executable_docker_lifecycle_command() {
     assert_eq!(
         plan.lifecycle.logs_hint.as_deref(),
         Some("docker logs mcp-gateway-gmail")
+    );
+    assert_eq!(
+        plan.lifecycle.restart_command_hint.as_deref(),
+        Some("docker restart mcp-gateway-gmail")
     );
     assert_eq!(plan.apply_command.as_deref(), Some(start));
     assert_eq!(
@@ -118,8 +124,34 @@ fn planner_emits_executable_docker_lifecycle_command() {
     );
     assert_eq!(
         plan.stop_command.as_ref().map(|command| &command.args),
-        Some(&vec!["stop".to_string(), "mcp-gateway-gmail".to_string(),])
+        Some(&vec![
+            "rm".to_string(),
+            "--force".to_string(),
+            "mcp-gateway-gmail".to_string(),
+        ])
     );
+    assert_eq!(
+        plan.restart_command.as_ref().map(|command| &command.args),
+        Some(&vec![
+            "restart".to_string(),
+            "mcp-gateway-gmail".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn docker_launch_uses_rm_only_when_restart_policy_disabled() {
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named("one-shot");
+    intent.image = Some("ghcr.io/example/one-shot:1".to_string());
+    let mut policy = planner.compile_default_policy(&intent);
+    policy.restart.max_restarts = 0;
+
+    let plan = planner.plan_with_policy(&intent, RuntimeProviderKind::Docker, policy);
+    let start = plan.lifecycle.start_command_hint.as_deref().unwrap();
+
+    assert!(start.contains("--rm"));
+    assert!(!start.contains("--restart=on-failure"));
 }
 
 #[test]
@@ -242,6 +274,8 @@ fn docker_apply_invokes_runner_with_restricted_defaults_and_value_free_audit() {
     assert!(command.args.contains(&"run".to_string()));
     assert!(command.args.contains(&"--detach".to_string()));
     assert!(command.args.contains(&"--network=none".to_string()));
+    assert!(command.args.contains(&"--restart=on-failure:2".to_string()));
+    assert!(!command.args.contains(&"--rm".to_string()));
     assert!(command.args.contains(&"--read-only".to_string()));
     assert!(command.args.contains(&"--cap-drop=ALL".to_string()));
     assert!(
@@ -271,20 +305,26 @@ fn docker_lifecycle_controls_use_same_runner_without_env_names() {
     let request = RuntimeApplyRequest::empty();
     let health = plan.health_with(&mut runner, &request).expect("health");
     let logs = plan.logs_with(&mut runner, &request).expect("logs");
+    let restart = plan.restart_with(&mut runner, &request).expect("restart");
     let stop = plan.stop_with(&mut runner, &request).expect("stop");
 
-    assert_eq!(runner.calls.len(), 3);
+    assert_eq!(runner.calls.len(), 4);
     assert_eq!(runner.calls[0].0.program, "docker");
     assert_eq!(runner.calls[0].0.args[0], "inspect");
     assert_eq!(runner.calls[0].1, Vec::<String>::new());
     assert_eq!(runner.calls[1].0.args[0], "logs");
     assert_eq!(runner.calls[1].1, Vec::<String>::new());
-    assert_eq!(runner.calls[2].0.args[0], "stop");
+    assert_eq!(runner.calls[2].0.args[0], "restart");
     assert_eq!(runner.calls[2].1, Vec::<String>::new());
+    assert_eq!(runner.calls[3].0.args[0], "rm");
+    assert_eq!(runner.calls[3].0.args[1], "--force");
+    assert_eq!(runner.calls[3].1, Vec::<String>::new());
     assert_eq!(health.audit.action, RuntimeApplyAction::Health);
     assert_eq!(health.audit.status, RuntimeApplyStatus::Healthy);
     assert_eq!(logs.audit.action, RuntimeApplyAction::Logs);
     assert_eq!(logs.audit.status, RuntimeApplyStatus::LogsCollected);
+    assert_eq!(restart.audit.action, RuntimeApplyAction::Restart);
+    assert_eq!(restart.audit.status, RuntimeApplyStatus::Restarted);
     assert_eq!(stop.audit.action, RuntimeApplyAction::Stop);
     assert_eq!(stop.audit.status, RuntimeApplyStatus::Stopped);
 }
@@ -328,6 +368,7 @@ fn runtime_lifecycle_controls_fail_closed_for_denied_mount_before_runner() {
     for result in [
         plan.health_with(&mut runner, &RuntimeApplyRequest::empty()),
         plan.logs_with(&mut runner, &RuntimeApplyRequest::empty()),
+        plan.restart_with(&mut runner, &RuntimeApplyRequest::empty()),
         plan.stop_with(&mut runner, &RuntimeApplyRequest::empty()),
     ] {
         assert!(

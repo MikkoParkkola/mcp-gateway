@@ -942,6 +942,7 @@ impl Backend {
             restart_max_attempts: plan.policy.restart.max_restarts,
             restart_backoff_secs: plan.policy.restart.backoff_secs,
             health_check: plan.lifecycle.health_check.clone(),
+            restart_command_hint: plan.lifecycle.restart_command_hint.clone(),
             rollback_step: plan.rollback_step.clone(),
         })
     }
@@ -1111,6 +1112,9 @@ pub struct BackendRuntimeStatus {
     pub restart_backoff_secs: u64,
     /// Provider-specific health check instruction or command.
     pub health_check: String,
+    /// Provider-specific restart command hint, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_command_hint: Option<String>,
     /// Rollback instruction for this runtime plan.
     pub rollback_step: String,
 }
@@ -1518,7 +1522,11 @@ mod tests {
         assert_eq!(runtime.restart_max_attempts, 4);
         assert_eq!(runtime.restart_backoff_secs, 11);
         assert!(runtime.health_check.contains("docker inspect"));
-        assert!(runtime.rollback_step.contains("docker stop"));
+        assert_eq!(
+            runtime.restart_command_hint.as_deref(),
+            Some("docker restart mcp-gateway-docs")
+        );
+        assert!(runtime.rollback_step.contains("docker rm --force"));
     }
 
     #[test]
@@ -1562,6 +1570,10 @@ mod tests {
         assert!(runtime.denied_reasons.is_empty());
         assert_eq!(runtime.confirmation_ids, vec!["runtime.privileged"]);
         assert!(runtime.health_check.contains("stdio"));
+        assert_eq!(
+            runtime.restart_command_hint.as_deref(),
+            Some("restart the gateway-managed child process")
+        );
         assert!(runtime.rollback_step.contains("direct-launch"));
     }
 
