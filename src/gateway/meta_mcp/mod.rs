@@ -182,6 +182,12 @@ pub struct MetaMcp {
     /// Response contract config (issue #133, D1). Set when enabled.
     pub(super) response_contract: Option<Arc<crate::config::ResponseContractConfig>>,
 
+    /// Context integrity kernel for prompt, tool, and data-boundary protection (MIK-6559).
+    ///
+    /// `Some` when `security.context_integrity.enabled = true`; `None` otherwise.
+    /// Zero overhead when `None` — no branch is taken on the hot path.
+    pub(super) context_integrity_kernel: Option<crate::security::ContextIntegrityKernel>,
+
     /// Per-action attestation validator (MIK-5223, B1-IDENT).
     ///
     /// `Some` only when the gateway is constructed with
@@ -254,6 +260,7 @@ impl MetaMcp {
             transparency_logger: None,
             response_inspection_action_mode: false,
             response_contract: None,
+            context_integrity_kernel: None,
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
         }
@@ -420,6 +427,17 @@ impl MetaMcp {
     /// before delivery to the client.
     pub fn set_response_contract(&mut self, config: crate::config::ResponseContractConfig) {
         self.response_contract = Some(Arc::new(config));
+    }
+
+    /// Attach a context integrity kernel (MIK-6559).
+    ///
+    /// When set, every non-protocol-error `gateway_invoke` result is classified,
+    /// policy-checked, provenance-tagged, and audited before delivery to the client.
+    pub fn set_context_integrity_kernel(
+        &mut self,
+        kernel: crate::security::ContextIntegrityKernel,
+    ) {
+        self.context_integrity_kernel = Some(kernel);
     }
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.

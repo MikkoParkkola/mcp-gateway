@@ -869,6 +869,65 @@ impl MetaMcp {
             }
         }
 
+        // === POST-INVOKE: Context integrity kernel (MIK-6559) ===
+        //
+        // Classify the tool result, apply policy decisions, provenance-tag,
+        // and audit every non-protocol-error result before it reaches the client.
+        //
+        // Monitor mode (default): annotates with `_context_integrity` metadata
+        // and logs findings but never blocks.
+        // Enforce mode: blocks or transforms based on finding severity, trust
+        // boundary, and tool annotations.
+        if let Some(ref kernel) = self.context_integrity_kernel {
+            let text = crate::security::response_inspect::extract_text_from_result(&result);
+            let is_remote = server.starts_with("http://") || server.starts_with("https://");
+            let tool_annotations = self
+                .backends
+                .get(server)
+                .and_then(|b| b.get_cached_tool(tool))
+                .and_then(|t| t.annotations)
+                .map(|a| crate::security::ToolAnnotationHints {
+                    read_only: a.read_only_hint,
+                    destructive: a.destructive_hint,
+                    idempotent: a.idempotent_hint,
+                    open_world: a.open_world_hint,
+                })
+                .unwrap_or_default();
+
+            let meta = kernel.evaluate(server, tool, &text, is_remote, &tool_annotations);
+
+            tracing::info!(
+                server,
+                tool,
+                trace_id,
+                action = ?meta.policy.action,
+                mode = ?meta.policy.mode,
+                data_class = ?meta.data_class,
+                evidence_id = %meta.evidence_id,
+                "context_integrity_decision"
+            );
+
+            if meta.policy.action == crate::security::ContextPolicyAction::Deny
+                && kernel.mode() == crate::security::ContextIntegrityMode::Enforce
+            {
+                return Err(Error::json_rpc(
+                    -32603,
+                    format!(
+                        "Tool '{tool}' on server '{server}' response blocked by context integrity \
+                         kernel: {} — evidence_id: {}",
+                        meta.policy.reason, meta.evidence_id
+                    ),
+                ));
+            }
+
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "_context_integrity".to_string(),
+                    serde_json::to_value(&meta).unwrap_or_default(),
+                );
+            }
+        }
+
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
         // `_cost_warnings` — active at ≥80% budget consumption (Notify tier).

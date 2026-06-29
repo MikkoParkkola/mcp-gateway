@@ -293,6 +293,21 @@ impl Gateway {
             info!(action, "Response contract gate enabled");
         }
 
+        // ── Context integrity kernel (MIK-6559) ────────────────────────────────
+        if self.config.security.context_integrity.enabled {
+            let kernel = crate::security::ContextIntegrityKernel::new(
+                self.config.security.context_integrity.clone(),
+            );
+            Arc::get_mut(&mut meta_mcp)
+                .expect("no other Arc references at this point")
+                .set_context_integrity_kernel(kernel);
+            let mode = match self.config.security.context_integrity.mode {
+                crate::security::ContextIntegrityMode::Monitor => "monitor",
+                crate::security::ContextIntegrityMode::Enforce => "enforce",
+            };
+            info!(mode, "Context integrity kernel enabled");
+        }
+
         Ok(BuiltMetaMcp {
             meta_mcp,
             tool_policy,

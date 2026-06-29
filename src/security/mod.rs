@@ -13,6 +13,7 @@
 //! - [`firewall`]: Unified request/response security firewall (RFC-0071)
 
 pub mod agent_identity;
+pub mod context_integrity;
 pub mod data_flow;
 #[cfg(feature = "firewall")]
 pub mod firewall;
@@ -31,6 +32,11 @@ pub mod transparency_log;
 pub use agent_identity::{
     AgentIdentity, AgentIdentityConfig, IdentitySource, extract_agent_identity,
     validate_agent_identity,
+};
+pub use context_integrity::{
+    ClassifierFinding, ContentProvenance, ContextIntegrityConfig, ContextIntegrityKernel,
+    ContextIntegrityMetadata, ContextIntegrityMode, DataClass, PolicyAction as ContextPolicyAction,
+    PolicyDecision, Severity, ToolAnnotationHints, TrustBoundary,
 };
 pub use data_flow::{
     DataFlowRecord, DataFlowTracer, SanitizationRecord, ToolCategory, audit_sanitization,

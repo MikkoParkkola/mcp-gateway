@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 pub use crate::security::agent_identity::AgentIdentityConfig;
+pub use crate::security::context_integrity::ContextIntegrityConfig;
 use crate::security::policy::ToolPolicyConfig;
 pub use crate::security::remote_provenance::RemoteServerSigningConfig;
 
@@ -237,6 +238,13 @@ pub struct SecurityConfig {
     /// Per-tool fail-closed response contract gate (issue #133, D1). Default: disabled.
     #[serde(default)]
     pub response_contract: ResponseContractConfig,
+    /// Context integrity kernel for prompt, tool, and data-boundary protection (MIK-6559).
+    ///
+    /// Classifies tool results, applies policy decisions, provenance-tags, and
+    /// audits every non-protocol-error `gateway_invoke` result before it reaches
+    /// the client/agent. Default: enabled, monitor-only mode.
+    #[serde(default)]
+    pub context_integrity: ContextIntegrityConfig,
     /// Remote MCP server provenance verification (OWASP ASI04). Default: disabled.
     #[serde(default)]
     pub remote_server_signing: RemoteServerSigningConfig,
@@ -260,6 +268,7 @@ impl Default for SecurityConfig {
             transparency_log: TransparencyLogConfig::default(),
             response_inspection: ResponseInspectionConfig::default(),
             response_contract: ResponseContractConfig::default(),
+            context_integrity: ContextIntegrityConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
         }
     }
