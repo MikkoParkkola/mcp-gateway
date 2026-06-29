@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::context_integrity::{ContextIntegrityPolicy, ContextIntegrityPolicyPreset};
 pub use crate::security::agent_identity::AgentIdentityConfig;
 use crate::security::policy::ToolPolicyConfig;
 pub use crate::security::remote_provenance::RemoteServerSigningConfig;
@@ -227,6 +228,87 @@ impl Default for IdentityGrantsConfig {
     }
 }
 
+// ── ContextIntegrityConfig ───────────────────────────────────────────────────
+
+/// Gateway-wide context-integrity policy preset.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextIntegrityPresetConfig {
+    /// Preserve the historical default: evaluate risky output and attach
+    /// metadata, but deliver content unchanged.
+    #[default]
+    MonitorOnly,
+    /// Developer-local monitor mode with gentler would-strip defaults.
+    LocalDeveloper,
+    /// Shared-team enforcement baseline.
+    TeamShared,
+    /// Evidence-only monitor mode.
+    AuditOnly,
+    /// Enterprise-license strict preset for stronger guarded-material handling.
+    EnterpriseStrict,
+}
+
+impl ContextIntegrityPresetConfig {
+    /// Return the license tier that owns this preset.
+    #[must_use]
+    pub const fn license_tier(self) -> &'static str {
+        match self {
+            Self::EnterpriseStrict => "enterprise",
+            Self::MonitorOnly | Self::LocalDeveloper | Self::TeamShared | Self::AuditOnly => {
+                "free_core"
+            }
+        }
+    }
+
+    /// Compile the config preset into an explicit kernel policy.
+    #[must_use]
+    pub const fn policy(self) -> ContextIntegrityPolicy {
+        match self {
+            Self::MonitorOnly => ContextIntegrityPolicy::monitor_only(),
+            Self::LocalDeveloper => {
+                ContextIntegrityPolicy::from_preset(ContextIntegrityPolicyPreset::LocalDeveloper)
+            }
+            Self::TeamShared => {
+                ContextIntegrityPolicy::from_preset(ContextIntegrityPolicyPreset::TeamShared)
+            }
+            Self::AuditOnly => {
+                ContextIntegrityPolicy::from_preset(ContextIntegrityPolicyPreset::AuditOnly)
+            }
+            Self::EnterpriseStrict => {
+                ContextIntegrityPolicy::from_preset(ContextIntegrityPolicyPreset::EnterpriseStrict)
+            }
+        }
+    }
+}
+
+/// Context-integrity gateway configuration.
+///
+/// ```yaml
+/// security:
+///   context_integrity:
+///     preset: team_shared
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ContextIntegrityConfig {
+    /// Named policy preset for live `gateway_invoke` tool-result wrapping.
+    pub preset: ContextIntegrityPresetConfig,
+}
+
+impl ContextIntegrityConfig {
+    /// Compile this config into an explicit kernel policy.
+    #[must_use]
+    pub const fn policy(&self) -> ContextIntegrityPolicy {
+        self.preset.policy()
+    }
+
+    /// Return the license tier associated with this preset.
+    #[must_use]
+    pub const fn license_tier(&self) -> &'static str {
+        self.preset.license_tier()
+    }
+}
+
 // ── SecurityConfig ────────────────────────────────────────────────────────────
 
 /// Security configuration for the gateway.
@@ -276,6 +358,9 @@ pub struct SecurityConfig {
     /// Local personal-capability grant file. Default: disabled.
     #[serde(default)]
     pub identity_grants: IdentityGrantsConfig,
+    /// Context-integrity tool-result boundary policy. Default: monitor-only.
+    #[serde(default)]
+    pub context_integrity: ContextIntegrityConfig,
     /// Remote MCP server provenance verification (OWASP ASI04). Default: disabled.
     #[serde(default)]
     pub remote_server_signing: RemoteServerSigningConfig,
@@ -300,6 +385,7 @@ impl Default for SecurityConfig {
             response_inspection: ResponseInspectionConfig::default(),
             response_contract: ResponseContractConfig::default(),
             identity_grants: IdentityGrantsConfig::default(),
+            context_integrity: ContextIntegrityConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
         }
     }

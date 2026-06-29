@@ -40,11 +40,27 @@ descriptors produce stronger decisions under the enforcing baseline.
 
 The kernel exposes named presets that compile to explicit policies:
 
+- `monitor_only`: default; evaluate risky output and attach evidence without
+  changing delivery.
 - `local_developer`: monitor-only with gentle would-strip defaults.
 - `team_shared`: enforcing baseline for shared environments.
 - `enterprise_strict`: enforcing policy with stronger guarded-material
   handling.
 - `audit_only`: evidence collection without delivery changes.
+
+Configure the preset in `gateway.yaml`:
+
+```yaml
+security:
+  context_integrity:
+    preset: team_shared
+```
+
+The default is `monitor_only`, which preserves the historical safe rollout
+behavior. `team_shared` is the free/core opt-in enforcement preset for shared
+developer or team gateways. `enterprise_strict` is reserved for enterprise
+license scope because it belongs with organization-specific data policies,
+approval workflows, and fleet evidence review.
 
 Every evaluation can produce a plain-language explanation with the decision
 reason, audit-safe source evidence, action taken, safe next step, and a
@@ -68,7 +84,7 @@ Free/core:
 - Local false-positive feedback disposition.
 - Existing response scanner and AX-010 tool-poisoning integration.
 - Local JSON evidence for tests and operator inspection.
-- Live monitor-only wrapping for risky gateway-routed tool output.
+- Live configurable wrapping for risky gateway-routed tool output.
 - Bounded classifier sampling for large local tool outputs.
 
 Enterprise:
@@ -96,10 +112,14 @@ Run:
 ```bash
 cargo test context_integrity::kernel::tests -- --nocapture
 cargo test --lib gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_output -- --nocapture
+cargo test --lib context_integrity_team_shared
 ```
 
 The focused tests cover provenance metadata, baseline classifier coverage, all
 six policy decisions, monitor-only evidence, privilege-boundary protection,
 bounded large-output classification, and AX-010 descriptor poisoning reuse. The
 live gateway regression proves risky tool output receives `_context_integrity`
-metadata before return.
+metadata before return. The `context_integrity_team_shared` regression proves
+that `security.context_integrity.preset: team_shared` is parsed from config and
+enforces denial on risky gateway-routed tool output through the shared
+`Gateway::build_meta_mcp` startup path.

@@ -493,6 +493,29 @@ fn validate_accepts_signed_remote_backend_provenance() {
 }
 
 #[test]
+fn config_parses_context_integrity_team_shared_preset() {
+    let yaml = r"
+security:
+  context_integrity:
+    preset: team_shared
+";
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+    assert_eq!(
+        config.security.context_integrity.preset,
+        crate::config::ContextIntegrityPresetConfig::TeamShared
+    );
+    assert_eq!(
+        config.security.context_integrity.license_tier(),
+        "free_core"
+    );
+    assert_eq!(
+        config.security.context_integrity.policy().mode,
+        crate::context_integrity::ContextIntegrityPolicyMode::Enforce
+    );
+}
+
+#[test]
 fn validate_rejects_required_remote_backend_without_provenance() {
     let yaml = r"
 security:

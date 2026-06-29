@@ -28,12 +28,13 @@ use crate::{Error, Result};
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, FailsafeConfig,
-    HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
-    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, ToolContractConfig, WebhookConfig,
+    CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig,
+    ContextIntegrityPresetConfig, FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig,
+    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
+    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
+    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
+    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, StreamingConfig, ToolContractConfig,
+    WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
