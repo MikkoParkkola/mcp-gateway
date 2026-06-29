@@ -117,12 +117,13 @@ fn ac3_smithery_config_schema_exposes_config_file() {
         .and_then(|v| v.as_mapping())
         .expect("configSchema.properties must be a mapping");
 
+    let config_file_key = serde_yaml::Value::String("configFile".into());
     assert!(
-        properties.contains_key(&serde_yaml::Value::String("configFile".into())),
+        properties.contains_key(&config_file_key),
         "configSchema.properties must include 'configFile' for gateway.yaml path"
     );
 
-    let config_file = &properties[&serde_yaml::Value::String("configFile".into())];
+    let config_file = &properties[&config_file_key];
     let cf_type = config_file
         .get("type")
         .and_then(|v| v.as_str())
