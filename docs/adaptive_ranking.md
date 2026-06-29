@@ -85,7 +85,7 @@ mcp-gateway ranking eval ranking-fixtures.json --format json
 The input can be either a JSON array of cases or an object with a `cases`
 array. Each case uses a stable `id`, the private `query` consumed during
 evaluation, the `expected_top_tool`, and candidate objects with the same
-`server`, `name`, `description`, and signal fields returned by gateway search.
+`server`, `tool`, `description`, and signal fields returned by gateway search.
 The emitted `ranking-eval.v1` report intentionally omits query text and
 candidate payloads; it contains only aggregate rates, case IDs, expected and
 actual top tools, baseline top tools, filtered/invalid counts, and static

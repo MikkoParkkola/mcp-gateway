@@ -97,6 +97,39 @@ fn test_save_and_load() {
 }
 
 #[test]
+fn persisted_usage_feedback_omits_query_and_argument_payloads() {
+    let ranker = SearchRanker::new();
+    ranker.record_use("search_backend", "company_lookup");
+
+    let temp = std::env::temp_dir().join(format!(
+        "test_ranking_feedback_privacy_{}.json",
+        std::process::id()
+    ));
+    ranker.save(&temp).unwrap();
+
+    let content = std::fs::read_to_string(&temp).unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&content).unwrap();
+    let mut keys: Vec<_> = entries[0].as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        keys,
+        vec![
+            "count".to_string(),
+            "server".to_string(),
+            "tool".to_string()
+        ]
+    );
+    assert!(!content.contains("query"));
+    assert!(!content.contains("arguments"));
+    assert!(!content.contains("payload"));
+    assert!(!content.contains("ACME-12345"));
+
+    std::fs::remove_file(temp).ok();
+}
+
+#[test]
 fn test_default_impl() {
     let ranker = SearchRanker::default();
     assert_eq!(ranker.usage_count("s1", "t1"), 0);
