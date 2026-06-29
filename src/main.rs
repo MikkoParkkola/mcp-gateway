@@ -14,6 +14,7 @@ use mcp_gateway::{
     config_persistence::{load_existing_or_default, write_config},
     gateway::Gateway,
     setup_tracing,
+    telemetry,
     validator::ValidateConfig,
 };
 use tracing::{error, info};
@@ -456,6 +457,13 @@ async fn run_server(cli: Cli) -> ExitCode {
         meta_mcp = config.meta_mcp.enabled,
         "Starting MCP Gateway"
     );
+
+    // Fire-and-forget privacy-preserving heartbeat (MIK-6573).
+    // Failure-open — never blocks startup.
+    let telemetry_config = config.telemetry.clone();
+    tokio::spawn(async move {
+        telemetry::maybe_send_heartbeat(telemetry_config.enabled).await;
+    });
 
     let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
     let gateway = match Gateway::new_with_path(config, config_path).await {

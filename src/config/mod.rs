@@ -32,7 +32,7 @@ pub use features::{
     HealthCheckConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
     KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
     RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
-    SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
+    SecurityConfig, StreamingConfig, TelemetryConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -54,6 +54,9 @@ pub struct Config {
     pub meta_mcp: MetaMcpConfig,
     /// Streaming configuration (for real-time notifications).
     pub streaming: StreamingConfig,
+    /// Telemetry configuration (privacy-preserving heartbeat — MIK-6573).
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
     /// Failsafe configuration.
     pub failsafe: FailsafeConfig,
     /// Backend configurations.

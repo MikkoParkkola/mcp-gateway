@@ -569,6 +569,47 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted) to get started.
 
+## Telemetry & Privacy
+
+mcp-gateway sends a **privacy-preserving heartbeat** on startup to track adoption and aggregate geography. This helps prioritise fixes, features, and platform support based on real usage — not guesswork.
+
+### What is collected
+
+The heartbeat payload contains exactly these fields and nothing else:
+
+| Field | Value |
+|-------|-------|
+| `project` | `"mcp-gateway"` |
+| `event` | `"heartbeat"` |
+| `version` | Crate version (e.g. `"2.19.0"`) |
+| `runtime` | `"rust"` |
+| `install_id` | Random UUID v4 (per-install, not tied to any identity) |
+
+The payload is **≤ 2 KB**. The client **never collects or transmits an IP address** — geography is derived server-side in aggregate by the MIK-6565 collector with **k-anonymity ≥ 5** (every reported geographic cell contains at least 5 installs before it appears in dashboards).
+
+### Every way to disable it
+
+Telemetry is **opt-out** and honours every common mechanism. The heartbeat is suppressed when **any** of the following is true:
+
+1. **Environment variables** — set `NO_TELEMETRY=1`, `DO_NOT_TRACK=1`, or `MCP_GATEWAY_NO_TELEMETRY=1`.
+2. **Configuration** — set `telemetry.enabled: false` in `gateway.yaml`.
+3. **CI environments** — automatically suppressed when `CI` or `GITHUB_ACTIONS` is set.
+4. **Debug / test builds** — debug assertions (`cargo build` without `--release`) or `#[cfg(test)]` builds never send telemetry.
+5. **Web UI DNT** — the optional web UI respects the `DNT: 1` browser header.
+
+### Architecture
+
+The heartbeat is **fire-and-forget** and **failure-open**:
+- It never blocks startup — the gateway is fully operational before the first packet leaves.
+- HTTP requests are bounded to **≤ 3 seconds** via reqwest timeout.
+- Any timeout, connection error, or 4xx/5xx response is silently swallowed.
+- **Zero new crate dependencies** — everything uses existing `reqwest`, `serde`, `uuid`, `chrono`, and `dirs`.
+- Library-only consumers of the `mcp_gateway` crate **never trigger a heartbeat** — only the `run_server()` entrypoint in the CLI binary sends it.
+
+### Collector infrastructure (MIK-6565)
+
+The heartbeat targets the shared MIK-6565 public collector (project `mcp-gateway`). The default URL can be overridden via the `MCP_GATEWAY_TELEMETRY_URL` environment variable. Aggregate dashboards are available to project maintainers.
+
 ## Ecosystem
 
 mcp-gateway is part of a suite of MCP tools:
