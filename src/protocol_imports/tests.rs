@@ -163,6 +163,30 @@ fn graphql_mutation_and_unbounded_query_are_gated() {
             .iter()
             .any(|gate| { gate.kind == ImportReviewGateKind::DestructiveAction })
     );
+    let viewer_yaml: serde_json::Value =
+        serde_yaml::from_str(viewer.generated_yaml.as_deref().expect("viewer yaml")).unwrap();
+    assert_eq!(
+        viewer_yaml["providers"]["primary"]["service"],
+        json!("graphql")
+    );
+    assert_eq!(
+        viewer_yaml["providers"]["primary"]["config"]["endpoint"],
+        json!("https://api.example.test/graphql")
+    );
+    assert_eq!(
+        viewer_yaml["providers"]["primary"]["config"]["body"]["query"],
+        json!("query Viewer { viewer { id email } }")
+    );
+    assert_eq!(viewer_yaml["metadata"]["read_only"], json!(true));
+
+    let mutation_yaml: serde_json::Value = serde_yaml::from_str(
+        delete_project
+            .generated_yaml
+            .as_deref()
+            .expect("mutation yaml"),
+    )
+    .unwrap();
+    assert_eq!(mutation_yaml["metadata"]["read_only"], json!(false));
 }
 
 #[test]
@@ -198,6 +222,21 @@ fn postman_collection_imports_requests_as_disabled_drafts() {
         draft.input_schema["properties"]["confirm"]["type"],
         "string"
     );
+    let generated_yaml: serde_json::Value =
+        serde_yaml::from_str(draft.generated_yaml.as_deref().expect("postman yaml")).unwrap();
+    assert_eq!(
+        generated_yaml["providers"]["primary"]["service"],
+        json!("rest")
+    );
+    assert_eq!(
+        generated_yaml["providers"]["primary"]["config"]["method"],
+        json!("DELETE")
+    );
+    assert_eq!(
+        generated_yaml["providers"]["primary"]["config"]["param_map"]["confirm"],
+        json!("confirm")
+    );
+    assert_eq!(generated_yaml["metadata"]["read_only"], json!(false));
 }
 
 #[test]
@@ -226,6 +265,7 @@ fn oci_package_preserves_license_and_verified_provenance() {
         .unwrap();
     let draft = &plan.drafts[0];
 
+    assert!(draft.generated_yaml.is_none());
     assert_eq!(draft.trust_card.license.as_deref(), Some("Apache-2.0"));
     assert_eq!(draft.trust_card.evidence, TrustEvidenceLevel::Verified);
     assert_eq!(

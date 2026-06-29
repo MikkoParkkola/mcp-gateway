@@ -297,6 +297,15 @@ impl ProtocolImportPlanner {
                 field: Some(operation.name.clone()),
             });
         }
+        let generated_yaml = graphql_capability_yaml(
+            &slugify(&operation.name),
+            &operation.name,
+            &spec.endpoint,
+            &operation.query,
+            &operation.variables_schema,
+            &operation.response_schema,
+            matches!(operation.operation_type, GraphqlOperationType::Query),
+        );
 
         self.build_draft(
             source,
@@ -307,7 +316,7 @@ impl ProtocolImportPlanner {
             operation.variables_schema.clone(),
             operation.response_schema.clone(),
             risks,
-            None,
+            generated_yaml,
         )
     }
 
@@ -331,6 +340,15 @@ impl ProtocolImportPlanner {
             is_safe_method(&request.method),
             "",
         );
+        let generated_yaml = postman_capability_yaml(
+            &slugify(&request.name),
+            &request.name,
+            &request.method,
+            &request.url,
+            &request.query_params,
+            &input_schema,
+            is_safe_method(&request.method),
+        );
 
         self.build_draft(
             source,
@@ -341,7 +359,7 @@ impl ProtocolImportPlanner {
             input_schema,
             empty_object_schema(),
             risks,
-            None,
+            generated_yaml,
         )
     }
 
@@ -513,4 +531,96 @@ fn activation_review_for(
         auto_resolvable_gate_count,
         human_review_required,
     }
+}
+
+fn graphql_capability_yaml(
+    name: &str,
+    description: &str,
+    endpoint: &str,
+    query: &str,
+    input_schema: &Value,
+    output_schema: &Value,
+    read_only: bool,
+) -> Option<String> {
+    yaml_from_json(&json!({
+        "fulcrum": "1.0",
+        "name": name,
+        "description": description,
+        "schema": {
+            "input": input_schema,
+            "output": output_schema,
+        },
+        "providers": {
+            "primary": {
+                "service": "graphql",
+                "cost_per_call": 0,
+                "timeout": 30,
+                "config": {
+                    "endpoint": endpoint,
+                    "headers": {
+                        "Accept": "application/json",
+                        "User-Agent": "mcp-gateway",
+                    },
+                    "body": {
+                        "query": query,
+                    },
+                },
+            },
+        },
+        "metadata": {
+            "category": "api",
+            "tags": ["graphql", "generated", "protocol-import"],
+            "cost_category": "unknown",
+            "execution_time": "medium",
+            "read_only": read_only,
+        },
+    }))
+}
+
+fn postman_capability_yaml(
+    name: &str,
+    description: &str,
+    method: &str,
+    endpoint: &str,
+    query_params: &[String],
+    input_schema: &Value,
+    read_only: bool,
+) -> Option<String> {
+    let param_map = query_params
+        .iter()
+        .map(|param| (param.clone(), json!(param)))
+        .collect::<serde_json::Map<_, _>>();
+
+    yaml_from_json(&json!({
+        "fulcrum": "1.0",
+        "name": name,
+        "description": description,
+        "schema": {
+            "input": input_schema,
+            "output": empty_object_schema(),
+        },
+        "providers": {
+            "primary": {
+                "service": "rest",
+                "cost_per_call": 0,
+                "timeout": 30,
+                "config": {
+                    "endpoint": endpoint,
+                    "method": method,
+                    "param_map": Value::Object(param_map),
+                },
+            },
+        },
+        "metadata": {
+            "category": "api",
+            "tags": ["postman", "generated", "protocol-import"],
+            "cost_category": "unknown",
+            "execution_time": "medium",
+            "read_only": read_only,
+        },
+    }))
+}
+
+fn yaml_from_json(value: &Value) -> Option<String> {
+    serde_yaml::to_string(&value).ok()
 }

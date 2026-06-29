@@ -690,6 +690,124 @@ tools:
     }
 
     #[tokio::test]
+    async fn apply_graphql_file_writes_inactive_draft_and_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("graphql.yaml");
+        let output = dir.path().join("graphql-drafts");
+        tokio::fs::write(
+            &spec,
+            r#"
+endpoint: https://api.example.test/graphql
+operations:
+  - name: Viewer
+    operation_type: query
+    query: "query Viewer($first: Int) { viewer { login repositories(first: $first) { nodes { name } } } }"
+    variables_schema:
+      type: object
+      properties:
+        first:
+          type: integer
+"#,
+        )
+        .await
+        .expect("write graphql spec");
+
+        let report = apply_plan_from_file(
+            ProtocolImportKind::Graphql,
+            &spec,
+            &output,
+            Some("github-graphql".to_string()),
+            "imported_tool_baseline".to_string(),
+            false,
+        )
+        .await
+        .expect("apply plan");
+
+        assert_eq!(report.activation_state, "inactive_draft_directory");
+        assert_eq!(report.written.len(), 1);
+        assert!(report.skipped.is_empty());
+        assert!(!report.written[0].enabled);
+
+        let draft_yaml = tokio::fs::read_to_string(&report.written[0].path)
+            .await
+            .expect("graphql draft yaml");
+        let value: serde_json::Value = serde_yaml::from_str(&draft_yaml).expect("graphql yaml");
+        assert_eq!(value["providers"]["primary"]["service"], "graphql");
+        assert_eq!(
+            value["providers"]["primary"]["config"]["endpoint"],
+            "https://api.example.test/graphql"
+        );
+        assert_eq!(value["metadata"]["read_only"], true);
+
+        let manifest = tokio::fs::read_to_string(&report.manifest_path)
+            .await
+            .expect("manifest");
+        let value: serde_json::Value = serde_json::from_str(&manifest).expect("manifest json");
+        assert_eq!(value["written"].as_array().unwrap().len(), 1);
+        assert!(
+            value["rollback"]["command"]
+                .as_str()
+                .unwrap()
+                .contains("rm --")
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_postman_file_writes_inactive_draft_and_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("collection.json");
+        let output = dir.path().join("postman-drafts");
+        tokio::fs::write(
+            &spec,
+            r#"{
+  "info": { "name": "Admin API", "_postman_id": "collection-1" },
+  "item": [
+    {
+      "name": "Delete All Users",
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "https://api.example.test/users",
+          "query": [{ "key": "confirm" }]
+        }
+      }
+    }
+  ]
+}"#,
+        )
+        .await
+        .expect("write postman collection");
+
+        let report = apply_plan_from_file(
+            ProtocolImportKind::Postman,
+            &spec,
+            &output,
+            None,
+            "imported_tool_baseline".to_string(),
+            false,
+        )
+        .await
+        .expect("apply plan");
+
+        assert_eq!(report.activation_state, "inactive_draft_directory");
+        assert_eq!(report.written.len(), 1);
+        assert!(report.skipped.is_empty());
+        assert!(!report.written[0].enabled);
+
+        let draft_yaml = tokio::fs::read_to_string(&report.written[0].path)
+            .await
+            .expect("postman draft yaml");
+        let value: serde_json::Value = serde_yaml::from_str(&draft_yaml).expect("postman yaml");
+        assert_eq!(value["providers"]["primary"]["service"], "rest");
+        assert_eq!(value["providers"]["primary"]["config"]["method"], "DELETE");
+        assert_eq!(
+            value["providers"]["primary"]["config"]["param_map"]["confirm"],
+            "confirm"
+        );
+        assert_eq!(value["metadata"]["read_only"], false);
+    }
+
+    #[tokio::test]
     async fn apply_oci_package_without_reversible_yaml_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("package.yaml");

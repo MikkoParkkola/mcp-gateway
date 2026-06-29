@@ -116,10 +116,11 @@ Generated tools are not loaded, routed, or enabled by this command.
 
 `import apply` also writes a JSON manifest with the plan digest, source digest,
 written files, skipped drafts, review-gate counts, next review steps, and a
-simple rollback command. Today, OpenAPI drafts carry reversible capability YAML.
-GraphQL, Postman, and OCI MCP package drafts are still preview/review evidence
-unless a reversible YAML projection exists, so apply records them as skipped
-rather than pretending incomplete adapters are executable.
+simple rollback command. OpenAPI, GraphQL, and Postman drafts carry reversible
+capability YAML and can be written as inactive local drafts. OCI MCP package
+drafts remain preview/review evidence until an executable `oci_mcp` adapter
+exists, so apply records them as skipped rather than pretending incomplete
+adapters are executable.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
@@ -138,6 +139,8 @@ Example:
 
 ```bash
 mcp-gateway import apply --kind openapi petstore.yaml --output capability-drafts/petstore
+mcp-gateway import apply --kind graphql github-graphql.yaml --output capability-drafts/github
+mcp-gateway import apply --kind postman collection.json --output capability-drafts/postman
 ```
 
 Review the generated files and manifest before moving any draft into a
