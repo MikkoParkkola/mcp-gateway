@@ -429,6 +429,54 @@ pub enum Command {
     #[cfg(feature = "runtime-substrate")]
     #[command(subcommand, about = "Sandbox runtime substrate commands (opt-in)")]
     Runtime(RuntimeCommand),
+
+    /// TrustCard and CBOM metadata for MCP servers and tools
+    #[command(subcommand, about = "TrustCard and CBOM metadata inspection, generation, and validation")]
+    Trust(TrustCommand),
+}
+
+/// Trust subcommands for TrustCard/CBOM metadata management.
+#[derive(Subcommand, Debug)]
+pub enum TrustCommand {
+    /// Inspect a backend's TrustCard
+    #[command(about = "Inspect a backend's TrustCard")]
+    Inspect {
+        /// Backend name to inspect
+        #[arg(required = true)]
+        backend: String,
+        /// Gateway config file to read
+        #[arg(short, long, default_value = "gateway.yaml")]
+        config: PathBuf,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate TrustCard and CBOM for a backend
+    #[command(about = "Generate TrustCard and CBOM for a backend")]
+    Generate {
+        /// Backend name to generate for
+        #[arg(required = true)]
+        backend: String,
+        /// Gateway config file to read
+        #[arg(short, long, default_value = "gateway.yaml")]
+        config: PathBuf,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a TrustCard or CBOM
+    #[command(about = "Validate a TrustCard or CBOM")]
+    Validate {
+        /// Backend name to validate
+        #[arg(required = true)]
+        backend: String,
+        /// Gateway config file to read
+        #[arg(short, long, default_value = "gateway.yaml")]
+        config: PathBuf,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Runtime-substrate subcommands (feature `runtime-substrate`).

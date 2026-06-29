@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use mcp_gateway::{
-    cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
+    cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand, TrustCommand},
     config::Config,
     config_persistence::{load_existing_or_default, write_config},
     gateway::Gateway,
@@ -190,6 +190,7 @@ async fn main() -> ExitCode {
             data_dir,
         }) => commands::run_upgrade_command(dry_run, quiet, data_dir.as_deref()),
         Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd),
+        Some(Command::Trust(trust_cmd)) => run_trust_command(trust_cmd),
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => run_stdio_server(cli).await,
@@ -327,6 +328,27 @@ fn run_audit_command(cmd: AuditCommand) -> ExitCode {
                 }
             }
         }
+    }
+}
+
+/// Dispatch a `trust` subcommand (TrustCard/CBOM inspection, generation, validation).
+fn run_trust_command(cmd: TrustCommand) -> ExitCode {
+    match cmd {
+        TrustCommand::Inspect {
+            backend,
+            config,
+            json,
+        } => commands::run_trust_inspect(&backend, &config, json),
+        TrustCommand::Generate {
+            backend,
+            config,
+            json,
+        } => commands::run_trust_generate(&backend, &config, json),
+        TrustCommand::Validate {
+            backend,
+            config,
+            json,
+        } => commands::run_trust_validate(&backend, &config, json),
     }
 }
 

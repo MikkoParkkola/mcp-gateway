@@ -16,6 +16,7 @@ mod plugin;
 mod setup;
 mod skills;
 mod stats;
+mod trust;
 mod upgrade;
 
 #[cfg(feature = "webui")]
@@ -31,6 +32,7 @@ pub use skills::{
     run_skills_show,
 };
 pub use stats::run_stats_command;
+pub use trust::{run_trust_generate, run_trust_inspect, run_trust_validate};
 pub use upgrade::{check_upgrade, data_dir as upgrade_data_dir, run_upgrade_command};
 
 use std::process::ExitCode;
