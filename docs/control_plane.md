@@ -16,6 +16,13 @@ The model covers:
 
 The read-only projection intentionally excludes grant and policy mutation helpers. This lets inventory and evidence views ship before editing workflows are enabled.
 
+The decision queue is the UI/API-ready projection for the next control-plane
+surface. It turns pending approvals, requested grants, non-enforced policies,
+low-trust evaluations, and unhealthy runtimes into role-aware human decision
+items with a reason code, suggested next step, required role, license tier, and
+per-actor `can_act` flag. It does not mutate state; grant and policy changes
+still require the audited mutation contract below.
+
 ## Roles
 
 - `admin`: can read, review, approve, and mutate grants or policies.
@@ -43,7 +50,8 @@ Enterprise:
 ## Current Limits
 
 - No web UI pages are served by this slice.
-- No API routes are wired yet.
+- No API routes are wired yet; the decision queue is the backend response
+  contract that those routes should expose.
 - No database persistence is added.
 - No OIDC/SCIM integration is added.
 - No SIEM or OTel export sink is added.
