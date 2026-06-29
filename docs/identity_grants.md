@@ -96,6 +96,12 @@ reason code, matching grant id when present, and timestamp.
 - Expired or revoked grants do not allow access.
 - A live matching grant allows the request and records its grant id.
 
+The gateway also carries the verified caller subject into the capability
+execution context. Direct capability execution uses the same personal owner
+check before schema validation or upstream auth resolution. The legacy
+no-context path remains compatible for public and shared capabilities, but
+personal capabilities require an explicit matching caller identity.
+
 Personal capability YAML uses the existing metadata block:
 
 ```yaml

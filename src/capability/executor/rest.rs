@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::CapabilityExecutor;
+use crate::capability::CapabilityExecutionContext;
 use crate::capability::definition::ProtocolConfig;
 use crate::{Error, Result};
 
@@ -24,6 +25,8 @@ pub struct ExecutionContext<'a> {
     pub capability: &'a crate::capability::CapabilityDefinition,
     /// The provider-level timeout in seconds
     pub timeout_secs: u64,
+    /// Request-scoped execution metadata.
+    pub context: CapabilityExecutionContext,
 }
 
 /// Trait for protocol-specific execution adapters.
@@ -109,7 +112,7 @@ impl ProtocolExecutor for RestExecutor<'_> {
         };
 
         self.executor
-            .execute_provider(ctx.capability, &provider, &params)
+            .execute_provider_with_context(ctx.capability, &provider, &params, &ctx.context)
             .await
     }
 }

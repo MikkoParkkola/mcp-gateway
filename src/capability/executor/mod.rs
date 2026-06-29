@@ -34,7 +34,10 @@ use reqwest::{
 use serde_json::Value;
 
 use super::response_cache::ResponseCache;
-use super::{CapabilityDefinition, ProviderConfig, RestConfig};
+use super::{
+    CapabilityDefinition, CapabilityExecutionContext, ProviderConfig, RestConfig,
+    validate_personal_capability_identity,
+};
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
 use crate::security::ssrf::{PinningResolver, SystemResolver};
@@ -241,6 +244,31 @@ impl CapabilityExecutor {
         )
     )]
     pub async fn execute(&self, capability: &CapabilityDefinition, params: Value) -> Result<Value> {
+        self.execute_with_context(capability, params, CapabilityExecutionContext::default())
+            .await
+    }
+
+    /// Execute a capability with request-scoped identity context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if identity validation, request execution, response
+    /// handling, or response transformation fails.
+    #[tracing::instrument(
+        skip(self, params, context),
+        fields(
+            capability = %capability.name,
+            request_id = %uuid::Uuid::new_v4()
+        )
+    )]
+    pub async fn execute_with_context(
+        &self,
+        capability: &CapabilityDefinition,
+        params: Value,
+        context: CapabilityExecutionContext,
+    ) -> Result<Value> {
+        validate_personal_capability_identity(capability, &context)?;
+
         let start_time = std::time::Instant::now();
 
         let provider = capability
@@ -259,7 +287,7 @@ impl CapabilityExecutor {
         // Route through the protocol executor trait.
         let protocol_config = provider.protocol_config();
         let response = self
-            .dispatch_protocol(capability, provider, &protocol_config, &params)
+            .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
             .await?;
 
         // Apply response transform pipeline if configured
@@ -301,12 +329,14 @@ impl CapabilityExecutor {
         provider: &ProviderConfig,
         protocol_config: &super::definition::ProtocolConfig,
         params: &Value,
+        context: &CapabilityExecutionContext,
     ) -> Result<Value> {
         use rest::{ExecutionContext, ProtocolExecutor as _};
 
         let ctx = ExecutionContext {
             capability,
             timeout_secs: provider.timeout,
+            context: context.clone(),
         };
 
         match protocol_config.protocol_name() {
@@ -345,12 +375,15 @@ impl CapabilityExecutor {
             provider = %provider.service
         )
     )]
-    pub(crate) async fn execute_provider(
+    pub(crate) async fn execute_provider_with_context(
         &self,
         capability: &CapabilityDefinition,
         provider: &ProviderConfig,
         params: &Value,
+        context: &CapabilityExecutionContext,
     ) -> Result<Value> {
+        validate_personal_capability_identity(capability, context)?;
+
         let config = &provider.config;
 
         // Merge static_params (capability-defined fixed values) with caller params.

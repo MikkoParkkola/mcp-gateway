@@ -41,6 +41,22 @@ use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_trace, resolve_idempotency_key,
 };
 
+async fn call_capability_tool_with_identity(
+    cap: &crate::capability::CapabilityBackend,
+    tool: &str,
+    arguments: Value,
+    caller_identity: Option<&GrantSubject>,
+) -> Result<crate::protocol::ToolsCallResult> {
+    cap.call_tool_with_context(
+        tool,
+        arguments,
+        crate::capability::CapabilityExecutionContext {
+            caller_identity: caller_identity.cloned(),
+        },
+    )
+    .await
+}
+
 fn enforce_output_schema(
     server: &str,
     tool: &str,
@@ -1245,7 +1261,8 @@ impl MetaMcp {
                 .get(tool)
                 .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
             self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
-            let result = cap.call_tool(tool, arguments).await?;
+            let result =
+                call_capability_tool_with_identity(&cap, tool, arguments, caller_identity).await?;
             let mut response = serde_json::to_value(result)?;
 
             // Apply per-capability response_transform when configured.

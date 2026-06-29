@@ -14,6 +14,7 @@ use std::time::Duration;
 use super::CapabilityExecutor;
 use super::rest::{ExecutionContext, ProtocolExecutor};
 use crate::capability::definition::ProtocolConfig;
+use crate::capability::validate_personal_capability_identity;
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
@@ -140,6 +141,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
                 config.protocol_name()
             ))
         })?;
+        validate_personal_capability_identity(ctx.capability, &ctx.context)?;
 
         if jsonrpc_config.endpoint.is_empty() {
             return Err(Error::Config(

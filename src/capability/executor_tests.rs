@@ -1,7 +1,9 @@
 //! Tests for `CapabilityExecutor` and `ResponseCache`
 
 use super::*;
+use crate::capability::CapabilityExecutionContext;
 use crate::capability::response_cache::ResponseCache;
+use crate::identity_grants::GrantSubject;
 use axum::{
     Json, Router,
     body::Body,
@@ -177,6 +179,128 @@ fn test_substitute_params_skips_unresolved_placeholders() {
     assert!(keys.contains(&"resolved"));
     assert!(keys.contains(&"static_val"));
     assert!(!keys.contains(&"unresolved"));
+}
+
+fn personal_auth_capability() -> CapabilityDefinition {
+    crate::capability::parse_capability(
+        r"
+name: personal_calendar
+description: Personal calendar read
+auth:
+  required: true
+  type: bearer
+  key: env:MIK6553_SHOULD_NOT_BE_READ
+metadata:
+  exposure: personal
+  identity_owner:
+    authority: cloudflare_access
+    subject: owner-1
+    label: owner@example.com
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /calendar
+      method: GET
+",
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn personal_capability_missing_identity_denies_before_auth_lookup() {
+    let executor = CapabilityExecutor::new();
+    let cap = personal_auth_capability();
+
+    let err = executor
+        .execute_with_context(
+            &cap,
+            serde_json::json!({}),
+            CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("caller identity is required"), "{err}");
+    assert!(!err.contains("MIK6553_SHOULD_NOT_BE_READ"), "{err}");
+}
+
+#[tokio::test]
+async fn personal_capability_owner_mismatch_denies_before_auth_lookup() {
+    let executor = CapabilityExecutor::new();
+    let cap = personal_auth_capability();
+    let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+        "cloudflare_access",
+        "other-user",
+        Some("other@example.com".to_string()),
+    ));
+
+    let err = executor
+        .execute_with_context(&cap, serde_json::json!({}), context)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("does not match owner"), "{err}");
+    assert!(!err.contains("MIK6553_SHOULD_NOT_BE_READ"), "{err}");
+}
+
+#[tokio::test]
+async fn personal_capability_matching_owner_reaches_auth_lookup() {
+    let executor = CapabilityExecutor::new();
+    let cap = personal_auth_capability();
+    let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+        "cloudflare_access",
+        "owner-1",
+        Some("owner@example.com".to_string()),
+    ));
+
+    let err = executor
+        .execute_with_context(&cap, serde_json::json!({}), context)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("MIK6553_SHOULD_NOT_BE_READ"), "{err}");
+    assert!(!err.contains("access denied"), "{err}");
+}
+
+#[tokio::test]
+async fn shared_required_auth_preserves_legacy_auth_lookup() {
+    let executor = CapabilityExecutor::new();
+    let cap = crate::capability::parse_capability(
+        r"
+name: shared_weather
+description: Shared weather lookup
+auth:
+  required: true
+  type: bearer
+  key: env:MIK6553_SHARED_AUTH_LOOKUP
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /weather
+      method: GET
+",
+    )
+    .unwrap();
+
+    let err = executor
+        .execute_with_context(
+            &cap,
+            serde_json::json!({}),
+            CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("MIK6553_SHARED_AUTH_LOOKUP"), "{err}");
+    assert!(!err.contains("access denied"), "{err}");
 }
 
 // ── static_params integration tests ──────────────────────────────────────────
