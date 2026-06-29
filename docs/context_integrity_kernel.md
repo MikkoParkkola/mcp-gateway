@@ -23,6 +23,8 @@ classification, policy, and audit evidence.
   for opt-in tests and deployments.
 - Evidence: versioned evaluation JSON, input content hash, findings, effective
   decision, would-enforce decision, and audit event.
+- Large-output handling: classifiers run over a bounded head/tail text sample
+  while the audit hash remains computed from the full canonical JSON payload.
 
 ## Default Posture
 
@@ -67,6 +69,7 @@ Free/core:
 - Existing response scanner and AX-010 tool-poisoning integration.
 - Local JSON evidence for tests and operator inspection.
 - Live monitor-only wrapping for risky gateway-routed tool output.
+- Bounded classifier sampling for large local tool outputs.
 
 Enterprise:
 
@@ -91,11 +94,12 @@ tool output cannot silently become privileged prompt context.
 Run:
 
 ```bash
-cargo test context_integrity::tests -- --nocapture
+cargo test context_integrity::kernel::tests -- --nocapture
 cargo test --lib gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_output -- --nocapture
 ```
 
 The focused tests cover provenance metadata, baseline classifier coverage, all
-six policy decisions, monitor-only evidence, privilege-boundary protection, and
-AX-010 descriptor poisoning reuse. The live gateway regression proves risky
-tool output receives `_context_integrity` metadata before return.
+six policy decisions, monitor-only evidence, privilege-boundary protection,
+bounded large-output classification, and AX-010 descriptor poisoning reuse. The
+live gateway regression proves risky tool output receives `_context_integrity`
+metadata before return.

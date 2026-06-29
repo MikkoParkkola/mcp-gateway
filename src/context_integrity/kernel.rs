@@ -23,6 +23,8 @@ use super::{
 };
 
 const GUARDED_INSPECT_CATEGORY: &str = concat!("sec", "ret");
+const MAX_CLASSIFICATION_TEXT_BYTES: usize = 64 * 1024;
+const CLASSIFICATION_TEXT_EDGE_BYTES: usize = MAX_CLASSIFICATION_TEXT_BYTES / 2;
 
 static PERSONAL_DATA_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
@@ -89,7 +91,7 @@ impl ContextIntegrityKernel {
     #[must_use]
     pub fn evaluate(&self, input: ContextIntegrityInput) -> ContextIntegrityEvaluation {
         let content_sha256 = canonical_json_sha256(&input.content);
-        let text = render_text(&input.content);
+        let text = render_text_for_classification(&input.content);
         let classification = self.classify_text(&input, &text);
         let would_decision = self.resolve_decision(&input, &classification);
         let decision = if self.policy.mode == ContextIntegrityPolicyMode::MonitorOnly {
@@ -552,6 +554,124 @@ fn render_text(value: &Value) -> String {
         Value::Bool(v) => v.to_string(),
         Value::Number(v) => v.to_string(),
     }
+}
+
+fn render_text_for_classification(value: &Value) -> String {
+    let mut sample = TextSample::default();
+    collect_text_sample(value, &mut sample);
+    sample.into_text()
+}
+
+#[derive(Default)]
+struct TextSample {
+    head: String,
+    tail: String,
+    total_bytes: usize,
+}
+
+impl TextSample {
+    fn push(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        let separator = if self.total_bytes == 0 { "" } else { "\n" };
+        self.push_segment(separator);
+        self.push_segment(text);
+    }
+
+    fn push_segment(&mut self, segment: &str) {
+        self.total_bytes += segment.len();
+        push_prefix_limited(&mut self.head, segment, MAX_CLASSIFICATION_TEXT_BYTES);
+        push_suffix_limited(&mut self.tail, segment, CLASSIFICATION_TEXT_EDGE_BYTES);
+    }
+
+    fn into_text(self) -> String {
+        if self.total_bytes <= MAX_CLASSIFICATION_TEXT_BYTES {
+            return self.head;
+        }
+
+        format!(
+            "{}\n[...content truncated for classification...]\n{}",
+            prefix_fragment(&self.head, CLASSIFICATION_TEXT_EDGE_BYTES),
+            self.tail
+        )
+    }
+}
+
+fn collect_text_sample(value: &Value, sample: &mut TextSample) {
+    match value {
+        Value::String(s) => sample.push(s),
+        Value::Array(items) => {
+            for item in items {
+                collect_text_sample(item, sample);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                collect_text_sample(value, sample);
+            }
+        }
+        Value::Null => {}
+        Value::Bool(v) => sample.push(&v.to_string()),
+        Value::Number(v) => sample.push(&v.to_string()),
+    }
+}
+
+fn push_prefix_limited(out: &mut String, segment: &str, limit: usize) {
+    if out.len() >= limit {
+        return;
+    }
+
+    let remaining = limit - out.len();
+    out.push_str(prefix_fragment(segment, remaining));
+}
+
+fn push_suffix_limited(out: &mut String, segment: &str, limit: usize) {
+    if segment.len() >= limit {
+        out.clear();
+        out.push_str(suffix_fragment(segment, limit));
+        return;
+    }
+
+    out.push_str(segment);
+    trim_prefix_to_limit(out, limit);
+}
+
+fn trim_prefix_to_limit(out: &mut String, limit: usize) {
+    if out.len() <= limit {
+        return;
+    }
+
+    let mut start = out.len() - limit;
+    while !out.is_char_boundary(start) {
+        start += 1;
+    }
+    out.drain(..start);
+}
+
+fn prefix_fragment(text: &str, limit: usize) -> &str {
+    if text.len() <= limit {
+        return text;
+    }
+
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn suffix_fragment(text: &str, limit: usize) -> &str {
+    if text.len() <= limit {
+        return text;
+    }
+
+    let mut start = text.len() - limit;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
 }
 
 fn map_inspect_severity(severity: InspectSeverity) -> ContextIntegritySeverity {
