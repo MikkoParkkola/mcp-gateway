@@ -12,7 +12,7 @@ CatalogTrustLab is the advisory evaluation layer for candidate MCP servers. It t
 - Safe active-eval planning and execution evidence: only fixture calls explicitly marked safe may be invoked, and only when the runtime is reported as isolated.
 - Remediation plans that map findings to enable, fix, block, or quarantine outcomes.
 
-The default CLI implementation remains static/advisory when no active runner is wired. The core TrustLab evaluator now also supports active fixture execution evidence through an injected runner: declared-safe fixtures are executed only when runtime isolation is present, non-isolated runs are skipped and blocked by evidence, and failed safe fixtures block enablement. The CLI can also attach a dry-run fixture evidence file with `--active-fixtures`; this records eligibility decisions without contacting a candidate server and keeps certification provisional until a real isolated runner executes the calls. Sandboxed RuntimeProvider-backed CLI execution and enterprise scheduling remain follow-up work.
+The default CLI implementation remains static/advisory unless active fixtures are supplied. The core TrustLab evaluator supports active fixture execution evidence through an injected runner: declared-safe fixtures are executed only when runtime isolation is present, non-isolated runs are skipped and blocked by evidence, and failed safe fixtures block enablement. The CLI attaches dry-run fixture evidence with `--active-fixtures` by default, or executes declared-safe matching fixtures through the local capability executor with `--execute-active-fixtures`. Execution mode is fail-closed and records only argument/result digests and errors, but it does not provision a sandbox by itself; run it inside a disposable container, CI job, or RuntimeProvider-managed environment and set `isolated: true` only for that environment. Fully automated RuntimeProvider provisioning and enterprise scheduling remain follow-up work.
 
 ## License Split
 
@@ -25,6 +25,7 @@ Free/core:
 - Managed local baseline registry with a manifest and safe baseline ids.
 - Safe fixture-call planning.
 - CLI dry-run fixture evidence from JSON/YAML files.
+- Explicit CLI execution of declared-safe fixtures through the local capability executor.
 - Isolated active-fixture evidence model for local or test runners.
 - Local CLI reports through `mcp-gateway trust lab evaluate`.
 
@@ -175,9 +176,27 @@ declared-safe fixtures are reported as `dry_run`, not `passed`, and are not
 invoked by the CLI. Unsafe entries stay skipped and cannot become runtime
 evidence without an explicit safe review plus a real isolated runner.
 
+Execute declared-safe active fixtures from an already isolated environment:
+
+```bash
+mcp-gateway trust lab evaluate weather_current \
+  --capabilities capabilities \
+  --active-fixtures trustlab-fixtures.yaml \
+  --execute-active-fixtures \
+  --enforce \
+  --format json
+```
+
+Execution mode requires `--active-fixtures`, filters fixtures to the evaluated
+capability, skips anything not explicitly marked safe, and refuses to invoke
+fixtures when the fixture file says `isolated: false`. Failed safe fixture calls
+produce `TRUSTLAB_ACTIVE_FIXTURE_FAILED`; with `--enforce`, that blocks the
+policy verdict until the fixture passes in isolation.
+
 Focused validation:
 
 ```bash
 cargo test trust::lab::tests -- --nocapture
-cargo test commands::trust::tests -- --nocapture
+cargo test lab_execute_active_fixtures --bin mcp-gateway -- --nocapture
+cargo test commands::trust::tests --bin mcp-gateway -- --nocapture
 ```

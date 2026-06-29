@@ -467,6 +467,7 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
                 baseline_registry,
                 update_baseline_registry,
                 active_fixtures,
+                execute_active_fixtures,
                 baseline_id,
                 minimum_score,
                 certification_score,
@@ -493,10 +494,41 @@ fn cli_trust_lab_evaluate_parses_thresholds() {
                 active_fixtures.as_deref(),
                 Some(std::path::Path::new("fixtures/active-fixtures.json"))
             );
+            assert!(!execute_active_fixtures);
             assert_eq!(baseline_id, "weather-baseline");
             assert_eq!(minimum_score, 80);
             assert_eq!(certification_score, 95);
             assert_eq!(format, mcp_gateway::cli::output::OutputFormat::Json);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn cli_trust_lab_evaluate_parses_execute_active_fixtures() {
+    let cli = parse_args(&[
+        "trust",
+        "lab",
+        "evaluate",
+        "weather",
+        "--active-fixtures",
+        "fixtures/active-fixtures.json",
+        "--execute-active-fixtures",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Trust(mcp_gateway::cli::TrustCommand::Lab(
+            mcp_gateway::cli::TrustLabCommand::Evaluate {
+                active_fixtures,
+                execute_active_fixtures,
+                ..
+            },
+        ))) => {
+            assert_eq!(
+                active_fixtures.as_deref(),
+                Some(std::path::Path::new("fixtures/active-fixtures.json"))
+            );
+            assert!(execute_active_fixtures);
         }
         other => panic!("unexpected: {other:?}"),
     }

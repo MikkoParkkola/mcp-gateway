@@ -1,7 +1,7 @@
 //! `TrustCard` and CBOM command handlers.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -9,13 +9,18 @@ use std::{
 use chrono::Utc;
 use mcp_gateway::{
     capability::CapabilityLoader,
-    cli::{TrustCommand, TrustLabCommand, output::OutputFormat},
+    cli::{
+        TrustCommand, TrustLabCommand,
+        invoke::{ToolCatalogue, execute_tool},
+        output::OutputFormat,
+    },
     trust::{
         TrustAssistantPrompt, TrustCard, TrustCardAssistant, TrustCardValidator,
         TrustEvaluationStatus, TrustFindingSeverity,
         lab::{
             CatalogTrustLab, TrustLabBaseline, TrustLabEvaluation, TrustLabFixtureCall,
-            TrustLabPolicy, TrustLabPolicyVerdict, TrustLabProfile,
+            TrustLabFixtureExecution, TrustLabPolicy, TrustLabPolicyVerdict, TrustLabProfile,
+            TrustLabRuntimeEvidence,
         },
     },
 };
@@ -114,6 +119,7 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
             baseline_registry,
             update_baseline_registry,
             active_fixtures,
+            execute_active_fixtures,
             baseline_id,
             minimum_score,
             certification_score,
@@ -136,6 +142,11 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
                     baseline_registry_path: baseline_registry.as_deref(),
                     update_baseline_registry,
                     active_fixtures_path: active_fixtures.as_deref(),
+                    active_fixture_mode: if execute_active_fixtures {
+                        TrustLabActiveFixtureMode::ExecuteLocal
+                    } else {
+                        TrustLabActiveFixtureMode::DryRun
+                    },
                     baseline_id: &baseline_id,
                 },
             )
@@ -287,7 +298,7 @@ async fn evaluate_lab_from_capabilities(
     baseline: Option<&TrustLabBaseline>,
 ) -> Result<Vec<TrustLabEvaluation>, String> {
     let cards = select_cards(capabilities, name).await?;
-    Ok(evaluate_lab_cards(&cards, policy, baseline, None))
+    evaluate_lab_cards(capabilities, &cards, policy, baseline, None).await
 }
 
 #[derive(Debug)]
@@ -304,7 +315,14 @@ struct LabEvaluationOptions<'a> {
     baseline_registry_path: Option<&'a Path>,
     update_baseline_registry: bool,
     active_fixtures_path: Option<&'a Path>,
+    active_fixture_mode: TrustLabActiveFixtureMode,
     baseline_id: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrustLabActiveFixtureMode {
+    DryRun,
+    ExecuteLocal,
 }
 
 async fn run_lab_evaluation(
@@ -319,8 +337,14 @@ async fn run_lab_evaluation(
         baseline_registry_path,
         update_baseline_registry,
         active_fixtures_path,
+        active_fixture_mode,
         baseline_id,
     } = options;
+    if active_fixture_mode == TrustLabActiveFixtureMode::ExecuteLocal
+        && active_fixtures_path.is_none()
+    {
+        return Err("--execute-active-fixtures requires --active-fixtures".to_string());
+    }
     let cards = select_cards(capabilities, name).await?;
     let active_fixtures = match active_fixtures_path {
         Some(path) => Some(read_active_fixture_spec(path).await?),
@@ -342,8 +366,15 @@ async fn run_lab_evaluation(
             None => None,
         },
     };
-    let evaluations =
-        evaluate_lab_cards(&cards, policy, baseline.as_ref(), active_fixtures.as_ref());
+    let evaluations = evaluate_lab_cards_with_mode(
+        capabilities,
+        &cards,
+        policy,
+        baseline.as_ref(),
+        active_fixtures.as_ref(),
+        active_fixture_mode,
+    )
+    .await?;
     let written_baseline = match write_baseline_path {
         Some(path) => {
             let baseline = lab_baseline_from_cards(baseline_id, &cards);
@@ -385,29 +416,62 @@ async fn select_cards(capabilities: &Path, name: Option<&str>) -> Result<Vec<Tru
     }
 }
 
-fn evaluate_lab_cards(
+#[cfg(test)]
+async fn evaluate_lab_cards(
+    capabilities: &Path,
     cards: &[TrustCard],
     policy: TrustLabPolicy,
     baseline: Option<&TrustLabBaseline>,
     active_fixtures: Option<&TrustLabActiveFixtureSpec>,
-) -> Vec<TrustLabEvaluation> {
+) -> Result<Vec<TrustLabEvaluation>, String> {
+    evaluate_lab_cards_with_mode(
+        capabilities,
+        cards,
+        policy,
+        baseline,
+        active_fixtures,
+        TrustLabActiveFixtureMode::DryRun,
+    )
+    .await
+}
+
+async fn evaluate_lab_cards_with_mode(
+    capabilities: &Path,
+    cards: &[TrustCard],
+    policy: TrustLabPolicy,
+    baseline: Option<&TrustLabBaseline>,
+    active_fixtures: Option<&TrustLabActiveFixtureSpec>,
+    active_fixture_mode: TrustLabActiveFixtureMode,
+) -> Result<Vec<TrustLabEvaluation>, String> {
     let lab = CatalogTrustLab::new(policy);
-    cards
-        .iter()
-        .map(|card| {
-            if let Some(spec) = active_fixtures {
-                let fixtures = fixture_calls_for_card(card, &spec.fixtures);
-                let runtime = CatalogTrustLab::dry_run_active_fixture_calls(
-                    spec.provider_name(),
+    let mut evaluations = Vec::with_capacity(cards.len());
+    for card in cards {
+        let evaluation = if let Some(spec) = active_fixtures {
+            let fixtures = fixture_calls_for_card(card, &spec.fixtures);
+            let provider_name = spec.provider_name(active_fixture_mode);
+            let runtime = match active_fixture_mode {
+                TrustLabActiveFixtureMode::DryRun => CatalogTrustLab::dry_run_active_fixture_calls(
+                    provider_name,
                     spec.isolated,
                     &fixtures,
-                );
-                lab.evaluate_card_with_runtime_at(card, baseline, chrono::Utc::now(), runtime)
-            } else {
-                lab.evaluate_card_with_baseline_at(card, baseline, chrono::Utc::now())
-            }
-        })
-        .collect()
+                ),
+                TrustLabActiveFixtureMode::ExecuteLocal => {
+                    run_local_active_fixture_calls(
+                        capabilities,
+                        provider_name,
+                        spec.isolated,
+                        &fixtures,
+                    )
+                    .await?
+                }
+            };
+            lab.evaluate_card_with_runtime_at(card, baseline, chrono::Utc::now(), runtime)
+        } else {
+            lab.evaluate_card_with_baseline_at(card, baseline, chrono::Utc::now())
+        };
+        evaluations.push(evaluation);
+    }
+    Ok(evaluations)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -420,11 +484,67 @@ struct TrustLabActiveFixtureSpec {
 }
 
 impl TrustLabActiveFixtureSpec {
-    fn provider_name(&self) -> &str {
-        self.provider
-            .as_deref()
-            .unwrap_or("cli_active_fixture_dry_run")
+    fn provider_name(&self, mode: TrustLabActiveFixtureMode) -> &str {
+        self.provider.as_deref().unwrap_or(match mode {
+            TrustLabActiveFixtureMode::DryRun => "cli_active_fixture_dry_run",
+            TrustLabActiveFixtureMode::ExecuteLocal => "cli_local_capability_executor",
+        })
     }
+}
+
+async fn run_local_active_fixture_calls(
+    capabilities: &Path,
+    provider: &str,
+    isolated: bool,
+    fixtures: &[TrustLabFixtureCall],
+) -> Result<TrustLabRuntimeEvidence, String> {
+    if !isolated || !fixtures.iter().any(|fixture| fixture.declared_safe) {
+        return Ok(CatalogTrustLab::run_active_fixture_calls(
+            provider,
+            isolated,
+            fixtures,
+            |_| {
+                TrustLabFixtureExecution::failed(
+                    "internal error: fixture runner was invoked for an ineligible fixture",
+                )
+            },
+        ));
+    }
+
+    let dir = capabilities.to_str().ok_or_else(|| {
+        format!(
+            "capability path is not valid UTF-8: {}",
+            capabilities.display()
+        )
+    })?;
+    let catalogue = ToolCatalogue::load(dir).await.map_err(|e| {
+        format!(
+            "failed to load capabilities for TrustLab active fixtures from {}: {e}",
+            capabilities.display()
+        )
+    })?;
+    let mut executions = VecDeque::new();
+    for fixture in fixtures.iter().filter(|fixture| fixture.declared_safe) {
+        let execution =
+            match execute_tool(&catalogue, &fixture.tool_name, fixture.arguments.clone()).await {
+                Ok(output) => TrustLabFixtureExecution::passed(output),
+                Err(e) => {
+                    TrustLabFixtureExecution::failed(format!("fixture execution failed: {e}"))
+                }
+            };
+        executions.push_back(execution);
+    }
+
+    Ok(CatalogTrustLab::run_active_fixture_calls(
+        provider,
+        isolated,
+        fixtures,
+        |_| {
+            executions.pop_front().unwrap_or_else(|| {
+                TrustLabFixtureExecution::failed("fixture execution result missing")
+            })
+        },
+    ))
 }
 
 async fn read_active_fixture_spec(path: &Path) -> Result<TrustLabActiveFixtureSpec, String> {
@@ -853,6 +973,32 @@ schema:
         std::fs::write(dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
 
+    fn write_executable_capability_with_invalid_method(dir: &Path, name: &str) {
+        let yaml = format!(
+            r"
+name: {name}
+description: Active fixture test capability
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /fixture
+      method: INVALID METHOD
+auth:
+  required: false
+  type: none
+schema:
+  input:
+    type: object
+    properties:
+      city:
+        type: string
+"
+        );
+        std::fs::write(dir.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
     #[tokio::test]
     async fn generate_cards_from_capabilities_sorts_and_validates() {
         let temp = TempDir::new().unwrap();
@@ -974,6 +1120,7 @@ schema:
                 baseline_registry_path: None,
                 update_baseline_registry: false,
                 active_fixtures_path: None,
+                active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1005,6 +1152,7 @@ schema:
                 baseline_registry_path: Some(&registry),
                 update_baseline_registry: true,
                 active_fixtures_path: None,
+                active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1039,6 +1187,7 @@ schema:
                 baseline_registry_path: Some(&registry),
                 update_baseline_registry: false,
                 active_fixtures_path: None,
+                active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1072,6 +1221,7 @@ schema:
                 baseline_registry_path: Some(&registry),
                 update_baseline_registry: false,
                 active_fixtures_path: None,
+                active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
                 baseline_id: "missing-baseline",
             },
         )
@@ -1118,6 +1268,7 @@ schema:
                 baseline_registry_path: None,
                 update_baseline_registry: false,
                 active_fixtures_path: Some(&fixtures_path),
+                active_fixture_mode: TrustLabActiveFixtureMode::DryRun,
                 baseline_id: "weather-baseline",
             },
         )
@@ -1148,6 +1299,157 @@ schema:
         assert_eq!(
             evaluation.certification.status,
             mcp_gateway::trust::lab::TrustLabCertificationStatus::Provisional
+        );
+    }
+
+    #[tokio::test]
+    async fn lab_execute_active_fixtures_requires_fixture_file() {
+        let temp = TempDir::new().unwrap();
+        write_capability(temp.path(), "weather");
+
+        let err = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            LabEvaluationOptions {
+                policy: TrustLabPolicy {
+                    advisory_only: false,
+                    ..TrustLabPolicy::default()
+                },
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: None,
+                update_baseline_registry: false,
+                active_fixtures_path: None,
+                active_fixture_mode: TrustLabActiveFixtureMode::ExecuteLocal,
+                baseline_id: "weather-baseline",
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err, "--execute-active-fixtures requires --active-fixtures");
+    }
+
+    #[tokio::test]
+    async fn lab_execute_active_fixtures_skips_non_isolated_runtime() {
+        let temp = TempDir::new().unwrap();
+        write_capability(temp.path(), "weather");
+        let fixtures_path = temp.path().join("trustlab-fixtures.json");
+        std::fs::write(
+            &fixtures_path,
+            serde_json::json!({
+                "isolated": false,
+                "fixtures": [
+                    {
+                        "tool_name": "weather",
+                        "arguments": {"city": "Helsinki"},
+                        "declared_safe": true
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let report = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            LabEvaluationOptions {
+                policy: TrustLabPolicy {
+                    advisory_only: false,
+                    ..TrustLabPolicy::default()
+                },
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: None,
+                update_baseline_registry: false,
+                active_fixtures_path: Some(&fixtures_path),
+                active_fixture_mode: TrustLabActiveFixtureMode::ExecuteLocal,
+                baseline_id: "weather-baseline",
+            },
+        )
+        .await
+        .unwrap();
+
+        let evaluation = &report.evaluations[0];
+        assert_eq!(evaluation.runtime.provider, "cli_local_capability_executor");
+        assert!(!evaluation.runtime.isolated);
+        assert!(!evaluation.runtime.active_eval);
+        assert_eq!(
+            evaluation.runtime.fixture_calls[0].status,
+            TrustLabFixtureCallStatus::Skipped
+        );
+        assert!(!evaluation.runtime.fixture_calls[0].invoked);
+        assert!(
+            evaluation
+                .findings
+                .iter()
+                .any(|finding| finding.code == "TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED")
+        );
+    }
+
+    #[tokio::test]
+    async fn lab_execute_active_fixtures_records_capability_execution_failure() {
+        let temp = TempDir::new().unwrap();
+        write_executable_capability_with_invalid_method(temp.path(), "weather");
+        let fixtures_path = temp.path().join("trustlab-fixtures.json");
+        std::fs::write(
+            &fixtures_path,
+            serde_json::json!({
+                "isolated": true,
+                "fixtures": [
+                    {
+                        "tool_name": "weather",
+                        "arguments": {"city": "Helsinki"},
+                        "declared_safe": true
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let report = run_lab_evaluation(
+            temp.path(),
+            Some("weather"),
+            LabEvaluationOptions {
+                policy: TrustLabPolicy {
+                    advisory_only: false,
+                    ..TrustLabPolicy::default()
+                },
+                baseline_path: None,
+                write_baseline_path: None,
+                baseline_registry_path: None,
+                update_baseline_registry: false,
+                active_fixtures_path: Some(&fixtures_path),
+                active_fixture_mode: TrustLabActiveFixtureMode::ExecuteLocal,
+                baseline_id: "weather-baseline",
+            },
+        )
+        .await
+        .unwrap();
+
+        let evaluation = &report.evaluations[0];
+        assert!(evaluation.runtime.isolated);
+        assert!(evaluation.runtime.active_eval);
+        assert_eq!(
+            evaluation.runtime.fixture_calls[0].status,
+            TrustLabFixtureCallStatus::Failed
+        );
+        assert!(evaluation.runtime.fixture_calls[0].invoked);
+        assert!(
+            evaluation.runtime.fixture_calls[0]
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("fixture execution failed")
+        );
+        assert_eq!(evaluation.policy_verdict, TrustLabPolicyVerdict::Block);
+        assert!(
+            evaluation
+                .findings
+                .iter()
+                .any(|finding| finding.code == "TRUSTLAB_ACTIVE_FIXTURE_FAILED")
         );
     }
 
