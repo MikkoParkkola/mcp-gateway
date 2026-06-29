@@ -94,10 +94,11 @@ policy, provider health check, restart hint, and rollback instruction. Public
 
 Current live lifecycle support is intentionally narrow: stdio backends accept
 `local_process` runtime plans that are not denied and do not require pending
-human confirmations. Container provider plans still fail closed in the live
-stdio adapter until the endpoint wiring can replace direct stdio spawning. The
-planner and audit contract remain usable for doctor, TrustLab, and future
-containerized lifecycle flows.
+human confirmations, and Docker/Podman plans can replace the direct stdio
+command with an interactive `docker run --rm` or `podman run --rm` bridge for
+images whose default command speaks MCP over stdio. HTTP container endpoint and
+port mapping remain future work. The planner and audit contract remain usable
+for doctor, TrustLab, and future containerized lifecycle flows.
 
 ## Human Gates
 

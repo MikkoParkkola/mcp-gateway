@@ -20,7 +20,10 @@ use crate::protocol::{
     JsonRpcResponse, Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult, Tool, ToolAnnotations, ToolsListResult,
 };
-use crate::runtime::{RuntimeDenyReason, RuntimeLicenseTier, RuntimePlan, RuntimeProviderKind};
+use crate::runtime::{
+    RuntimeDenyReason, RuntimeLaunchCommand, RuntimeLaunchMode, RuntimeLicenseTier, RuntimePlan,
+    RuntimeProviderKind,
+};
 use crate::transport::{HttpTransport, StdioTransport, Transport};
 use crate::{Error, Result};
 
@@ -295,10 +298,10 @@ impl Backend {
                 cwd,
                 protocol_version,
             } => {
-                self.enforce_stdio_runtime_plan()?;
+                let launch = self.resolve_stdio_runtime_launch(command)?;
                 let transport = StdioTransport::new(
-                    command,
-                    self.config.env.clone(),
+                    &launch.command,
+                    launch.env,
                     cwd.clone(),
                     self.config.timeout,
                     protocol_version.clone(),
@@ -388,16 +391,54 @@ impl Backend {
         Ok(Some(oauth))
     }
 
-    fn enforce_stdio_runtime_plan(&self) -> Result<()> {
+    fn resolve_stdio_runtime_launch(
+        &self,
+        configured_command: &str,
+    ) -> Result<ResolvedStdioLaunch> {
         let Some(plan) = self.runtime_plan.as_ref() else {
-            return Ok(());
+            return Ok(ResolvedStdioLaunch {
+                command: configured_command.to_string(),
+                env: self.config.env.clone(),
+            });
         };
-        if plan.provider != RuntimeProviderKind::LocalProcess {
-            return Err(Error::Config(format!(
-                "backend '{}' runtime profile selected {:?}, but live stdio backend lifecycle currently supports only local_process",
+        self.enforce_stdio_runtime_plan(plan)?;
+
+        match plan.provider {
+            RuntimeProviderKind::LocalProcess => {
+                info!(
+                    backend = %self.name,
+                    provider = ?plan.provider,
+                    policy_id = %plan.policy.id,
+                    "RuntimeProvider profile accepted before stdio backend start"
+                );
+                Ok(ResolvedStdioLaunch {
+                    command: configured_command.to_string(),
+                    env: self.config.env.clone(),
+                })
+            }
+            RuntimeProviderKind::Docker | RuntimeProviderKind::Podman => {
+                let command = container_stdio_bridge_command(plan)?;
+                info!(
+                    backend = %self.name,
+                    provider = ?plan.provider,
+                    policy_id = %plan.policy.id,
+                    "RuntimeProvider container stdio bridge accepted before backend start"
+                );
+                Ok(ResolvedStdioLaunch {
+                    command,
+                    env: filter_runtime_env(&self.config.env, &plan.policy.env.allowed_keys),
+                })
+            }
+            RuntimeProviderKind::Systemd
+            | RuntimeProviderKind::Launchd
+            | RuntimeProviderKind::Kubernetes => Err(Error::Config(format!(
+                "backend '{}' runtime profile selected {:?}, but live stdio backend lifecycle currently supports local_process plus docker/podman stdio bridge",
                 self.name, plan.provider
-            )));
+            ))),
         }
+    }
+
+    fn enforce_stdio_runtime_plan(&self, plan: &RuntimePlan) -> Result<()> {
         if plan.is_denied() {
             let reasons = plan
                 .denied
@@ -422,13 +463,6 @@ impl Backend {
                 self.name, plan.policy.id
             )));
         }
-
-        info!(
-            backend = %self.name,
-            provider = ?plan.provider,
-            policy_id = %plan.policy.id,
-            "RuntimeProvider profile accepted before stdio backend start"
-        );
         Ok(())
     }
 
@@ -1058,6 +1092,62 @@ impl Backend {
     }
 }
 
+struct ResolvedStdioLaunch {
+    command: String,
+    env: HashMap<String, String>,
+}
+
+fn container_stdio_bridge_command(plan: &RuntimePlan) -> Result<String> {
+    let command = plan.launch_command.as_ref().ok_or_else(|| {
+        Error::Config(format!(
+            "runtime provider {:?} has no structured launch command for stdio bridge",
+            plan.provider
+        ))
+    })?;
+    if command.args.first().map(String::as_str) != Some("run") {
+        return Err(Error::Config(format!(
+            "runtime provider {:?} launch command is not a container run command",
+            plan.provider
+        )));
+    }
+
+    let mut args = vec![
+        "run".to_string(),
+        "--interactive".to_string(),
+        "--rm".to_string(),
+    ];
+    let mut skip_restart_value = false;
+    for arg in command.args.iter().skip(1) {
+        if skip_restart_value {
+            skip_restart_value = false;
+            continue;
+        }
+        match arg.as_str() {
+            "--detach" | "-d" | "--interactive" | "-i" | "--rm" => {}
+            "--restart" => skip_restart_value = true,
+            value if value.starts_with("--restart=") => {}
+            _ => args.push(arg.clone()),
+        }
+    }
+
+    Ok(RuntimeLaunchCommand {
+        program: command.program.clone(),
+        args,
+        mode: RuntimeLaunchMode::RunToCompletion,
+    }
+    .display_command())
+}
+
+fn filter_runtime_env(
+    env: &HashMap<String, String>,
+    allowed_keys: &[String],
+) -> HashMap<String, String> {
+    allowed_keys
+        .iter()
+        .filter_map(|key| env.get(key).map(|value| (key.clone(), value.clone())))
+        .collect()
+}
+
 /// Backend status information
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BackendStatus {
@@ -1577,14 +1667,18 @@ mod tests {
         assert!(runtime.rollback_step.contains("direct-launch"));
     }
 
-    #[tokio::test]
-    async fn stdio_backend_rejects_container_runtime_plan_before_spawn() {
+    #[test]
+    fn stdio_backend_uses_container_runtime_bridge_command() {
         let cfg = BackendConfig {
             transport: TransportConfig::Stdio {
                 command: "definitely-not-a-real-mcp-server".to_string(),
                 cwd: None,
                 protocol_version: None,
             },
+            env: HashMap::from([
+                ("SAFE_HANDLE".to_string(), "safe-value".to_string()),
+                ("UNDECLARED_ENV".to_string(), "must-not-pass".to_string()),
+            ]),
             runtime_profile: Some("containerized".to_string()),
             ..BackendConfig::default()
         };
@@ -1596,6 +1690,7 @@ mod tests {
             crate::config::RuntimeProfileConfig {
                 provider: Some(crate::runtime::RuntimeProviderKind::Docker),
                 image: Some("ghcr.io/example/server:latest".to_string()),
+                env_keys: vec!["SAFE_HANDLE".to_string()],
                 ..crate::config::RuntimeProfileConfig::default()
             },
         );
@@ -1608,10 +1703,41 @@ mod tests {
             Some(plan),
         );
 
-        let err = backend.start().await.expect_err("container plan rejected");
+        let launch = backend
+            .resolve_stdio_runtime_launch("definitely-not-a-real-mcp-server")
+            .expect("container stdio bridge launch");
+        let parts = shlex::split(&launch.command).expect("bridge command is shell-splitable");
+
+        assert_eq!(parts.first().map(String::as_str), Some("docker"));
+        assert_eq!(parts.get(1).map(String::as_str), Some("run"));
+        assert_eq!(
+            parts.get(2..6),
+            Some(
+                &[
+                    "--interactive".to_string(),
+                    "--rm".to_string(),
+                    "--name".to_string(),
+                    "mcp-gateway-docs".to_string()
+                ][..]
+            ),
+            "bridge flags must not split paired docker options: {parts:?}"
+        );
+        assert!(parts.contains(&"--interactive".to_string()));
+        assert!(parts.contains(&"--rm".to_string()));
+        assert!(!parts.contains(&"--detach".to_string()));
         assert!(
-            err.to_string().contains("supports only local_process"),
-            "containerized stdio plan should fail closed before spawn: {err}"
+            !parts.iter().any(|arg| arg.starts_with("--restart=")),
+            "stdio bridge must drop detached restart policy flags: {parts:?}"
+        );
+        assert!(parts.contains(&"--network=none".to_string()));
+        assert!(parts.contains(&"--read-only".to_string()));
+        assert!(parts.contains(&"--cap-drop=ALL".to_string()));
+        assert!(parts.contains(&"SAFE_HANDLE".to_string()));
+        assert!(!parts.contains(&"UNDECLARED_ENV".to_string()));
+        assert!(parts.contains(&"ghcr.io/example/server:latest".to_string()));
+        assert_eq!(
+            launch.env,
+            HashMap::from([("SAFE_HANDLE".to_string(), "safe-value".to_string())])
         );
     }
 
