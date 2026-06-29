@@ -230,6 +230,7 @@ pub enum RuntimeNetworkEgress {
 
 /// Runtime resource limits.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct RuntimeResourcePolicy {
     /// CPU cores, rounded to milli-core granularity by providers.
     pub cpu_cores: u32,
@@ -262,6 +263,7 @@ pub struct RuntimeEnvironmentPolicy {
 
 /// Restart policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct RuntimeRestartPolicy {
     /// Maximum restart attempts.
     pub max_restarts: u32,

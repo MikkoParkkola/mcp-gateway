@@ -32,7 +32,8 @@ pub use features::{
     HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
     KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
     PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
+    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
+    StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -86,6 +87,9 @@ pub struct Config {
     /// Agent Auth — OAuth 2.0 agent-scoped tool permissions.
     #[serde(default)]
     pub agent_auth: AgentAuthConfig,
+    /// `RuntimeProvider` planning and isolation profiles.
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
     /// Plugin marketplace and local plugin directory.
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
@@ -291,6 +295,7 @@ impl Config {
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
         self.validate_required_env_references()?;
+        self.runtime.validate()?;
         Ok(())
     }
 

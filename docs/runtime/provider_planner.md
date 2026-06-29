@@ -21,6 +21,42 @@ providers that are ready to launch.
   read-only root filesystem, `--cap-drop=ALL`, `no-new-privileges`, memory and
   CPU limits, and a small process limit.
 
+## Gateway Config
+
+Operators can declare reusable runtime profiles in `gateway.yaml`. Omitted
+runtime config preserves the existing direct-launch behavior through
+`local_process`.
+
+```yaml
+runtime:
+  default_provider: local_process
+  availability:
+    docker: true
+  profiles:
+    gmail:
+      provider: docker
+      image: ghcr.io/example/gmail-mcp:1
+      executable: mcp-gmail
+      data_class: sensitive
+      env_keys:
+        - GMAIL_HANDLE
+      guarded_env_keys:
+        - GMAIL_HANDLE
+      network_egress: none
+      resources:
+        cpu_cores: 2
+        memory_mb: 768
+        timeout_secs: 45
+      restart:
+        max_restarts: 3
+        backoff_secs: 10
+```
+
+Config validation rejects container profiles without an image, invalid resource
+limits, malformed environment names, empty allowlist entries, and malformed mount
+targets. Availability is declarative and does not probe Docker or Podman during
+config load; runtime plans still emit preflight checks such as `docker info`.
+
 ## Human Gates
 
 The planner pauses for human approval before host mounts, unrestricted egress,
