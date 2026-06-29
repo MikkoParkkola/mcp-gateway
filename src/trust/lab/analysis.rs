@@ -312,6 +312,12 @@ fn remediation_action_from_finding(finding: &TrustFinding) -> TrustLabRemediatio
                 false,
                 false,
             ),
+            "TRUSTLAB_ACTIVE_FIXTURE_DRY_RUN" => (
+                TrustLabRemediationCategory::ReviewScanner,
+                "Execute dry-run fixture in isolation",
+                false,
+                false,
+            ),
             "TRUSTLAB_TOOL_POISONING" => (
                 TrustLabRemediationCategory::Quarantine,
                 "Quarantine suspicious tool descriptor",

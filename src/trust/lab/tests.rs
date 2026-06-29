@@ -271,6 +271,41 @@ fn active_eval_refuses_to_invoke_without_isolation() {
 }
 
 #[test]
+fn active_eval_dry_run_keeps_certification_provisional() {
+    let fixtures = vec![TrustLabFixtureCall {
+        tool_name: "search_docs".to_string(),
+        arguments: json!({"q": "release notes"}),
+        declared_safe: true,
+    }];
+    let runtime =
+        CatalogTrustLab::dry_run_active_fixture_calls("cli_fixture_plan", true, &fixtures);
+
+    let lab = CatalogTrustLab::new(TrustLabPolicy {
+        advisory_only: false,
+        ..TrustLabPolicy::default()
+    });
+    let evaluation = lab.evaluate_card_with_runtime_at(&clean_card(), None, fixed_time(), runtime);
+
+    assert!(!evaluation.runtime.active_eval);
+    assert!(!evaluation.runtime.fixture_calls[0].invoked);
+    assert_eq!(
+        evaluation.runtime.fixture_calls[0].status,
+        TrustLabFixtureCallStatus::DryRun
+    );
+    assert!(
+        evaluation
+            .findings
+            .iter()
+            .any(|finding| finding.code == "TRUSTLAB_ACTIVE_FIXTURE_DRY_RUN")
+    );
+    assert_eq!(evaluation.policy_verdict, TrustLabPolicyVerdict::Warn);
+    assert_eq!(
+        evaluation.certification.status,
+        TrustLabCertificationStatus::Provisional
+    );
+}
+
+#[test]
 fn active_eval_failed_fixture_blocks_enablement() {
     let fixtures = vec![TrustLabFixtureCall {
         tool_name: "search_docs".to_string(),

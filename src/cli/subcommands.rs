@@ -355,6 +355,12 @@ pub enum TrustLabCommand {
         #[arg(long)]
         update_baseline_registry: bool,
 
+        /// JSON/YAML file with dry-run active fixture evidence. The CLI does
+        /// not call a candidate server; it records which declared-safe fixtures
+        /// would be eligible for isolated execution.
+        #[arg(long)]
+        active_fixtures: Option<PathBuf>,
+
         /// Baseline identifier used when --write-baseline is set.
         #[arg(long, default_value = "local-baseline")]
         baseline_id: String,

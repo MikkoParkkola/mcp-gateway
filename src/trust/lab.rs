@@ -305,6 +305,76 @@ impl CatalogTrustLab {
         }
     }
 
+    /// Attach a dry-run active fixture plan without invoking a candidate server.
+    ///
+    /// This is intended for CLI and CI evidence before a live `RuntimeProvider`
+    /// runner is available. It proves the fixture set and fail-closed
+    /// eligibility decisions, but keeps the evaluation provisional through a
+    /// warning finding until a real isolated runner executes the calls.
+    #[must_use]
+    pub fn dry_run_active_fixture_calls(
+        provider: impl Into<String>,
+        isolated: bool,
+        fixtures: &[TrustLabFixtureCall],
+    ) -> TrustLabRuntimeEvidence {
+        let fixture_calls = fixtures
+            .iter()
+            .map(|fixture| {
+                let arguments_digest_sha256 = canonical_json_sha256(&fixture.arguments);
+                if !fixture.declared_safe {
+                    return TrustLabFixtureCallReport {
+                        tool_name: fixture.tool_name.clone(),
+                        arguments_digest_sha256,
+                        declared_safe: false,
+                        invoked: false,
+                        status: TrustLabFixtureCallStatus::Skipped,
+                        result_digest_sha256: None,
+                        error: None,
+                        skipped_reason: Some(
+                            "fixture was not explicitly declared safe".to_string(),
+                        ),
+                    };
+                }
+
+                if !isolated {
+                    return TrustLabFixtureCallReport {
+                        tool_name: fixture.tool_name.clone(),
+                        arguments_digest_sha256,
+                        declared_safe: true,
+                        invoked: false,
+                        status: TrustLabFixtureCallStatus::Skipped,
+                        result_digest_sha256: None,
+                        error: None,
+                        skipped_reason: Some("runtime isolation was not enabled".to_string()),
+                    };
+                }
+
+                TrustLabFixtureCallReport {
+                    tool_name: fixture.tool_name.clone(),
+                    arguments_digest_sha256,
+                    declared_safe: true,
+                    invoked: false,
+                    status: TrustLabFixtureCallStatus::DryRun,
+                    result_digest_sha256: None,
+                    error: None,
+                    skipped_reason: Some(
+                        "dry-run evidence only; fixture was not invoked".to_string(),
+                    ),
+                }
+            })
+            .collect::<Vec<_>>();
+        let active_eval = false;
+        let safe_fixture_only = fixture_calls.iter().all(|report| report.declared_safe);
+
+        TrustLabRuntimeEvidence {
+            provider: provider.into(),
+            isolated,
+            active_eval,
+            safe_fixture_only,
+            fixture_calls,
+        }
+    }
+
     fn attach_runtime_evidence(
         &self,
         evaluation: &mut TrustLabEvaluation,
@@ -632,6 +702,15 @@ fn runtime_findings(runtime: &TrustLabRuntimeEvidence) -> Vec<TrustFinding> {
                 "Rerun active evaluation after resolving the runtime skip reason.",
                 TrustEvidenceKind::Observed,
             ));
+        } else if fixture.status == TrustLabFixtureCallStatus::DryRun {
+            findings.push(lab_finding(
+                "TRUSTLAB_ACTIVE_FIXTURE_DRY_RUN",
+                TrustFindingSeverity::Warn,
+                format!("runtime.fixture_calls[{}]", fixture.tool_name),
+                "Declared-safe fixture was dry-run only and was not invoked",
+                "Run the fixture through an isolated RuntimeProvider-backed runner before certification.",
+                TrustEvidenceKind::Observed,
+            ));
         } else if fixture.status == TrustLabFixtureCallStatus::Failed {
             findings.push(lab_finding(
                 "TRUSTLAB_ACTIVE_FIXTURE_FAILED",
@@ -704,6 +783,8 @@ pub enum TrustLabFixtureCallStatus {
     Planned,
     /// Safe fixture executed and passed.
     Passed,
+    /// Safe fixture was validated in a dry run but not invoked.
+    DryRun,
     /// Safe fixture executed and failed.
     Failed,
     /// Fixture was skipped.
