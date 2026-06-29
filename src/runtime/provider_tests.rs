@@ -3,7 +3,7 @@ use super::{
     RuntimeApplyRequest, RuntimeApplyStatus, RuntimeAvailability, RuntimeCommandOutcome,
     RuntimeCommandRunner, RuntimeDataClass, RuntimeDenyReason, RuntimeIntent, RuntimeLaunchCommand,
     RuntimeMount, RuntimeMountMode, RuntimeNetworkEgress, RuntimePlanner, RuntimeProvider,
-    RuntimeProviderKind, RuntimeProviderSelection,
+    RuntimeProviderKind, RuntimeProviderSelection, StdRuntimeCommandRunner,
 };
 
 #[derive(Default)]
@@ -419,4 +419,116 @@ fn local_and_docker_providers_use_same_contract() {
     assert_eq!(plans[0].provider, RuntimeProviderKind::LocalProcess);
     assert_eq!(plans[1].provider, RuntimeProviderKind::Docker);
     assert_eq!(plans[0].policy.id, plans[1].policy.id);
+}
+
+#[test]
+#[ignore = "requires a reachable Docker daemon; run scripts/dev/runtime-provider-docker-smoke.sh"]
+fn runtime_provider_real_docker_smoke_exercises_lifecycle() {
+    assert_eq!(
+        std::env::var("MCP_GATEWAY_RUNTIME_DOCKER_SMOKE").as_deref(),
+        Ok("1"),
+        "set MCP_GATEWAY_RUNTIME_DOCKER_SMOKE=1 or run scripts/dev/runtime-provider-docker-smoke.sh"
+    );
+
+    let image = std::env::var("MCP_GATEWAY_RUNTIME_DOCKER_IMAGE")
+        .unwrap_or_else(|_| "docker.io/library/hello-world:latest".to_string());
+    let server_name = format!(
+        "docker-smoke-{}-{}",
+        std::process::id(),
+        unix_timestamp_secs()
+    );
+    let planner = RuntimePlanner::new(RuntimeAvailability::with_docker());
+    let mut intent = RuntimeIntent::named(server_name);
+    intent.image = Some(image);
+    intent.data_class = RuntimeDataClass::Sensitive;
+
+    let plan = planner.plan(&intent);
+    let container_name = docker_container_name(&plan);
+    let _cleanup = DockerCleanup::new(&container_name);
+    let mut runner = StdRuntimeCommandRunner;
+    let request = RuntimeApplyRequest::empty();
+
+    let started = plan
+        .apply_with(&mut runner, &request)
+        .expect("docker start");
+    assert_eq!(started.audit.provider, RuntimeProviderKind::Docker);
+    assert_eq!(started.audit.action, RuntimeApplyAction::Start);
+    assert_eq!(started.audit.status, RuntimeApplyStatus::Started);
+    assert_eq!(started.audit.env_keys, Vec::<String>::new());
+    assert!(
+        started
+            .outcome
+            .external_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+    );
+
+    let health = plan
+        .health_with(&mut runner, &request)
+        .expect("docker inspect");
+    assert_eq!(health.audit.action, RuntimeApplyAction::Health);
+    assert!(
+        matches!(health.outcome.stdout.trim(), "true" | "false"),
+        "unexpected docker inspect running state: {:?}",
+        health.outcome.stdout
+    );
+
+    let logs = plan.logs_with(&mut runner, &request).expect("docker logs");
+    assert_eq!(logs.audit.action, RuntimeApplyAction::Logs);
+    assert!(logs.outcome.stdout.contains("Hello from Docker"));
+
+    let restarted = plan
+        .restart_with(&mut runner, &request)
+        .expect("docker restart");
+    assert_eq!(restarted.audit.action, RuntimeApplyAction::Restart);
+
+    let stopped = plan.stop_with(&mut runner, &request).expect("docker rm");
+    assert_eq!(stopped.audit.action, RuntimeApplyAction::Stop);
+}
+
+fn unix_timestamp_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_secs()
+}
+
+fn docker_container_name(plan: &super::RuntimePlan) -> String {
+    let args = &plan
+        .launch_command
+        .as_ref()
+        .expect("docker launch command")
+        .args;
+    let name_index = args
+        .iter()
+        .position(|arg| arg == "--name")
+        .expect("docker --name argument");
+    args.get(name_index + 1)
+        .expect("docker container name value")
+        .clone()
+}
+
+struct DockerCleanup {
+    name: String,
+}
+
+impl DockerCleanup {
+    fn new(name: &str) -> Self {
+        remove_docker_container(name);
+        Self {
+            name: name.to_string(),
+        }
+    }
+}
+
+impl Drop for DockerCleanup {
+    fn drop(&mut self) {
+        remove_docker_container(&self.name);
+    }
+}
+
+fn remove_docker_container(name: &str) {
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "--force", name])
+        .output();
 }

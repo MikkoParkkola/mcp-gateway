@@ -142,3 +142,17 @@ Docker lifecycle commands, restart-policy-aware launch flags, restart command
 audit, guarded name handling, broad egress confirmation, forbidden mount denial,
 apply fail-closed behavior, container image denial, and the shared
 LocalProcess/Docker provider contract.
+
+For a live Docker daemon smoke on a Docker-enabled host, run:
+
+```bash
+scripts/dev/runtime-provider-docker-smoke.sh
+```
+
+The smoke is ignored in normal test runs. It sets the explicit
+`MCP_GATEWAY_RUNTIME_DOCKER_SMOKE=1` gate, starts a restricted
+`docker.io/library/hello-world:latest` container through
+`StdRuntimeCommandRunner`, then exercises `inspect`, `logs`, `restart`, and
+`rm --force` through the same structured `RuntimePlan` lifecycle commands used
+by the provider contract. Override the image with
+`MCP_GATEWAY_RUNTIME_DOCKER_IMAGE` when a local registry mirror is required.
