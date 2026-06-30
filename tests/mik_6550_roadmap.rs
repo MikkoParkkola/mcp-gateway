@@ -104,6 +104,14 @@ fn mik_6550_public_boundary_has_no_blocked_terms() {
 fn mik_6550_public_competitor_comparison_is_present() {
     for phrase in [
         "Public MCP Gateway Comparison",
+        "This table compares public, user-facing behavior",
+        "docs/OWASP_AGENTIC_AI_COMPLIANCE.md",
+        "docs/trustcard.md",
+        "docs/adaptive_ranking.md",
+        "https://docs.docker.com/ai/mcp-catalog-and-toolkit/",
+        "https://github.com/mcpjungle/MCPJungle",
+        "https://github.com/open-webui/mcpo",
+        "https://github.com/supercorp-ai/supergateway",
         "Docker MCP Gateway / Toolkit",
         "MCPJungle",
         "mcpo",

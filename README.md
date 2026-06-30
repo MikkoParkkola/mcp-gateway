@@ -58,8 +58,14 @@ The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gatew
 
 ### Public MCP Gateway Comparison
 
-Sources are linked in the project names. This table compares public,
-user-facing behavior, not internal roadmap scoring.
+This table compares public, user-facing behavior, not internal roadmap scoring.
+MCP Gateway entries are grounded in this repo's public docs: [quickstart](QUICKSTART.md),
+[deployment](docs/DEPLOYMENT.md), [OWASP controls](docs/OWASP_AGENTIC_AI_COMPLIANCE.md),
+[TrustCard/CBOM](docs/trustcard.md), [CatalogTrustLab](docs/catalog_trust_lab.md),
+[adaptive ranking](docs/adaptive_ranking.md), and the [Trust Fabric roadmap](docs/roadmap/mik-6550-trust-fabric-roadmap.md).
+Competitor entries are grounded in public project docs: [Docker MCP Catalog and Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/),
+[MCPJungle README](https://github.com/mcpjungle/MCPJungle), [mcpo README](https://github.com/open-webui/mcpo),
+and [Supergateway README](https://github.com/supercorp-ai/supergateway).
 
 | Axis | **MCP Gateway** | **[Docker MCP Gateway / Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/)** | **[MCPJungle](https://github.com/mcpjungle/MCPJungle)** | **[mcpo](https://github.com/open-webui/mcpo) / [Supergateway](https://github.com/supercorp-ai/supergateway)** |
 |---|---|---|---|---|
