@@ -9,9 +9,9 @@ use super::{
     TrustCardDraft, TrustCardRiskVerdict, TrustEvidenceLevel,
     helpers::{
         PostmanRequest, aggregate_gates, classify_route_risks, classify_schema_risks,
-        collect_postman_requests, digest_for, empty_object_schema, gates_for_risks, human_title,
-        is_safe_method, lacks_graphql_bounds, plan_digest, policy_for_gates, postman_input_schema,
-        slugify, source_kind_slug,
+        collect_postman_requests, digest_for, empty_object_schema, gates_for_risks,
+        graphql_exceeds_limits, human_title, is_safe_method, lacks_graphql_bounds, plan_digest,
+        policy_for_gates, postman_input_schema, slugify, source_kind_slug,
     },
 };
 
@@ -294,6 +294,16 @@ impl ProtocolImportPlanner {
                 kind: ImportRiskKind::UnboundedQuery,
                 level: ImportRiskLevel::Medium,
                 reason: "GraphQL query lacks obvious pagination or complexity bounds".to_string(),
+                field: Some(operation.name.clone()),
+            });
+        }
+        if let Some((depth, fields)) = graphql_exceeds_limits(&operation.query) {
+            risks.push(ImportRisk {
+                kind: ImportRiskKind::UnboundedQuery,
+                level: ImportRiskLevel::High,
+                reason: format!(
+                    "GraphQL query exceeds depth/complexity limits (depth {depth}, {fields} selection sets); must be reviewed before activation"
+                ),
                 field: Some(operation.name.clone()),
             });
         }
