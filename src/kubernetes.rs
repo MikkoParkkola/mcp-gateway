@@ -277,6 +277,18 @@ pub enum KubernetesPlanError {
         /// Field path.
         field: &'static str,
     },
+    /// A resource name is not a valid RFC 1123 Kubernetes object name.
+    ///
+    /// Rejecting this at parse time prevents a flag-shaped name (e.g. `--all`)
+    /// from reaching a `kubectl` command vector as a positional argument, where
+    /// it would be reinterpreted as a flag and widen the operation.
+    #[error("Kubernetes document {document} has invalid metadata.name {name:?}")]
+    InvalidName {
+        /// Zero-based document index.
+        document: usize,
+        /// The rejected name.
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +337,23 @@ impl ResourceIndex {
     }
 }
 
+/// Validate a Kubernetes object name (the RFC 1123 subset kubectl accepts for
+/// object names): 1–253 chars of lowercase alphanumerics, `-`, and `.`, starting
+/// and ending with an alphanumeric. Rejecting flag-shaped names like `--all`
+/// here keeps them out of `kubectl` command vectors where they would be parsed
+/// as flags rather than as the target object.
+fn is_valid_k8s_object_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 253 {
+        return false;
+    }
+    let is_alnum = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    let bytes = name.as_bytes();
+    if !is_alnum(bytes[0]) || !is_alnum(bytes[bytes.len() - 1]) {
+        return false;
+    }
+    bytes.iter().all(|&b| is_alnum(b) || b == b'-' || b == b'.')
+}
+
 fn parse_resources(input: &str) -> Result<Vec<KubernetesResource>, KubernetesPlanError> {
     let mut resources = Vec::new();
     for (index, document) in serde_yaml::Deserializer::from_str(input).enumerate() {
@@ -349,6 +378,12 @@ fn parse_resources(input: &str) -> Result<Vec<KubernetesResource>, KubernetesPla
                 document: index,
                 field: "metadata.name",
             })?;
+        if !is_valid_k8s_object_name(name) {
+            return Err(KubernetesPlanError::InvalidName {
+                document: index,
+                name: name.to_string(),
+            });
+        }
         resources.push(KubernetesResource {
             kind: kind.to_string(),
             name: name.to_string(),
@@ -633,6 +668,48 @@ mod tests {
 
     const EXAMPLE: &str =
         include_str!("../deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml");
+
+    #[test]
+    fn valid_k8s_object_names_accepted() {
+        for name in [
+            "mcp-gateway",
+            "gw1",
+            "a",
+            "my.svc-2",
+            "x".repeat(253).as_str(),
+        ] {
+            assert!(is_valid_k8s_object_name(name), "should accept {name:?}");
+        }
+    }
+
+    #[test]
+    fn flag_shaped_and_malformed_names_rejected() {
+        for name in [
+            "--all",
+            "-l",
+            "-n",
+            "",
+            "UPPER",
+            "trailing-",
+            ".leading",
+            "a b",
+            &"x".repeat(254),
+        ] {
+            assert!(!is_valid_k8s_object_name(name), "should reject {name:?}");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_flag_shaped_resource_name() {
+        // A manifest whose metadata.name is `--all` must be rejected before it
+        // can reach a kubectl command vector as a positional argument.
+        let manifest = "apiVersion: mcpgateway.io/v1alpha1\nkind: Gateway\nmetadata:\n  name: --all\nspec: {}\n";
+        let err = parse_resources(manifest).expect_err("flag-shaped name must be rejected");
+        assert!(
+            matches!(err, KubernetesPlanError::InvalidName { .. }),
+            "got {err:?}"
+        );
+    }
 
     #[test]
     fn reconcile_plan_resolves_example_custom_resources() {
