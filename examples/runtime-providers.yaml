@@ -1,0 +1,65 @@
+# Example: Backend with Docker runtime provider
+#
+# The backend runs in a Docker container with restricted defaults:
+# - no host network (--network none)
+# - read-only root filesystem (--read-only)
+# - explicit environment allowlist
+# - CPU and memory limits
+# - audit events with secret redaction
+#
+backends:
+  my-docker-server:
+    description: "MCP server running in Docker with isolation"
+    enabled: true
+    command: "node my-mcp-server.js"
+    runtime:
+      provider: docker
+      resources:
+        cpu: 1.0
+        memory: "512MiB"
+      egress:
+        deny_default: true
+        allowlist:
+          - "10.0.0.0/8"
+          - "api.example.com"
+      env_policy:
+        inherit_env: false
+        allowlist:
+          - PATH
+          - HOME
+      mounts:
+        allow_writable: false
+        mounts:
+          - host: /tmp/cache
+            container: /cache
+      identity:
+        user: "1000"
+      timeouts:
+        start_secs: 60
+      log_policy:
+        capture: true
+        max_lines: 500
+
+  my-podman-server:
+    description: "MCP server running in Podman with isolation"
+    enabled: true
+    command: "python my-mcp-server.py"
+    runtime:
+      provider: podman
+      resources:
+        cpu: 0.5
+        memory: "256MiB"
+      egress:
+        deny_default: true
+        allowlist:
+          - "192.168.1.0/24"
+
+  my-local-server:
+    description: "MCP server running locally (compatibility mode)"
+    enabled: true
+    command: "./my-local-server"
+    # runtime defaults to local_compat — no isolation, preserves existing behavior
+
+server:
+  host: "127.0.0.1"
+  port: 9020

@@ -575,6 +575,13 @@ pub struct BackendConfig {
     /// Transport type.
     #[serde(flatten)]
     pub transport: TransportConfig,
+    /// Runtime provider and isolation policy.
+    ///
+    /// Omitted key defaults to `local_compat` (preserves existing
+    /// direct-launch stdio behavior).  Set `provider: docker` or
+    /// `provider: podman` for container-based isolation.
+    #[serde(default)]
+    pub runtime: crate::runtime::RuntimeConfig,
     /// Idle timeout before hibernation.
     #[serde(with = "humantime_serde")]
     pub idle_timeout: Duration,
@@ -606,6 +613,7 @@ impl Default for BackendConfig {
             description: String::new(),
             enabled: true,
             transport: TransportConfig::default(),
+            runtime: crate::runtime::RuntimeConfig::default(),
             idle_timeout: Duration::from_secs(300),
             timeout: Duration::from_secs(30),
             env: HashMap::new(),

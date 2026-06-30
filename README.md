@@ -95,6 +95,8 @@ Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gatew
 
 ### Recent additions
 
+- **Runtime provider isolation (Docker/Podman).** Backends can now run in containers with restricted defaults: `--network none`, `--read-only` root filesystem, explicit environment allowlists, read-only bind mounts, resource limits, and deterministic labels. Provider `local_compat` preserves existing direct-launch behavior; `provider: docker` and `provider: podman` enable container isolation with fail-closed policy enforcement and redacted NDJSON audit events. See [docs/runtime/providers.md](docs/runtime/providers.md) and [examples/runtime-providers.yaml](examples/runtime-providers.yaml).
+
 - **OpenAPI importer.** `mcp-gateway cap import <spec-url-or-file>` turns an OpenAPI 3 spec into one validated capability YAML per operation. The full Swagger Petstore spec becomes 19 validated capability YAMLs end-to-end:
   ```bash
   mcp-gateway cap import https://petstore3.swagger.io/api/v3/openapi.json --output capabilities/ --prefix petstore

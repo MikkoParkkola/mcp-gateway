@@ -390,3 +390,96 @@ fn validate_rejects_tampered_remote_backend_provenance_signature() {
         "error should name the backend and invalid signature: {msg}"
     );
 }
+
+// ── Runtime policy config (MIK-6555 AC.3) ────────────────────────────────────
+
+/// AC.3: Omitted runtime config defaults to local_compat.
+/// AC.3: YAML without runtime becomes local_compat; YAML with docker policy
+/// round-trips without losing fields.
+#[test]
+fn runtime_policy_config_defaults_and_roundtrip() {
+    // GIVEN: a YAML backend without a `runtime` key
+    let yaml_no_runtime = r#"
+backends:
+  my-backend:
+    command: "./my-server"
+"#;
+    let config: Config = serde_yaml::from_str(yaml_no_runtime).unwrap();
+
+    // THEN: runtime defaults to local_compat
+    let backend = config.backends.get("my-backend").unwrap();
+    assert_eq!(backend.runtime.provider, "local_compat");
+
+    // GIVEN: a YAML backend with a docker runtime policy
+    let yaml_docker = r#"
+backends:
+  my-backend:
+    command: "./my-server"
+    runtime:
+      provider: docker
+      resources:
+        cpu: 1.0
+        memory: "512MiB"
+      mounts:
+        allow_writable: true
+        mounts:
+          - host: /tmp/data
+            container: /data
+            writable: true
+      egress:
+        deny_default: true
+        allowlist:
+          - "10.0.0.0/8"
+      env_policy:
+        inherit_env: false
+        allowlist:
+          - PATH
+      secrets:
+        env_secrets:
+          API_KEY: "env:MCP_SECRET"
+      identity:
+        user: "1000"
+      timeouts:
+        start_secs: 60
+      log_policy:
+        capture: true
+        max_lines: 500
+"#;
+    let config: Config = serde_yaml::from_str(yaml_docker).unwrap();
+    let backend = config.backends.get("my-backend").unwrap();
+
+    // THEN: provider is docker
+    assert_eq!(backend.runtime.provider, "docker");
+
+    // AND: round-trip through YAML preserves all fields
+    let roundtripped_yaml = serde_yaml::to_string(config).unwrap();
+    let config2: Config = serde_yaml::from_str(&roundtripped_yaml).unwrap();
+    let backend2 = config2.backends.get("my-backend").unwrap();
+    assert_eq!(backend2.runtime.provider, "docker");
+    assert!((backend2.runtime.resources.cpu - 1.0f64).abs() < f64::EPSILON);
+    assert_eq!(backend2.runtime.resources.memory, "512MiB");
+    assert!(backend2.runtime.mounts.allow_writable);
+    assert_eq!(backend2.runtime.mounts.mounts.len(), 1);
+    assert_eq!(backend2.runtime.mounts.mounts[0].host, "/tmp/data");
+    assert_eq!(backend2.runtime.mounts.mounts[0].container, "/data");
+    assert!(backend2.runtime.mounts.mounts[0].writable);
+    assert!(backend2.runtime.egress.deny_default);
+    assert_eq!(backend2.runtime.egress.allowlist.len(), 1);
+    assert!(!backend2.runtime.env_policy.inherit_env);
+    assert_eq!(backend2.runtime.env_policy.allowlist.len(), 1);
+    assert_eq!(backend2.runtime.secrets.env_secrets.len(), 1);
+    assert_eq!(
+        backend2.runtime.identity.user.as_deref(),
+        Some("1000")
+    );
+    assert_eq!(backend2.runtime.timeouts.start_secs, 60);
+    assert!(backend2.runtime.log_policy.capture);
+    assert_eq!(backend2.runtime.log_policy.max_lines, 500);
+}
+
+/// AC.3: BackendConfig default runtime is local_compat
+#[test]
+fn backend_config_default_runtime_is_local_compat() {
+    let cfg = BackendConfig::default();
+    assert_eq!(cfg.runtime.provider, "local_compat");
+}

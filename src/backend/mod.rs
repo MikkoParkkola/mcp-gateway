@@ -20,7 +20,8 @@ use crate::protocol::{
     JsonRpcResponse, Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult, Tool, ToolAnnotations, ToolsListResult,
 };
-use crate::transport::{HttpTransport, StdioTransport, Transport};
+use crate::runtime::{create_provider, PolicyVerdict, RuntimeProvider};
+use crate::transport::{HttpTransport, Transport};
 use crate::{Error, Result};
 
 struct CachedMetadata<T> {
@@ -260,15 +261,76 @@ impl Backend {
                 cwd,
                 protocol_version,
             } => {
-                let transport = StdioTransport::new(
-                    command,
-                    self.config.env.clone(),
-                    cwd.clone(),
-                    self.config.timeout,
-                    protocol_version.clone(),
-                );
-                transport.start().await?;
-                transport
+                // ── RuntimeProvider path (MIK-6555) ──
+                // Delegate stdio backend lifecycle to the configured
+                // RuntimeProvider instead of constructing StdioTransport
+                // directly.  This lets operators use local_compat,
+                // docker, or podman isolation without changing transport
+                // config.
+                let provider = create_provider(&self.config.runtime)?;
+
+                // Validate policy before spawning anything (fail-closed)
+                let verdict = provider.validate_policy(&self.config.runtime);
+                if let PolicyVerdict::Deny(reason) = &verdict {
+                    warn!(
+                        backend = %self.name,
+                        provider = %provider.provider_id(),
+                        %reason,
+                        "Runtime policy denied — refusing to start backend"
+                    );
+                    return Err(Error::Config(format!(
+                        "Runtime policy denied for backend '{}': {}",
+                        self.name, reason
+                    )));
+                }
+
+                // Emit audit events for provider selection
+                for event in provider.audit_selection(&self.name, &self.config.runtime) {
+                    info!(
+                        target: "runtime_audit",
+                        backend = %self.name,
+                        provider = %event.provider,
+                        action = ?event.action,
+                        verdict = %event.verdict,
+                        "{}",
+                        event.to_ndjson().trim()
+                    );
+                }
+
+                let (handle, audit_events) = provider
+                    .start(
+                        &self.name,
+                        command,
+                        self.config.env.clone(),
+                        cwd.clone(),
+                        protocol_version.clone(),
+                        self.config.timeout,
+                        &self.config.runtime,
+                    )
+                    .await?;
+
+                // Emit audit events for start transition
+                for event in audit_events {
+                    info!(
+                        target: "runtime_audit",
+                        backend = %self.name,
+                        provider = %event.provider,
+                        action = ?event.action,
+                        verdict = %event.verdict,
+                        "{}",
+                        event.to_ndjson().trim()
+                    );
+                }
+
+                // Extract transport from the handle
+                handle
+                    .as_transport()
+                    .ok_or_else(|| {
+                        Error::Transport(format!(
+                            "Runtime provider '{}' did not return a transport handle",
+                            provider.provider_id()
+                        ))
+                    })?
             }
             TransportConfig::Http {
                 http_url,
