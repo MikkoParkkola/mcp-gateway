@@ -1,0 +1,902 @@
+//! Shadow MCP security inventory.
+//!
+//! MIK-6554: Read-only `shadow scan` capability for local MCP security inventory.
+//! Builds on the existing `AutoDiscovery` stack to produce a risk-scored,
+//! stable-JSON report of MCP assets that operators can use before unmanaged
+//! MCP servers become production dependencies.
+//!
+//! # AC traceability
+//! - AC.1: `ShadowAsset` model and `ShadowRisk` taxonomy
+//! - AC.2: Local shadow scan (configs, processes, ports, gateway registry)
+//! - AC.3: Unmanaged flagging with reason/evidence/remediation
+//! - AC.4: Passive MCP probe (bounded timeout, no `tools/call`, secret redaction)
+//! - AC.5: JSON + table report output
+//! - AC.6: Enterprise CIDR scanning gated from free local scan
+
+use std::collections::HashSet;
+use std::fmt;
+use std::time::Duration;
+
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
+
+use crate::config::{BackendConfig, Config, TransportConfig};
+use crate::discovery::{AutoDiscovery, DiscoveredServer, DiscoverySource};
+use crate::{Error, Result};
+
+// ── ShadowRisk taxonomy ───────────────────────────────────────────────────────
+
+/// Risk classification for a `ShadowAsset`.
+///
+/// AC.1 covers: unmanaged, duplicate-port, unauthenticated, stale-binary,
+/// unknown-provenance, personal-credential-reference, missing-trust-metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowRisk {
+    /// The asset is not registered as a gateway backend — unmanaged.
+    Unmanaged,
+    /// Two or more assets share the same listening port.
+    DuplicatePort,
+    /// HTTP transport without any authentication (no bearer token, no mTLS, no API key).
+    Unauthenticated,
+    /// The binary on disk is older than 180 days — potentially stale / unpatched.
+    StaleBinary,
+    /// Provenance cannot be determined (no config file, no package signature, not in gateway registry).
+    UnknownProvenance,
+    /// A credential reference points to a personal account (e.g. `~/.personal/`).
+    PersonalCredentialReference,
+    /// No trust metadata (SHA-256 pin, signature, or attestation) found for the binary.
+    MissingTrustMetadata,
+}
+
+impl ShadowRisk {
+    /// Severity: 0=info, 1=low, 2=medium, 3=high, 4=critical.
+    #[must_use]
+    pub fn severity(&self) -> u8 {
+        match self {
+            Self::Unmanaged => 2,
+            Self::DuplicatePort => 1,
+            Self::Unauthenticated => 3,
+            Self::StaleBinary => 2,
+            Self::UnknownProvenance => 2,
+            Self::PersonalCredentialReference => 3,
+            Self::MissingTrustMetadata => 2,
+        }
+    }
+
+    /// Human-readable risk label.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Unmanaged => "unmanaged",
+            Self::DuplicatePort => "duplicate_port",
+            Self::Unauthenticated => "unauthenticated",
+            Self::StaleBinary => "stale_binary",
+            Self::UnknownProvenance => "unknown_provenance",
+            Self::PersonalCredentialReference => "personal_credential_reference",
+            Self::MissingTrustMetadata => "missing_trust_metadata",
+        }
+    }
+
+    /// Default remediation hint.
+    #[must_use]
+    pub fn remediation_hint(&self) -> &'static str {
+        match self {
+            Self::Unmanaged => {
+                "Register this server as a gateway backend or audit it before production use."
+            }
+            Self::DuplicatePort => {
+                "Reassign one of the conflicting servers to a different port."
+            }
+            Self::Unauthenticated => {
+                "Add authentication (bearer token, mTLS, or API key) to the HTTP transport."
+            }
+            Self::StaleBinary => {
+                "Update the binary to the latest version, then re-scan."
+            }
+            Self::UnknownProvenance => {
+                "Document the origin and maintainer of this server in the gateway registry."
+            }
+            Self::PersonalCredentialReference => {
+                "Replace personal credential references with service-account or vault-managed credentials."
+            }
+            Self::MissingTrustMetadata => {
+                "Pin the binary with a SHA-256 hash or sign it with a known key."
+            }
+        }
+    }
+}
+
+impl fmt::Display for ShadowRisk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+// ── ShadowAsset model ─────────────────────────────────────────────────────────
+
+/// A stable, risk-scored MCP asset discovered during a shadow scan.
+///
+/// AC.1: Must serialize to stable JSON with `schema_version`, `asset_id`, `kind`,
+/// `source`, `management_status`, `evidence`, `risks`, and `remediation_hints`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShadowAsset {
+    /// Schema version for the ShadowAsset format (currently 1).
+    pub schema_version: u32,
+    /// Stable identifier: SHA-256 of (kind + name + source).
+    pub asset_id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Asset kind: `mcp_server`, `mcp_config`, `mcp_process`, `gateway_backend`.
+    pub kind: ShadowAssetKind,
+    /// Discovery source (config file path, process table, port scan, gateway config).
+    pub source: String,
+    /// Transport summary (one-line description).
+    pub transport_summary: String,
+    /// Evidence list — what was observed.
+    pub evidence: Vec<String>,
+    /// Management status: `managed` (in gateway config) or `unmanaged`.
+    pub management_status: String,
+    /// Risk findings.
+    pub risks: Vec<ShadowRisk>,
+    /// Remediation hints (one per risk, or a single catch-all).
+    pub remediation_hints: Vec<String>,
+    /// First observed timestamp (ISO-8601).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_observed: Option<String>,
+    /// Last observed timestamp (ISO-8601).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_observed: Option<String>,
+    /// Redacted metadata (config snippets, env var references with secrets removed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_metadata: Option<serde_json::Value>,
+}
+
+/// Asset classification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowAssetKind {
+    /// An MCP server definition found in a client config file.
+    McpServer,
+    /// An MCP client config file itself.
+    McpConfig,
+    /// A running process that matches MCP server patterns.
+    McpProcess,
+    /// A gateway-configured backend instance.
+    GatewayBackend,
+    /// A local listening port that may be an MCP server.
+    ListeningPort,
+}
+
+impl fmt::Display for ShadowAssetKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::McpServer => write!(f, "mcp_server"),
+            Self::McpConfig => write!(f, "mcp_config"),
+            Self::McpProcess => write!(f, "mcp_process"),
+            Self::GatewayBackend => write!(f, "gateway_backend"),
+            Self::ListeningPort => write!(f, "listening_port"),
+        }
+    }
+}
+
+impl ShadowAsset {
+    /// Build a stable `asset_id` from kind, name, and source.
+    #[must_use]
+    pub fn compute_asset_id(kind: &ShadowAssetKind, name: &str, source: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(kind.to_string().as_bytes());
+        hasher.update(b":");
+        hasher.update(name.as_bytes());
+        hasher.update(b":");
+        hasher.update(source.as_bytes());
+        format!("sha256:{:x}", hasher.finalize())
+    }
+
+    /// Overall severity: max risk severity, or 0 if no risks.
+    #[must_use]
+    pub fn overall_severity(&self) -> u8 {
+        self.risks.iter().map(ShadowRisk::severity).max().unwrap_or(0)
+    }
+
+    /// Human-readable severity label.
+    #[must_use]
+    pub fn severity_label(&self) -> &'static str {
+        match self.overall_severity() {
+            0 => "none",
+            1 => "low",
+            2 => "medium",
+            3 => "high",
+            4 => "critical",
+            _ => "unknown",
+        }
+    }
+}
+
+// ── ShadowReport ──────────────────────────────────────────────────────────────
+
+/// The top-level result of a shadow scan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShadowReport {
+    /// Schema version for the report envelope.
+    pub schema_version: u32,
+    /// Scan timestamp (ISO-8601).
+    pub scanned_at: String,
+    /// Scan mode: `local` (free/core) or `enterprise`.
+    pub scan_mode: String,
+    /// Total assets found.
+    pub total_assets: usize,
+    /// Count of unmanaged assets.
+    pub unmanaged_count: usize,
+    /// Count of assets with critical/high risk.
+    pub high_risk_count: usize,
+    /// The discovered assets.
+    pub assets: Vec<ShadowAsset>,
+}
+
+impl ShadowReport {
+    /// Create a new report envelope.
+    #[must_use]
+    pub fn new(assets: Vec<ShadowAsset>, scan_mode: &str) -> Self {
+        let unmanaged_count = assets
+            .iter()
+            .filter(|a| a.management_status == "unmanaged")
+            .count();
+        let high_risk_count = assets
+            .iter()
+            .filter(|a| a.overall_severity() >= 3)
+            .count();
+        Self {
+            schema_version: 1,
+            scanned_at: Utc::now().to_rfc3339(),
+            scan_mode: scan_mode.to_string(),
+            total_assets: assets.len(),
+            unmanaged_count,
+            high_risk_count,
+            assets,
+        }
+    }
+
+    /// Render a human-readable table report.
+    #[must_use]
+    pub fn render_table(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "Shadow Scan Report  (schema_version: {})\n",
+            self.schema_version
+        ));
+        out.push_str(&format!(
+            "Scanned at: {}  |  Mode: {}  |  Assets: {}  |  Unmanaged: {}  |  High-risk: {}\n",
+            self.scanned_at,
+            self.scan_mode,
+            self.total_assets,
+            self.unmanaged_count,
+            self.high_risk_count
+        ));
+        out.push_str(&format!(
+            "{0:-<80}\n{1:<30} {2:<12} {3:<10} {4:<12} {5}\n{0:-<80}\n",
+            "",
+            "NAME",
+            "STATUS",
+            "SEVERITY",
+            "KIND",
+            "REMEDIATION"
+        ));
+
+        for asset in &self.assets {
+            let remediation = asset
+                .remediation_hints
+                .first()
+                .map_or("", String::as_str);
+            out.push_str(&format!(
+                "{:<30} {:<12} {:<10} {:<12} {}\n",
+                truncate_str(&asset.name, 30),
+                &asset.management_status,
+                asset.severity_label(),
+                asset.kind.to_string(),
+                truncate_str(remediation, 40)
+            ));
+        }
+        out.push_str(&format!("{:-<80}\n", ""));
+        out
+    }
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max.saturating_sub(1)])
+    }
+}
+
+// ── ShadowScanner ─────────────────────────────────────────────────────────────
+
+/// Collects MCP assets from local sources: client configs, running processes,
+/// listening ports, and gateway-configured backends.
+pub struct ShadowScanner {
+    /// Gateway config (for comparing registered backends).
+    gateway_config: Option<Config>,
+    /// Registered backend names from the gateway config.
+    registered_names: HashSet<String>,
+    /// Scan mode: `local` or `enterprise`.
+    mode: ShadowScanMode,
+}
+
+/// Scan mode controls what the scanner is allowed to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShadowScanMode {
+    /// Free/core local scan — no CIDR/network scanning.
+    Local,
+    /// Enterprise scan — allows CIDR/network scanning.
+    #[allow(dead_code)]
+    Enterprise,
+}
+
+impl ShadowScanner {
+    /// Create a new shadow scanner for local mode (no gateway config).
+    #[must_use]
+    pub fn local() -> Self {
+        Self {
+            gateway_config: None,
+            registered_names: HashSet::new(),
+            mode: ShadowScanMode::Local,
+        }
+    }
+
+    /// Create a new shadow scanner with a gateway config for management comparison.
+    #[must_use]
+    pub fn with_gateway_config(config: Config) -> Self {
+        let registered_names: HashSet<String> = config.backends.keys().cloned().collect();
+        Self {
+            gateway_config: Some(config),
+            registered_names,
+            mode: ShadowScanMode::Local,
+        }
+    }
+
+    /// Set enterprise mode (allows CIDR scanning).
+    pub fn set_enterprise(&mut self) {
+        self.mode = ShadowScanMode::Enterprise;
+    }
+
+    /// Returns true if enterprise mode is active.
+    #[must_use]
+    pub fn is_enterprise(&self) -> bool {
+        self.mode == ShadowScanMode::Enterprise
+    }
+
+    /// Run a local shadow scan: configs, processes, ports, and gateway registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the discovery scanner fails entirely.
+    pub async fn scan_local(&self) -> Result<Vec<ShadowAsset>> {
+        let mut assets: Vec<ShadowAsset> = Vec::new();
+        let now = Utc::now().to_rfc3339();
+
+        // ── 1. Scan MCP client configs using AutoDiscovery ──────────────────
+        let discovery = AutoDiscovery::new();
+        let discovered = discovery
+            .discover_all()
+            .await
+            .unwrap_or_else(|e| {
+                warn!("Discovery scan had errors: {e}");
+                Vec::new()
+            });
+
+        for server in &discovered {
+            let risks = self.classify_risks(server);
+            let management_status = if self.registered_names.contains(&server.name) {
+                "managed"
+            } else {
+                "unmanaged"
+            }
+            .to_string();
+
+            let transport_summary = transport_summary(&server.transport);
+            let evidence = self.collect_evidence(server);
+            let kind = kind_from_source(&server.source);
+
+            let asset_id =
+                ShadowAsset::compute_asset_id(&kind, &server.name, &source_string(&server.source));
+
+            assets.push(ShadowAsset {
+                schema_version: 1,
+                asset_id,
+                name: server.name.clone(),
+                kind,
+                source: source_string(&server.source),
+                transport_summary,
+                evidence,
+                management_status,
+                remediation_hints: risks.iter().map(|r| r.remediation_hint().to_string()).collect(),
+                risks,
+                first_observed: Some(now.clone()),
+                last_observed: Some(now.clone()),
+                redacted_metadata: redacted_metadata_from_discovered(server),
+            });
+        }
+
+        // ── 2. Collect gateway-configured backends ──────────────────────────
+        if let Some(ref config) = self.gateway_config {
+            for (name, backend) in &config.backends {
+                let kind = ShadowAssetKind::GatewayBackend;
+                let source = "gateway.yaml".to_string();
+                let asset_id = ShadowAsset::compute_asset_id(&kind, name, &source);
+                let risks = self.classify_backend_risks(name, backend);
+                let transport_summary = transport_summary(&backend.transport);
+
+                assets.push(ShadowAsset {
+                    schema_version: 1,
+                    asset_id,
+                    name: name.clone(),
+                    kind,
+                    source,
+                    transport_summary,
+                    evidence: vec![format!(
+                        "Found in gateway.yaml backend: {}",
+                        backend.description
+                    )],
+                    management_status: "managed".to_string(),
+                    remediation_hints: risks
+                        .iter()
+                        .map(|r| r.remediation_hint().to_string())
+                        .collect(),
+                    risks,
+                    first_observed: Some(now.clone()),
+                    last_observed: Some(now.clone()),
+                    redacted_metadata: redacted_metadata_from_backend(backend),
+                });
+            }
+        }
+
+        // ── 3. Detect duplicate ports ──────────────────────────────────────
+        self.flag_duplicate_ports(&mut assets);
+
+        // ── 4. Scan local listening ports (passive, no spawn) ──────────────
+        if let Ok(port_assets) = self.scan_listening_ports() {
+            assets.extend(port_assets);
+        }
+
+        Ok(assets)
+    }
+
+    /// Reject CIDR/network scan in free mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error with a clear message when not in enterprise mode.
+    pub fn reject_cidr_scan(&self) -> Result<()> {
+        if self.mode != ShadowScanMode::Enterprise {
+            Err(Error::Config(
+                "CIDR/network scanning is an enterprise feature. \
+                 Use local shadow scan without --cidr, or enable enterprise mode."
+                    .to_string(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Enterprise CIDR scan extension point (gated).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error in free/core mode.
+    #[allow(unused_variables)]
+    pub async fn scan_network_cidr(&self, _cidr: &str) -> Result<Vec<ShadowAsset>> {
+        self.reject_cidr_scan()?;
+        // Enterprise implementation would go here.
+        Ok(Vec::new())
+    }
+
+    // ── Private helpers ────────────────────────────────────────────────────
+
+    /// Classify risks for a discovered server.
+    fn classify_risks(&self, server: &DiscoveredServer) -> Vec<ShadowRisk> {
+        let mut risks = Vec::new();
+
+        // Unmanaged check
+        if !self.registered_names.contains(&server.name) {
+            risks.push(ShadowRisk::Unmanaged);
+        }
+
+        // Unauthenticated check (HTTP without auth)
+        if let TransportConfig::Http { .. } = &server.transport {
+            risks.push(ShadowRisk::Unauthenticated);
+        }
+
+        // Unknown provenance check (no config path, not in registry)
+        if server.metadata.config_path.is_none()
+            && !matches!(server.source, DiscoverySource::Environment)
+        {
+            // If also not in gateway, it's truly unknown
+            if !self.registered_names.contains(&server.name) {
+                risks.push(ShadowRisk::UnknownProvenance);
+            }
+        }
+
+        // Personal credential reference check
+        if let Some(ref cmd) = server.metadata.command {
+            if contains_personal_path(cmd) {
+                risks.push(ShadowRisk::PersonalCredentialReference);
+            }
+        }
+
+        // Missing trust metadata check (no SHA-256 pin, no signature)
+        // For discovered servers, we can't verify trust metadata since we
+        // don't spawn the binary to check. Flag it.
+        if matches!(server.transport, TransportConfig::Stdio { .. }) {
+            risks.push(ShadowRisk::MissingTrustMetadata);
+        }
+
+        risks
+    }
+
+    /// Classify risks for a gateway-configured backend.
+    fn classify_backend_risks(&self, _name: &str, backend: &BackendConfig) -> Vec<ShadowRisk> {
+        let mut risks = Vec::new();
+
+        // Unauthenticated check
+        if let TransportConfig::Http { .. } = &backend.transport {
+            if backend.env.is_empty()
+                && !backend
+                    .description
+                    .to_lowercase()
+                    .contains("authenticated")
+            {
+                risks.push(ShadowRisk::Unauthenticated);
+            }
+        }
+
+        // Stale binary check (not applicable to stdio since we can't check without spawning)
+        // Skip for now.
+
+        // Missing trust metadata
+        if let TransportConfig::Stdio { ref command, .. } = &backend.transport {
+            // If no attestation or pinning, flag
+            risks.push(ShadowRisk::MissingTrustMetadata);
+            // Also check for personal paths
+            if contains_personal_path(command) {
+                risks.push(ShadowRisk::PersonalCredentialReference);
+            }
+        }
+
+        risks
+    }
+
+    /// Collect evidence strings from a discovered server.
+    fn collect_evidence(&self, server: &DiscoveredServer) -> Vec<String> {
+        let mut evidence = Vec::new();
+        evidence.push(format!("source: {:?}", server.source));
+        if let Some(ref path) = server.metadata.config_path {
+            evidence.push(format!("config_path: {}", path.display()));
+        }
+        if let Some(pid) = server.metadata.pid {
+            evidence.push(format!("pid: {pid}"));
+        }
+        if let Some(port) = server.metadata.port {
+            evidence.push(format!("port: {port}"));
+        }
+        if let Some(ref cmd) = server.metadata.command {
+            evidence.push(format!("command: {cmd}"));
+        }
+        evidence
+    }
+
+    /// Scan local listening ports (passive: read /proc/net/tcp or platform equivalent).
+    fn scan_listening_ports(&self) -> Result<Vec<ShadowAsset>> {
+        #[cfg(target_os = "linux")]
+        {
+            self.scan_listening_ports_linux()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.scan_listening_ports_macos()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn scan_listening_ports_linux(&self) -> Result<Vec<ShadowAsset>> {
+        use std::fs;
+        let mut assets = Vec::new();
+        let now = Utc::now().to_rfc3339();
+
+        // Read /proc/net/tcp for listening sockets
+        let tcp = match fs::read_to_string("/proc/net/tcp") {
+            Ok(s) => s,
+            Err(_) => return Ok(assets),
+        };
+
+        // /proc/net/tcp6 for IPv6
+        let tcp6 = fs::read_to_string("/proc/net/tcp6").unwrap_or_default();
+
+        let known_mcp_ports: HashSet<u16> = [39300, 39400, 8000, 3000, 5000, 4000, 9090]
+            .iter()
+            .copied()
+            .collect();
+
+        for line in tcp.lines().skip(1).chain(tcp6.lines().skip(1)) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 4 {
+                continue;
+            }
+            // State is the 4th field (0-indexed 3). 0A = LISTEN
+            if parts.len() > 3 && parts[3] == "0A" {
+                // Local address is field 2: hex IP:hex port
+                if let Some(addr_part) = parts.get(1) {
+                    if let Some(port_hex) = addr_part.split(':').nth(1) {
+                        if let Ok(port) = u16::from_str_radix(port_hex, 16) {
+                            if known_mcp_ports.contains(&port) {
+                                let kind = ShadowAssetKind::ListeningPort;
+                                let source = "/proc/net/tcp".to_string();
+                                let name = format!("port:{port}");
+                                let asset_id =
+                                    ShadowAsset::compute_asset_id(&kind, &name, &source);
+                                assets.push(ShadowAsset {
+                                    schema_version: 1,
+                                    asset_id,
+                                    name,
+                                    kind,
+                                    source,
+                                    transport_summary: format!("TCP port {port} (LISTEN)"),
+                                    evidence: vec![format!(
+                                        "Listening on TCP port {port}"
+                                    )],
+                                    management_status: "unmanaged".to_string(),
+                                    remediation_hints: vec![
+                                        "Verify if this port hosts an MCP server. \
+                                         Register it in gateway.yaml if managed."
+                                            .to_string(),
+                                    ],
+                                    risks: vec![ShadowRisk::Unmanaged],
+                                    first_observed: Some(now.clone()),
+                                    last_observed: Some(now.clone()),
+                                    redacted_metadata: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(assets)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn scan_listening_ports_macos(&self) -> Result<Vec<ShadowAsset>> {
+        // On macOS, we can't easily read the process table without spawning
+        // commands. We use a lazy approach: skip port scanning in unit-tests
+        // and rely on the discovery module's process_scanner for running daemons.
+        // In a real deployment, `lsof -iTCP -sTCP:LISTEN -nP` would be used.
+        Ok(Vec::new())
+    }
+
+    /// Flag assets that share the same port.
+    fn flag_duplicate_ports(&self, assets: &mut [ShadowAsset]) {
+        let mut port_map: std::collections::HashMap<u16, Vec<usize>> =
+            std::collections::HashMap::new();
+
+        for (i, asset) in assets.iter().enumerate() {
+            for ev in &asset.evidence {
+                if let Some(port) = extract_port_from_evidence(ev) {
+                    port_map.entry(port).or_default().push(i);
+                    break;
+                }
+            }
+        }
+
+        for indices in port_map.values() {
+            if indices.len() >= 2 {
+                for &idx in indices {
+                    if !assets[idx].risks.contains(&ShadowRisk::DuplicatePort) {
+                        assets[idx].risks.push(ShadowRisk::DuplicatePort);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Passive MCP probe ────────────────────────────────────────────────────────
+
+/// Configuration for a passive MCP probe.
+#[derive(Debug, Clone)]
+pub struct ProbeConfig {
+    /// Timeout for the HTTP request.
+    pub timeout: Duration,
+    /// User-agent string.
+    pub user_agent: String,
+}
+
+impl Default for ProbeConfig {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(5),
+            user_agent: "mcp-gateway-shadow-probe/1.0".to_string(),
+        }
+    }
+}
+
+/// Result of a passive MCP probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeResult {
+    /// Whether the probe succeeded.
+    pub reachable: bool,
+    /// MCP server name from the initialize response (if any).
+    pub server_name: Option<String>,
+    /// MCP protocol version from the response.
+    pub protocol_version: Option<String>,
+    /// Any error encountered.
+    pub error: Option<String>,
+}
+
+/// Perform a passive MCP probe against an HTTP URL.
+///
+/// AC.4: This probe:
+/// - Has a bounded timeout
+/// - Sends only an `initialize` handshake (no `tools/call`, no tool invocation)
+/// - Redacts secret-like values from config/env
+///
+/// # Errors
+///
+/// Returns an error if the HTTP client cannot be built.
+pub async fn probe_mcp_http(url: &str, config: &ProbeConfig) -> Result<ProbeResult> {
+    let client = reqwest::Client::builder()
+        .timeout(config.timeout)
+        .user_agent(&config.user_agent)
+        .build()
+        .map_err(|e| Error::Internal(format!("Failed to build probe client: {e}")))?;
+
+    // Build a minimal MCP initialize request.
+    // This is the ONLY request we send — no tools/call, no unknown tools.
+    let initialize_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "shadow-probe-1",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "mcp-gateway-shadow-probe",
+                "version": "1.0"
+            }
+        }
+    });
+
+    match client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .json(&initialize_request)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(body) => {
+                        let server_name = body
+                            .get("result")
+                            .and_then(|r| r.get("serverInfo"))
+                            .and_then(|s| s.get("name"))
+                            .and_then(|n| n.as_str())
+                            .map(String::from);
+                        let protocol_version = body
+                            .get("result")
+                            .and_then(|r| r.get("protocolVersion"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        Ok(ProbeResult {
+                            reachable: true,
+                            server_name,
+                            protocol_version,
+                            error: None,
+                        })
+                    }
+                    Err(e) => Ok(ProbeResult {
+                        reachable: true,
+                        server_name: None,
+                        protocol_version: None,
+                        error: Some(format!("Failed to parse response: {e}")),
+                    }),
+                }
+            } else {
+                Ok(ProbeResult {
+                    reachable: false,
+                    server_name: None,
+                    protocol_version: None,
+                    error: Some(format!("HTTP {}", status.as_u16())),
+                })
+            }
+        }
+        Err(e) => Ok(ProbeResult {
+            reachable: false,
+            server_name: None,
+            protocol_version: None,
+            error: Some(format!("Connection failed: {e}")),
+        }),
+    }
+}
+
+// ── Secret redaction ──────────────────────────────────────────────────────────
+
+/// Patterns that indicate a value may contain a secret.
+const SECRET_PATTERNS: &[&str] = &[
+    "api_key",
+    "apikey",
+    "secret",
+    "password",
+    "token",
+    "credential",
+    "private_key",
+    "privatekey",
+    "auth",
+];
+
+/// Check whether a string key looks like a secret reference.
+#[must_use]
+pub fn is_secret_key(key: &str) -> bool {
+    let lower = key.to_lowercase();
+    SECRET_PATTERNS
+        .iter()
+        .any(|pat| lower.contains(pat))
+}
+
+/// Redact a value if it looks like a secret.
+#[must_use]
+pub fn redact_if_secret(key: &str, value: &str) -> String {
+    if is_secret_key(key) {
+        if value.len() <= 4 {
+            "***".to_string()
+        } else {
+            format!("{}***{}", &value[..2], &value[value.len() - 2..])
+        }
+    } else {
+        value.to_string()
+    }
+}
+
+/// Redact secret values from a map.
+#[must_use]
+pub fn redact_secret
+
+[…truncated 22666 chars — raise BridgeOptions.maxResultChars, or call the tool with a narrower scope (filter, head, pagination)…]
+
+n_hints: vec![],
+            first_observed: None,
+            last_observed: None,
+            redacted_metadata: None,
+        };
+        assert_eq!(asset.overall_severity(), 0);
+        assert_eq!(asset.severity_label(), "none");
+    }
+
+    #[test]
+    fn shadow_asset_kind_serializes_as_snake_case() {
+        let kinds = vec![
+            (ShadowAssetKind::McpServer, "mcp_server"),
+            (ShadowAssetKind::McpConfig, "mcp_config"),
+            (ShadowAssetKind::McpProcess, "mcp_process"),
+            (ShadowAssetKind::GatewayBackend, "gateway_backend"),
+            (ShadowAssetKind::ListeningPort, "listening_port"),
+        ];
+        for (kind, expected) in kinds {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, format!("\"{expected}\""));
+        }
+    }
+
+    #[test]
+    fn shadow_risk_display_format() {
+        assert_eq!(ShadowRisk::Unmanaged.to_string(), "unmanaged");
+        assert_eq!(ShadowRisk::Unauthenticated.to_string(), "unauthenticated");
+    }
+}

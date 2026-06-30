@@ -13,9 +13,13 @@ use crate::config::{BackendConfig, TransportConfig};
 
 pub mod config_scanner;
 pub mod process_scanner;
+pub mod shadow;
 
 use config_scanner::ConfigScanner;
 use process_scanner::ProcessScanner;
+
+// Re-export shadow types for CLI use
+pub use shadow::{ShadowAsset, ShadowAssetKind, ShadowReport, ShadowRisk, ShadowScanner, ShadowScanOptions};
 
 /// Discovered MCP server
 #[derive(Debug, Clone, Serialize, Deserialize)]
