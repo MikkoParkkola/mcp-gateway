@@ -38,9 +38,12 @@ pub mod store;
 
 use std::sync::Arc;
 
-use crate::config::KeyServerConfig;
+use tracing::debug;
+
+use crate::config::{KeyServerConfig, KeyServerOidcConfig};
 use crate::gateway::auth::AuthenticatedClient;
 use oidc::VerifiedIdentity;
+use policy::RequestedScopes;
 
 pub use audit::AuditEvent;
 pub use oidc::{JwksCache, OidcVerifier};
@@ -106,6 +109,54 @@ impl KeyServer {
         audit::emit(&ev);
 
         Some((client, temp))
+    }
+
+    /// Verify a raw OIDC ID token (JWT) presented directly as a bearer
+    /// ("delegated auth", MIK-6648) and resolve it to a client + identity.
+    ///
+    /// Unlike [`validate_token`](Self::validate_token) (which looks up a
+    /// previously-exchanged opaque token in the store), this verifies the JWT
+    /// signature/claims against the configured OIDC providers and resolves the
+    /// identity through the same policy engine used by the `/auth/token`
+    /// exchange. Returns `None` when verification fails or no policy matches —
+    /// i.e. it is fail-closed and never grants access without a policy rule.
+    ///
+    /// The caller is responsible for gating this on `config.delegated_bearer`.
+    pub async fn verify_bearer_identity(
+        &self,
+        token: &str,
+    ) -> Option<(AuthenticatedClient, VerifiedIdentity)> {
+        let oidc_config = KeyServerOidcConfig {
+            max_token_age_secs: self.config.max_oidc_token_age_secs,
+        };
+        let identity = match self.oidc.verify(token, &oidc_config).await {
+            Ok(id) => id,
+            Err(e) => {
+                debug!(error = %e, "Delegated OIDC bearer verification failed");
+                return None;
+            }
+        };
+
+        // Resolve scopes via the same first-match-wins policy engine. No
+        // requested-scope narrowing: a delegated bearer takes the policy's
+        // full grant for the identity.
+        let scopes = self
+            .policy
+            .resolve_scopes(&identity, &RequestedScopes::default())?;
+
+        let client = AuthenticatedClient {
+            name: oidc_client_identity_key(&identity),
+            rate_limit: scopes.rate_limit,
+            backends: scopes.backends.clone(),
+            allowed_tools: if scopes.tools.is_empty() {
+                None
+            } else {
+                Some(scopes.tools.clone())
+            },
+            denied_tools: None,
+            admin: false,
+        };
+        Some((client, identity))
     }
 }
 

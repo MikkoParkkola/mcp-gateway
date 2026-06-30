@@ -63,6 +63,14 @@ pub struct KeyServerConfig {
     /// If `None`, revocation endpoints return 503.
     #[serde(default)]
     pub admin_token: Option<String>,
+    /// Accept a raw OIDC ID token (JWT) as a bearer directly on the gateway
+    /// endpoint — "delegated auth" — instead of requiring a prior token
+    /// exchange. Default `false`: leaving it off keeps the auth surface
+    /// byte-identical (raw OIDC bearers are still accepted only via the
+    /// `/auth/token` exchange). Verification still requires a matching OIDC
+    /// provider and a policy rule, so enabling it does not bypass policy.
+    #[serde(default)]
+    pub delegated_bearer: bool,
 }
 
 fn default_token_ttl_secs() -> u64 {
@@ -92,6 +100,7 @@ impl Default for KeyServerConfig {
             oidc: Vec::new(),
             policies: Vec::new(),
             admin_token: None,
+            delegated_bearer: false,
         }
     }
 }
