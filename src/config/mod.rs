@@ -32,7 +32,7 @@ pub use features::{
     HealthCheckConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
     KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
     RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
-    SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
+    SecurityConfig, StreamingConfig, TelemetryConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -93,6 +93,9 @@ pub struct Config {
     #[cfg(feature = "cost-governance")]
     #[serde(default)]
     pub cost_governance: crate::cost_accounting::config::CostGovernanceConfig,
+    /// Privacy-preserving active-user telemetry (MIK-6573).
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 }
 
 fn default_routing_profile() -> String {

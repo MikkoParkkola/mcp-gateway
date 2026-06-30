@@ -457,6 +457,10 @@ async fn run_server(cli: Cli) -> ExitCode {
         "Starting MCP Gateway"
     );
 
+    // Privacy-preserving daily heartbeat (MIK-6573). Fire-and-forget:
+    // never blocks startup, never panics, honours every opt-out.
+    mcp_gateway::telemetry::maybe_send_heartbeat(&config);
+
     let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
     let gateway = match Gateway::new_with_path(config, config_path).await {
         Ok(g) => g,

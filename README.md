@@ -101,6 +101,47 @@ Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gatew
   ```
   22 tests across [`src/capability/openapi.rs`](src/capability/openapi.rs) and [`tests/openapi_import_tests.rs`](tests/openapi_import_tests.rs).
 
+## Telemetry & Privacy
+
+mcp-gateway includes an **optional, privacy-preserving daily heartbeat** that helps the maintainers understand adoption trends and aggregate geography. The heartbeat is intentionally minimal and fully transparent:
+
+### What is collected
+
+| Field | Example | Purpose |
+|-------|---------|---------|
+| `project` | `"mcp-gateway"` | Identifies the sending project |
+| `event` | `"heartbeat"` | Event type (always `"heartbeat"`) |
+| `version` | `"2.19.0"` | Crate version for adoption tracking |
+| `runtime` | `"rust"` | Runtime identifier |
+| `install_id` | `"uuid-v4"` *(optional)* | Random per-install UUID to deduplicate daily counts |
+
+**Nothing else is sent.** No IP address, hostname, file paths, configuration values, user data, or any other identifying information is ever included in the payload. Active-user geography is derived **server-side in aggregate** via [MIK-6565](https://github.com/MikkoParkkola/mik-services) with **k-anonymity ≥ 5** — individual installs are never identifiable.
+
+### How it works
+
+- Fires at most **once per install per calendar day** (UTC), from the `run_server` entry-point only.
+- Library-only consumers (`use mcp_gateway::...`) never trigger a heartbeat.
+- The HTTP request has a **3-second timeout** and is **failure-open** — any error is silently swallowed and never blocks gateway startup.
+- Adds **zero new dependencies** to the crate.
+
+### How to disable
+
+Telemetry is suppressed when **any** of the following conditions is true:
+
+| Opt-out method | How |
+|----------------|-----|
+| `NO_TELEMETRY=1` | Standard community opt-out env var |
+| `DO_NOT_TRACK=1` | [Console Do Not Track](https://consoledonottrack.com/) standard |
+| `MCP_GATEWAY_NO_TELEMETRY=1` | Project-native env var |
+| Config `telemetry.enabled: false` | In your `gateway.yaml` |
+| `CI=1` or `GITHUB_ACTIONS=1` | CI environments are auto-suppressed |
+| Debug/test builds | `cfg!(debug_assertions)` is auto-suppressed |
+| Browser `DNT: 1` header | Respected by the optional webui surface |
+
+### Override the collector URL
+
+The default collector endpoint is overridable via the `MCP_GATEWAY_TELEMETRY_URL` environment variable.
+
 ## Quick Start
 
 **Tell your AI assistant** (recommended):

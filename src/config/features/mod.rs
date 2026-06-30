@@ -12,6 +12,7 @@ mod key_server;
 mod playbooks;
 mod security;
 mod streaming;
+mod telemetry;
 mod webhooks;
 
 pub use auth::{AgentAuthConfig, AgentDefinitionConfig, ApiKeyConfig, AuthConfig};
@@ -31,4 +32,5 @@ pub use security::{
     ToolContractConfig,
 };
 pub use streaming::StreamingConfig;
+pub use telemetry::TelemetryConfig;
 pub use webhooks::WebhookConfig;
