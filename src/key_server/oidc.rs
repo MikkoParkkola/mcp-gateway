@@ -207,7 +207,7 @@ impl JwksCache {
     /// (`discovery_url`, conventionally `{issuer}/.well-known/openid-configuration`).
     ///
     /// The discovered `issuer` field MUST equal the requested issuer (mix-up
-    /// defense, OpenID Connect Discovery §4.3), and the returned `jwks_uri` must
+    /// defense, `OpenID Connect Discovery` §4.3), and the returned `jwks_uri` must
     /// be HTTPS. Results are cached for the same TTL as JWKS.
     ///
     /// # Errors
@@ -509,7 +509,7 @@ fn default_jwks_uri(issuer: &str) -> String {
 }
 
 /// Derive the default OIDC discovery document URL from the issuer.
-/// Per OpenID Connect Discovery §4, this is `{issuer}/.well-known/openid-configuration`.
+/// Per `OpenID Connect Discovery` §4, this is `{issuer}/.well-known/openid-configuration`.
 fn default_discovery_url(issuer: &str) -> String {
     let base = issuer.trim_end_matches('/');
     format!("{base}/.well-known/openid-configuration")
@@ -517,7 +517,7 @@ fn default_discovery_url(issuer: &str) -> String {
 
 /// Validate a fetched OIDC discovery document and extract a trusted `jwks_uri`.
 ///
-/// Enforces the OpenID Connect Discovery §4.3 mix-up defense (the document's
+/// Enforces the `OpenID Connect Discovery` §4.3 mix-up defense (the document's
 /// `issuer` must equal the requested issuer) and rejects a non-HTTPS `jwks_uri`.
 fn validate_discovery_document(
     requested_issuer: &str,
@@ -586,7 +586,10 @@ mod tests {
         };
         let err = validate_discovery_document("https://accounts.google.com", doc)
             .expect_err("issuer mismatch must be rejected");
-        assert!(matches!(err, OidcError::IssuerMismatch { .. }), "got {err:?}");
+        assert!(
+            matches!(err, OidcError::IssuerMismatch { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
