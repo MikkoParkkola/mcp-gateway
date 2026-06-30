@@ -542,7 +542,7 @@ pub enum CbomComponentKind {
 }
 
 /// Evidence quality for a `TrustCard` field.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustEvidenceKind {
     /// Declared by a trusted source.
