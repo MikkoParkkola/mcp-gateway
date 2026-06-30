@@ -94,6 +94,10 @@ pub enum OidcError {
         /// Actual issuer URL found in the token.
         actual: String,
     },
+
+    /// The OIDC discovery document returned a non-HTTPS `jwks_uri`.
+    #[error("OIDC discovery returned insecure (non-HTTPS) jwks_uri: {0}")]
+    InsecureJwksUri(String),
 }
 
 /// Verified identity extracted from a valid OIDC ID token.
@@ -152,9 +156,32 @@ impl CachedJwks {
     }
 }
 
+/// Minimal OIDC discovery document (`.well-known/openid-configuration`).
+/// Only the fields needed to locate and trust the signing keys are parsed.
+#[derive(Debug, Deserialize)]
+struct OidcDiscoveryDocument {
+    issuer: String,
+    jwks_uri: String,
+}
+
+/// Cached `jwks_uri` resolved from an issuer's discovery document.
+struct CachedDiscovery {
+    jwks_uri: String,
+    fetched_at: Instant,
+    ttl: Duration,
+}
+
+impl CachedDiscovery {
+    fn is_stale(&self) -> bool {
+        self.fetched_at.elapsed() >= self.ttl
+    }
+}
+
 /// JWKS cache — one entry per OIDC issuer.
 pub struct JwksCache {
     inner: DashMap<String, CachedJwks>,
+    /// Resolved `jwks_uri` per issuer, from the OIDC discovery document.
+    discovery: DashMap<String, CachedDiscovery>,
     http: reqwest::Client,
     /// How long to cache a fetched JWKS (default 1 hour).
     ttl: Duration,
@@ -166,6 +193,7 @@ impl JwksCache {
     pub fn new() -> Self {
         Self {
             inner: DashMap::new(),
+            discovery: DashMap::new(),
             http: reqwest::Client::builder()
                 .https_only(true)
                 .timeout(Duration::from_secs(10))
@@ -173,6 +201,43 @@ impl JwksCache {
                 .unwrap_or_default(),
             ttl: Duration::from_secs(3600),
         }
+    }
+
+    /// Resolve the `jwks_uri` for `issuer` from its OIDC discovery document
+    /// (`discovery_url`, conventionally `{issuer}/.well-known/openid-configuration`).
+    ///
+    /// The discovered `issuer` field MUST equal the requested issuer (mix-up
+    /// defense, OpenID Connect Discovery §4.3), and the returned `jwks_uri` must
+    /// be HTTPS. Results are cached for the same TTL as JWKS.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OidcError`] on fetch/parse failure, issuer mismatch, or a
+    /// non-HTTPS `jwks_uri`.
+    pub async fn resolve_jwks_uri(
+        &self,
+        issuer: &str,
+        discovery_url: &str,
+    ) -> Result<String, OidcError> {
+        if let Some(cached) = self.discovery.get(issuer)
+            && !cached.is_stale()
+        {
+            return Ok(cached.jwks_uri.clone());
+        }
+
+        debug!(issuer = %issuer, "Fetching OIDC discovery from {discovery_url}");
+        let doc: OidcDiscoveryDocument = self.http.get(discovery_url).send().await?.json().await?;
+        let jwks_uri = validate_discovery_document(issuer, doc)?;
+
+        self.discovery.insert(
+            issuer.to_string(),
+            CachedDiscovery {
+                jwks_uri: jwks_uri.clone(),
+                fetched_at: Instant::now(),
+                ttl: self.ttl,
+            },
+        );
+        Ok(jwks_uri)
     }
 
     /// Return the cached JWKS for `issuer`, or fetch from `jwks_uri` if stale.
@@ -277,10 +342,19 @@ impl OidcVerifier {
         let kid = header.kid.clone().ok_or(OidcError::MissingKeyId)?;
 
         // Fetch JWKS (cached; refresh once on unknown kid)
-        let jwks_uri = provider
-            .jwks_uri
-            .clone()
-            .unwrap_or_else(|| default_jwks_uri(&provider.issuer));
+        let jwks_uri = if let Some(uri) = provider.jwks_uri.clone() {
+            uri
+        } else if provider.auto_discover {
+            let discovery_url = provider
+                .discovery_url
+                .clone()
+                .unwrap_or_else(|| default_discovery_url(&provider.issuer));
+            self.jwks_cache
+                .resolve_jwks_uri(&provider.issuer, &discovery_url)
+                .await?
+        } else {
+            default_jwks_uri(&provider.issuer)
+        };
 
         let decoding_key = self
             .find_decoding_key(&kid, &provider.issuer, &jwks_uri)
@@ -434,6 +508,33 @@ fn default_jwks_uri(issuer: &str) -> String {
     format!("{base}/.well-known/jwks.json")
 }
 
+/// Derive the default OIDC discovery document URL from the issuer.
+/// Per OpenID Connect Discovery §4, this is `{issuer}/.well-known/openid-configuration`.
+fn default_discovery_url(issuer: &str) -> String {
+    let base = issuer.trim_end_matches('/');
+    format!("{base}/.well-known/openid-configuration")
+}
+
+/// Validate a fetched OIDC discovery document and extract a trusted `jwks_uri`.
+///
+/// Enforces the OpenID Connect Discovery §4.3 mix-up defense (the document's
+/// `issuer` must equal the requested issuer) and rejects a non-HTTPS `jwks_uri`.
+fn validate_discovery_document(
+    requested_issuer: &str,
+    doc: OidcDiscoveryDocument,
+) -> Result<String, OidcError> {
+    if doc.issuer != requested_issuer {
+        return Err(OidcError::IssuerMismatch {
+            expected: requested_issuer.to_string(),
+            actual: doc.issuer,
+        });
+    }
+    if !doc.jwks_uri.starts_with("https://") {
+        return Err(OidcError::InsecureJwksUri(doc.jwks_uri));
+    }
+    Ok(doc.jwks_uri)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,6 +555,49 @@ mod tests {
 
         // THEN: no double slash
         assert_eq!(uri, "https://accounts.google.com/.well-known/jwks.json");
+    }
+
+    #[test]
+    fn default_discovery_url_appends_openid_configuration() {
+        assert_eq!(
+            default_discovery_url("https://accounts.google.com/"),
+            "https://accounts.google.com/.well-known/openid-configuration"
+        );
+    }
+
+    #[test]
+    fn validate_discovery_accepts_matching_issuer_and_https() {
+        let doc = OidcDiscoveryDocument {
+            issuer: "https://accounts.google.com".to_string(),
+            jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".to_string(),
+        };
+        let uri = validate_discovery_document("https://accounts.google.com", doc)
+            .expect("matching issuer + https jwks_uri must be accepted");
+        assert_eq!(uri, "https://www.googleapis.com/oauth2/v3/certs");
+    }
+
+    #[test]
+    fn validate_discovery_rejects_issuer_mismatch() {
+        // Mix-up defense: a document whose issuer differs from the requested one
+        // must be rejected even if it is otherwise well-formed.
+        let doc = OidcDiscoveryDocument {
+            issuer: "https://attacker.invalid".to_string(),
+            jwks_uri: "https://attacker.invalid/jwks".to_string(),
+        };
+        let err = validate_discovery_document("https://accounts.google.com", doc)
+            .expect_err("issuer mismatch must be rejected");
+        assert!(matches!(err, OidcError::IssuerMismatch { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn validate_discovery_rejects_non_https_jwks_uri() {
+        let doc = OidcDiscoveryDocument {
+            issuer: "https://accounts.google.com".to_string(),
+            jwks_uri: "http://accounts.google.com/jwks".to_string(),
+        };
+        let err = validate_discovery_document("https://accounts.google.com", doc)
+            .expect_err("non-https jwks_uri must be rejected");
+        assert!(matches!(err, OidcError::InsecureJwksUri(_)), "got {err:?}");
     }
 
     #[test]

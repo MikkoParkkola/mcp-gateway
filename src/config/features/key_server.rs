@@ -77,6 +77,9 @@ fn default_max_oidc_token_age_secs() -> u64 {
 fn default_cleanup_interval_secs() -> u64 {
     DEFAULT_CLEANUP_INTERVAL_SECS
 }
+const fn default_auto_discover() -> bool {
+    true
+}
 
 impl Default for KeyServerConfig {
     fn default() -> Self {
@@ -119,9 +122,20 @@ impl KeyServerConfig {
 pub struct KeyServerProviderConfig {
     /// The OIDC issuer URL (must match the `iss` claim in tokens).
     pub issuer: String,
-    /// Override JWKS URI. Defaults to `{issuer}/.well-known/jwks.json`.
+    /// Override JWKS URI. When set, takes precedence over discovery and the
+    /// `{issuer}/.well-known/jwks.json` fallback.
     #[serde(default)]
     pub jwks_uri: Option<String>,
+    /// Override the OIDC discovery document URL. Defaults to
+    /// `{issuer}/.well-known/openid-configuration` when `auto_discover` is on.
+    #[serde(default)]
+    pub discovery_url: Option<String>,
+    /// Resolve `jwks_uri` from the provider's OIDC discovery document
+    /// (`.well-known/openid-configuration`) instead of guessing it. Enabled by
+    /// default; an explicit `jwks_uri` still wins. Disable to fall back to the
+    /// legacy `{issuer}/.well-known/jwks.json` guess.
+    #[serde(default = "default_auto_discover")]
+    pub auto_discover: bool,
     /// Expected audience values (`aud` claim). Empty = any audience accepted.
     #[serde(default)]
     pub audiences: Vec<String>,
