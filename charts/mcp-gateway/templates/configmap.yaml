@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Enterprise Edition — mcp-gateway ConfigMap
+# NOTE: Secrets are NEVER stored in this ConfigMap.
+# All sensitive values are referenced via secretKeyRef in the Deployment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-gateway.fullname" . }}-config
+  labels:
+    {{- include "mcp-gateway.labels" . | nindent 4 }}
+data:
+  gateway.yaml: |
+    # Non-secret configuration only.
+    # API keys, tokens, and passwords are injected from Kubernetes Secrets
+    # via secretKeyRef — see deployment.yaml env section.
+    server:
+      port: 39400
+      host: "0.0.0.0"
+    log:
+      level: {{ .Values.config.logLevel | default "info" }}
+      format: {{ .Values.config.logFormat | default "json" }}

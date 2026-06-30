@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Enterprise Edition — mcp-gateway PodDisruptionBudget
+{{- if and (ge (int .Values.replicaCount) 2) .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mcp-gateway.fullname" . }}-pdb
+  labels:
+    {{- include "mcp-gateway.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "mcp-gateway.selectorLabels" . | nindent 6 }}
+{{- end }}

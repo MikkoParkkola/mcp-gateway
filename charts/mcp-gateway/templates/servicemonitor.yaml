@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Enterprise Edition — mcp-gateway ServiceMonitor (opt-in Prometheus integration)
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "mcp-gateway.fullname" . }}
+  labels:
+    {{- include "mcp-gateway.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "mcp-gateway.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.metrics.scrapeInterval | default "30s" }}
+      path: /metrics
+{{- end }}

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Enterprise Edition — mcp-gateway Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-gateway.fullname" . }}
+  labels:
+    {{- include "mcp-gateway.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.service.port | default 39400 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    {{- if .Values.metrics.enabled }}
+    - port: 9090
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    {{- end }}
+  selector:
+    {{- include "mcp-gateway.selectorLabels" . | nindent 4 }}
