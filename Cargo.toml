@@ -169,6 +169,11 @@ spec-preview = []
 ## call path (src/runtime/provision.rs). NOT in default — foundation code.
 runtime-substrate = []
 
+## Enterprise ControlPlaneUI (MIK-6558).
+## Gates the enterprise control plane module (src/control_plane/) behind an
+## explicit opt-in. NOT in default — requires Enterprise license.
+enterprise = []
+
 [[bin]]
 name = "mcp-gateway"
 path = "src/main.rs"

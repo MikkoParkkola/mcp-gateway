@@ -35,6 +35,8 @@ pub mod cache;
 pub mod capability;
 pub mod chains;
 pub mod cli;
+#[cfg(feature = "enterprise")]
+pub mod control_plane;
 pub mod config;
 pub mod config_persistence;
 pub mod config_reload;

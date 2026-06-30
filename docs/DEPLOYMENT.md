@@ -30,9 +30,11 @@ The release profile applies: `lto = "thin"`, `codegen-units = 1`, `panic = "abor
 |---------|---------|-------------|
 | `webui` | Yes | Embedded web dashboard at `/ui` and `/dashboard` |
 | `metrics` | No | Prometheus metrics endpoint at `/metrics` |
+| `enterprise` | No | Enterprise ControlPlaneUI — governance control plane at `/control-plane` |
 
 ```bash
 cargo build --release --features metrics       # Add metrics
+cargo build --release --features enterprise    # Add ControlPlaneUI (Enterprise)
 cargo build --release --no-default-features    # Minimal (no web UI)
 ```
 
@@ -265,6 +267,27 @@ mcp-gateway stats --url http://127.0.0.1:39400 --price 15.0
 ```
 
 Built-in dashboards: `/ui` (tool list, health, config) and `/dashboard` (health matrix, cache rates, top tools). Auto-refresh every 5s.
+
+### ControlPlaneUI (Enterprise)
+
+The ControlPlaneUI (`--features enterprise`) provides a governance control plane for enterprise operators:
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/control-plane` | GET | Admin | Governance dashboard (inventory, evidence, approvals) |
+| `/ui/api/control-plane/servers` | GET | Role-based | Server inventory |
+| `/ui/api/control-plane/tools` | GET | Role-based | Tool inventory |
+| `/ui/api/control-plane/grants` | GET | Role-based | Identity grants (read-only in v1) |
+| `/ui/api/control-plane/policies` | GET | Role-based | Policy bindings (read-only in v1) |
+| `/ui/api/control-plane/approvals` | GET | Role-based | Approval requests |
+| `/ui/api/control-plane/audit` | GET | Role-based | Audit evidence (time-bounded) |
+| `/ui/api/control-plane/health` | GET | Role-based | Runtime health |
+| `/ui/api/control-plane/trust-cards` | GET | Role-based | TrustCard / evaluation summaries |
+| `/ui/api/control-plane/export` | POST | Role-based | Evidence export (NDJSON/JSON bundle) |
+
+RBAC roles: `admin` (full access), `security_reviewer` (approve/reject), `developer` (request only), `auditor` (read-only).
+
+Free/core tier exposes only the read-only local status/summary surfaces (`/health`, `/ui`, `/dashboard`). Grant/policy mutations, evidence export, OIDC-backed RBAC, and external storage require Enterprise license. See [`LICENSE-EE.md`](../LICENSE-EE.md).
 
 ## Authentication for Production
 
