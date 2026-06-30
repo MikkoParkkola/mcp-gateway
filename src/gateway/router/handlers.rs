@@ -531,6 +531,8 @@ pub(super) async fn meta_mcp_handler(
                 && let Some(ref mut result_val) = call_response.result
             {
                 let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                let mut response_blocked = false;
+                let mut block_descriptions: Vec<String> = Vec::new();
                 for target in &backend_targets {
                     let target = target.as_target();
                     let verdict = fw.check_response(
@@ -540,7 +542,13 @@ pub(super) async fn meta_mcp_handler(
                         result_val,
                         caller_name,
                     );
-                    if verdict.action == FirewallAction::Warn {
+                    if !verdict.allowed {
+                        response_blocked = true;
+                        // MIK-6562 AC.3: collect finding descriptions without raw payload
+                        for finding in &verdict.findings {
+                            block_descriptions.push(finding.description.clone());
+                        }
+                    } else if verdict.action == FirewallAction::Warn {
                         warn!(
                             server = target.server,
                             tool = target.tool,
@@ -548,6 +556,19 @@ pub(super) async fn meta_mcp_handler(
                             "Firewall: response warning"
                         );
                     }
+                }
+                if response_blocked {
+                    call_response = JsonRpcResponse::error_with_data(
+                        Some(id),
+                        -32600,
+                        "Response blocked by security firewall",
+                        json!({
+                            "blocked": true,
+                            "reason": "response_inspection",
+                            "finding_count": block_descriptions.len(),
+                            "categories": block_descriptions
+                        }),
+                    );
                 }
             }
 

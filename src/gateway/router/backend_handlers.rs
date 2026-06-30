@@ -367,7 +367,26 @@ fn scan_direct_backend_response(
     let caller_name = client.map_or("anonymous", |c| c.name.as_str());
     let session_id = format!("direct:{backend_name}");
     let verdict = fw.check_response(&session_id, backend_name, tool_name, result, caller_name);
-    if verdict.action == FirewallAction::Warn {
+    if !verdict.allowed {
+        // MIK-6562: block the response with structured metadata, no raw payload
+        let descriptions: Vec<String> = verdict
+            .findings
+            .iter()
+            .map(|f| f.description.clone())
+            .collect();
+        let request_id = response.id.clone();
+        *response = JsonRpcResponse::error_with_data(
+            request_id,
+            -32600,
+            "Response blocked by security firewall",
+            serde_json::json!({
+                "blocked": true,
+                "reason": "response_inspection",
+                "finding_count": descriptions.len(),
+                "categories": descriptions
+            }),
+        );
+    } else if verdict.action == FirewallAction::Warn {
         warn!(
             backend = %backend_name,
             tool = %tool_name,
