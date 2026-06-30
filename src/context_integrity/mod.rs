@@ -251,6 +251,25 @@ pub struct ContextIntegrityPolicy {
     pub high_risk_action_decision: ContextIntegrityDecisionKind,
     /// Whether read-only content without critical findings is allowed.
     pub allow_benign_read_only: bool,
+    /// When `true`, the render guard is non-bypassable: it refuses to run in a
+    /// purely advisory `MonitorOnly` mode and treats its effective mode as
+    /// `Enforce`. A "guard" that only observes is not a guard — this flag makes
+    /// that property explicit and uncircumventable at the chokepoint.
+    pub non_bypassable: bool,
+}
+
+impl ContextIntegrityPolicy {
+    /// The mode actually applied. When [`non_bypassable`](Self::non_bypassable)
+    /// is set, a configured `MonitorOnly` is upgraded to `Enforce` so the guard
+    /// cannot be silently reduced to advisory tagging.
+    #[must_use]
+    pub const fn effective_mode(&self) -> ContextIntegrityPolicyMode {
+        if self.non_bypassable {
+            ContextIntegrityPolicyMode::Enforce
+        } else {
+            self.mode
+        }
+    }
 }
 
 impl ContextIntegrityPolicy {
@@ -266,6 +285,7 @@ impl ContextIntegrityPolicy {
             tool_poisoning_decision: ContextIntegrityDecisionKind::Deny,
             high_risk_action_decision: ContextIntegrityDecisionKind::Confirm,
             allow_benign_read_only: true,
+            non_bypassable: false,
         }
     }
 
@@ -291,6 +311,7 @@ impl ContextIntegrityPolicy {
                 tool_poisoning_decision: ContextIntegrityDecisionKind::Deny,
                 high_risk_action_decision: ContextIntegrityDecisionKind::Confirm,
                 allow_benign_read_only: true,
+                non_bypassable: false,
             },
             ContextIntegrityPolicyPreset::TeamShared => Self::enforcing_baseline(),
             ContextIntegrityPolicyPreset::EnterpriseStrict => Self {
@@ -302,6 +323,7 @@ impl ContextIntegrityPolicy {
                 tool_poisoning_decision: ContextIntegrityDecisionKind::Deny,
                 high_risk_action_decision: ContextIntegrityDecisionKind::Confirm,
                 allow_benign_read_only: true,
+                non_bypassable: false,
             },
             ContextIntegrityPolicyPreset::AuditOnly => Self::monitor_only(),
         }

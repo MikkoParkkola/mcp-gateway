@@ -94,7 +94,7 @@ impl ContextIntegrityKernel {
         let text = render_text_for_classification(&input.content);
         let classification = self.classify_text(&input, &text);
         let would_decision = self.resolve_decision(&input, &classification);
-        let decision = if self.policy.mode == ContextIntegrityPolicyMode::MonitorOnly {
+        let decision = if self.policy.effective_mode() == ContextIntegrityPolicyMode::MonitorOnly {
             ContextIntegrityDecisionKind::Allow
         } else {
             would_decision
@@ -117,7 +117,7 @@ impl ContextIntegrityKernel {
             decision,
             would_decision,
             findings_count: classification.findings.len(),
-            monitor_only: self.policy.mode == ContextIntegrityPolicyMode::MonitorOnly,
+            monitor_only: self.policy.effective_mode() == ContextIntegrityPolicyMode::MonitorOnly,
         };
 
         ContextIntegrityEvaluation {
@@ -182,11 +182,12 @@ impl ContextIntegrityKernel {
             finalize_classification(&mut evaluation.classification);
             let would_decision =
                 self.resolve_decision_from_findings(&evaluation.classification, input.action_risk);
-            let decision = if self.policy.mode == ContextIntegrityPolicyMode::MonitorOnly {
-                ContextIntegrityDecisionKind::Allow
-            } else {
-                would_decision
-            };
+            let decision =
+                if self.policy.effective_mode() == ContextIntegrityPolicyMode::MonitorOnly {
+                    ContextIntegrityDecisionKind::Allow
+                } else {
+                    would_decision
+                };
             evaluation.policy = policy_verdict(
                 &self.policy,
                 decision,
@@ -454,7 +455,7 @@ fn policy_verdict(
     classification: &ContextIntegrityClassification,
     input: &ContextIntegrityInput,
 ) -> ContextIntegrityPolicyVerdict {
-    let enforcement_applied = policy.mode == ContextIntegrityPolicyMode::Enforce
+    let enforcement_applied = policy.effective_mode() == ContextIntegrityPolicyMode::Enforce
         && decision != ContextIntegrityDecisionKind::Allow;
     let confirmation_required = matches!(decision, ContextIntegrityDecisionKind::Confirm)
         || (input.action_risk.requires_confirmation() && !classification.findings.is_empty());
@@ -465,7 +466,7 @@ fn policy_verdict(
         .any(|f| f.classifier == ContextIntegrityClassifier::ToolAccessEscalation);
     let rationale = if classification.findings.is_empty() {
         "no classifier findings".to_string()
-    } else if policy.mode == ContextIntegrityPolicyMode::MonitorOnly {
+    } else if policy.effective_mode() == ContextIntegrityPolicyMode::MonitorOnly {
         format!(
             "monitor-only: would apply {would_decision:?} for {} finding(s)",
             classification.findings.len()
@@ -478,7 +479,7 @@ fn policy_verdict(
     };
 
     ContextIntegrityPolicyVerdict {
-        mode: policy.mode,
+        mode: policy.effective_mode(),
         decision,
         would_decision,
         enforcement_applied,
