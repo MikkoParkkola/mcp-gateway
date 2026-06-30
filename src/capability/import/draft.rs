@@ -106,7 +106,7 @@ impl SafetyClassification {
 ///
 /// Contains the minimum information needed for a human reviewer to
 /// understand and approve the imported capability.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TrustCardStub {
     /// Who is responsible for reviewing this capability.
     #[serde(default)]

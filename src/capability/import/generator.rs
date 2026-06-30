@@ -426,7 +426,7 @@ impl ImportGenerator {
         );
         report.insert(
             "total_drafts".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(total)),
+            serde_json::Value::Number(serde_json::Number::from(total as u64)),
         );
         report.insert(
             "pending_review".to_string(),

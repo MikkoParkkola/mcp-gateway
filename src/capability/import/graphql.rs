@@ -195,8 +195,6 @@ fn parse_graphql_sdl_fields(sdl: &str) -> Result<Vec<GraphQlFieldInfo>> {
     let mut fields = Vec::new();
     let mut current_type = String::new();
     let mut in_type = false;
-    let mut in_field = false;
-    let mut current_field: Option<GraphQlFieldInfo> = None;
     let mut current_description: Option<String> = None;
 
     for line in sdl.lines() {
@@ -237,16 +235,13 @@ fn parse_graphql_sdl_fields(sdl: &str) -> Result<Vec<GraphQlFieldInfo>> {
         if in_type {
             // Check for closing brace
             if trimmed == "}" {
-                if let Some(field) = current_field.take() {
-                    fields.push(field);
-                }
                 in_type = false;
                 continue;
             }
 
             // Field definition
             if let Some(field_name) = trimmed
-                .split(['(', ':'])
+                .split(&['(', ':'] as &[char])
                 .next()
                 .map(|s| s.trim().to_string())
             {
