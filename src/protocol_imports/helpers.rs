@@ -205,6 +205,71 @@ pub(super) fn lacks_graphql_bounds(query: &str, variables_schema: &Value) -> boo
     !has_query_bounds && !has_variable_bounds
 }
 
+/// Maximum GraphQL selection-set nesting depth allowed before review is forced.
+pub(super) const MAX_GRAPHQL_DEPTH: usize = 12;
+/// Maximum GraphQL field-selection count (complexity proxy) before review.
+pub(super) const MAX_GRAPHQL_FIELDS: usize = 200;
+
+/// Compute `(max_depth, field_count)` for a GraphQL query by scanning braces
+/// outside string literals and comments.
+///
+/// `max_depth` is the deepest selection-set nesting (`{ ... }`); `field_count`
+/// is the number of selection sets opened (a cheap complexity proxy). The
+/// scanner skips `"..."` strings, `"""..."""` block strings, and `# ...`
+/// comments so braces inside them never inflate the metrics.
+pub(super) fn graphql_query_metrics(query: &str) -> (usize, usize) {
+    let bytes = query.as_bytes();
+    let mut i = 0;
+    let (mut depth, mut max_depth, mut field_count) = (0usize, 0usize, 0usize);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'"' => {
+                if bytes[i..].starts_with(b"\"\"\"") {
+                    i += 3;
+                    while i + 2 < bytes.len() && !bytes[i..].starts_with(b"\"\"\"") {
+                        i += 1;
+                    }
+                    i += 3;
+                } else {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b'"' {
+                        i += if bytes[i] == b'\\' { 2 } else { 1 };
+                    }
+                    i += 1;
+                }
+            }
+            b'{' => {
+                depth += 1;
+                field_count += 1;
+                max_depth = max_depth.max(depth);
+                i += 1;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    (max_depth, field_count)
+}
+
+/// Whether a GraphQL query exceeds the depth or complexity limits and must be
+/// review-gated regardless of pagination bounds.
+pub(super) fn graphql_exceeds_limits(query: &str) -> Option<(usize, usize)> {
+    let (depth, fields) = graphql_query_metrics(query);
+    if depth > MAX_GRAPHQL_DEPTH || fields > MAX_GRAPHQL_FIELDS {
+        Some((depth, fields))
+    } else {
+        None
+    }
+}
+
 pub(super) fn gates_for_risks(risks: &[ImportRisk]) -> Vec<ImportReviewGate> {
     let mut gates = Vec::new();
     for risk in risks {
@@ -443,5 +508,44 @@ pub(super) fn human_title(value: &str) -> String {
         "Imported Tool".to_string()
     } else {
         words.join(" ")
+    }
+}
+
+#[cfg(test)]
+mod graphql_metrics_tests {
+    use super::{MAX_GRAPHQL_DEPTH, graphql_exceeds_limits, graphql_query_metrics};
+
+    #[test]
+    fn shallow_query_within_limits() {
+        let q = "query { user(id: 1) { name email } }";
+        let (depth, fields) = graphql_query_metrics(q);
+        assert_eq!(depth, 2, "user{{}} + outer {{}}");
+        assert_eq!(fields, 2);
+        assert!(graphql_exceeds_limits(q).is_none());
+    }
+
+    #[test]
+    fn deeply_nested_query_exceeds_depth() {
+        // Build a query nested past MAX_GRAPHQL_DEPTH.
+        let mut q = String::from("query ");
+        let levels = MAX_GRAPHQL_DEPTH + 3;
+        for _ in 0..levels {
+            q.push_str("{ a ");
+        }
+        for _ in 0..levels {
+            q.push('}');
+        }
+        let (depth, _) = graphql_query_metrics(&q);
+        assert!(depth > MAX_GRAPHQL_DEPTH, "depth was {depth}");
+        assert!(graphql_exceeds_limits(&q).is_some());
+    }
+
+    #[test]
+    fn braces_in_strings_and_comments_do_not_count() {
+        // Braces inside a string literal, block string, and comment must be ignored.
+        let q = "query { f(arg: \"{ { {\") } # trailing { { {\nquery2 { \"\"\" { { { \"\"\" g }";
+        let (depth, _fields) = graphql_query_metrics(q);
+        // Only the two real top-level selection sets contribute depth 1 each.
+        assert_eq!(depth, 1, "string/comment braces leaked into depth: {depth}");
     }
 }

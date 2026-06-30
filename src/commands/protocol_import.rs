@@ -165,6 +165,7 @@ async fn apply_plan_to_directory(
     let manifest_path = output.join(manifest_file_name(plan));
     let mut writable = Vec::new();
     let mut skipped = Vec::new();
+    let mut claimed_paths = std::collections::HashSet::new();
 
     for draft in &plan.drafts {
         let Some(generated_yaml) = draft.generated_yaml.as_deref() else {
@@ -180,6 +181,21 @@ async fn apply_plan_to_directory(
         };
 
         let path = output.join(format!("{}.yaml", draft.name));
+        // In-batch collision: two source operations whose names slugify to the
+        // same file (e.g. "Delete User" in two Postman folders) would otherwise
+        // silently overwrite each other. Skip the later one with an explicit
+        // reason instead of clobbering the earlier write.
+        if !claimed_paths.insert(path.clone()) {
+            skipped.push(SkippedDraft {
+                draft_id: draft.id.clone(),
+                name: draft.name.clone(),
+                reason: format!(
+                    "output path {} already claimed by an earlier draft in this import (slug collision); rename the source operation to disambiguate",
+                    path.display()
+                ),
+            });
+            continue;
+        }
         writable.push((draft, generated_yaml, path));
     }
 
@@ -356,6 +372,8 @@ fn parse_document<T: DeserializeOwned>(
     content: &str,
 ) -> Result<T, String> {
     serde_json::from_str(content).or_else(|json_err| {
+        guard_untrusted_yaml(content)
+            .map_err(|guard_err| format!("rejected {label} {}: {guard_err}", file.display()))?;
         serde_yaml::from_str(content).map_err(|yaml_err| {
             format!(
                 "failed to parse {label} {} as JSON or YAML: {json_err}; {yaml_err}",
@@ -363,6 +381,60 @@ fn parse_document<T: DeserializeOwned>(
             )
         })
     })
+}
+
+/// Maximum byte size of an untrusted spec document.
+const MAX_SPEC_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum number of YAML alias references tolerated. Legitimate API specs use
+/// `$ref` (a spec-level mechanism), not YAML aliases, so this is ~0 in practice;
+/// a low cap kills the exponential "billion laughs" alias-amplification bomb.
+const MAX_YAML_ALIASES: usize = 64;
+
+/// Reject hostile untrusted YAML before it reaches `serde_yaml`, which expands
+/// anchor/alias references during deserialization (a "billion laughs" memory /
+/// stack `DoS`). JSON parsing is already bounded by `serde_json`'s recursion limit,
+/// so this guard only runs on the YAML fallback path.
+fn guard_untrusted_yaml(content: &str) -> Result<(), String> {
+    if content.len() > MAX_SPEC_BYTES {
+        return Err(format!(
+            "document is {} bytes, exceeds the {MAX_SPEC_BYTES}-byte spec limit",
+            content.len()
+        ));
+    }
+    let alias_count = count_yaml_aliases(content);
+    if alias_count > MAX_YAML_ALIASES {
+        return Err(format!(
+            "document uses {alias_count} YAML aliases (limit {MAX_YAML_ALIASES}); \
+             alias amplification is rejected — use $ref for spec-level reuse"
+        ));
+    }
+    Ok(())
+}
+
+/// Count YAML alias references (`*name` in node position) in raw text. A node
+/// alias appears at the start of a value, i.e. after a structural character
+/// (`:`, `-`, `[`, `{`, `,`) or at line start, followed by an anchor-name char.
+/// This deliberately over-counts conservatively rather than parse YAML.
+fn count_yaml_aliases(content: &str) -> usize {
+    let bytes = content.as_bytes();
+    let mut count = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'*' && i + 1 < bytes.len() {
+            let next = bytes[i + 1];
+            let prev = bytes[..i]
+                .iter()
+                .rev()
+                .find(|b| !b.is_ascii_whitespace())
+                .copied();
+            let at_node_position = matches!(prev, None | Some(b':' | b'-' | b'[' | b'{' | b','));
+            if at_node_position && (next.is_ascii_alphanumeric() || next == b'_') {
+                count += 1;
+            }
+        }
+        i += 1;
+    }
+    count
 }
 
 fn default_source_name(file: &Path) -> String {
@@ -528,6 +600,43 @@ mod tests {
     use mcp_gateway::protocol_imports::{ImportRiskKind, ImportSourceKind};
 
     use super::*;
+
+    #[test]
+    fn guard_rejects_yaml_alias_bomb() {
+        // A billion-laughs-style alias amplification must be rejected before
+        // serde_yaml expands it.
+        use std::fmt::Write as _;
+        let mut bomb = String::from("a: &a [x, x, x, x, x, x, x, x, x]\n");
+        for (i, prev) in ('b'..='z').zip('a'..='y') {
+            let _ = writeln!(
+                bomb,
+                "{i}: &{i} [*{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}]"
+            );
+        }
+        let err = guard_untrusted_yaml(&bomb).expect_err("alias bomb must be rejected");
+        assert!(err.contains("alias"), "got: {err}");
+    }
+
+    #[test]
+    fn guard_allows_normal_yaml_without_aliases() {
+        let ok = "openapi: 3.0.0\ninfo:\n  title: x\npaths: {}\n";
+        assert!(guard_untrusted_yaml(ok).is_ok());
+    }
+
+    #[test]
+    fn guard_rejects_oversized_document() {
+        let big = "x".repeat(MAX_SPEC_BYTES + 1);
+        let err = guard_untrusted_yaml(&big).expect_err("oversized doc must be rejected");
+        assert!(err.contains("exceeds"), "got: {err}");
+    }
+
+    #[test]
+    fn count_yaml_aliases_ignores_scalar_stars() {
+        // `*` inside scalar text (not in node position) must not be counted.
+        assert_eq!(count_yaml_aliases("note: see 2 * 3 for math\n"), 0);
+        assert_eq!(count_yaml_aliases("ref: *anchor\n"), 1);
+        assert_eq!(count_yaml_aliases("list:\n  - *a\n  - *b\n"), 2);
+    }
 
     const OPENAPI_SPEC: &str = r#"
 openapi: 3.0.0
