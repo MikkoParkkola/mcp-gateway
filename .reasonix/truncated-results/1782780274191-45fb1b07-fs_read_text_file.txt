@@ -25,7 +25,7 @@ use mcp_gateway::runtime::provider::{
     create_provider, validate_egress, validate_mount, PolicyVerdict, RuntimeProvider,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════��════════════════════════════════════════
 // AC.1 — RuntimeProvider trait covers lifecycle, policy, and evidence
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -136,7 +136,7 @@ async fn ac_1_provider_exposes_all_lifecycle_operations() {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AC.2 — local_compat preserves existing stdio launch semantics
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════���═════════════════════════════════════════════
 
 /// MIK-6555.AC.2 AC.2: Backends with no runtime config preserve existing
 /// direct-launch behavior through provider id `local_compat`, including cwd,
@@ -152,7 +152,7 @@ fn ac_2_mik_6555_ac_2_ac_2_backends_with_no_runtime_con() {
     let config = RuntimeConfig::default();
     assert_eq!(config.provider, "local_compat");
 
-    // ── local_compat accepts the default config ─────────────────────────
+    // ── local_compat accepts the default config ───────────��─────────────
     let provider = LocalCompatProvider::new();
     let verdict = provider.validate_policy(&config);
     assert!(verdict.is_allowed(),
@@ -331,7 +331,7 @@ fn ac_4_mik_6555_ac_4_ac_4_docker_podman_provider_start() {
     // container spawn by detecting forbidden flags. No policy field maps
     // to --network=host directly — DockerProvider defaults to --network none.
 
-    // ── Resource flags: CPU and memory configured ───────────────────────
+    // ── Resource flags: CPU and memory configured ──────────���────────────
     let mut config_with_resources = RuntimeConfig::docker_restricted();
     config_with_resources.resources = ResourcePolicy {
         cpu: 1.0,
@@ -348,7 +348,7 @@ fn ac_4_mik_6555_ac_4_ac_4_docker_podman_provider_start() {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AC.5 — Denied network and mount policies fail closed before spawn
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════��═════════════════════════════════════════════════════════════════════
 
 /// MIK-6555.AC.5 AC.5: Denied network and mount policies fail closed before
 /// process/container start, including host network, Docker socket mount, `/`,
@@ -586,12 +586,11 @@ fn ac_7_mik_6555_ac_7_ac_7_existing_runtime_substrate() {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AC.8 — Operator documentation includes provider examples + security table
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════
 
-/// MIK-6555.AC.8 AC.8: Operator documentation includes copy-pasteable
-/// `local_compat`, `docker`, and `podman` backend examples plus a security
-/// tradeoff table covering network defaults, mounts, env/secrets, resource
-/// limits, logs, and compatibility migration.
+[…truncated 316 chars — raise BridgeOptions.maxResultChars, or call the tool with a narrower scope (filter, head, pagination)…]
+
+lity migration.
 ///
 /// CHECK: `rg -n "local_compat|provider: docker|provider: podman|read-only|network"
 /// docs/runtime README.md examples/` exits 0 (expected: all provider examples
@@ -618,94 +617,3 @@ fn ac_8_mik_6555_ac_8_ac_8_operator_documentation_inclu() {
 
     // ── Must document security defaults ──────────────────────────────────
     assert!(
-        providers_md.contains("read-only"),
-        "docs must document read-only filesystem default"
-    );
-    assert!(
-        providers_md.contains("network"),
-        "docs must document network isolation"
-    );
-
-    // ── Must contain a security tradeoff table ───────────────────────────
-    assert!(
-        providers_md.contains("Security Tradeoff") || providers_md.contains("tradeoff"),
-        "docs must contain a security tradeoff table"
-    );
-
-    // ── Must contain migration guidance ──────────────────────────────────
-    assert!(
-        providers_md.contains("Migration") || providers_md.contains("migration"),
-        "docs must contain migration guidance from local_compat"
-    );
-
-    // ── README check (optional, best-effort) ─────────────────────────────
-    if let Ok(readme) = std::fs::read_to_string("README.md") {
-        // At minimum the README should reference runtime providers
-        // Not a hard requirement per AC, but noted
-        let _ = readme;
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// AC.9 — Deploy: Diff merged to main, release built+deployed
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// MIK-6555.AC.9 AC.deploy: Diff merged to main, release built+deployed,
-/// post-deploy telemetry confirms active.
-///
-/// CHECK: `git log origin/main --grep 'MIK-6555' --oneline` exits 0
-///
-/// This test verifies the in-repo contract that the deploy validation hook
-/// will check: the acceptance test file itself exists and the integration
-/// test file for docker exists.
-#[test]
-fn ac_9_mik_6555_ac_9_ac_deploy_diff_merged_to_main_re() {
-    // ── Verify the integration test files exist (deploy pre-check) ──────
-    assert!(
-        std::path::Path::new("tests/mik_6555_acs.rs").exists(),
-        "acceptance test file must exist"
-    );
-    assert!(
-        std::path::Path::new("tests/runtime_provider_docker.rs").exists(),
-        "docker provider integration test must exist"
-    );
-
-    // ── Verify the runtime module is properly structured for deployment ──
-    assert!(
-        std::path::Path::new("src/runtime/mod.rs").exists(),
-        "runtime module must exist"
-    );
-    assert!(
-        std::path::Path::new("src/runtime/provider.rs").exists(),
-        "runtime provider trait must exist"
-    );
-    assert!(
-        std::path::Path::new("src/runtime/policy.rs").exists(),
-        "runtime policy module must exist"
-    );
-    assert!(
-        std::path::Path::new("src/runtime/local_compat.rs").exists(),
-        "local_compat provider must exist"
-    );
-    assert!(
-        std::path::Path::new("src/runtime/docker.rs").exists(),
-        "docker provider must exist"
-    );
-    assert!(
-        std::path::Path::new("src/runtime/audit.rs").exists(),
-        "audit module must exist"
-    );
-    assert!(
-        std::path::Path::new("docs/runtime/providers.md").exists(),
-        "provider documentation must exist"
-    );
-
-    // ── Verify the BackendConfig has the runtime field ───────────────────
-    // (static assertion: if this compiles, the field exists)
-    let cfg = BackendConfig::default();
-    assert_eq!(cfg.runtime.provider, "local_compat");
-
-    // ── Deploy flag: the --grep 'MIK-6555' check is orchestrator-owned ──
-    // This test verifies the code contract. The git log check runs post-merge.
-    // If we got here, the code is deployable.
-}

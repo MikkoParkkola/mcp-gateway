@@ -15,7 +15,7 @@ use std::sync::Arc;
 use super::audit::{AuditAction, AuditEvent, policy_hash};
 use super::policy::RuntimeConfig;
 use super::provider::{PolicyVerdict, RuntimeHandle, RuntimeProvider, validate_egress};
-use crate::transport::StdioTransport;
+use crate::transport::{StdioTransport, Transport};
 use crate::Result;
 
 /// The `local_compat` runtime provider.
