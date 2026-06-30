@@ -3,9 +3,10 @@
 use mcp_gateway::discovery::{
     AutoDiscovery, DiscoverySource,
     shadow::{
-        ShadowAuthExposure, ShadowDataRisk, ShadowDoctorStatus, ShadowEnterpriseCapability,
-        ShadowLicenseTier, ShadowRemediationAction, ShadowRiskSeverity, ShadowScanActivity,
-        ShadowScanCapability, ShadowScanMode, ShadowScanReport,
+        ShadowAuthExposure, ShadowConsumerHandoff, ShadowDataRisk, ShadowDoctorStatus,
+        ShadowEnterpriseBoundary, ShadowEnterpriseCapability, ShadowLicenseTier,
+        ShadowRemediationAction, ShadowRiskSeverity, ShadowScanActivity, ShadowScanCapability,
+        ShadowScanMode, ShadowScanReport,
     },
 };
 
@@ -427,6 +428,12 @@ fn shadow_consumer_handoff_projects_report_for_product_surfaces() {
     );
     let handoff = report.consumer_handoff();
 
+    assert_handoff_inventory_shape(&handoff, &report);
+    assert_enterprise_boundary(&handoff.enterprise_boundary, &report);
+    assert_handoff_surfaces_are_sanitized(&handoff);
+}
+
+fn assert_handoff_inventory_shape(handoff: &ShadowConsumerHandoff, report: &ShadowScanReport) {
     assert_eq!(handoff.schema_version, "shadow_radar.handoff.v1");
     assert_eq!(handoff.source_report_schema, "shadow_radar.v1");
     assert!(handoff.passive);
@@ -434,12 +441,27 @@ fn shadow_consumer_handoff_projects_report_for_product_surfaces() {
     assert_eq!(handoff.trustcard_inputs.len(), report.assets.len());
     assert_eq!(handoff.doctor_findings.len(), report.assets.len());
     assert_eq!(handoff.control_plane_assets.len(), report.assets.len());
+}
 
-    let boundary = &handoff.enterprise_boundary;
+fn assert_enterprise_boundary(boundary: &ShadowEnterpriseBoundary, report: &ShadowScanReport) {
     assert_eq!(
         boundary.schema_version,
         "shadow_radar.enterprise_boundary.v1"
     );
+    assert_free_core_scan_boundary(boundary);
+    assert_enterprise_scan_boundary(boundary);
+    assert_enterprise_evidence_boundary(boundary);
+    assert_eq!(
+        boundary.local_unmanaged_total,
+        report.summary.unmanaged_total
+    );
+    assert_eq!(
+        boundary.local_network_exposed_total,
+        report.summary.network_exposed_total
+    );
+}
+
+fn assert_free_core_scan_boundary(boundary: &ShadowEnterpriseBoundary) {
     assert_eq!(
         boundary.free_core_scan.license_tier,
         ShadowLicenseTier::FreeCore
@@ -480,6 +502,9 @@ fn shadow_consumer_handoff_projects_report_for_product_surfaces() {
             .denied_capabilities
             .contains(&ShadowScanCapability::ConfigMutation)
     );
+}
+
+fn assert_enterprise_scan_boundary(boundary: &ShadowEnterpriseBoundary) {
     assert_eq!(
         boundary.enterprise_scan.license_tier,
         ShadowLicenseTier::Enterprise
@@ -522,6 +547,9 @@ fn shadow_consumer_handoff_projects_report_for_product_surfaces() {
             .denied_capabilities
             .contains(&ShadowScanCapability::ConfigMutation)
     );
+}
+
+fn assert_enterprise_evidence_boundary(boundary: &ShadowEnterpriseBoundary) {
     assert!(
         boundary
             .enterprise_capabilities
@@ -544,15 +572,9 @@ fn shadow_consumer_handoff_projects_report_for_product_surfaces() {
             .iter()
             .all(|export| !export.sensitive_values_included)
     );
-    assert_eq!(
-        boundary.local_unmanaged_total,
-        report.summary.unmanaged_total
-    );
-    assert_eq!(
-        boundary.local_network_exposed_total,
-        report.summary.network_exposed_total
-    );
+}
 
+fn assert_handoff_surfaces_are_sanitized(handoff: &ShadowConsumerHandoff) {
     let local_card = handoff
         .trustcard_inputs
         .iter()

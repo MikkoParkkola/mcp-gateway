@@ -380,6 +380,15 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     let (status, body) = send_json(&router, Method::GET, "/ui/api/control-plane", None).await;
 
     assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
+    assert_control_plane_route_metadata(&body);
+    assert_control_plane_inventory_counts(&body);
+    assert_control_plane_shadow_boundary(&body);
+    assert_control_plane_views(&body);
+
+    server.abort();
+}
+
+fn assert_control_plane_route_metadata(body: &Value) {
     assert_eq!(body["schema_version"], "control_plane.api.v1");
     assert_eq!(body["source"], "local_runtime_snapshot");
     assert_eq!(body["route"]["read_only"], true);
@@ -391,12 +400,18 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     assert_eq!(body["coverage"]["servers"], true);
     assert_eq!(body["coverage"]["trust_cards"], true);
     assert_eq!(body["coverage"]["runtime_health"], true);
+}
+
+fn assert_control_plane_inventory_counts(body: &Value) {
     assert_eq!(body["inventory_counts"]["servers"], 1);
     assert_eq!(body["inventory_counts"]["tools"], 1);
     assert_eq!(body["inventory_counts"]["trust_cards"], 1);
     assert_eq!(body["inventory_counts"]["runtime_health"], 1);
     assert!(body["inventory_counts"]["shadow_assets"].is_u64());
     assert!(body["inventory_counts"]["shadow_high_or_critical_assets"].is_u64());
+}
+
+fn assert_control_plane_shadow_boundary(body: &Value) {
     assert_eq!(
         body["shadow_radar"]["schema_version"],
         "shadow_radar.handoff.v1"
@@ -469,6 +484,9 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
         export["requires_enterprise_license"] == true
             && export["sensitive_values_included"] == false
     }));
+}
+
+fn assert_control_plane_views(body: &Value) {
     assert_eq!(body["view"]["servers"][0]["name"], "docs");
     assert_eq!(body["view"]["tools"][0]["name"], "search_docs");
     assert_eq!(body["view"]["trust_cards"][0]["server_id"], "backend:docs");
@@ -489,8 +507,6 @@ async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
     assert_eq!(body["current_limits"][0], "read_only_api");
 
     assert!(body["decision_queue"]["items"].is_array());
-
-    server.abort();
 }
 
 #[tokio::test]
