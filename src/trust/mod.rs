@@ -85,6 +85,8 @@ impl TrustCard {
                 transport: TrustTransport::Unknown,
                 auth_mode: TrustAuthMode::Unknown,
                 runtime_profile: None,
+                network_reach: Vec::new(),
+                signature_evidence: Vec::new(),
                 risk_class: trust_tool.risk_class,
                 data_classes: trust_tool.data_classes.clone(),
                 permissions: trust_tool.permissions.clone(),
@@ -173,6 +175,12 @@ pub struct TrustServer {
     /// Runtime profile identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_profile: Option<String>,
+    /// Network targets the server may contact.
+    #[serde(default)]
+    pub network_reach: Vec<TrustNetworkReach>,
+    /// Signature or provenance verification evidence.
+    #[serde(default)]
+    pub signature_evidence: Vec<TrustSignatureEvidence>,
     /// Coarse risk classification.
     pub risk_class: TrustRiskClass,
     /// Data classes the server may touch.
@@ -234,7 +242,7 @@ impl TrustTool {
         }
     }
 
-    fn into_component(self, server_name: &str) -> CbomComponent {
+    pub(super) fn into_component(self, server_name: &str) -> CbomComponent {
         CbomComponent {
             name: format!("{server_name}:{}", self.name),
             kind: CbomComponentKind::Tool,
@@ -333,7 +341,7 @@ pub struct CbomTool {
 }
 
 impl CbomTool {
-    fn from_trust_tool(tool: &TrustTool) -> Self {
+    pub(super) fn from_trust_tool(tool: &TrustTool) -> Self {
         Self {
             name: tool.name.clone(),
             description: tool.description.clone(),
@@ -396,7 +404,7 @@ pub struct CbomAnnotation {
 }
 
 impl CbomAnnotation {
-    fn from_trust_tool(tool: &TrustTool) -> Self {
+    pub(super) fn from_trust_tool(tool: &TrustTool) -> Self {
         Self {
             subject_kind: CbomSubjectKind::Tool,
             subject_name: tool.name.clone(),
@@ -441,7 +449,7 @@ pub struct CbomProvenance {
 }
 
 impl CbomProvenance {
-    fn observed(
+    pub(super) fn observed(
         subject_kind: CbomSubjectKind,
         subject_name: impl Into<String>,
         source_uri: impl Into<String>,
@@ -454,7 +462,7 @@ impl CbomProvenance {
         }
     }
 
-    fn inferred(
+    pub(super) fn inferred(
         subject_kind: CbomSubjectKind,
         subject_name: impl Into<String>,
         source_uri: impl Into<String>,
@@ -545,6 +553,45 @@ pub enum TrustEvidenceKind {
     Observed,
     /// Missing or unknown.
     Missing,
+}
+
+/// Network target evidence for a server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustNetworkReach {
+    /// Target URL, host, or service label.
+    pub target: String,
+    /// Optional protocol or transport hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
+}
+
+/// Signature verification status.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustSignatureStatus {
+    /// Signature or provenance was verified.
+    Verified,
+    /// Signature or provenance is missing.
+    Missing,
+    /// Signature or provenance verification failed.
+    Failed,
+    /// Signature status is unknown.
+    Unknown,
+}
+
+/// Signature or provenance evidence attached to a server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustSignatureEvidence {
+    /// Evidence subject.
+    pub subject: String,
+    /// Evidence kind, such as `capability_sha256`.
+    pub kind: String,
+    /// Verification status.
+    pub status: TrustSignatureStatus,
+    /// Evidence quality.
+    pub evidence: TrustEvidenceKind,
 }
 
 /// Coarse risk class.

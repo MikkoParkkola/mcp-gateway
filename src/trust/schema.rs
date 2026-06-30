@@ -7,8 +7,8 @@ pub use super::{
     CapabilityBom, CbomAnnotation, CbomComponent, CbomComponentKind, CbomDependency, CbomPrompt,
     CbomProvenance, CbomResource, CbomSubjectKind, CbomTool, TrustAuthMode, TrustCard,
     TrustDataClass, TrustEvaluationStatus, TrustEvidenceKind, TrustFinding, TrustFindingSeverity,
-    TrustPermission, TrustRiskClass, TrustServer, TrustTool, TrustToolAnnotations, TrustTransport,
-    TrustValidationReport,
+    TrustNetworkReach, TrustPermission, TrustRiskClass, TrustServer, TrustSignatureEvidence,
+    TrustSignatureStatus, TrustTool, TrustToolAnnotations, TrustTransport, TrustValidationReport,
 };
 
 /// Compatibility alias for consumers that use the CBOM term directly.
