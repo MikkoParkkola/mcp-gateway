@@ -158,14 +158,20 @@ pub(super) fn risk_reasons(
     data_risk: &ShadowDataRisk,
     ownership: &ShadowOwnership,
 ) -> Vec<String> {
-    let mut reasons = vec!["not_registered_in_gateway_config".to_string()];
+    let mut reasons = vec![
+        "unmanaged_server".to_string(),
+        "not_registered_in_gateway_config".to_string(),
+        "missing_trust_metadata".to_string(),
+    ];
     match auth_exposure {
         ShadowAuthExposure::StdioProcess => reasons.push("local_stdio_process".to_string()),
         ShadowAuthExposure::LocalHttpNoAuthMetadata => {
             reasons.push("local_http_without_auth_metadata".to_string());
+            reasons.push("unauthenticated_http_endpoint".to_string());
         }
         ShadowAuthExposure::NetworkHttpNoAuthMetadata => {
             reasons.push("network_http_without_auth_metadata".to_string());
+            reasons.push("unauthenticated_http_endpoint".to_string());
         }
         ShadowAuthExposure::Unknown => reasons.push("unknown_transport_auth".to_string()),
     }
@@ -178,12 +184,43 @@ pub(super) fn risk_reasons(
         ShadowOwnership::ClientConfig => reasons.push("source_client_config".to_string()),
         ShadowOwnership::LocalProcess => reasons.push("source_local_process".to_string()),
         ShadowOwnership::Environment => reasons.push("source_environment".to_string()),
-        ShadowOwnership::Unknown => reasons.push("unknown_owner".to_string()),
+        ShadowOwnership::Unknown => {
+            reasons.push("unknown_owner".to_string());
+            reasons.push("unknown_provenance".to_string());
+        }
     }
     if server.metadata.command.is_some() {
         reasons.push("command_arguments_redacted".to_string());
     }
+    if has_personal_access_reference(server) {
+        reasons.push("personal_access_reference".to_string());
+    }
+    if has_stale_binary_reference(server) {
+        reasons.push("stale_binary".to_string());
+    }
     reasons
+}
+
+fn has_personal_access_reference(server: &DiscoveredServer) -> bool {
+    let mut haystack = format!("{} {}", server.name, server.description).to_ascii_lowercase();
+    if let Some(command) = &server.metadata.command {
+        haystack.push(' ');
+        haystack.push_str(&command.to_ascii_lowercase());
+    }
+    ["token", "key", "password", "oauth", "bearer", "private"]
+        .iter()
+        .any(|needle| haystack.contains(needle))
+}
+
+fn has_stale_binary_reference(server: &DiscoveredServer) -> bool {
+    let mut haystack = format!("{} {}", server.name, server.description).to_ascii_lowercase();
+    if let Some(command) = &server.metadata.command {
+        haystack.push(' ');
+        haystack.push_str(&command.to_ascii_lowercase());
+    }
+    ["stale", "legacy", "deprecated"]
+        .iter()
+        .any(|needle| haystack.contains(needle))
 }
 
 pub(super) fn evidence_refs(asset: &ShadowAsset) -> Vec<String> {

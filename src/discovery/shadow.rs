@@ -4,7 +4,10 @@
 //! evidence. It never handshakes with, lists tools from, or invokes a
 //! discovered server.
 
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +105,10 @@ pub struct ShadowActionGroup {
 pub struct ShadowAsset {
     /// Stable id for diffing repeated reports.
     pub id: String,
+    /// Stable id alias for external ingestion contracts.
+    pub asset_id: String,
+    /// Stable asset kind for SIEM and control-plane ingestion.
+    pub kind: String,
     /// Discovered server name.
     pub name: String,
     /// Human-readable description from the source.
@@ -116,6 +123,8 @@ pub struct ShadowAsset {
     pub auth_exposure: ShadowAuthExposure,
     /// Gateway trust status.
     pub trust_status: ShadowTrustStatus,
+    /// Stable management status for public JSON consumers.
+    pub management_status: String,
     /// Data risk classification.
     pub data_risk: ShadowDataRisk,
     /// Severity of this unmanaged asset.
@@ -126,6 +135,21 @@ pub struct ShadowAsset {
     pub remediation: ShadowRemediation,
     /// Short, stable reasons behind the classification.
     pub risk_reasons: Vec<String>,
+    /// Structured risk taxonomy for downstream ingestion.
+    pub risks: Vec<ShadowRiskFinding>,
+    /// Human-safe remediation hints.
+    pub remediation_hints: Vec<String>,
+}
+
+/// Structured risk finding for a `ShadowAsset`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShadowRiskFinding {
+    /// Stable machine code.
+    pub code: String,
+    /// Severity inherited from the asset classification.
+    pub severity: ShadowRiskSeverity,
+    /// Human-readable description.
+    pub detail: String,
 }
 
 /// Ownership inference.
@@ -494,7 +518,11 @@ impl ShadowScanReport {
             .collect();
 
         assets.sort_by(|left, right| left.id.cmp(&right.id).then(left.name.cmp(&right.name)));
+        mark_duplicate_ports(&mut assets);
         ensure_unique_ids(&mut assets);
+        for asset in &mut assets {
+            asset.refresh_schema_aliases();
+        }
 
         let high_or_critical_total = assets
             .iter()
@@ -667,9 +695,13 @@ impl ShadowAsset {
             ShadowEvidence::from_server(server, gateway_config, transport.endpoint.as_deref());
         let risk_reasons = risk_reasons(server, &auth_exposure, &data_risk, &ownership);
         let id = stable_shadow_id(server, &transport);
+        let risks = build_risks(&risk_reasons, &severity);
+        let remediation_hints = remediation_hints(&remediation);
 
         Self {
+            asset_id: id.clone(),
             id,
+            kind: "mcp_server".to_string(),
             name: server.name.clone(),
             description: server.description.clone(),
             source: server.source.clone(),
@@ -677,13 +709,103 @@ impl ShadowAsset {
             transport,
             auth_exposure,
             trust_status: ShadowTrustStatus::Unmanaged,
+            management_status: "unmanaged".to_string(),
             data_risk,
             severity,
             evidence,
             remediation,
             risk_reasons,
+            risks,
+            remediation_hints,
         }
     }
+
+    fn refresh_schema_aliases(&mut self) {
+        self.asset_id.clone_from(&self.id);
+        self.management_status = match self.trust_status {
+            ShadowTrustStatus::Unmanaged => "unmanaged".to_string(),
+        };
+        self.risks = build_risks(&self.risk_reasons, &self.severity);
+        self.remediation_hints = remediation_hints(&self.remediation);
+    }
+}
+
+fn mark_duplicate_ports(assets: &mut [ShadowAsset]) {
+    let mut counts = HashMap::<u16, usize>::new();
+    for port in assets.iter().filter_map(|asset| asset.evidence.port) {
+        *counts.entry(port).or_insert(0) += 1;
+    }
+
+    for asset in assets {
+        if asset
+            .evidence
+            .port
+            .is_some_and(|port| counts.get(&port).copied().unwrap_or_default() > 1)
+            && !asset
+                .risk_reasons
+                .iter()
+                .any(|reason| reason == "duplicate_port")
+        {
+            asset.risk_reasons.push("duplicate_port".to_string());
+        }
+    }
+}
+
+fn build_risks(reasons: &[String], severity: &ShadowRiskSeverity) -> Vec<ShadowRiskFinding> {
+    reasons
+        .iter()
+        .map(|reason| ShadowRiskFinding {
+            code: reason.clone(),
+            severity: severity.clone(),
+            detail: risk_detail(reason).to_string(),
+        })
+        .collect()
+}
+
+fn risk_detail(code: &str) -> &'static str {
+    match code {
+        "unmanaged_server" => "Server is not managed by the compared gateway configuration.",
+        "not_registered_in_gateway_config" => {
+            "Server name is absent from the compared gateway configuration."
+        }
+        "missing_trust_metadata" => "Gateway-owned trust metadata is absent.",
+        "unauthenticated_http_endpoint" => "HTTP transport lacks passive authentication metadata.",
+        "local_http_without_auth_metadata" => {
+            "Loopback HTTP transport lacks passive authentication metadata."
+        }
+        "network_http_without_auth_metadata" => {
+            "Non-loopback HTTP transport lacks passive authentication metadata."
+        }
+        "local_stdio_process" => "Local stdio transport was found in passive evidence.",
+        "sensitive_data_domain" => "Passive evidence indicates access to sensitive data domains.",
+        "high_privilege_domain" => "Passive evidence indicates high-privilege local access.",
+        "source_client_config" => "Evidence came from a local client configuration.",
+        "source_local_process" => "Evidence came from a local process.",
+        "source_environment" => "Evidence came from environment configuration.",
+        "unknown_owner" => "Passive evidence does not identify an owner.",
+        "unknown_provenance" => "Passive evidence does not identify provenance.",
+        "command_arguments_redacted" => {
+            "Command existed, but arguments were omitted from evidence."
+        }
+        "personal_access_reference" => "Passive evidence referenced personal access material.",
+        "stale_binary" => "Passive evidence suggests legacy, deprecated, or stale binary use.",
+        "duplicate_port" => "Multiple unmanaged assets reported the same local port.",
+        _ => "Unmanaged MCP asset risk signal.",
+    }
+}
+
+fn remediation_hints(remediation: &ShadowRemediation) -> Vec<String> {
+    let mut hints = vec![
+        remediation.verification_step.clone(),
+        remediation.rollback_step.clone(),
+    ];
+    if let Some(command) = &remediation.dry_run_command {
+        hints.push(command.clone());
+    }
+    if let Some(command) = &remediation.apply_command {
+        hints.push(command.clone());
+    }
+    hints
 }
 
 impl ShadowTransport {
@@ -823,3 +945,6 @@ impl ShadowControlPlaneAsset {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

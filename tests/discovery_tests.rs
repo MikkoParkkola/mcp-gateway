@@ -325,6 +325,43 @@ fn shadow_report_is_passive_and_excludes_registered_servers() {
 }
 
 #[test]
+fn shadow_scan_flags_unmanaged_fixture_with_reason_evidence_remediation() {
+    let registered: std::collections::HashSet<String> = ["managed-gateway"]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    let discovered = vec![
+        make_stdio_discovered("managed-gateway", "managed-gateway-mcp"),
+        make_stdio_discovered("unmanaged-local", "unmanaged-local-mcp"),
+    ];
+
+    let report = ShadowScanReport::from_discovered(
+        &discovered,
+        &registered,
+        Some(std::path::Path::new("gateway.yaml")),
+    );
+
+    assert_eq!(report.summary.managed_total, 1);
+    assert_eq!(report.summary.unmanaged_total, 1);
+    let asset = &report.assets[0];
+    assert_eq!(asset.name, "unmanaged-local");
+    assert_eq!(asset.management_status, "unmanaged");
+    assert!(
+        asset
+            .risk_reasons
+            .iter()
+            .any(|reason| reason == "not_registered_in_gateway_config")
+    );
+    assert!(asset.evidence.command_present);
+    assert!(!asset.remediation.verification_step.is_empty());
+    assert!(!asset.remediation_hints.is_empty());
+    assert_eq!(
+        asset.remediation.action,
+        ShadowRemediationAction::AdoptIntoGateway
+    );
+}
+
+#[test]
 fn shadow_report_redacts_command_arguments_and_url_private_values() {
     let registered = std::collections::HashSet::new();
     let discovered = vec![

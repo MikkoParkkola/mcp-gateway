@@ -118,6 +118,8 @@ recommended action, confidence, confirmation requirement, verification step,
 and rollback step. The default scan is local and passive: it reads known client
 configs, environment hints, and the local process table, but it does not
 handshake with discovered servers or invoke their tools.
+The machine-readable schema and risk-code contract are documented in
+[`SHADOW_SCAN.md`](SHADOW_SCAN.md).
 
 Code that renders TrustCards, doctor findings, or control-plane inventory
 consumes the derived `shadow_radar.handoff.v1` feed from
