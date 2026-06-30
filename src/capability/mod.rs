@@ -36,6 +36,7 @@ mod definition;
 pub mod discovery;
 mod executor;
 pub mod hash;
+pub mod import;
 mod loader;
 mod openapi;
 mod parser;
@@ -55,6 +56,10 @@ pub use executor::jsonrpc::JsonRpcExecutor;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};
 pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
+pub use import::{
+    CapabilityDraft, DraftAuth, DraftExample, ImportGenerator, ImportSourceKind,
+    ReviewState, SafetyClassification, TrustCardStub,
+};
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
 pub use schema_validator::{
