@@ -520,6 +520,13 @@ impl MetaMcp {
         *self.identity_grants.write() = grants;
     }
 
+    /// Snapshot all identity-grant rows for read-only projection (e.g. the
+    /// control-plane inventory). Returns owned clones so the lock is not held.
+    #[must_use]
+    pub fn identity_grant_rows(&self) -> Vec<crate::identity_grants::IdentityGrant> {
+        self.identity_grants.read().values().cloned().collect()
+    }
+
     /// Return whether trusted caller identity headers are enabled.
     #[must_use]
     pub const fn trust_caller_identity_headers(&self) -> bool {

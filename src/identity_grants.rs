@@ -531,6 +531,11 @@ impl LocalIdentityGrantStore {
         self.grants.is_empty()
     }
 
+    /// Iterate over all grant rows, ordered by grant id.
+    pub fn values(&self) -> impl Iterator<Item = &IdentityGrant> {
+        self.grants.values()
+    }
+
     /// Insert or replace a grant.
     pub fn upsert(&mut self, grant: IdentityGrant) {
         self.grants.insert(grant.grant_id.clone(), grant);

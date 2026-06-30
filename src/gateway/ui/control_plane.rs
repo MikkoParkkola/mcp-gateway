@@ -15,10 +15,10 @@ use super::super::router::AppState;
 use super::errors::auth_required;
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneActor, ControlPlaneAuthorization, ControlPlaneDecisionQueue,
-    ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrantStatus, ControlPlaneHealth,
-    ControlPlaneLicenseTier, ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole,
-    ControlPlaneRuntimeHealth, ControlPlaneServer, ControlPlaneServerStatus, ControlPlaneSnapshot,
-    ControlPlaneTool, ControlPlaneTrustCard, ControlPlaneUser,
+    ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus,
+    ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneRbac, ControlPlaneReadOnlyView,
+    ControlPlaneRole, ControlPlaneRuntimeHealth, ControlPlaneServer, ControlPlaneServerStatus,
+    ControlPlaneSnapshot, ControlPlaneTool, ControlPlaneTrustCard, ControlPlaneUser,
 };
 use crate::discovery::AutoDiscovery;
 use crate::discovery::shadow::{
@@ -151,7 +151,45 @@ fn local_runtime_snapshot(
         }
     }
 
+    // Project the live identity-grant store into the read-only inventory so the
+    // "grants" governance view reflects actual local grants instead of an empty
+    // table (MIK-6558). Status is derived from revocation/expiry; local grants
+    // have no "requested" state, so an active grant reads as Approved.
+    let now = chrono::Utc::now();
+    for grant in state.meta_mcp.identity_grant_rows() {
+        snapshot
+            .grants
+            .push(control_plane_grant_from_identity(grant, now));
+    }
+
     snapshot
+}
+
+/// Project a local [`IdentityGrant`] into a read-only [`ControlPlaneGrant`].
+///
+/// Local grants have no "requested" state: a grant that is neither revoked nor
+/// past its expiry reads as `Approved`; otherwise `Revoked`.
+fn control_plane_grant_from_identity(
+    grant: crate::identity_grants::IdentityGrant,
+    now: chrono::DateTime<chrono::Utc>,
+) -> ControlPlaneGrant {
+    let revoked =
+        grant.revoked_at.is_some() || grant.expires_at.is_some_and(|expiry| expiry <= now);
+    ControlPlaneGrant {
+        grant_id: grant.grant_id,
+        subject_id: grant
+            .subject
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("{}:{}", grant.subject.authority, grant.subject.subject)),
+        server_id: format!("capability:{}", grant.capability),
+        tool_id: grant.tool,
+        status: if revoked {
+            ControlPlaneGrantStatus::Revoked
+        } else {
+            ControlPlaneGrantStatus::Approved
+        },
+    }
 }
 
 fn trust_card_digest_sha256(card: &TrustCard) -> String {
@@ -440,5 +478,69 @@ impl ControlPlaneInventoryCounts {
             shadow_assets: shadow_radar.summary.unmanaged_total,
             shadow_high_or_critical_assets: shadow_radar.summary.high_or_critical_total,
         }
+    }
+}
+
+#[cfg(test)]
+mod grant_projection_tests {
+    use super::control_plane_grant_from_identity;
+    use crate::control_plane::ControlPlaneGrantStatus;
+    use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant};
+    use chrono::{Duration, Utc};
+
+    fn grant() -> IdentityGrant {
+        IdentityGrant {
+            grant_id: "g-1".to_string(),
+            subject: GrantSubject::new("oidc", "sub-123", Some("alice@corp".to_string())),
+            agent: GrantAgent::Any,
+            capability: "gmail".to_string(),
+            tool: Some("send".to_string()),
+            scope: GrantScope::Execute,
+            owner: None,
+            expires_at: None,
+            revoked_at: None,
+            provenance: "local-file".to_string(),
+            reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn active_grant_projects_as_approved_with_label_and_capability() {
+        let row = control_plane_grant_from_identity(grant(), Utc::now());
+        assert_eq!(row.grant_id, "g-1");
+        assert_eq!(row.subject_id, "alice@corp");
+        assert_eq!(row.server_id, "capability:gmail");
+        assert_eq!(row.tool_id.as_deref(), Some("send"));
+        assert_eq!(row.status, ControlPlaneGrantStatus::Approved);
+    }
+
+    #[test]
+    fn revoked_grant_projects_as_revoked() {
+        let mut g = grant();
+        g.revoked_at = Some(Utc::now());
+        assert_eq!(
+            control_plane_grant_from_identity(g, Utc::now()).status,
+            ControlPlaneGrantStatus::Revoked
+        );
+    }
+
+    #[test]
+    fn expired_grant_projects_as_revoked() {
+        let mut g = grant();
+        g.expires_at = Some(Utc::now() - Duration::hours(1));
+        assert_eq!(
+            control_plane_grant_from_identity(g, Utc::now()).status,
+            ControlPlaneGrantStatus::Revoked
+        );
+    }
+
+    #[test]
+    fn subject_id_falls_back_to_authority_subject_without_label() {
+        let mut g = grant();
+        g.subject = GrantSubject::new("oidc", "sub-123", None);
+        assert_eq!(
+            control_plane_grant_from_identity(g, Utc::now()).subject_id,
+            "oidc:sub-123"
+        );
     }
 }
