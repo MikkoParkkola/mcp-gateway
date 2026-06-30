@@ -28,6 +28,53 @@ use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
+/// Render-guard non-bypassability (MIK-5854 / MIK-6690).
+///
+/// `GuardedValue` wraps a tool result that has passed the context-integrity
+/// render guard. Its inner field is private to this module, so the ONLY ways to
+/// obtain one are the two named, greppable constructors below. Because
+/// [`MetaMcp::invoke_tool_traced`] returns `Result<GuardedValue>`, the compiler
+/// rejects any `return Ok(...)` that has not produced a `GuardedValue` — a
+/// future code path cannot emit un-guarded tool content from the chokepoint
+/// without consciously calling one of these constructors (which review/grep
+/// will catch).
+mod guarded {
+    use serde_json::Value;
+
+    /// A tool result that has passed (or is exempt from) the render guard.
+    pub(super) struct GuardedValue(Value);
+
+    impl GuardedValue {
+        /// Seal a value that has just been through `apply_context_integrity`.
+        /// Call this ONLY immediately after the guard runs on live dispatch.
+        pub(super) fn sealed_by_guard(value: Value) -> Self {
+            Self(value)
+        }
+
+        /// Seal a value served from cache. Cached results were guarded at store
+        /// time (the cache is populated only after `apply_context_integrity`),
+        /// so re-serving them is in-policy without re-running the guard.
+        pub(super) fn from_cache(value: Value) -> Self {
+            Self(value)
+        }
+
+        /// Apply gateway-authored, non-content augmentation (trace id,
+        /// predictions, cost warnings, signature) while preserving guard status.
+        /// The closure must only add gateway metadata, never new tool content.
+        #[must_use]
+        pub(super) fn augment(self, f: impl FnOnce(Value) -> Value) -> Self {
+            Self(f(self.0))
+        }
+
+        /// Unwrap at the single delivery boundary.
+        pub(super) fn into_inner(self) -> Value {
+            self.0
+        }
+    }
+}
+
+use guarded::GuardedValue;
+
 use super::super::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
     did_you_mean, extract_bool_or, extract_optional_str, extract_price_per_million,
@@ -340,11 +387,16 @@ impl MetaMcp {
                 &trace_id_clone,
             )
             .await
+            // Single delivery boundary: unwrap the guard-sealed result.
+            .map(GuardedValue::into_inner)
         })
         .await
     }
 
     /// Inner implementation executed within a trace-ID scope.
+    ///
+    /// Returns a [`GuardedValue`]: every success path must produce one, so the
+    /// render guard cannot be bypassed at the chokepoint (MIK-6690).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     async fn invoke_tool_traced(
         &self,
@@ -354,7 +406,7 @@ impl MetaMcp {
         agent_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
         trace_id: &str,
-    ) -> Result<Value> {
+    ) -> Result<GuardedValue> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         let mut arguments = parse_tool_arguments(args)?;
@@ -502,10 +554,9 @@ impl MetaMcp {
                     )
                     .increment(1);
                     let predictions = self.record_and_predict(session_id, &tool_key);
-                    return Ok(augment_with_trace(
-                        augment_with_predictions(cached, predictions),
-                        trace_id,
-                    ));
+                    return Ok(GuardedValue::from_cache(cached).augment(|v| {
+                        augment_with_trace(augment_with_predictions(v, predictions), trace_id)
+                    }));
                 }
                 GuardOutcome::Proceed => {
                     debug!(
@@ -540,10 +591,9 @@ impl MetaMcp {
                     idem_cache.mark_completed(key, cached.clone());
                 }
                 let predictions = self.record_and_predict(session_id, &tool_key);
-                return Ok(augment_with_trace(
-                    augment_with_predictions(cached, predictions),
-                    trace_id,
-                ));
+                return Ok(GuardedValue::from_cache(cached).augment(|v| {
+                    augment_with_trace(augment_with_predictions(v, predictions), trace_id)
+                }));
             }
         }
 
@@ -1008,7 +1058,10 @@ impl MetaMcp {
             final_result = signer.sign_response(final_result, request_nonce);
         }
 
-        Ok(final_result)
+        // `result` passed apply_context_integrity earlier on this path; the steps
+        // since then add only gateway-authored metadata. Seal at the delivery
+        // boundary so the return type proves the guard ran.
+        Ok(GuardedValue::sealed_by_guard(final_result))
     }
 
     /// Record success/failure against both backend and per-capability error budgets.
