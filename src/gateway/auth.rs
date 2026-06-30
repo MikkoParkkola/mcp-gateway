@@ -406,19 +406,8 @@ pub async fn auth_middleware(
 
     // 1. Try static auth (existing behavior)
     if let Some(client) = auth_config.validate_token(token) {
-        if !auth_config.check_authenticated_client_rate_limit(&client) {
-            warn!(client = %client.name, path = %path, "Rate limit exceeded");
-            return rate_limited_response(format!(
-                "Rate limit exceeded for client '{}'. Try again later.",
-                client.name
-            ));
-        }
-        if !auth_config.check_client_circuit_breaker(&client.name) {
-            warn!(client = %client.name, path = %path, "Client circuit breaker open");
-            return circuit_open_response(format!(
-                "Client '{}' circuit breaker is open. Try again later.",
-                client.name
-            ));
+        if let Some(deny) = client_preflight(auth_config, &client, path) {
+            return deny;
         }
         debug!(client = %client.name, path = %path, "Authenticated via static key");
         request.extensions_mut().insert(client);
@@ -429,19 +418,8 @@ pub async fn auth_middleware(
     if let Some(ref ks) = state.key_server
         && let Some((client, identity_token)) = ks.validate_token(token).await
     {
-        if !auth_config.check_authenticated_client_rate_limit(&client) {
-            warn!(client = %client.name, path = %path, "Rate limit exceeded");
-            return rate_limited_response(format!(
-                "Rate limit exceeded for client '{}'. Try again later.",
-                client.name
-            ));
-        }
-        if !auth_config.check_client_circuit_breaker(&client.name) {
-            warn!(client = %client.name, path = %path, "Client circuit breaker open");
-            return circuit_open_response(format!(
-                "Client '{}' circuit breaker is open. Try again later.",
-                client.name
-            ));
+        if let Some(deny) = client_preflight(auth_config, &client, path) {
+            return deny;
         }
         debug!(client = %client.name, path = %path, "Authenticated via temporary token");
         request
@@ -451,14 +429,96 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
 
-    // 3. Reject
+    // 3. Try a raw OIDC ID token presented directly as a bearer (delegated
+    //    auth, MIK-6648). Gated on `delegated_bearer` and a cheap JWT-shape
+    //    check so we never run JWKS verification on opaque/static tokens. The
+    //    verified subject is bound into request extensions so downstream grant
+    //    evaluation can scope capabilities to the caller identity.
+    if let Some(ref ks) = state.key_server
+        && ks.config.delegated_bearer
+        && looks_like_jwt(token)
+        && let Some((client, identity)) = ks.verify_bearer_identity(token).await
+    {
+        if let Some(deny) = client_preflight(auth_config, &client, path) {
+            return deny;
+        }
+        debug!(client = %client.name, path = %path, "Authenticated via delegated OIDC bearer");
+        request.extensions_mut().insert(identity);
+        request.extensions_mut().insert(client);
+        return next.run(request).await;
+    }
+
+    // 4. Reject
     warn!(path = %path, "Invalid token");
     bearer_unauthorized_response("Invalid token")
+}
+
+/// Per-client rate-limit + circuit-breaker preflight shared by every auth path.
+/// Returns `Some(response)` to short-circuit with an error, `None` to proceed.
+fn client_preflight(
+    auth_config: &ResolvedAuthConfig,
+    client: &AuthenticatedClient,
+    path: &str,
+) -> Option<Response> {
+    if !auth_config.check_authenticated_client_rate_limit(client) {
+        warn!(client = %client.name, path = %path, "Rate limit exceeded");
+        return Some(rate_limited_response(format!(
+            "Rate limit exceeded for client '{}'. Try again later.",
+            client.name
+        )));
+    }
+    if !auth_config.check_client_circuit_breaker(&client.name) {
+        warn!(client = %client.name, path = %path, "Client circuit breaker open");
+        return Some(circuit_open_response(format!(
+            "Client '{}' circuit breaker is open. Try again later.",
+            client.name
+        )));
+    }
+    None
+}
+
+/// Cheap structural check: a JWT is three non-empty base64url segments joined
+/// by `.`. Used to avoid running OIDC/JWKS verification on opaque static keys
+/// or exchanged tokens, which never have this shape.
+fn looks_like_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(h), Some(p), Some(s), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    !h.is_empty()
+        && !p.is_empty()
+        && !s.is_empty()
+        && [h, p, s].iter().all(|seg| {
+            seg.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn looks_like_jwt_accepts_three_base64url_segments() {
+        // Build from parts so no JWT-shaped literal trips the secret scanner.
+        let jwt = format!("{}.{}.{}", "abc-_", "def-_", "ghi-_");
+        assert!(looks_like_jwt(&jwt));
+        assert!(looks_like_jwt("aGVhZGVy.cGF5bG9hZA.c2ln"));
+    }
+
+    #[test]
+    fn looks_like_jwt_rejects_non_jwt_tokens() {
+        // opaque static keys / exchanged tokens have no JWT shape
+        assert!(!looks_like_jwt("static-key-12345"));
+        assert!(!looks_like_jwt("two.parts"));
+        assert!(!looks_like_jwt("four.parts.here.nope"));
+        assert!(!looks_like_jwt("a..c")); // empty middle segment
+        assert!(!looks_like_jwt("")); // empty
+        assert!(!looks_like_jwt("has spaces.in.it"));
+        assert!(!looks_like_jwt("plus+slash/.b.c")); // base64 (not url) chars
+    }
 
     #[test]
     fn test_public_path_check() {
