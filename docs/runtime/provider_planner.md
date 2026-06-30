@@ -124,6 +124,37 @@ logs, and stop. Container plans expose `docker restart NAME` or
 `rm --force NAME` so a deterministic runtime name can be reused on the next
 apply.
 
+## Scaling and Concurrency
+
+Choose the provider by **how many isolated instances run concurrently**, not by
+convenience:
+
+- **`local_process`, `docker`, `podman` are single-node / development scale.**
+  They launch each runtime through the host's local process table or local
+  container daemon. This is correct for the current model — the gateway starts
+  one runtime per configured backend at process start, a small static count.
+- **`kubernetes` is the scale path for many concurrent isolated instances.** It
+  schedules workloads across a node pool through the cluster API server and
+  manages their lifecycles centrally.
+
+**Do not scale per-caller, per-session, or per-tenant isolation through a local
+container daemon.** Launching many containers concurrently through a single
+local Docker/Podman daemon overloads the daemon's API server and makes it a
+single point of failure. This is a documented failure mode in large-scale agent
+systems: the R2E-Gym project reported that spawning 512 Docker containers per
+iteration through the local daemon crashed the Docker daemon, and the fix was to
+move scheduling to Kubernetes across a pool of nodes (Cameron R. Wolfe,
+["Agentic RL: Frameworks and Best Practices"](https://cameronrwolfe.substack.com/p/agentic-rl),
+2026). If a future feature gives each authenticated subject its own isolated
+runtime for a personal MCP tool, that many-instance workload belongs on the
+`kubernetes` provider, never on local Docker.
+
+**Lifecycle teardown is a first-class requirement, not an afterthought.** At
+scale, slow or missing teardown leaks containers/workloads and is itself a
+bottleneck and a cost. Every launched runtime must have an explicit stop/TTL
+path (the plan already emits `stop_command_hint`); a scale design must prove
+that instances are reliably reclaimed, not just started.
+
 ## Enterprise Boundary
 
 Kubernetes, fleet policy, advanced hardened runtime packs, tenant placement,
