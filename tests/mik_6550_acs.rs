@@ -111,7 +111,7 @@ fn mik_6550_ac_5_roadmap_linked_from_index() {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                    targets.push(path);
+                    targets.push(path.clone());
                 }
                 // Also check subdirectories
                 if path.is_dir() {
