@@ -287,19 +287,27 @@ impl ContextIntegrityPresetConfig {
 /// security:
 ///   context_integrity:
 ///     preset: team_shared
+///     non_bypassable: true
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ContextIntegrityConfig {
     /// Named policy preset for live `gateway_invoke` tool-result wrapping.
     pub preset: ContextIntegrityPresetConfig,
+    /// Make the render guard non-bypassable: enforce even if the preset is
+    /// monitor-only. Off by default so the auth/observability surface is
+    /// unchanged unless an operator opts in.
+    #[serde(default)]
+    pub non_bypassable: bool,
 }
 
 impl ContextIntegrityConfig {
     /// Compile this config into an explicit kernel policy.
     #[must_use]
     pub const fn policy(&self) -> ContextIntegrityPolicy {
-        self.preset.policy()
+        let mut policy = self.preset.policy();
+        policy.non_bypassable = self.non_bypassable;
+        policy
     }
 
     /// Return the license tier associated with this preset.
@@ -388,5 +396,33 @@ impl Default for SecurityConfig {
             context_integrity: ContextIntegrityConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod context_integrity_config_tests {
+    use super::ContextIntegrityConfig;
+    use crate::context_integrity::ContextIntegrityPolicyMode;
+
+    #[test]
+    fn non_bypassable_flows_from_config_to_policy() {
+        let cfg = ContextIntegrityConfig {
+            non_bypassable: true,
+            ..ContextIntegrityConfig::default()
+        };
+        let policy = cfg.policy();
+        assert!(policy.non_bypassable);
+        // Default preset is monitor-only; non_bypassable upgrades effective mode.
+        assert_eq!(policy.effective_mode(), ContextIntegrityPolicyMode::Enforce);
+    }
+
+    #[test]
+    fn default_config_is_not_non_bypassable() {
+        let policy = ContextIntegrityConfig::default().policy();
+        assert!(!policy.non_bypassable);
+        assert_eq!(
+            policy.effective_mode(),
+            ContextIntegrityPolicyMode::MonitorOnly
+        );
     }
 }
