@@ -77,6 +77,7 @@ pub mod tracing_context;
 pub mod transform;
 pub mod transition;
 pub mod transport;
+pub mod trust;
 pub mod tunnel;
 pub mod validator;
 

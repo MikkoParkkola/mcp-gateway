@@ -354,6 +354,64 @@ pub enum TlsCommand {
     },
 }
 
+/// Trust management subcommands (MIK-6556)
+#[derive(Subcommand, Debug)]
+pub enum TrustCommand {
+    /// Inspect trust metadata for a backend or tool
+    ///
+    /// Reads the gateway configuration and emits a TrustCard summary for
+    /// each configured backend. Supports JSON and table output formats.
+    #[command(about = "Inspect trust metadata for configured backends")]
+    Inspect {
+        /// Backend name to inspect (inspects all if omitted)
+        #[arg(long)]
+        backend: Option<String>,
+
+        /// Output format: "json" or "table"
+        #[arg(short, long, default_value = "json")]
+        format: String,
+
+        /// Gateway config file to read
+        #[arg(short, long, default_value = "gateway.yaml")]
+        config: PathBuf,
+    },
+
+    /// Generate TrustCard and CapabilityBom from gateway configuration
+    ///
+    /// Produces deterministic TrustCard and CapabilityBom JSON for each
+    /// configured backend. Output never contains resolved secret values.
+    #[command(about = "Generate TrustCard and CapabilityBom JSON")]
+    Generate {
+        /// Backend name to generate for (generates all if omitted)
+        #[arg(long)]
+        backend: Option<String>,
+
+        /// Output directory for generated files
+        #[arg(short, long, default_value = ".")]
+        output: PathBuf,
+
+        /// Gateway config file to read
+        #[arg(short, long, default_value = "gateway.yaml")]
+        config: PathBuf,
+    },
+
+    /// Validate TrustCard files against the trust schema
+    ///
+    /// Reads TrustCard JSON files and validates them, emitting findings
+    /// with Info, Warn, and Fail severities. Returns non-zero exit code
+    /// when any Fail findings are present.
+    #[command(about = "Validate TrustCard files")]
+    Validate {
+        /// TrustCard JSON files to validate
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+
+        /// Output format: "json" or "plain"
+        #[arg(short, long, default_value = "plain")]
+        format: String,
+    },
+}
+
 /// Transparency log audit subcommands
 #[derive(Subcommand, Debug)]
 pub enum AuditCommand {

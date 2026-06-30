@@ -39,7 +39,7 @@ use clap_complete::Shell;
 use crate::cli::output::OutputFormat;
 
 pub use skills::SkillsCommand;
-pub use subcommands::{AuditCommand, CapCommand, PluginCommand, TlsCommand};
+pub use subcommands::{AuditCommand, CapCommand, PluginCommand, TlsCommand, TrustCommand};
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
 // Defined here (library crate) so both the CLI parser and the binary-only
@@ -424,6 +424,23 @@ pub enum Command {
     /// ```
     #[command(subcommand, about = "Transparency log audit commands")]
     Audit(AuditCommand),
+
+    /// Trust management — inspect, generate, and validate TrustCard/CBOM metadata (MIK-6556).
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Inspect all backends
+    /// mcp-gateway trust inspect
+    ///
+    /// # Generate TrustCard JSON
+    /// mcp-gateway trust generate --output ./trust-output
+    ///
+    /// # Validate a TrustCard file
+    /// mcp-gateway trust validate trustcard.json
+    /// ```
+    #[command(subcommand, about = "Trust management (inspect, generate, validate)")]
+    Trust(TrustCommand),
 
     /// Dual-substrate OCI runtime abstraction (MIK-5226, B4-PLATFORM).
     #[cfg(feature = "runtime-substrate")]
