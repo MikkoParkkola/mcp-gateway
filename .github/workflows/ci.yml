@@ -51,6 +51,25 @@ jobs:
       - name: Validate noninteractive setup and routed first call
         run: scripts/dev/usability-smoke.sh
 
+  k8s-kind-rollback:
+    name: K8s kind apply+upgrade+rollback
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Validate kind rollback smoke script
+        run: bash -n deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh
+      - name: Create kind cluster
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          cluster_name: mcp-gateway-rollback-smoke
+      - name: Apply, upgrade, and roll back on the real cluster
+        env:
+          # kind-action already created the cluster and set the kube context;
+          # the smoke reuses it (and must not delete it — the action owns teardown).
+          MCP_GATEWAY_KIND_CLUSTER: mcp-gateway-rollback-smoke
+          MCP_GATEWAY_KIND_KEEP: "1"
+        run: deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh
+
   check:
     name: Clippy (pedantic)
     runs-on: ubuntu-latest
