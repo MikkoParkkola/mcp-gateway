@@ -297,7 +297,7 @@ async fn ac_4_mik_6558_ac_4_ac_4_grant_and_policy_mutations_r() {
     let store = Arc::new(EmbeddedControlPlaneStore::new());
     let rbac = RbacEngine::new();
     let license = LicenseGate::new(LicenseTier::Enterprise);
-    let reconciler = ControlPlaneReconciler::new(Arc::clone(&store), rbac, license);
+    let reconciler = ControlPlaneReconciler::new(store, rbac, license);
 
     // Grant lifecycle: request → approve → rollback
     let grant = IdentityGrant {
@@ -355,7 +355,7 @@ async fn ac_4_mik_6558_ac_4_ac_4_grant_and_policy_mutations_r() {
     assert!(!rolled_pb.enabled);
 
     // Audit evidence was emitted
-    let audit = store.list_audit_evidence(None, None).await.unwrap();
+    let audit = reconciler.store.list_audit_evidence(None, None).await.unwrap();
     assert!(audit.len() >= 6, "Expected >=6 audit records, got {}", audit.len());
     for ev in &audit {
         assert!(!ev.id.is_empty());
@@ -536,139 +536,11 @@ fn ac_7_mik_6558_ac_7_ac_7_enterprise_license_boundary() {
     // Free: all features gated with Enterprise mention
     for feature in &gated_features {
         let result = free.check(feature);
-        assert!(result.is_err(), "Free must gate {feature:?}");
-        assert!(result.unwrap_err().contains("Enterprise"), "Error must mention Enterprise");
-    }
+        assert!(result.is_err(), 
 
-    // Verify docs/DEPLOYMENT.md contains ControlPlaneUI
-    let deployment_md = include_str!("../docs/DEPLOYMENT.md");
-    assert!(deployment_md.contains("ControlPlaneUI"), "docs/DEPLOYMENT.md must mention ControlPlaneUI");
-}
+[…truncated 6315 chars — raise BridgeOptions.maxResultChars, or call the tool with a narrower scope (filter, head, pagination)…]
 
-/// MIK-6558.AC.8 AC.8: ControlPlaneUI is integrated into the existing web UI framework without creating a second frontend stack; UI tests cover inventory, evidence, approval review, grant request, revocation/rollback, and auditor read-only flows. CHECK: `cargo test --all-features webui_control_plane_workflows` exits 0 (expected: all listed UI/API workflows pass through the in-process router)
-#[cfg(feature = "enterprise")]
-#[tokio::test]
-async fn ac_8_mik_6558_ac_8_ac_8_controlplaneui_is_integrated() {
-    use std::sync::Arc;
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use tower::ServiceExt;
-    use control_plane::api::ControlPlaneApiState;
-    use control_plane::license::{LicenseGate, LicenseTier};
-    use control_plane::rbac::RbacEngine;
-    use control_plane::storage::EmbeddedControlPlaneStore;
-    use control_plane::ui::control_plane_web_router;
-
-    let state = Arc::new(ControlPlaneApiState {
-        store: Arc::new(EmbeddedControlPlaneStore::new()),
-        rbac: RbacEngine::new(),
-        license: LicenseGate::new(LicenseTier::Enterprise),
-    });
-    let app = control_plane_web_router(state);
-
-    // Dashboard renders
-    let req = Request::builder().uri("/control-plane").body(Body::empty()).unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-    let body = String::from_utf8(body_bytes.to_vec()).unwrap();
-    assert!(body.contains("ControlPlaneUI"));
-    assert!(body.contains("Servers"));
-    assert!(body.contains("Approval Requests"));
-    assert!(body.contains("Audit Evidence"));
-    assert!(body.contains("Grants"));
-    assert!(body.contains("Policies"));
-
-    // API routes work under /ui/api/control-plane/
-    let api_endpoints = [
-        "/ui/api/control-plane/servers",
-        "/ui/api/control-plane/grants",
-        "/ui/api/control-plane/approvals",
-        "/ui/api/control-plane/audit",
-    ];
-    for ep in &api_endpoints {
-        let req = Request::builder().method("GET").uri(*ep)
-            .header("X-Control-Plane-Role", "admin")
-            .body(Body::empty()).unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert!(resp.status().is_success() || resp.status() == StatusCode::NOT_FOUND);
-    }
-
-    // Auditor read-only flow
-    let auditor_endpoints = [
-        "/ui/api/control-plane/servers", "/ui/api/control-plane/tools",
-        "/ui/api/control-plane/health", "/ui/api/control-plane/trust-cards",
-        "/ui/api/control-plane/grants", "/ui/api/control-plane/policies",
-        "/ui/api/control-plane/approvals", "/ui/api/control-plane/audit",
-        "/ui/api/control-plane/users", "/ui/api/control-plane/groups",
-    ];
-    for ep in &auditor_endpoints {
-        let req = Request::builder().method("GET").uri(*ep)
-            .header("X-Control-Plane-Role", "auditor")
-            .body(Body::empty()).unwrap();
-        let resp = app.clone().oneshot(req).await.unwrap();
-        let s = resp.status();
-        assert!(s == StatusCode::OK || s == StatusCode::NOT_FOUND,
-            "Auditor GET {ep}: expected 200/404, got {s}");
-    }
-}
-
-/// MIK-6558.AC.9 AC.9: OTel/SIEM export emits structured events for every control-plane state transition with actor, role, request id, object id, previous state hash, new state hash, decision, and trace id. CHECK: `cargo test --all-features control_plane_otlp_siem_event_contract` exits 0 (expected: every mutation fixture emits one matching event)
-#[cfg(feature = "enterprise")]
-#[test]
-fn ac_9_mik_6558_ac_9_ac_9_otel_siem_export_emits_struc() {
-    use control_plane::otel::{TestSiemCollector, SiemEmitter, build_siem_event};
-
-    let collector = TestSiemCollector::new();
-
-    // Grant creation
-    let e1 = build_siem_event("grant.created", "admin", "admin", "req-1", "grant-abc",
-        None, Some("sha256:new"), "created", "trace-1");
-    collector.emit(&e1);
-
-    // Grant approval
-    let e2 = build_siem_event("grant.approved", "security_reviewer", "security_reviewer",
-        "req-2", "grant-abc", Some("sha256:prev"), Some("sha256:new2"), "approved", "trace-2");
-    collector.emit(&e2);
-
-    // Policy rollback
-    let e3 = build_siem_event("policy.rolled_back", "admin", "admin", "req-3", "policy-xyz",
-        Some("sha256:bad"), Some("sha256:good"), "rolled_back", "trace-3");
-    collector.emit(&e3);
-
-    let events = collector.events();
-    assert_eq!(events.len(), 3);
-
-    // Event 1 has all required fields
-    assert_eq!(events[0].event_type, "grant.created");
-    assert_eq!(events[0].actor, "admin");
-    assert_eq!(events[0].role, "admin");
-    assert_eq!(events[0].request_id, "req-1");
-    assert_eq!(events[0].object_id, "grant-abc");
-    assert_eq!(events[0].previous_state_hash, None);
-    assert_eq!(events[0].new_state_hash.as_deref(), Some("sha256:new"));
-    assert_eq!(events[0].decision, "created");
-    assert_eq!(events[0].trace_id, "trace-1");
-    assert!(!events[0].event_id.is_empty());
-
-    // Event 2
-    assert_eq!(events[1].event_type, "grant.approved");
-    assert_eq!(events[1].previous_state_hash.as_deref(), Some("sha256:prev"));
-
-    // Event 3
-    assert_eq!(events[2].event_type, "policy.rolled_back");
-    assert_eq!(events[2].decision, "rolled_back");
-
-    // Serialization round-trip
-    let json = serde_json::to_string(&e1).unwrap();
-    let parsed: control_plane::otel::SiemEvent = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.event_type, "grant.created");
-    assert_eq!(parsed.event_id, e1.event_id);
-}
-
-/// MIK-6558.AC.10 AC.deploy: Diff merged to main, release built+deployed, post-deploy telemetry confirms active. CHECK: `git log origin/main --grep 'MIK-6558' --oneline` exits 0
-///
-/// This is a deploy-time gate: the orchestrator verifies the commit is on main and the release is active.
-/// The test itself verifies the enterprise module is available and the commit message pattern is present.
+t message pattern is present.
 #[cfg(feature = "enterprise")]
 #[test]
 fn ac_10_mik_6558_ac_10_ac_deploy_diff_merged_to_main_r() {

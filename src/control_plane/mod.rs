@@ -45,7 +45,7 @@ pub use evidence::{EvidenceExportBundle, EvidenceExporter, RedactedAuditEvidence
 pub use license::{GatedFeature, LicenseGate, LicenseTier};
 pub use otel::{SiemEmitter, SiemEvent, TracingSiemEmitter, build_siem_event};
 pub use rbac::{Action, RbacEngine, RbacResult, Role, check_rbac};
-pub use reconciler::{Reconciler, ReconciliationOutcome, ReconciliationRequest};
+pub use reconciler::{ControlPlaneReconciler, ReconcilerError, ReconcilerResult};
 pub use storage::{ControlPlaneStore, EmbeddedControlPlaneStore, StoreError, SCHEMA_VERSION};
 #[cfg(feature = "webui")]
 pub use ui::{control_plane_dashboard_handler, control_plane_web_router};
