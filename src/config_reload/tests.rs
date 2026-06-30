@@ -562,6 +562,41 @@ fn diff_detects_routing_profiles_change() {
 }
 
 #[test]
+fn diff_runtime_profile_change_restarts_referencing_backend() {
+    let mut old = Config::default();
+    old.runtime.profiles.insert(
+        "safe".to_string(),
+        crate::config::RuntimeProfileConfig::default(),
+    );
+    old.backends.insert(
+        "docs".to_string(),
+        BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "node server.js".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            runtime_profile: Some("safe".to_string()),
+            ..BackendConfig::default()
+        },
+    );
+
+    let mut new = old.clone();
+    new.runtime.profiles.insert(
+        "safe".to_string(),
+        crate::config::RuntimeProfileConfig {
+            privileged: true,
+            ..crate::config::RuntimeProfileConfig::default()
+        },
+    );
+
+    let patch = compute_diff(&old, &new);
+    assert!(patch.profiles_changed);
+    assert_eq!(patch.backends_modified.len(), 1);
+    assert_eq!(patch.backends_modified[0].0, "docs");
+}
+
+#[test]
 fn diff_detects_default_routing_profile_change() {
     // GIVEN: default_routing_profile differs
     let old = Config::default();

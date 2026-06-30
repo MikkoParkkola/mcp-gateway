@@ -26,7 +26,10 @@ use tracing::{debug, info, warn};
 
 use super::hash::compute_capability_hash;
 use super::schema_validator::validate_arguments;
-use super::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
+use super::{
+    CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
+    validate_personal_capability_identity,
+};
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
 
@@ -356,12 +359,29 @@ impl CapabilityBackend {
     ///
     /// Returns an error if the capability is not found or execution fails.
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolsCallResult> {
+        self.call_tool_with_context(name, arguments, CapabilityExecutionContext::default())
+            .await
+    }
+
+    /// Execute a capability with request-scoped identity context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the capability is not found, identity validation
+    /// fails, or execution fails.
+    pub async fn call_tool_with_context(
+        &self,
+        name: &str,
+        arguments: Value,
+        context: CapabilityExecutionContext,
+    ) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
 
         // O(1) lookup; clone releases the read lock before the async executor call.
         let capability = self
             .get(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
+        validate_personal_capability_identity(&capability, &context)?;
 
         // Validate arguments against the YAML schema before making any HTTP call.
         let input_schema = &capability.schema.input;
@@ -389,7 +409,7 @@ impl CapabilityBackend {
         // backend liveness (MIK-5080).
         let result = self
             .executor
-            .execute(&capability, validation.coerced)
+            .execute_with_context(&capability, validation.coerced, context)
             .await?;
 
         Ok(build_success_tool_result(&capability, result))
@@ -582,6 +602,34 @@ providers:
         crate::capability::parse_capability(&yaml).unwrap()
     }
 
+    fn make_personal_cap(name: &str) -> CapabilityDefinition {
+        let yaml = format!(
+            r"
+name: {name}
+description: Personal test capability
+schema:
+  input:
+    type: object
+    properties:
+      required_value:
+        type: string
+    required: [required_value]
+metadata:
+  exposure: personal
+  identity_owner:
+    authority: cloudflare_access
+    subject: owner-1
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: http://127.0.0.1:9
+      path: /test
+"
+        );
+        crate::capability::parse_capability(&yaml).unwrap()
+    }
+
     // ── IndexedCapabilities unit tests ────────────────────────────────────
 
     #[test]
@@ -723,6 +771,24 @@ providers:
         // THEN: count remains 1 (update, not duplicate insert)
         assert_eq!(backend.len(), 1);
         assert_eq!(backend.get_tools().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn capability_backend_call_tool_denies_personal_without_identity_before_schema() {
+        let backend = make_backend();
+        {
+            let mut caps = backend.capabilities.write();
+            caps.upsert(make_personal_cap("personal_tool"));
+        }
+
+        let err = backend
+            .call_tool("personal_tool", json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("caller identity is required"), "{err}");
+        assert!(!err.contains("required_value"), "{err}");
     }
 
     #[tokio::test]

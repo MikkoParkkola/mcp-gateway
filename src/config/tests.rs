@@ -90,6 +90,152 @@ server:
     assert_eq!(config.env_files[0], "~/.claude/secrets.env");
 }
 
+#[test]
+fn runtime_config_deserializes_profiles_and_plans_docker() {
+    let yaml = r"
+runtime:
+  default_provider: local_process
+  availability:
+    docker: true
+  profiles:
+    gmail:
+      provider: docker
+      image: ghcr.io/example/gmail-mcp:1
+      executable: mcp-gmail
+      data_class: sensitive
+      env_keys:
+        - GMAIL_HANDLE
+      guarded_env_keys:
+        - GMAIL_HANDLE
+      network_egress: none
+      resources:
+        cpu_cores: 2
+        memory_mb: 768
+        timeout_secs: 45
+      restart:
+        max_restarts: 3
+        backoff_secs: 10
+";
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+    let plan = config
+        .runtime
+        .plan_profile("gmail", "gmail")
+        .expect("runtime profile plan");
+
+    assert_eq!(plan.provider, crate::runtime::RuntimeProviderKind::Docker);
+    assert_eq!(plan.policy.resources.memory_mb, 768);
+    assert_eq!(plan.policy.restart.max_restarts, 3);
+    assert!(plan.launch_command.is_some());
+    assert!(!plan.is_denied());
+}
+
+#[test]
+fn runtime_config_uses_defaults_for_partial_resource_and_restart_policy() {
+    let yaml = r"
+runtime:
+  profiles:
+    local_docs:
+      provider: local_process
+      executable: mcp-docs
+      resources:
+        memory_mb: 256
+      restart:
+        max_restarts: 4
+";
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+    let plan = config
+        .runtime
+        .plan_profile("local_docs", "local-docs")
+        .expect("runtime profile plan");
+
+    assert_eq!(plan.policy.resources.cpu_cores, 1);
+    assert_eq!(plan.policy.resources.memory_mb, 256);
+    assert_eq!(plan.policy.resources.timeout_secs, 60);
+    assert_eq!(plan.policy.restart.max_restarts, 4);
+    assert_eq!(plan.policy.restart.backoff_secs, 5);
+}
+
+#[test]
+fn backend_runtime_profile_deserializes_and_validates() {
+    let yaml = r#"
+runtime:
+  profiles:
+    local_safe:
+      provider: local_process
+      network_egress: none
+backends:
+  docs:
+    command: "node server.js"
+    runtime_profile: local_safe
+"#;
+    let config: Config = serde_yaml::from_str(yaml).expect("config");
+    let backend = config.backends.get("docs").expect("backend");
+    assert_eq!(backend.runtime_profile.as_deref(), Some("local_safe"));
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn validate_rejects_unknown_backend_runtime_profile() {
+    let yaml = r#"
+backends:
+  docs:
+    command: "node server.js"
+    runtime_profile: missing
+"#;
+    let config: Config = serde_yaml::from_str(yaml).expect("config");
+    let result = config.validate();
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("backends.docs.runtime_profile"),
+        "error should cite backend runtime profile: {msg}"
+    );
+}
+
+#[test]
+fn validate_rejects_container_runtime_profile_without_image() {
+    let yaml = r"
+runtime:
+  profiles:
+    missing_image:
+      provider: docker
+";
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+    let result = config.validate();
+
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("runtime.profiles.missing_image.image"),
+        "error should name missing image field: {msg}"
+    );
+}
+
+#[test]
+fn validate_rejects_invalid_runtime_env_key() {
+    let yaml = r"
+runtime:
+  profiles:
+    unsafe_env:
+      provider: local_process
+      env_keys:
+        - BAD-KEY
+";
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+    let result = config.validate();
+
+    assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("runtime.profiles.unsafe_env.env_keys"),
+        "error should name invalid env key field: {msg}"
+    );
+}
+
 // ── SurfacedToolConfig — config parsing (T2.2) ────────────────────────────────
 
 #[test]
@@ -344,6 +490,29 @@ fn validate_accepts_signed_remote_backend_provenance() {
     let config: Config = serde_yaml::from_str(&signed_remote_provenance_yaml()).unwrap();
 
     assert!(config.validate().is_ok());
+}
+
+#[test]
+fn config_parses_context_integrity_team_shared_preset() {
+    let yaml = r"
+security:
+  context_integrity:
+    preset: team_shared
+";
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+    assert_eq!(
+        config.security.context_integrity.preset,
+        crate::config::ContextIntegrityPresetConfig::TeamShared
+    );
+    assert_eq!(
+        config.security.context_integrity.license_tier(),
+        "free_core"
+    );
+    assert_eq!(
+        config.security.context_integrity.policy().mode,
+        crate::context_integrity::ContextIntegrityPolicyMode::Enforce
+    );
 }
 
 #[test]

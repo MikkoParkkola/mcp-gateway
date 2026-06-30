@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::TransportConfig;
 use crate::{Error, Result};
@@ -178,7 +178,7 @@ impl ProcessScanner {
                         }
                     } else {
                         // Can't determine transport, skip this one
-                        warn!(
+                        debug!(
                             "Found {} process but could not determine port/transport",
                             pattern.server_name
                         );
@@ -245,7 +245,7 @@ impl ProcessScanner {
                             protocol_version: None,
                         }
                     } else {
-                        warn!(
+                        debug!(
                             "Found {} process but could not determine port/transport",
                             pattern.server_name
                         );

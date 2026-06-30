@@ -91,7 +91,11 @@ const MIN_WORD_LEN: usize = 3;
 /// 7. Truncate to [`MAX_KEYWORDS`]
 fn extract_keywords(text: &str) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    let mut words: Vec<String> = Vec::new();
+    // High-signal short domain terms are kept ahead of the length-ranked fill so
+    // they survive truncation (the length heuristic otherwise drops "email",
+    // "inbox", etc. in favour of merely-longer generic words).
+    let mut priority: Vec<String> = Vec::new();
+    let mut rest: Vec<String> = Vec::new();
 
     for raw_word in tokenize(text) {
         let word = raw_word.to_lowercase();
@@ -102,12 +106,20 @@ fn extract_keywords(text: &str) -> Vec<String> {
             continue;
         }
         if seen.insert(word.clone()) {
-            words.push(word);
+            if is_priority(&word) {
+                priority.push(word);
+            } else {
+                rest.push(word);
+            }
         }
     }
 
     // Stable sort descending by length — longer words are more specific.
-    words.sort_by_key(|w| Reverse(w.len()));
+    rest.sort_by_key(|w| Reverse(w.len()));
+
+    // Priority terms first (first-occurrence order), then the length-ranked fill.
+    let mut words = priority;
+    words.extend(rest);
     words.truncate(MAX_KEYWORDS);
     words
 }
@@ -125,6 +137,17 @@ fn tokenize(text: &str) -> impl Iterator<Item = &str> {
 /// that provides no search value.
 fn is_stopword(word: &str) -> bool {
     STOPWORDS.binary_search(&word).is_ok()
+}
+
+/// Return `true` if `word` (already lowercase) is a high-signal short domain term
+/// that must survive the length-based truncation in [`extract_keywords`].
+///
+/// The "longer = more specific" ranking unfairly drops short but high-value
+/// search words (e.g. "email", "mail", "inbox") in favour of generic longer
+/// words. Priority terms are retained ahead of the length-ranked fill so they
+/// are always indexed when present.
+fn is_priority(word: &str) -> bool {
+    PRIORITY_KEYWORDS.binary_search(&word).is_ok()
 }
 
 // ============================================================================
@@ -298,6 +321,24 @@ const STOPWORDS: &[&str] = &[
 ];
 
 // ============================================================================
+// Priority keyword table (sorted — enables O(log n) binary_search)
+// ============================================================================
+
+/// High-signal short domain terms retained ahead of the length-ranked fill.
+///
+/// The length heuristic in [`extract_keywords`] ("longer = more specific")
+/// otherwise discards these high-value but short words when a description also
+/// contains longer generic words — e.g. `update_thread`'s "Update an **email**
+/// thread…" loses "email" (5 chars) to "important"/"between"/"labels". Keeping
+/// them here makes mail/calendar/messaging tools discoverable under the obvious
+/// search terms.
+///
+/// MUST remain sorted (ASCII lexicographic) for `binary_search` to be correct.
+const PRIORITY_KEYWORDS: &[&str] = &[
+    "calendar", "chat", "draft", "email", "event", "inbox", "mail", "reply", "send", "spam",
+];
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -325,6 +366,32 @@ mod tests {
         let input = "Searches the web. [keywords: search, web]";
         // WHEN / THEN: returned unchanged
         assert_eq!(enrich_description(input), input);
+    }
+
+    #[test]
+    fn priority_short_keywords_survive_length_truncation() {
+        // GIVEN: a description with the short, high-value word "email" alongside
+        // several longer generic words that would win the length ranking.
+        let result = enrich_description(
+            "Update an email thread: mark done, move between Important and Other, manage labels and folders.",
+        );
+        // THEN: "email" is retained in the keyword tags despite being short.
+        assert!(
+            result.contains("[keywords:") && result.contains("email"),
+            "Expected 'email' retained, got: {result}"
+        );
+    }
+
+    #[test]
+    fn priority_keywords_table_is_sorted() {
+        // binary_search in is_priority requires the table stay ASCII-sorted.
+        let mut sorted = PRIORITY_KEYWORDS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            PRIORITY_KEYWORDS,
+            sorted.as_slice(),
+            "PRIORITY_KEYWORDS must remain sorted for binary_search"
+        );
     }
 
     #[test]

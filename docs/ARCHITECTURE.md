@@ -59,6 +59,7 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 | Module | File(s) | Responsibility |
 |--------|---------|----------------|
 | **gateway** | `gateway/` | Core server: axum router, request handling, session management |
+| **identity_grants** | `identity_grants.rs` | Per-subject and per-agent grant contract for personal capabilities |
 | **backend** | `backend/` | Backend lifecycle: spawn, connect, health tracking, tool caching |
 | **transport** | `transport/` | Wire protocols: stdio subprocess I/O, HTTP client, SSE streaming |
 | **protocol** | `protocol/` | MCP JSON-RPC types, version negotiation (2024-10-07 through 2025-11-25) |
@@ -68,7 +69,7 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 | **failsafe** | `failsafe/` | Circuit breaker (closed/open/half-open), retry with exponential backoff, token-bucket rate limiter |
 | **oauth** | `oauth/` | OAuth 2.0 client: authorization code flow, token refresh, dynamic registration |
 | **discovery** | `discovery/` | Meta-MCP logic: list, search (ranked), invoke routing |
-| **ranking** | `ranking/` | Usage-weighted search ranking, frequency persistence |
+| **ranking** | `ranking/` | Safety-aware adaptive search ranking, explanations, local feedback persistence |
 | **registry** | `registry/` | Capability registry: install, search, list from local and remote sources |
 | **secrets** | `secrets/` | Keychain integration (macOS/Linux), env var resolution, session caching |
 | **stats** | `stats/` | Invocation counters, cache hit rates, token savings estimation |
@@ -85,9 +86,12 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
                     "params": { "name": "gateway_search_tools",
                                 "arguments": { "query": "weather" } } }
 2. Gateway:       discovery::search() -> iterate all backends -> match by name/description
-3. Ranking:       ranking::rank() -> sort by usage frequency
+3. Ranking:       ranking::rank() -> suppress unsafe/unavailable tools, then score
+                  by relevance, safety, grant fit, trust, health, cost, latency,
+                  freshness, and local feedback
                   (persisted in ~/.mcp-gateway/usage.json)
-4. Response:      Return ranked matches with server, tool name, description, input schema
+4. Response:      Return ranked matches with server, tool name, description,
+                  input schema, score, and explanation metadata
 ```
 
 ### Tool Invocation
@@ -128,7 +132,7 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 | Meta-MCP default | ON | Core value prop: compact tool surface with on-demand discovery |
 | Capability format | Custom YAML ("fulcrum") | Simpler than OpenAPI for single-endpoint definitions |
 | Cache | In-memory HashMap | Local proxy -- no need for Redis; bounded by max_entries |
-| Search ranking | Usage frequency | Simple, effective, persisted, no ML overhead |
+| Search ranking | Safety-aware deterministic scoring | Keeps relevance primary while suppressing unsafe/unavailable tools and explaining signal-based downgrades; see `docs/adaptive_ranking.md` |
 
 ## Security Model
 

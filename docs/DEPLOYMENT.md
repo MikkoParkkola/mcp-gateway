@@ -36,9 +36,23 @@ cargo build --release --features metrics       # Add metrics
 cargo build --release --no-default-features    # Minimal (no web UI)
 ```
 
+## Single-Node Templates
+
+Reusable templates for Docker Compose, Linux systemd, and macOS launchd live in
+[`deploy/single-node`](../deploy/single-node/README.md). They all consume the
+same `gateway.yaml` and `capabilities/` directory emitted by
+`mcp-gateway init --profile local`.
+
+From a repo checkout, validate the template paths and native start behavior:
+
+```bash
+scripts/dev/service-template-smoke.sh
+```
+
 ## Docker Deployment
 
 ```bash
+mcp-gateway init --profile local
 docker build -t mcp-gateway:latest .
 
 docker run -d --name mcp-gateway \
@@ -74,6 +88,71 @@ services:
 ```
 
 Stdio backends spawn child processes. If those backends use `npx`, install Node.js in the image or run them as HTTP sidecar containers.
+
+### Container Verification
+
+Use the same doctor command for local and container deployments:
+
+```bash
+mcp-gateway doctor --config gateway.yaml --format json
+curl -sf http://localhost:39400/health > /dev/null
+scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
+scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + routed tool call
+scripts/dev/service-template-smoke.sh  # repo checkout: service template paths + native start smoke
+```
+
+Client configs are still generated on the host, not inside the container:
+
+```bash
+mcp-gateway setup export --target all --dry-run --config gateway.yaml
+mcp-gateway setup export --target all --config gateway.yaml
+```
+
+Applied exports print any backup file and a rollback command. Use that rollback command before deleting or hand-editing a generated client config.
+
+## Kubernetes Enterprise Alpha
+
+The enterprise-alpha Kubernetes package lives in
+[`deploy/kubernetes/enterprise-alpha`](../deploy/kubernetes/enterprise-alpha/README.md).
+It currently covers CRD shape, Helm-style values, least-privilege base
+resources, network policy defaults, HA probes, read-only preflight checks,
+local manifest tests, a deterministic reconcile plan, a server-side dry-run
+wrapper, a disposable kind smoke fixture, and sensitive-data-free evidence
+exports for Kubernetes status, Events, OTel, and SIEM adapters. It also includes
+a deterministic controller-manager loop for bounded CI cycles or continuous
+operator reconciliation over a reviewed resource stream, plus a gated cluster
+apply command plan and opt-in executor for preflight, server-side dry-run,
+apply, verification, evidence export, and rollback handles.
+
+```bash
+mcp-gateway kubernetes plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway
+
+mcp-gateway kubernetes controller \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --cycles 2
+
+mcp-gateway kubernetes apply-plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway
+
+mcp-gateway kubernetes apply-plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --execute \
+  --format plain
+
+deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh mcp-gateway
+deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
+```
+
+Free/core deployment remains Docker, Docker Compose, and single-node service
+templates. Kubernetes HA, cluster policy reconciliation, managed rollout,
+multi-tenant namespaces, controller-manager operation, gated cluster apply
+planning and execution, kind-based cluster validation, and fleet evidence export
+adapters are enterprise scope.
 
 ## Configuration Loading Order
 
@@ -220,11 +299,36 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now mcp-gateway
 ```
 
+## macOS launchd
+
+The launch daemon template is
+[`deploy/single-node/com.mikkoparkkola.mcp-gateway.plist`](../deploy/single-node/com.mikkoparkkola.mcp-gateway.plist).
+It uses `/usr/local/etc/mcp-gateway/gateway.yaml` and starts from that
+directory, so the generated `capabilities/` directory works without editing
+the config.
+
+## Client Configuration Safety
+
+`mcp-gateway setup export` is the supported way to write Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Cline, and Zed client configs.
+
+```bash
+# Preview the exact entry first
+mcp-gateway setup export --target all --dry-run --config /etc/mcp-gateway/gateway.yaml
+
+# Apply with backup and post-write verification
+mcp-gateway setup export --target all --config /etc/mcp-gateway/gateway.yaml
+
+# Restore one client config from the printed backup path
+mcp-gateway setup export --rollback /path/to/client.json.mcp-gateway.bak.123456789
+```
+
+The exporter preserves unrelated client settings, creates a sibling backup before updating an existing file, verifies the gateway entry after writing, and prints the rollback command. For managed team deployments, generate and review the client entry once, then distribute it through your MDM, dotfile manager, or configuration-management system instead of asking each user to hand-edit JSON.
+
 ## Health Checks
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/health` | GET | No (public by default) | Backend status, circuit breaker state |
+| `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
 | `/ui/api/status` | GET | Depends on config | JSON API for dashboards |
 
 Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testing recovery).
@@ -264,7 +368,7 @@ Build with `--features metrics`, scrape `/metrics`:
 mcp-gateway stats --url http://127.0.0.1:39400 --price 15.0
 ```
 
-Built-in dashboards: `/ui` (tool list, health, config) and `/dashboard` (health matrix, cache rates, top tools). Auto-refresh every 5s.
+Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools). Auto-refresh every 5s.
 
 ## Authentication for Production
 

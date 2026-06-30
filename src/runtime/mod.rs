@@ -33,6 +33,7 @@ pub mod compiler;
 pub mod descriptor;
 pub mod divergence;
 pub mod r#override;
+pub mod provider;
 
 /// Hardened provisioning call path (wired entry point, off-by-default feature).
 #[cfg(feature = "runtime-substrate")]
@@ -49,4 +50,15 @@ pub use descriptor::{
 };
 pub use divergence::{DivergenceRecord, DivergenceRegistry, SubstrateTag};
 pub use r#override::OverrideHook;
+pub use provider::{
+    ContainerProvider, LocalProcessProvider, RuntimeApplyAction, RuntimeApplyAuditEvent,
+    RuntimeApplyError, RuntimeApplyRequest, RuntimeApplyResult, RuntimeApplyStatus,
+    RuntimeAuditEvent, RuntimeAvailability, RuntimeCommandOutcome, RuntimeCommandRunner,
+    RuntimeConfirmation, RuntimeConfirmationRisk, RuntimeDataClass, RuntimeDenial,
+    RuntimeDenyReason, RuntimeEnvironmentPolicy, RuntimeIntent, RuntimeLaunchCommand,
+    RuntimeLaunchMode, RuntimeLicenseTier, RuntimeLifecyclePlan, RuntimeMount, RuntimeMountMode,
+    RuntimeNetworkEgress, RuntimePlan, RuntimePlanner, RuntimePolicy, RuntimePreflightCheck,
+    RuntimeProvider, RuntimeProviderKind, RuntimeProviderSelection, RuntimeRecommendation,
+    RuntimeResourcePolicy, RuntimeRestartPolicy, StdRuntimeCommandRunner,
+};
 pub use substrate::Substrate;

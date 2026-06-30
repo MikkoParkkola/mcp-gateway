@@ -3,16 +3,36 @@
 //! Performs a series of diagnostic checks and prints a pass/fail/warn table.
 //! Exit code is `SUCCESS` when all required checks pass, `FAILURE` otherwise.
 
-use std::fmt::Write as _;
-use std::net::TcpListener;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
+#[cfg(test)]
+use std::net::TcpListener;
+
 use mcp_gateway::{
+    cli::output::OutputFormat,
     config::{Config, TransportConfig},
-    discovery::AutoDiscovery,
+    discovery::{
+        AutoDiscovery,
+        shadow::{
+            ShadowDoctorFinding, ShadowDoctorStatus, ShadowRemediationAction, ShadowScanReport,
+        },
+    },
 };
+use serde_json::{Value, json};
+
+mod health;
+mod shadow;
+
+use health::check_port_and_gateway_runtime;
+pub use shadow::run_doctor_shadow_command;
+
+#[cfg(test)]
+use health::MCP_SESSION_HEADER;
+#[cfg(test)]
+use shadow::{DLP_RULES, render_grep, render_nginx, render_yaml};
 
 // ── Check result ──────────────────────────────────────────────────────────────
 
@@ -38,6 +58,20 @@ pub struct CheckResult {
     pub detail: String,
     /// Optional hint printed on the next line when status is Fail or Warn.
     pub hint: Option<String>,
+    /// Stable diagnostic category for machine-readable output.
+    pub category: &'static str,
+    /// Command the user can run to resolve or investigate the finding.
+    pub fix_command: Option<String>,
+    /// Whether the gateway can safely apply the fix without user input.
+    pub auto_fixable: bool,
+    /// Risk class for applying the suggested fix.
+    pub risk: &'static str,
+    /// Whether a human should explicitly approve before applying the fix.
+    pub confirmation_required: bool,
+    /// Command that verifies the fix after it is applied.
+    pub verification_command: Option<String>,
+    /// Command or instruction that rolls back the fix when available.
+    pub rollback_command: Option<String>,
 }
 
 impl CheckResult {
@@ -47,6 +81,13 @@ impl CheckResult {
             status: CheckStatus::Pass,
             detail: detail.into(),
             hint: None,
+            category: "general",
+            fix_command: None,
+            auto_fixable: false,
+            risk: "none",
+            confirmation_required: false,
+            verification_command: None,
+            rollback_command: None,
         }
     }
 
@@ -56,6 +97,13 @@ impl CheckResult {
             status: CheckStatus::Fail,
             detail: detail.into(),
             hint: None,
+            category: "general",
+            fix_command: None,
+            auto_fixable: false,
+            risk: "operator_action",
+            confirmation_required: false,
+            verification_command: None,
+            rollback_command: None,
         }
     }
 
@@ -65,6 +113,13 @@ impl CheckResult {
             status: CheckStatus::Warn,
             detail: detail.into(),
             hint: None,
+            category: "general",
+            fix_command: None,
+            auto_fixable: false,
+            risk: "operator_action",
+            confirmation_required: false,
+            verification_command: None,
+            rollback_command: None,
         }
     }
 
@@ -72,15 +127,51 @@ impl CheckResult {
         self.hint = Some(hint.into());
         self
     }
+
+    fn with_category(mut self, category: &'static str) -> Self {
+        self.category = category;
+        self
+    }
+
+    fn with_manual_fix(mut self, command: impl Into<String>) -> Self {
+        self.fix_command = Some(command.into());
+        self.auto_fixable = false;
+        self.confirmation_required = true;
+        if self.status != CheckStatus::Pass && self.risk == "none" {
+            self.risk = "operator_action";
+        }
+        self
+    }
+
+    fn with_risk(mut self, risk: &'static str) -> Self {
+        self.risk = risk;
+        self
+    }
+
+    fn with_verification(mut self, command: impl Into<String>) -> Self {
+        self.verification_command = Some(command.into());
+        self
+    }
+
+    fn with_rollback(mut self, command: impl Into<String>) -> Self {
+        self.rollback_command = Some(command.into());
+        self
+    }
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Run `mcp-gateway doctor`.
-pub async fn run_doctor_command(fix: bool, config_path: Option<&Path>) -> ExitCode {
-    println!("Gateway Doctor");
-    println!("==============");
-    println!();
+pub async fn run_doctor_command(
+    fix: bool,
+    config_path: Option<&Path>,
+    format: OutputFormat,
+) -> ExitCode {
+    if format != OutputFormat::Json {
+        println!("Gateway Doctor");
+        println!("==============");
+        println!();
+    }
 
     let mut results: Vec<CheckResult> = Vec::new();
 
@@ -89,12 +180,12 @@ pub async fn run_doctor_command(fix: bool, config_path: Option<&Path>) -> ExitCo
     results.push(config_result);
 
     let Some(config) = config else {
-        print_results(&results);
+        print_results(&results, format);
         return ExitCode::FAILURE;
     };
 
-    // ── 2. Port ────────────────────────────────────────────────────────────
-    results.push(check_port(config.server.port));
+    // ── 2. Port and gateway runtime ────────────────────────────────────────
+    results.extend(check_port_and_gateway_runtime(&config).await);
 
     // ── 3. Backend env vars ────────────────────────────────────────────────
     for (name, backend) in config.enabled_backends() {
@@ -118,8 +209,11 @@ pub async fn run_doctor_command(fix: bool, config_path: Option<&Path>) -> ExitCo
     // ── 6. AI client configuration ─────────────────────────────────────────
     results.push(check_ai_client_config(&config).await);
 
+    // ── 7. Passive ShadowRadar handoff ─────────────────────────────────────
+    results.extend(check_shadow_radar(&config, config_path).await);
+
     // ── Print and summarize ────────────────────────────────────────────────
-    print_results(&results);
+    print_results(&results, format);
 
     let failed = results
         .iter()
@@ -134,13 +228,105 @@ pub async fn run_doctor_command(fix: bool, config_path: Option<&Path>) -> ExitCo
 
 // ── Individual checks ──────────────────────────────────────────────────────────
 
+async fn check_shadow_radar(config: &Config, config_path: Option<&Path>) -> Vec<CheckResult> {
+    let discovery = AutoDiscovery::new();
+    let registered_names: HashSet<String> = config.backends.keys().cloned().collect();
+    let gateway_config_path = config_path.or_else(|| Some(Path::new("gateway.yaml")));
+
+    match discovery.discover_all().await {
+        Ok(discovered) => {
+            let report = ShadowScanReport::from_discovered(
+                &discovered,
+                &registered_names,
+                gateway_config_path,
+            );
+            let handoff = report.consumer_handoff();
+            if handoff.doctor_findings.is_empty() {
+                return vec![
+                    CheckResult::pass("ShadowRadar", "passive scan found no unmanaged MCP servers")
+                        .with_category("shadow_radar")
+                        .with_verification("mcp-gateway cap discover --shadow --format json"),
+                ];
+            }
+
+            handoff
+                .doctor_findings
+                .into_iter()
+                .map(shadow_finding_check_result)
+                .collect()
+        }
+        Err(e) => vec![
+            CheckResult::warn("ShadowRadar", format!("passive discovery unavailable: {e}"))
+                .with_category("shadow_radar")
+                .with_hint("Run mcp-gateway cap discover --shadow --format json for details")
+                .with_risk("shadow_discovery_unavailable")
+                .with_verification("mcp-gateway doctor --format json"),
+        ],
+    }
+}
+
+fn shadow_finding_check_result(finding: ShadowDoctorFinding) -> CheckResult {
+    let severity = shadow_doctor_status_label(&finding.status);
+    let action = shadow_remediation_label(&finding.remediation_action);
+    CheckResult::warn(
+        format!("ShadowRadar {}", finding.asset_id),
+        format!(
+            "{severity}: {} Category: {}. Recommended action: {action}.",
+            finding.detail, finding.category
+        ),
+    )
+    .with_category("shadow_radar")
+    .with_hint("Review unmanaged MCP discovery before trusting or adopting this server")
+    .with_manual_fix(shadow_manual_fix_command(&finding.remediation_action))
+    .with_risk("shadow_mcp_review")
+    .with_verification(finding.verification_step)
+    .with_rollback("Restore the previous gateway config backup or remove the adopted backend")
+}
+
+fn shadow_doctor_status_label(status: &ShadowDoctorStatus) -> &'static str {
+    match status {
+        ShadowDoctorStatus::Info => "info",
+        ShadowDoctorStatus::Warning => "warning",
+        ShadowDoctorStatus::Critical => "critical",
+    }
+}
+
+fn shadow_remediation_label(action: &ShadowRemediationAction) -> &'static str {
+    match action {
+        ShadowRemediationAction::AdoptIntoGateway => "adopt into gateway after review",
+        ShadowRemediationAction::Quarantine => "quarantine until owner and trust are known",
+        ShadowRemediationAction::RequestOwner => "request owner review",
+        ShadowRemediationAction::IgnoreWithReason => "document accepted risk",
+        ShadowRemediationAction::Disable => "disable unmanaged server after approval",
+        ShadowRemediationAction::EnterprisePolicyTicket => "open enterprise policy ticket",
+    }
+}
+
+fn shadow_manual_fix_command(action: &ShadowRemediationAction) -> &'static str {
+    match action {
+        ShadowRemediationAction::AdoptIntoGateway => {
+            "mcp-gateway cap discover --shadow --write-config"
+        }
+        ShadowRemediationAction::Quarantine
+        | ShadowRemediationAction::RequestOwner
+        | ShadowRemediationAction::IgnoreWithReason
+        | ShadowRemediationAction::Disable
+        | ShadowRemediationAction::EnterprisePolicyTicket => {
+            "mcp-gateway cap discover --shadow --format json"
+        }
+    }
+}
+
 fn check_config(path: Option<&Path>, _fix: bool) -> (CheckResult, Option<Config>) {
     let resolved = resolve_config_path(path);
 
     let Some(ref p) = resolved else {
         return (
             CheckResult::fail("Configuration", "no gateway.yaml found")
-                .with_hint("Run 'mcp-gateway init' to create one"),
+                .with_category("config")
+                .with_hint("Run 'mcp-gateway init --profile local' to create one")
+                .with_manual_fix("mcp-gateway init --profile local")
+                .with_verification("mcp-gateway doctor --format json"),
             None,
         );
     };
@@ -148,7 +334,10 @@ fn check_config(path: Option<&Path>, _fix: bool) -> (CheckResult, Option<Config>
     if !p.exists() {
         return (
             CheckResult::fail("Configuration", format!("{} not found", p.display()))
-                .with_hint("Run 'mcp-gateway init' to create one"),
+                .with_category("config")
+                .with_hint("Run 'mcp-gateway init --profile local' to create one")
+                .with_manual_fix("mcp-gateway init --profile local")
+                .with_verification("mcp-gateway doctor --format json"),
             None,
         );
     }
@@ -161,21 +350,29 @@ fn check_config(path: Option<&Path>, _fix: bool) -> (CheckResult, Option<Config>
                 config.backends.len(),
                 if config.backends.len() == 1 { "" } else { "s" }
             );
-            (CheckResult::pass("Configuration", detail), Some(config))
+            (
+                CheckResult::pass("Configuration", detail).with_category("config"),
+                Some(config),
+            )
         }
         Err(e) => (
-            CheckResult::fail("Configuration", format!("{}: {e}", p.display())),
+            CheckResult::fail("Configuration", format!("{}: {e}", p.display()))
+                .with_category("config")
+                .with_manual_fix(format!("mcp-gateway validate {}", p.display())),
             None,
         ),
     }
 }
 
+#[cfg(test)]
 fn check_port(port: u16) -> CheckResult {
     let addr = format!("127.0.0.1:{port}");
     match TcpListener::bind(&addr) {
-        Ok(_) => CheckResult::pass("Port", format!("{port} available")),
+        Ok(_) => CheckResult::pass("Port", format!("{port} available")).with_category("port"),
         Err(_) => CheckResult::fail("Port", format!("{port} already in use"))
-            .with_hint("Another process is listening on this port"),
+            .with_category("port")
+            .with_hint("Another process is listening on this port")
+            .with_manual_fix(format!("lsof -nP -iTCP:{port} -sTCP:LISTEN")),
     }
 }
 
@@ -190,10 +387,13 @@ fn check_backend_env(name: &str, backend: &mcp_gateway::config::BackendConfig) -
     for key in entry.required_env {
         let label = format!("{name}: {key}");
         if std::env::var(key).is_ok() || backend.env.contains_key(*key) {
-            results.push(CheckResult::pass(label, "is set"));
+            results.push(CheckResult::pass(label, "is set").with_category("auth"));
         } else {
             results.push(
-                CheckResult::fail(label, "not set").with_hint(format!("export {key}=<value>")),
+                CheckResult::fail(label, "not set")
+                    .with_category("auth")
+                    .with_hint(format!("export {key}=<value>"))
+                    .with_manual_fix(format!("export {key}=<value>")),
             );
         }
     }
@@ -221,14 +421,19 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
             if status.is_server_error() {
                 Some(
                     CheckResult::fail(label, format!("HTTP {status} ({ms}ms)"))
+                        .with_category("backend_http")
                         .with_hint("Server returned a 5xx error"),
                 )
             } else {
-                Some(CheckResult::pass(label, format!("HTTP {status} ({ms}ms)")))
+                Some(
+                    CheckResult::pass(label, format!("HTTP {status} ({ms}ms)"))
+                        .with_category("backend_http"),
+                )
             }
         }
         Err(e) => Some(
             CheckResult::fail(label, format!("connection failed: {e}"))
+                .with_category("backend_http")
                 .with_hint(format!("Check that the server at {http_url} is running")),
         ),
     }
@@ -247,17 +452,24 @@ fn check_stdio_backend(name: &str, transport: &TransportConfig) -> Option<CheckR
     // (launching would block and side-effects are unpredictable).
     let found = which_command(bin);
     if found {
-        Some(CheckResult::pass(label, format!("'{bin}' found")))
+        Some(CheckResult::pass(label, format!("'{bin}' found")).with_category("backend_stdio"))
     } else {
         Some(
-            CheckResult::fail(label, format!("'{bin}' not found in PATH")).with_hint(format!(
-                "Install the command: {}",
-                if bin == "npx" {
-                    "install Node.js from https://nodejs.org"
+            CheckResult::fail(label, format!("'{bin}' not found in PATH"))
+                .with_category("backend_stdio")
+                .with_hint(format!(
+                    "Install the command: {}",
+                    if bin == "npx" {
+                        "install Node.js from https://nodejs.org"
+                    } else {
+                        "check your PATH"
+                    }
+                ))
+                .with_manual_fix(if bin == "npx" {
+                    "install Node.js from https://nodejs.org".to_string()
                 } else {
-                    "check your PATH"
-                }
-            )),
+                    format!("which {bin}")
+                }),
         )
     }
 }
@@ -276,17 +488,31 @@ async fn check_ai_client_config(config: &Config) -> CheckResult {
 
     if points_to_gateway {
         CheckResult::pass("AI client", "at least one client points to gateway")
+            .with_category("client_config")
     } else {
-        CheckResult::warn("AI client", "no client configured to use gateway").with_hint(format!(
-            "Run 'mcp-gateway setup --configure-client' or add \
-                 {{\"url\": \"{gateway_url}\"}} to your client's mcpServers"
-        ))
+        CheckResult::warn("AI client", "no client configured to use gateway")
+            .with_category("client_config")
+            .with_hint(format!(
+                "Run 'mcp-gateway setup wizard --configure-client' or add \
+                     {{\"url\": \"{gateway_url}\"}} to your client's mcpServers"
+            ))
+            .with_manual_fix("mcp-gateway setup wizard --configure-client")
+            .with_risk("config_mutation")
+            .with_verification("mcp-gateway doctor --format json")
+            .with_rollback("mcp-gateway setup export --rollback <backup-file>")
     }
 }
 
 // ── Output formatting ─────────────────────────────────────────────────────────
 
-fn print_results(results: &[CheckResult]) {
+fn print_results(results: &[CheckResult], format: OutputFormat) {
+    match format {
+        OutputFormat::Json => print_results_json(results),
+        OutputFormat::Plain | OutputFormat::Table => print_results_human(results),
+    }
+}
+
+fn print_results_human(results: &[CheckResult]) {
     use std::fmt::Write as _;
 
     let use_color = std::env::var("NO_COLOR").is_err();
@@ -302,18 +528,7 @@ fn print_results(results: &[CheckResult]) {
     println!();
 
     // Summary line.
-    let pass = results
-        .iter()
-        .filter(|r| r.status == CheckStatus::Pass)
-        .count();
-    let fail = results
-        .iter()
-        .filter(|r| r.status == CheckStatus::Fail)
-        .count();
-    let warn = results
-        .iter()
-        .filter(|r| r.status == CheckStatus::Warn)
-        .count();
+    let (pass, fail, warn) = summary_counts(results);
 
     let mut summary = String::new();
     let _ = write!(
@@ -332,6 +547,91 @@ fn print_results(results: &[CheckResult]) {
         );
     }
     println!("{summary}");
+}
+
+fn print_results_json(results: &[CheckResult]) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&doctor_report_json_value(results)).unwrap_or_default()
+    );
+}
+
+fn doctor_report_json_value(results: &[CheckResult]) -> Value {
+    let (pass, fail, warn) = summary_counts(results);
+    let checks: Vec<Value> = results.iter().map(check_result_json_value).collect();
+    json!({
+        "schema_version": "doctor.v1",
+        "ok": fail == 0,
+        "summary": {
+            "pass": pass,
+            "fail": fail,
+            "warn": warn,
+            "total": results.len(),
+        },
+        "checks": checks,
+    })
+}
+
+fn check_result_json_value(result: &CheckResult) -> Value {
+    json!({
+        "id": stable_check_id(&result.label),
+        "label": result.label,
+        "category": result.category,
+        "status": status_str(&result.status),
+        "detail": result.detail,
+        "hint": result.hint,
+        "fixability": {
+            "auto_fixable": result.auto_fixable,
+            "safe_to_apply": result.auto_fixable,
+            "command": result.fix_command,
+            "requires_user": result.status != CheckStatus::Pass && !result.auto_fixable,
+            "risk": result.risk,
+            "confirmation_required": result.confirmation_required,
+            "verification": result.verification_command,
+            "rollback": result.rollback_command,
+        },
+    })
+}
+
+fn summary_counts(results: &[CheckResult]) -> (usize, usize, usize) {
+    let pass = results
+        .iter()
+        .filter(|r| r.status == CheckStatus::Pass)
+        .count();
+    let fail = results
+        .iter()
+        .filter(|r| r.status == CheckStatus::Fail)
+        .count();
+    let warn = results
+        .iter()
+        .filter(|r| r.status == CheckStatus::Warn)
+        .count();
+    (pass, fail, warn)
+}
+
+fn status_str(status: &CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Pass => "pass",
+        CheckStatus::Fail => "fail",
+        CheckStatus::Warn => "warn",
+    }
+}
+
+fn stable_check_id(label: &str) -> String {
+    label
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 fn format_badge(status: &CheckStatus, color: bool) -> &'static str {
@@ -373,208 +673,15 @@ fn which_command(bin: &str) -> bool {
         })
 }
 
-// ── Shadow DLP rule export ─────────────────────────────────────────────────────
-
-/// A single DLP regex rule for network-layer MCP detection.
-///
-/// Derived from RFC-0132 §Shadow-MCP-Detection, Layer 3 and the Cloudflare
-/// DLP pattern reference in the RFC-0132 Appendix.  These patterns match
-/// MCP JSON-RPC messages as they appear in HTTP request/response bodies.
-///
-/// **Operator note**: These are heuristic patterns for *external* tools
-/// (firewalls, SIEMs, reverse proxies).  `mcp-gateway` does not intercept
-/// arbitrary outbound traffic — deploy these in your network-layer tooling.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DlpRule {
-    /// Human-readable rule name (also used as the YAML `name:` key and nginx
-    /// comment).
-    pub name: &'static str,
-    /// Selector category from RFC-0132 (host / uri / body).
-    pub category: &'static str,
-    /// The regex pattern, written in POSIX ERE compatible with grep -E and
-    /// most SIEM/WAF regex engines.
-    pub regex: &'static str,
-    /// Free-text description for the operator.
-    pub description: &'static str,
-}
-
-/// All MCP DLP rules derived from RFC-0132 Appendix and Cloudflare reference.
-///
-/// Patterns are POSIX ERE-compatible (grep -E, nginx `~`, `HAProxy` `acl`).
-/// The `\s{0,5}` allowance covers compacted vs. pretty-printed JSON.
-pub const DLP_RULES: &[DlpRule] = &[
-    DlpRule {
-        name: "MCP Initialize Method",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"initialize""#,
-        description: "MCP init handshake — first message in every MCP session",
-    },
-    DlpRule {
-        name: "MCP Tools Call",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"tools/call""#,
-        description: "Tool invocation — present in every tool execution",
-    },
-    DlpRule {
-        name: "MCP Tools List",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"tools/list""#,
-        description: "Tool enumeration — emitted by clients that pre-load schema",
-    },
-    DlpRule {
-        name: "MCP Resources Read",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"resources/read""#,
-        description: "MCP resource read — file/blob access",
-    },
-    DlpRule {
-        name: "MCP Resources List",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"resources/list""#,
-        description: "MCP resource listing",
-    },
-    DlpRule {
-        name: "MCP Prompts List or Get",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"prompts/(list|get)""#,
-        description: "MCP prompt enumeration or retrieval",
-    },
-    DlpRule {
-        name: "MCP Sampling Create Message",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"sampling/createMessage""#,
-        description: "LLM sampling back-channel — high-privilege, monitor closely",
-    },
-    DlpRule {
-        name: "MCP Protocol Version",
-        category: "body",
-        regex: r#""protocolVersion"\s{0,5}:\s{0,5}"202[4-9]"#,
-        description: "MCP version negotiation — present in every initialize message",
-    },
-    DlpRule {
-        name: "MCP Notifications Initialized",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"notifications/initialized""#,
-        description: "Session ready notification sent after successful handshake",
-    },
-    DlpRule {
-        name: "MCP Roots List",
-        category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"roots/list""#,
-        description: "Client root-directory enumeration",
-    },
-];
-
-// ── Formatters ────────────────────────────────────────────────────────────────
-
-fn render_grep(rules: &[DlpRule]) -> String {
-    let mut out = String::new();
-    out.push_str("# MCP DLP patterns — shell grep\n");
-    out.push_str("# Generated by: mcp-gateway doctor --shadow --shadow-format grep\n");
-    out.push_str("# Source: RFC-0132 §Shadow-MCP-Detection Layer 3\n");
-    out.push_str("#\n");
-    out.push_str("# OPERATOR NOTE: Heuristic patterns only. The gateway does not\n");
-    out.push_str("# intercept outbound traffic. Deploy in your network-layer tooling.\n");
-    out.push_str("#\n");
-    out.push_str("# Usage example (stream log file):\n");
-    out.push_str("#   tail -f /var/log/proxy.log | grep -EP 'PATTERN'\n");
-    out.push('\n');
-
-    for rule in rules {
-        let _ = writeln!(
-            out,
-            "# [{}] {} — {}",
-            rule.category, rule.name, rule.description
-        );
-        let _ = writeln!(out, "grep -EP '{}'\n", rule.regex);
-    }
-    out
-}
-
-fn render_nginx(rules: &[DlpRule]) -> String {
-    let mut out = String::new();
-    out.push_str("# MCP DLP patterns — nginx log_format / if-block snippets\n");
-    out.push_str("# Generated by: mcp-gateway doctor --shadow --shadow-format nginx\n");
-    out.push_str("# Source: RFC-0132 §Shadow-MCP-Detection Layer 3\n");
-    out.push_str("#\n");
-    out.push_str("# OPERATOR NOTE: Heuristic patterns only. These are NOT enforced by\n");
-    out.push_str("# mcp-gateway itself. Place in your nginx server/location block.\n");
-    out.push_str("#\n");
-    out.push_str("# Requires: nginx built with PCRE support (standard in most packages).\n");
-    out.push_str("# Add the map block in http {}, then reference $mcp_shadow in access_log.\n");
-    out.push('\n');
-
-    let combined: Vec<&str> = rules.iter().map(|r| r.regex).collect();
-    let combined_regex = combined.join("|");
-
-    out.push_str("# -- Combined map (1 = detected MCP traffic) --\n");
-    out.push_str("map $request_body $mcp_shadow {\n");
-    out.push_str("    default          0;\n");
-    let _ = writeln!(out, "    ~*({combined_regex})  1;");
-    out.push_str("}\n\n");
-
-    out.push_str("# -- Or use individual if blocks inside location /mcp { ... } --\n");
-    for rule in rules {
-        let _ = writeln!(out, "# [{}] {}", rule.category, rule.name);
-        let _ = writeln!(out, "# {}", rule.description);
-        let _ = writeln!(out, "if ($request_body ~* '{}') {{", rule.regex);
-        out.push_str("    # set $mcp_shadow 1; access_log ... mcp_shadow;\n");
-        out.push_str("}\n\n");
-    }
-    out
-}
-
-fn render_yaml(rules: &[DlpRule]) -> String {
-    let mut out = String::new();
-    out.push_str("# MCP DLP rules — YAML export for SIEM import\n");
-    out.push_str("# Generated by: mcp-gateway doctor --shadow --shadow-format yaml\n");
-    out.push_str("# Source: RFC-0132 §Shadow-MCP-Detection Layer 3\n");
-    out.push_str("#\n");
-    out.push_str("# OPERATOR NOTE: Heuristic patterns only. The gateway does not\n");
-    out.push_str("# intercept outbound traffic. Deploy in your SIEM/firewall tooling.\n");
-    out.push('\n');
-    out.push_str("dlp_rules:\n");
-
-    for rule in rules {
-        let _ = writeln!(out, "  - name: \"{}\"", rule.name);
-        let _ = writeln!(out, "    category: \"{}\"", rule.category);
-        let escaped_regex = rule.regex.replace('\\', "\\\\").replace('"', "\\\"");
-        let _ = writeln!(out, "    regex: \"{escaped_regex}\"");
-        let _ = writeln!(out, "    description: \"{}\"", rule.description);
-        out.push('\n');
-    }
-    out
-}
-
-// ── Public entry point for --shadow ──────────────────────────────────────────
-
-/// Run `mcp-gateway doctor --shadow`.
-///
-/// Emits DLP/firewall regex rules for operator-side network-layer MCP
-/// detection.  This is **rule generation only** — the gateway does not
-/// intercept arbitrary outbound traffic.
-///
-/// # Arguments
-///
-/// * `format` — one of `"grep"` (default), `"nginx"`, or `"yaml"`.
-pub fn run_doctor_shadow_command(format: &str) -> ExitCode {
-    let output = match format.to_ascii_lowercase().as_str() {
-        "grep" | "" => render_grep(DLP_RULES),
-        "nginx" | "haproxy" => render_nginx(DLP_RULES),
-        "yaml" => render_yaml(DLP_RULES),
-        other => {
-            eprintln!(
-                "Error: unknown --shadow-format '{other}'. \
-                 Valid values: grep, nginx, yaml"
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-    print!("{output}");
-    ExitCode::SUCCESS
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "doctor/runtime_tests.rs"]
+mod runtime_tests;
+
+#[cfg(test)]
+#[path = "doctor/shadow_tests.rs"]
+mod shadow_tests;
 
 #[cfg(test)]
 mod tests {
@@ -608,6 +715,114 @@ mod tests {
     fn check_result_with_hint_stores_hint() {
         let r = CheckResult::fail("Port", "taken").with_hint("kill the process");
         assert_eq!(r.hint.as_deref(), Some("kill the process"));
+    }
+
+    #[test]
+    fn check_result_fixability_metadata_is_json_visible() {
+        let r = CheckResult::fail("Configuration", "missing")
+            .with_category("config")
+            .with_hint("Run init")
+            .with_manual_fix("mcp-gateway init --profile local")
+            .with_risk("config_mutation")
+            .with_verification("mcp-gateway doctor --format json")
+            .with_rollback("mcp-gateway setup export --rollback <backup-file>");
+
+        let value = check_result_json_value(&r);
+
+        assert_eq!(value["id"], "configuration");
+        assert_eq!(value["category"], "config");
+        assert_eq!(value["status"], "fail");
+        assert_eq!(value["hint"], "Run init");
+        assert_eq!(value["fixability"]["auto_fixable"], false);
+        assert_eq!(value["fixability"]["safe_to_apply"], false);
+        assert_eq!(value["fixability"]["risk"], "config_mutation");
+        assert_eq!(value["fixability"]["confirmation_required"], true);
+        assert_eq!(
+            value["fixability"]["verification"],
+            "mcp-gateway doctor --format json"
+        );
+        assert_eq!(
+            value["fixability"]["rollback"],
+            "mcp-gateway setup export --rollback <backup-file>"
+        );
+        assert_eq!(
+            value["fixability"]["command"],
+            "mcp-gateway init --profile local"
+        );
+        assert_eq!(value["fixability"]["requires_user"], true);
+    }
+
+    #[test]
+    fn doctor_report_json_has_stable_schema_and_summary_fields() {
+        let results = vec![
+            CheckResult::pass("Configuration", "gateway.yaml").with_category("config"),
+            CheckResult::warn("AI client", "not configured")
+                .with_category("client_config")
+                .with_manual_fix("mcp-gateway setup wizard --configure-client")
+                .with_risk("config_mutation")
+                .with_verification("mcp-gateway doctor --format json")
+                .with_rollback("mcp-gateway setup export --rollback <backup-file>"),
+        ];
+
+        let value = doctor_report_json_value(&results);
+
+        assert_eq!(value["schema_version"], "doctor.v1");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["summary"]["pass"], 1);
+        assert_eq!(value["summary"]["warn"], 1);
+        assert_eq!(value["summary"]["fail"], 0);
+        assert_eq!(value["summary"]["total"], 2);
+        assert_eq!(value["checks"][0]["id"], "configuration");
+        assert_eq!(value["checks"][1]["id"], "ai_client");
+        assert_eq!(value["checks"][1]["fixability"]["requires_user"], true);
+        assert_eq!(value["checks"][1]["fixability"]["risk"], "config_mutation");
+        assert_eq!(
+            value["checks"][1]["fixability"]["verification"],
+            "mcp-gateway doctor --format json"
+        );
+        assert_eq!(
+            value["checks"][1]["fixability"]["rollback"],
+            "mcp-gateway setup export --rollback <backup-file>"
+        );
+    }
+
+    #[test]
+    fn shadow_doctor_finding_is_machine_readable_warning() {
+        let finding = ShadowDoctorFinding {
+            finding_id: "shadow-doctor:remote-weather".to_string(),
+            asset_id: "remote-weather".to_string(),
+            status: ShadowDoctorStatus::Critical,
+            category: "restricted_shadow_asset".to_string(),
+            detail: "remote-weather is unmanaged via streamable_http".to_string(),
+            remediation_action: ShadowRemediationAction::Quarantine,
+            verification_step: "mcp-gateway cap discover --shadow --format json".to_string(),
+        };
+
+        let result = shadow_finding_check_result(finding);
+        let value = check_result_json_value(&result);
+
+        assert_eq!(value["id"], "shadowradar_remote_weather");
+        assert_eq!(value["category"], "shadow_radar");
+        assert_eq!(value["status"], "warn");
+        assert!(
+            value["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("restricted_shadow_asset")
+        );
+        assert_eq!(value["fixability"]["auto_fixable"], false);
+        assert_eq!(value["fixability"]["safe_to_apply"], false);
+        assert_eq!(value["fixability"]["requires_user"], true);
+        assert_eq!(value["fixability"]["confirmation_required"], true);
+        assert_eq!(value["fixability"]["risk"], "shadow_mcp_review");
+        assert_eq!(
+            value["fixability"]["command"],
+            "mcp-gateway cap discover --shadow --format json"
+        );
+        assert_eq!(
+            value["fixability"]["verification"],
+            "mcp-gateway cap discover --shadow --format json"
+        );
     }
 
     // ── format_badge ──────────────────────────────────────────────────────────
@@ -701,166 +916,5 @@ mod tests {
         let backend = mcp_gateway::config::BackendConfig::default();
         let results = check_backend_env("totally-unknown-server-xyz", &backend);
         assert!(results.is_empty());
-    }
-
-    // ── DLP_RULES catalogue ───────────────────────────────────────────────────
-
-    #[test]
-    fn dlp_rules_has_ten_entries() {
-        assert_eq!(DLP_RULES.len(), 10, "RFC-0132 specifies 10 DLP patterns");
-    }
-
-    #[test]
-    fn dlp_rules_all_have_non_empty_fields() {
-        for rule in DLP_RULES {
-            assert!(!rule.name.is_empty(), "name must not be empty");
-            assert!(!rule.category.is_empty(), "category must not be empty");
-            assert!(!rule.regex.is_empty(), "regex must not be empty");
-            assert!(
-                !rule.description.is_empty(),
-                "description must not be empty"
-            );
-        }
-    }
-
-    #[test]
-    fn dlp_rules_categories_are_valid() {
-        let valid = ["host", "uri", "body"];
-        for rule in DLP_RULES {
-            assert!(
-                valid.contains(&rule.category),
-                "unexpected category '{}' for rule '{}'",
-                rule.category,
-                rule.name
-            );
-        }
-    }
-
-    // ── render_grep ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn render_grep_contains_header_disclaimer() {
-        let out = render_grep(DLP_RULES);
-        assert!(
-            out.contains("OPERATOR NOTE"),
-            "must include operator disclaimer"
-        );
-        assert!(out.contains("RFC-0132"), "must cite RFC-0132");
-    }
-
-    #[test]
-    fn render_grep_contains_each_rule_regex() {
-        let out = render_grep(DLP_RULES);
-        for rule in DLP_RULES {
-            assert!(
-                out.contains(rule.regex),
-                "grep output missing regex for rule '{}'",
-                rule.name
-            );
-        }
-    }
-
-    #[test]
-    fn render_grep_one_grep_command_per_rule() {
-        let out = render_grep(DLP_RULES);
-        let grep_lines: Vec<&str> = out.lines().filter(|l| l.starts_with("grep -EP")).collect();
-        assert_eq!(
-            grep_lines.len(),
-            DLP_RULES.len(),
-            "expected one grep line per rule"
-        );
-    }
-
-    // ── render_nginx ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn render_nginx_contains_map_block() {
-        let out = render_nginx(DLP_RULES);
-        assert!(
-            out.contains("map $request_body $mcp_shadow"),
-            "must include map block"
-        );
-        assert!(
-            out.contains("OPERATOR NOTE"),
-            "must include operator disclaimer"
-        );
-    }
-
-    #[test]
-    fn render_nginx_contains_each_rule_as_if_block() {
-        let out = render_nginx(DLP_RULES);
-        for rule in DLP_RULES {
-            assert!(
-                out.contains(rule.regex),
-                "nginx output missing regex for rule '{}'",
-                rule.name
-            );
-        }
-    }
-
-    // ── render_yaml ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn render_yaml_starts_with_dlp_rules_key() {
-        let out = render_yaml(DLP_RULES);
-        assert!(
-            out.contains("dlp_rules:"),
-            "must have top-level dlp_rules: key"
-        );
-    }
-
-    #[test]
-    fn render_yaml_contains_all_rule_names() {
-        let out = render_yaml(DLP_RULES);
-        for rule in DLP_RULES {
-            assert!(
-                out.contains(rule.name),
-                "yaml output missing name for rule '{}'",
-                rule.name
-            );
-        }
-    }
-
-    #[test]
-    fn render_yaml_escapes_backslashes_in_regex() {
-        let out = render_yaml(DLP_RULES);
-        // Every rule with \s should have \\s in the YAML output
-        let has_backslash_rule = DLP_RULES.iter().any(|r| r.regex.contains('\\'));
-        if has_backslash_rule {
-            assert!(
-                out.contains("\\\\s"),
-                "backslashes in regex must be escaped to \\\\ in YAML"
-            );
-        }
-    }
-
-    #[test]
-    fn render_yaml_contains_disclaimer() {
-        let out = render_yaml(DLP_RULES);
-        assert!(
-            out.contains("OPERATOR NOTE"),
-            "yaml must include operator disclaimer"
-        );
-    }
-
-    // ── run_doctor_shadow_command ─────────────────────────────────────────────
-
-    #[test]
-    fn shadow_command_invalid_format_returns_failure() {
-        let code = run_doctor_shadow_command("iptables");
-        assert_eq!(code, ExitCode::FAILURE);
-    }
-
-    #[test]
-    fn shadow_command_haproxy_alias_is_accepted() {
-        // "haproxy" is an alias for the nginx formatter
-        let code = run_doctor_shadow_command("haproxy");
-        assert_eq!(code, ExitCode::SUCCESS);
-    }
-
-    #[test]
-    fn shadow_command_empty_format_defaults_to_grep() {
-        let code = run_doctor_shadow_command("");
-        assert_eq!(code, ExitCode::SUCCESS);
     }
 }

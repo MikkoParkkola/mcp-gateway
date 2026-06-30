@@ -10,6 +10,7 @@ mod code_mode;
 mod failsafe;
 mod key_server;
 mod playbooks;
+mod runtime;
 mod security;
 mod streaming;
 mod webhooks;
@@ -26,8 +27,10 @@ pub use key_server::{
     PolicyMatchConfig, PolicyScopesConfig,
 };
 pub use playbooks::PlaybooksConfig;
+pub use runtime::{RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig};
 pub use security::{
-    AgentIdentityConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
+    AgentIdentityConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
+    IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
     ToolContractConfig,
 };
 pub use streaming::StreamingConfig;

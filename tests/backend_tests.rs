@@ -23,6 +23,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         oauth: None,
         secrets: Vec::new(),
         passthrough: false,
+        runtime_profile: None,
     };
 
     let failsafe = FailsafeConfig::default();

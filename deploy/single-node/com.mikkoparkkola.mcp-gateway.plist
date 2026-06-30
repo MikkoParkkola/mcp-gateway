@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mikkoparkkola.mcp-gateway</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/mcp-gateway</string>
+    <string>--config</string>
+    <string>/usr/local/etc/mcp-gateway/gateway.yaml</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>39400</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/usr/local/etc/mcp-gateway</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MCP_GATEWAY_LOG_LEVEL</key>
+    <string>info</string>
+    <key>MCP_GATEWAY_LOG_FORMAT</key>
+    <string>json</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/var/log/mcp-gateway.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/mcp-gateway.err.log</string>
+</dict>
+</plist>

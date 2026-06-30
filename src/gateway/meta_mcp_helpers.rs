@@ -484,7 +484,12 @@ pub(crate) fn ranked_results_to_json(ranked: Vec<SearchResult>) -> Vec<Value> {
                 "server": r.server,
                 "tool": r.tool,
                 "description": r.description,
-                "score": r.score
+                "score": r.score,
+                "ranking": {
+                    "included": r.explanation.included,
+                    "reasons": r.explanation.reasons,
+                    "signals": r.signals
+                }
             })
         })
         .collect()

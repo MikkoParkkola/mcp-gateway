@@ -135,6 +135,18 @@ tr:hover td { background: var(--bg3); }
 .cap-body textarea:focus { outline: none; border-color: var(--accent); }
 .cap-body-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; align-items: center; }
 
+/* Control plane */
+.split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.table-scroll { overflow-x: auto; margin-bottom: 1.5rem; }
+.muted { color: var(--fg2); }
+.mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.8rem; }
+.tag-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+.tag { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.35rem 0.55rem; font-size: 0.8rem; background: var(--bg2); color: var(--fg2); }
+.tag-on { color: var(--green); border-color: rgba(63,185,80,0.35); }
+.tag-off { color: var(--fg2); }
+.row-main { font-weight: 600; margin-bottom: 0.2rem; }
+.row-sub { color: var(--fg2); font-size: 0.8rem; }
+
 /* Registry search */
 .reg-search-wrap { position: relative; }
 .reg-search-wrap input { width: 100%; padding-right: 2rem; }
@@ -153,6 +165,7 @@ tr:hover td { background: var(--bg3); }
   nav a.active { border-bottom-color: var(--accent); border-left: none; }
   main { padding: 1rem; }
   .cards { grid-template-columns: repeat(2, 1fr); }
+  .split-grid { grid-template-columns: 1fr; }
 }
 
 /* YAML Editor Styles */
@@ -277,6 +290,7 @@ tr:hover td { background: var(--bg3); }
     <a href="#dashboard" class="nav-link active" data-page="dashboard">Dashboard</a>
     <a href="#tools" class="nav-link" data-page="tools">Tools</a>
     <a href="#servers" class="nav-link" data-page="servers">Servers</a>
+    <a href="#control-plane" class="nav-link" data-page="control-plane">Control Plane</a>
     <a href="#capabilities" class="nav-link" data-page="capabilities">Capabilities</a>
     <a href="#config" class="nav-link" data-page="config">Config</a>
     <a href="#costs" class="nav-link" data-page="costs">Costs</a>
@@ -399,6 +413,95 @@ tr:hover td { background: var(--bg3); }
           <tbody id="servers-tbody"><tr><td colspan="10" style="color:var(--fg2)">Loading...</td></tr></tbody>
         </table>
       </div>
+    </div>
+
+    <!-- Control Plane -->
+    <div id="page-control-plane" class="page">
+      <div class="tab-header">
+        <h1>Control Plane</h1>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <span id="cp-status" class="muted" style="font-size:0.85rem"></span>
+          <button class="btn btn-sm btn-secondary" onclick="refreshControlPlane()">Refresh</button>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card"><div class="label">Actor</div><div class="value" id="cp-actor" style="font-size:1.15rem">-</div></div>
+        <div class="card"><div class="label">Decisions</div><div class="value" id="cp-decisions">-</div></div>
+        <div class="card"><div class="label">Coverage</div><div class="value" id="cp-coverage-count">-</div></div>
+        <div class="card"><div class="label">Shadow MCPs</div><div class="value" id="cp-shadow-count">-</div></div>
+        <div class="card"><div class="label">TrustCards</div><div class="value" id="cp-trustcards-count">-</div></div>
+        <div class="card"><div class="label">Mode</div><div class="value" id="cp-mode" style="font-size:1.15rem">-</div></div>
+      </div>
+
+      <div class="split-grid">
+        <div>
+          <h2>Server Inventory</h2>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Name</th><th>Status</th><th>Owner</th></tr></thead>
+              <tbody id="cp-servers-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h2>Runtime Health</h2>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Server</th><th>Provider</th><th>Health</th></tr></thead>
+              <tbody id="cp-runtime-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <h2>TrustCards</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Server</th><th>Digest</th><th>Schema</th></tr></thead>
+          <tbody id="cp-trustcards-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+        </table>
+      </div>
+
+      <h2>ShadowRadar</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Asset</th><th>Transport</th><th>Severity</th><th>Action</th><th>Review</th></tr></thead>
+          <tbody id="cp-shadow-tbody"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
+        </table>
+      </div>
+
+      <h2>Decision Queue</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Decision</th><th>Target</th><th>Required</th><th>Tier</th><th>Actor</th></tr></thead>
+          <tbody id="cp-decisions-tbody"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="split-grid">
+        <div>
+          <h2>Feature Boundary</h2>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Feature</th><th>Tier</th><th>This Route</th></tr></thead>
+              <tbody id="cp-features-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h2>RBAC</h2>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Action</th><th>Access</th><th>Evidence</th></tr></thead>
+              <tbody id="cp-rbac-tbody"><tr><td colspan="3" class="muted">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <h2>Coverage</h2>
+      <div id="cp-coverage-tags" class="tag-grid"></div>
     </div>
 
     <!-- Capabilities -->
@@ -549,6 +652,7 @@ function onHash() {
   const hash = location.hash.replace('#', '') || 'dashboard';
   showPage(hash);
   if (hash === 'tools') refreshTools();
+  if (hash === 'control-plane') refreshControlPlane();
   if (hash === 'capabilities') refreshCapabilities();
   if (hash === 'config') refreshConfig();
   if (hash === 'costs') refreshCosts();
@@ -586,6 +690,50 @@ function truncate(s, n) {
   return s.length > n ? s.substring(0, n) + '...' : s;
 }
 
+function humanize(s) {
+  return String(s || '-').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function boolBadge(ok, yes = 'Yes', no = 'No') {
+  return ok
+    ? `<span class="badge badge-healthy">${esc(yes)}</span>`
+    : `<span class="badge badge-halfopen">${esc(no)}</span>`;
+}
+
+function licenseBadge(tier) {
+  return tier === 'free_core'
+    ? '<span class="badge badge-healthy">Free/Core</span>'
+    : '<span class="badge badge-running">Enterprise</span>';
+}
+
+function healthBadge(health) {
+  const h = (health || 'unknown').toLowerCase();
+  if (h === 'healthy') return '<span class="badge badge-healthy">Healthy</span>';
+  if (h === 'down') return '<span class="badge badge-down">Down</span>';
+  if (h === 'degraded') return '<span class="badge badge-halfopen">Degraded</span>';
+  return '<span class="badge badge-running">Unknown</span>';
+}
+
+function severityBadge(severity) {
+  const s = (severity || 'unknown').toLowerCase();
+  if (s === 'critical' || s === 'high') {
+    return `<span class="badge badge-down">${esc(humanize(s))}</span>`;
+  }
+  if (s === 'medium') return '<span class="badge badge-halfopen">Medium</span>';
+  if (s === 'low') return '<span class="badge badge-healthy">Low</span>';
+  return '<span class="badge badge-running">Unknown</span>';
+}
+
+function actionBadge(action) {
+  const a = (action || 'review').toLowerCase();
+  if (a === 'quarantine' || a === 'disable') {
+    return `<span class="badge badge-down">${esc(humanize(a))}</span>`;
+  }
+  if (a === 'adopt_into_gateway') return '<span class="badge badge-healthy">Adopt</span>';
+  if (a === 'ignore_with_reason') return '<span class="badge badge-running">Document</span>';
+  return `<span class="badge badge-halfopen">${esc(humanize(a))}</span>`;
+}
+
 // Dashboard
 async function refreshDashboard() {
   try {
@@ -603,6 +751,179 @@ async function refreshDashboard() {
   } catch (e) {
     console.warn('Status fetch failed:', e);
   }
+}
+
+// Control Plane
+async function refreshControlPlane() {
+  const status = document.getElementById('cp-status');
+  if (status) {
+    status.textContent = 'Refreshing...';
+    status.style.color = '';
+  }
+  try {
+    const d = await apiFetch('/ui/api/control-plane');
+    renderControlPlane(d);
+    if (status) status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    if (status) {
+      status.textContent = e.message;
+      status.style.color = 'var(--red)';
+    }
+    const tbody = document.getElementById('cp-decisions-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="color:var(--red)">${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderControlPlane(d) {
+  const actor = d.actor || {};
+  const coverage = d.coverage || {};
+  const coverageEntries = Object.entries(coverage);
+  const covered = coverageEntries.filter(([, ok]) => ok).length;
+  const decisions = d.decision_queue?.items || [];
+  const route = d.route || {};
+  const limits = d.current_limits || [];
+  const shadow = d.shadow_radar || {};
+  const shadowSummary = shadow.summary || {};
+  const trustCards = d.view?.trust_cards || [];
+
+  document.getElementById('cp-actor').textContent =
+    `${actor.display_name || '-'} / ${humanize(actor.role)}`;
+  document.getElementById('cp-decisions').textContent = decisions.length;
+  document.getElementById('cp-coverage-count').textContent =
+    coverageEntries.length ? `${covered}/${coverageEntries.length}` : '-';
+  document.getElementById('cp-shadow-count').textContent =
+    shadowSummary.unmanaged_total ?? d.inventory_counts?.shadow_assets ?? '-';
+  document.getElementById('cp-trustcards-count').textContent =
+    d.inventory_counts?.trust_cards ?? trustCards.length;
+  document.getElementById('cp-mode').innerHTML = route.read_only
+    ? '<span class="badge badge-healthy">Read Only</span>'
+    : '<span class="badge badge-open">Mutating</span>';
+
+  renderControlPlaneServers(d.view?.servers || []);
+  renderControlPlaneRuntime(d.view?.runtime_health || []);
+  renderControlPlaneTrustCards(trustCards);
+  renderControlPlaneShadow(shadow);
+  renderControlPlaneDecisions(decisions);
+  renderControlPlaneFeatures(d.features || []);
+  renderControlPlaneRbac(d.authorizations || {});
+  renderControlPlaneCoverage(coverageEntries, limits);
+}
+
+function renderControlPlaneServers(servers) {
+  const tbody = document.getElementById('cp-servers-tbody');
+  if (!servers.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No visible servers</td></tr>';
+    return;
+  }
+  tbody.innerHTML = servers.map(s => `<tr>
+    <td><div class="row-main">${esc(s.name)}</div><div class="row-sub mono">${esc(s.server_id)}</div></td>
+    <td>${humanize(s.status)}</td>
+    <td>${esc(s.owner_group_id || '-')}</td>
+  </tr>`).join('');
+}
+
+function renderControlPlaneRuntime(runtimes) {
+  const tbody = document.getElementById('cp-runtime-tbody');
+  if (!runtimes.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No runtime health records</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runtimes.map(r => `<tr>
+    <td class="mono">${esc(r.server_id)}</td>
+    <td>${esc(r.provider || '-')}</td>
+    <td>${healthBadge(r.health)}</td>
+  </tr>`).join('');
+}
+
+function renderControlPlaneTrustCards(cards) {
+  const tbody = document.getElementById('cp-trustcards-tbody');
+  if (!cards.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No TrustCards generated from cached tools</td></tr>';
+    return;
+  }
+  tbody.innerHTML = cards.map(card => `<tr>
+    <td class="mono">${esc(card.server_id || '-')}</td>
+    <td><code>${esc((card.trust_card_digest_sha256 || '').slice(0, 16))}</code><div class="row-sub mono">${esc(card.trust_card_digest_sha256 || '-')}</div></td>
+    <td>${esc(card.schema_version || '-')}</td>
+  </tr>`).join('');
+}
+
+function renderControlPlaneShadow(shadow) {
+  const tbody = document.getElementById('cp-shadow-tbody');
+  const assets = shadow.control_plane_assets || [];
+  if (!assets.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">No shadow MCPs</td></tr>';
+    return;
+  }
+  tbody.innerHTML = assets.map(asset => {
+    const evidence = (asset.evidence_refs || []).slice(0, 2).join(' · ');
+    return `<tr>
+      <td><div class="row-main">${esc(asset.display_name)}</div><div class="row-sub mono">${esc(asset.asset_id)}</div>${evidence ? `<div class="row-sub">${esc(evidence)}</div>` : ''}</td>
+      <td><div>${esc(asset.transport_kind || '-')}</div><div class="row-sub">${asset.local_only ? 'Local only' : 'Network exposed'}</div></td>
+      <td>${severityBadge(asset.severity)}</td>
+      <td>${actionBadge(asset.recommended_action)}</td>
+      <td>${boolBadge(asset.confirmation_required, 'Required', 'Not required')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderControlPlaneDecisions(decisions) {
+  const tbody = document.getElementById('cp-decisions-tbody');
+  if (!decisions.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">No human-gated decisions</td></tr>';
+    return;
+  }
+  tbody.innerHTML = decisions.map(item => `<tr>
+    <td>
+      <div class="row-main">${esc(item.summary)}</div>
+      <div class="row-sub">${esc(item.next_step || '')}</div>
+      <div class="row-sub mono">${esc(item.reason_code)}</div>
+    </td>
+    <td><div>${humanize(item.target_kind)}</div><div class="row-sub mono">${esc(item.target_id)}</div></td>
+    <td><div>${humanize(item.required_role)}</div><div class="row-sub">${humanize(item.required_action)}</div></td>
+    <td>${licenseBadge(item.license_tier)}</td>
+    <td>${boolBadge(item.can_act, 'Can Act', 'Review Only')}</td>
+  </tr>`).join('');
+}
+
+function renderControlPlaneFeatures(features) {
+  const tbody = document.getElementById('cp-features-tbody');
+  if (!features.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No feature boundary data</td></tr>';
+    return;
+  }
+  tbody.innerHTML = features.map(f => `<tr>
+    <td>${humanize(f.feature)}</td>
+    <td>${licenseBadge(f.license_tier)}</td>
+    <td>${boolBadge(f.available_in_this_route, 'Available', 'Gated')}</td>
+  </tr>`).join('');
+}
+
+function renderControlPlaneRbac(authorizations) {
+  const tbody = document.getElementById('cp-rbac-tbody');
+  const entries = Object.entries(authorizations);
+  if (!entries.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No RBAC projection</td></tr>';
+    return;
+  }
+  tbody.innerHTML = entries.map(([action, auth]) => `<tr>
+    <td><div class="row-main">${humanize(action)}</div><div class="row-sub mono">${esc(auth.reason_code)}</div></td>
+    <td>${boolBadge(auth.allowed, 'Allowed', 'Denied')}</td>
+    <td>${auth.audit_required || auth.rollback_required
+      ? 'Audit + rollback'
+      : '<span class="muted">Not required</span>'}</td>
+  </tr>`).join('');
+}
+
+function renderControlPlaneCoverage(entries, limits) {
+  const tags = document.getElementById('cp-coverage-tags');
+  const coverageTags = entries.map(([name, ok]) =>
+    `<span class="tag ${ok ? 'tag-on' : 'tag-off'}">${esc(humanize(name))}: ${ok ? 'covered' : 'empty'}</span>`
+  );
+  const limitTags = limits.map(limit =>
+    `<span class="tag tag-off">${esc(humanize(limit))}</span>`
+  );
+  tags.innerHTML = coverageTags.concat(limitTags).join('');
 }
 
 // Servers
@@ -1474,6 +1795,7 @@ function esc(s) {
 // Auto-refresh
 function refreshAll() {
   refreshDashboard();
+  if (location.hash.replace('#', '') === 'control-plane') refreshControlPlane();
 }
 
 // Initial load

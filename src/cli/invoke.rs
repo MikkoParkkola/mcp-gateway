@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::capability::{CapabilityDefinition, CapabilityExecutor, CapabilityLoader};
+use crate::capability::{
+    CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
+};
 use crate::registry::{Registry, RegistryEntry};
 use crate::{Error, Result};
 
@@ -138,12 +140,33 @@ pub async fn execute_tool(
     tool_name: &str,
     args: Value,
 ) -> Result<Value> {
+    execute_tool_with_context(
+        catalogue,
+        tool_name,
+        args,
+        CapabilityExecutionContext::default(),
+    )
+    .await
+}
+
+/// Execute a tool by name with request-scoped execution metadata.
+///
+/// # Errors
+///
+/// - `Error::Config` if the tool name is not found in the catalogue.
+/// - Propagates execution errors from the capability executor.
+pub async fn execute_tool_with_context(
+    catalogue: &ToolCatalogue,
+    tool_name: &str,
+    args: Value,
+    context: CapabilityExecutionContext,
+) -> Result<Value> {
     let cap = catalogue
         .find(tool_name)
         .ok_or_else(|| Error::Config(format!("Tool not found: '{tool_name}'")))?;
 
     let executor = Arc::new(CapabilityExecutor::new());
-    executor.execute(cap, args).await
+    executor.execute_with_context(cap, args, context).await
 }
 
 /// Build registry entries from the catalogue (for completion / listing).

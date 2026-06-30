@@ -11,359 +11,17 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-// ============================================================================
-// Synonym expansion
-// ============================================================================
+mod scoring;
 
-/// Return the synonym group for a given word (all lowercase).
-///
-/// Each word maps to the *other* members of its group. Matches against synonyms
-/// score at 0.8× of an exact match to prefer literal terms. Returns an empty
-/// slice when the word has no known synonyms.
-///
-/// # Extending the synonym map
-///
-/// Add a new `match` arm with the canonical and alternate spellings:
-/// ```text
-/// "send" | "deliver" | "publish" | "emit" => &["send", "deliver", "publish", "emit"],
-/// ```
-/// Every word in the group must map to the full group (bidirectional).
-#[must_use]
-pub fn expand_synonyms(word: &str) -> &'static [&'static str] {
-    match word {
-        // search group
-        "search" | "find" | "discover" | "locate" | "lookup" | "query" => {
-            &["search", "find", "discover", "locate", "lookup", "query"]
-        }
-        // monitor group
-        "monitor" | "watch" | "track" | "observe" | "alert" => {
-            &["monitor", "watch", "track", "observe", "alert"]
-        }
-        // extract group
-        "extract" | "scrape" | "parse" | "pull" | "fetch" => {
-            &["extract", "scrape", "parse", "pull", "fetch"]
-        }
-        // create group
-        "create" | "generate" | "make" | "build" | "produce" => {
-            &["create", "generate", "make", "build", "produce"]
-        }
-        // analyze group
-        "analyze" | "examine" | "inspect" | "audit" | "review" => {
-            &["analyze", "examine", "inspect", "audit", "review"]
-        }
-        // batch group
-        "batch" | "bulk" | "mass" | "parallel" | "concurrent" => {
-            &["batch", "bulk", "mass", "parallel", "concurrent"]
-        }
-        // entity group
-        "entity" | "record" | "item" | "object" | "resource" => {
-            &["entity", "record", "item", "object", "resource"]
-        }
-        // research group
-        "research" | "investigate" | "study" | "explore" => {
-            &["research", "investigate", "study", "explore"]
-        }
-        // send group
-        "send" | "deliver" | "publish" | "emit" | "notify" => {
-            &["send", "deliver", "publish", "emit", "notify"]
-        }
-        // delete group
-        "delete" | "remove" | "purge" | "clear" | "destroy" => {
-            &["delete", "remove", "purge", "clear", "destroy"]
-        }
-        // list group
-        "list" | "enumerate" | "browse" | "catalog" | "index" => {
-            &["list", "enumerate", "browse", "catalog", "index"]
-        }
-        // convert group
-        "convert" | "transform" | "translate" | "format" | "encode" => {
-            &["convert", "transform", "translate", "format", "encode"]
-        }
-        // execute group
-        "execute" | "run" | "invoke" | "call" | "trigger" => {
-            &["execute", "run", "invoke", "call", "trigger"]
-        }
-        // show group
-        "show" | "display" | "render" | "print" | "view" => {
-            &["show", "display", "render", "print", "view"]
-        }
-        // check group
-        "check" | "validate" | "verify" | "test" | "assert" => {
-            &["check", "validate", "verify", "test", "assert"]
-        }
-        // modify group
-        "modify" | "update" | "edit" | "change" | "patch" => {
-            &["modify", "update", "edit", "change", "patch"]
-        }
-        // count group
-        "count" | "aggregate" | "summarize" | "total" | "tally" => {
-            &["count", "aggregate", "summarize", "total", "tally"]
-        }
-        // access group
-        "access" | "read" | "get" | "retrieve" | "obtain" => {
-            &["access", "read", "get", "retrieve", "obtain"]
-        }
-        // store group
-        "store" | "save" | "write" | "persist" | "cache" => {
-            &["store", "save", "write", "persist", "cache"]
-        }
-        // connect group
-        "connect" | "link" | "attach" | "join" | "bind" => {
-            &["connect", "link", "attach", "join", "bind"]
-        }
-        _ => &[],
-    }
-}
+use scoring::score_text_relevance;
+pub use scoring::{expand_synonyms, is_schema_field_match};
 
-/// Score multiplier applied to synonym-expanded matches.
-///
-/// Exact matches retain their full score; synonym matches are discounted
-/// to prefer literal term alignment over semantic expansion.
-const SYNONYM_MULTIPLIER: f64 = 0.8;
+#[cfg(test)]
+use scoring::{
+    SYNONYM_MULTIPLIER, extract_tag_section, is_keyword_match, is_keyword_match_with_synonyms,
+};
 
-// ============================================================================
-// Scoring helpers
-// ============================================================================
-
-/// Return `true` if `text` contains `word` as a substring, or contains any
-/// synonym of `word`.  The `synonym_hit` output flag is set to `true` when a
-/// synonym (not the word itself) produced the match — callers can apply the
-/// `SYNONYM_MULTIPLIER` in that case.
-fn text_contains_with_synonyms(text: &str, word: &str) -> (bool, bool) {
-    if text.contains(word) {
-        return (true, false);
-    }
-    for syn in expand_synonyms(word) {
-        if *syn != word && text.contains(*syn) {
-            return (true, true);
-        }
-    }
-    (false, false)
-}
-
-/// Keyword-tag scoring: returns `(score, via_synonym)`.
-///
-/// Tier: `6 + 2N` where N is the number of matched keyword tags.
-#[allow(clippy::cast_precision_loss)]
-fn keyword_tag_score(desc_lower: &str, words: &[&str]) -> (f64, bool) {
-    if !desc_lower.contains("[keywords:") {
-        return (0.0, false);
-    }
-    let exact_kw = count_keyword_matches(desc_lower, words);
-    if exact_kw > 0 {
-        return (6.0 + (exact_kw as f64) * 2.0, false);
-    }
-    let syn_kw = count_keyword_matches_with_synonyms(desc_lower, words);
-    if syn_kw > 0 {
-        (6.0 + (syn_kw as f64) * 2.0, true)
-    } else {
-        (0.0, false)
-    }
-}
-
-/// Text-coverage scoring for multi-word queries: returns `(score, via_synonym)`.
-///
-/// Counts query words found anywhere in `combined` (tool name + description).
-/// Tiers: `10+2N` (all N matched), `3+2M` (M of N partial), `0` (no match).
-#[allow(clippy::cast_precision_loss)]
-fn text_coverage_score(combined: &str, words: &[&str]) -> (f64, bool) {
-    if words.len() <= 1 {
-        return (0.0, false);
-    }
-    let exact_matched = words.iter().filter(|w| combined.contains(**w)).count();
-    if exact_matched == words.len() {
-        return (10.0 + (exact_matched as f64) * 2.0, false);
-    }
-    let syn_matched = words
-        .iter()
-        .filter(|w| text_contains_with_synonyms(combined, w).0)
-        .count();
-    let any_syn = words
-        .iter()
-        .any(|w| text_contains_with_synonyms(combined, w).1);
-    if syn_matched == words.len() {
-        (10.0 + (syn_matched as f64) * 2.0, any_syn)
-    } else if syn_matched > 0 {
-        (3.0 + (syn_matched as f64) * 2.0, any_syn)
-    } else {
-        (0.0, false)
-    }
-}
-
-/// Select the winning `(score, via_synonym)` from the three scoring paths.
-///
-/// Schema scores are never synonym-discounted (field names are exact identifiers).
-fn best_coverage_score(kw: (f64, bool), schema: f64, text: (f64, bool)) -> (f64, bool) {
-    let (kw_best, kw_syn) = if kw.0 >= text.0 { kw } else { text };
-    if schema > kw_best {
-        (schema, false)
-    } else {
-        (kw_best, kw_syn)
-    }
-}
-
-/// Compute text relevance score for a single result against a pre-lowercased query.
-///
-/// `words` must be `query.split_whitespace().collect()` — passed in to avoid
-/// re-splitting for every result in a batch.
-///
-/// Synonym-expanded matches use the same scoring tiers but with a
-/// `SYNONYM_MULTIPLIER` (0.8×) applied to the base text-relevance score before
-/// the usage multiplier is applied.
-fn score_text_relevance(tool: &str, description: &str, query: &str, words: &[&str]) -> f64 {
-    let tool_lower = tool.to_lowercase();
-    let desc_lower = description.to_lowercase();
-
-    // Tier 1: single-word exact name match
-    if tool_lower == query {
-        return 10.0;
-    }
-
-    // Tier 2: all words found in tool name alone
-    if words.len() > 1 {
-        if words.iter().all(|w| tool_lower.contains(w)) {
-            return 15.0;
-        }
-        let syn_all_in_name = words
-            .iter()
-            .all(|w| text_contains_with_synonyms(&tool_lower, w).0);
-        let any_synonym = words
-            .iter()
-            .any(|w| text_contains_with_synonyms(&tool_lower, w).1);
-        if syn_all_in_name && any_synonym {
-            return 15.0 * SYNONYM_MULTIPLIER;
-        }
-    }
-
-    // Coverage tiers: keyword-tag, schema-field, text-coverage — take the best.
-    let combined = format!("{tool_lower} {desc_lower}");
-    let (best, via_syn) = best_coverage_score(
-        keyword_tag_score(&desc_lower, words),
-        schema_field_score(&desc_lower, words),
-        text_coverage_score(&combined, words),
-    );
-    if best > 0.0 {
-        return if via_syn {
-            best * SYNONYM_MULTIPLIER
-        } else {
-            best
-        };
-    }
-
-    // Single-word substring fallbacks (exact, then schema-field, then desc, then synonyms)
-    if tool_lower.contains(query) {
-        return 5.0;
-    }
-    if words.len() == 1 && is_schema_field_match(&desc_lower, query) {
-        return 6.0;
-    }
-    if desc_lower.contains(query) {
-        return 2.0;
-    }
-    if words.len() == 1 {
-        for syn in expand_synonyms(query) {
-            if *syn != query {
-                if tool_lower.contains(syn) {
-                    return 5.0 * SYNONYM_MULTIPLIER;
-                }
-                if desc_lower.contains(syn) {
-                    return 2.0 * SYNONYM_MULTIPLIER;
-                }
-            }
-        }
-    }
-
-    0.0
-}
-
-/// Extract a bracketed tag section from a lowercased description by its prefix.
-///
-/// Returns the content between `[{prefix}:` and the matching `]`, or `None`
-/// if the section is absent.  Used by both keyword and schema tag lookups.
-fn extract_tag_section<'a>(desc_lower: &'a str, prefix: &str) -> Option<&'a str> {
-    let marker = format!("[{prefix}:");
-    let start = desc_lower.find(marker.as_str())?;
-    let after_marker = &desc_lower[start + marker.len()..];
-    let end = after_marker.find(']').unwrap_or(after_marker.len());
-    Some(&after_marker[..end])
-}
-
-/// Check whether `word` appears as a discrete keyword inside the
-/// `[keywords: tag1, tag2, ...]` suffix of a lowercased description.
-/// Also matches against hyphen-split parts (e.g., "entity" matches "entity-discovery").
-fn is_keyword_match(desc_lower: &str, word: &str) -> bool {
-    let Some(section) = extract_tag_section(desc_lower, "keywords") else {
-        return false;
-    };
-    section.split(',').any(|tag| {
-        let tag = tag.trim();
-        tag == word || tag.split('-').any(|part| part == word)
-    })
-}
-
-/// Check whether `word` appears as a token inside the `[schema: ...]` suffix.
-///
-/// Schema tokens are plain lowercase identifiers separated by commas.
-#[must_use]
-pub fn is_schema_field_match(desc_lower: &str, word: &str) -> bool {
-    let Some(section) = extract_tag_section(desc_lower, "schema") else {
-        return false;
-    };
-    section.split(',').any(|token| token.trim() == word)
-}
-
-/// Count how many query words match schema fields in the description.
-fn count_schema_field_matches(desc_lower: &str, words: &[&str]) -> usize {
-    words
-        .iter()
-        .filter(|w| is_schema_field_match(desc_lower, w))
-        .count()
-}
-
-/// Compute the schema-field scoring tier for a query against a description.
-///
-/// Returns `(score, via_synonym=false)` — schema tokens are exact identifiers
-/// so synonym expansion is never applied here.
-///
-/// Tier: `4 + 2N` where N is the count of matched schema fields.
-/// A single match scores 6.0 (above description-substring at 2.0, below
-/// keyword-tag at 8.0). When no schema section is present, returns 0.0.
-#[allow(clippy::cast_precision_loss)]
-fn schema_field_score(desc_lower: &str, words: &[&str]) -> f64 {
-    if !desc_lower.contains("[schema:") {
-        return 0.0;
-    }
-    let n = count_schema_field_matches(desc_lower, words);
-    if n > 0 { 4.0 + (n as f64) * 2.0 } else { 0.0 }
-}
-
-/// Check whether `word` or any of its synonyms appears as a keyword tag in the description.
-fn is_keyword_match_with_synonyms(desc_lower: &str, word: &str) -> bool {
-    if is_keyword_match(desc_lower, word) {
-        return true;
-    }
-    expand_synonyms(word)
-        .iter()
-        .any(|syn| *syn != word && is_keyword_match(desc_lower, syn))
-}
-
-/// Count how many query words match keywords in the description (exact only).
-fn count_keyword_matches(desc_lower: &str, words: &[&str]) -> usize {
-    words
-        .iter()
-        .filter(|w| is_keyword_match(desc_lower, w))
-        .count()
-}
-
-/// Count how many query words match keywords in the description (exact or synonym).
-fn count_keyword_matches_with_synonyms(desc_lower: &str, words: &[&str]) -> usize {
-    words
-        .iter()
-        .filter(|w| is_keyword_match_with_synonyms(desc_lower, w))
-        .count()
-}
-
-/// Search result with relevance score
+/// Search result with relevance score and adaptive ranking metadata.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     /// Server name
@@ -374,6 +32,282 @@ pub struct SearchResult {
     pub description: String,
     /// Relevance score (higher = more relevant)
     pub score: f64,
+    /// Coarse ranking signals used for scoring and explanations.
+    pub signals: RankingSignals,
+    /// Deterministic explanation for inclusion or downgrade.
+    pub explanation: RankingExplanation,
+    /// Exclusion reason when policy prefilters suppress the result.
+    pub exclusion: Option<RankingExclusion>,
+}
+
+impl SearchResult {
+    /// Create a search result with neutral non-relevance signals.
+    #[must_use]
+    pub fn new(
+        server: impl Into<String>,
+        tool: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            server: server.into(),
+            tool: tool.into(),
+            description: description.into(),
+            score: 0.0,
+            signals: RankingSignals::default(),
+            explanation: RankingExplanation {
+                included: true,
+                reasons: Vec::new(),
+            },
+            exclusion: None,
+        }
+    }
+}
+
+/// Coarse ranking signals. Values are clamped to `0.0..=1.0` except
+/// `usage_count`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingSignals {
+    /// Text relevance computed from name, description, keywords, and schema.
+    pub relevance: f64,
+    /// Safety score. `0.0` suppresses the candidate.
+    pub safety: f64,
+    /// Risk-fit score where `1.0` means low risk and `0.0` suppresses the candidate.
+    pub risk: f64,
+    /// Trust score. Very low trust suppresses the candidate.
+    pub trust: f64,
+    /// Grant/authorization fit. `0.0` suppresses the candidate.
+    pub grant: f64,
+    /// Policy fit. `0.0` suppresses the candidate.
+    pub policy_fit: f64,
+    /// Permission fit derived from identity, scope, and grant metadata.
+    pub permission_fit: f64,
+    /// Runtime health score. `0.0` suppresses the candidate.
+    pub runtime_health: f64,
+    /// Cost-efficiency score.
+    pub cost_efficiency: f64,
+    /// Latency score.
+    pub latency: f64,
+    /// Historical success-rate score.
+    pub success_rate: f64,
+    /// Freshness score.
+    pub freshness: f64,
+    /// User preference score.
+    pub user_preference: f64,
+    /// Organization preference score.
+    pub organization_preference: f64,
+    /// Local feedback boost derived from safe usage counters.
+    pub user_feedback: f64,
+    /// Local usage count used to compute feedback.
+    pub usage_count: u64,
+}
+
+impl Default for RankingSignals {
+    fn default() -> Self {
+        Self {
+            relevance: 0.0,
+            safety: 1.0,
+            risk: 1.0,
+            trust: 1.0,
+            grant: 1.0,
+            policy_fit: 1.0,
+            permission_fit: 1.0,
+            runtime_health: 1.0,
+            cost_efficiency: 1.0,
+            latency: 1.0,
+            success_rate: 1.0,
+            freshness: 1.0,
+            user_preference: 1.0,
+            organization_preference: 1.0,
+            user_feedback: 0.0,
+            usage_count: 0,
+        }
+    }
+}
+
+impl RankingSignals {
+    pub(crate) fn from_json(value: &Value) -> Self {
+        let grant = parse_grant_signal(value);
+        Self {
+            safety: parse_safety_signal(value),
+            risk: parse_risk_signal(value),
+            trust: parse_numeric_signal(value, &["trust_score", "trust"], 1.0),
+            grant,
+            policy_fit: parse_policy_fit_signal(value),
+            permission_fit: parse_permission_fit_signal(value, grant),
+            runtime_health: parse_runtime_health_signal(value),
+            cost_efficiency: parse_cost_efficiency_signal(value),
+            latency: parse_latency_signal(value),
+            success_rate: parse_success_rate_signal(value),
+            freshness: parse_numeric_signal(value, &["freshness_score", "freshness"], 1.0),
+            user_preference: parse_numeric_signal(
+                value,
+                &[
+                    "user_preference_score",
+                    "user_preference",
+                    "personal_preference_score",
+                    "personal_preference",
+                ],
+                1.0,
+            ),
+            organization_preference: parse_numeric_signal(
+                value,
+                &[
+                    "organization_preference_score",
+                    "organization_preference",
+                    "org_preference_score",
+                    "org_preference",
+                ],
+                1.0,
+            ),
+            ..Self::default()
+        }
+    }
+
+    fn multiplier(&self) -> f64 {
+        // Relevance remains dominant. Non-text signals gently reorder safe
+        // candidates without letting popularity override a poor intent match.
+        let weighted = (self.safety * 0.16)
+            + (self.risk * 0.12)
+            + (self.trust * 0.12)
+            + (self.policy_fit * 0.12)
+            + (self.permission_fit * 0.12)
+            + (self.grant * 0.08)
+            + (self.runtime_health * 0.08)
+            + (self.success_rate * 0.07)
+            + (self.cost_efficiency * 0.05)
+            + (self.latency * 0.04)
+            + (self.freshness * 0.02)
+            + (self.user_preference * 0.01)
+            + (self.organization_preference * 0.01)
+            + (self.user_feedback.min(1.0) * 0.02);
+        weighted.clamp(0.0, 1.25)
+    }
+}
+
+/// Deterministic ranking explanation emitted with search results.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RankingExplanation {
+    /// Whether the candidate survived policy prefilters.
+    pub included: bool,
+    /// Stable explanation reasons that do not include request payloads.
+    pub reasons: Vec<String>,
+}
+
+/// Suppression category for policy prefilters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RankingExclusion {
+    /// Exclusion kind.
+    pub kind: RankingExclusionKind,
+    /// Stable explanation reason.
+    pub reason: String,
+}
+
+/// Coarse reason a candidate was suppressed before relevance ranking.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RankingExclusionKind {
+    /// Unsafe metadata or risk marker.
+    Unsafe,
+    /// Missing or denied grant.
+    Unauthorized,
+    /// Candidate is denied by policy or license constraints.
+    PolicyDenied,
+    /// Unhealthy or disabled runtime.
+    Unhealthy,
+    /// Trust signal is below the safe threshold.
+    Untrusted,
+}
+
+/// One deterministic offline ranking evaluation case.
+///
+/// The query is consumed only while evaluating the fixture. Reports reference
+/// `id` instead of echoing query text so fixtures can model sensitive prompts
+/// without leaking them through evaluation output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingEvalCase {
+    /// Stable fixture identifier, for example `unsafe_exact_match`.
+    pub id: String,
+    /// Search query used by the fixture.
+    pub query: String,
+    /// Expected top tool after policy prefilters and adaptive ranking.
+    pub expected_top_tool: String,
+    /// Candidate JSON objects accepted by [`json_to_search_result`].
+    pub candidates: Vec<Value>,
+}
+
+/// Per-case offline ranking result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingEvalCaseResult {
+    /// Stable fixture identifier copied from [`RankingEvalCase::id`].
+    pub id: String,
+    /// Expected top tool for the fixture.
+    pub expected_top_tool: String,
+    /// Adaptive ranker top tool after policy prefilters.
+    pub actual_top_tool: Option<String>,
+    /// Text-only baseline top tool before adaptive signals and prefilters.
+    pub baseline_top_tool: Option<String>,
+    /// Whether the adaptive ranker selected the expected top tool.
+    pub top1_hit: bool,
+    /// Whether the text-only baseline selected the expected top tool.
+    pub baseline_top1_hit: bool,
+    /// Number of valid candidates removed by adaptive policy prefilters.
+    pub filtered_candidates: usize,
+    /// Number of malformed candidate objects ignored for this case.
+    pub invalid_candidates: usize,
+}
+
+/// Measurable improvement target surfaced by offline ranking evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingImprovementTarget {
+    /// Stable machine-readable target kind.
+    pub kind: RankingImprovementTargetKind,
+    /// Current measured value.
+    pub current: f64,
+    /// Target value for the next evaluation tranche.
+    pub target: f64,
+    /// Static explanation that does not include query or candidate payloads.
+    pub reason: String,
+}
+
+/// Improvement target categories emitted by offline ranking evaluation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RankingImprovementTargetKind {
+    /// Add more fixture cases before treating the suite as representative.
+    ExpandFixtureCorpus,
+    /// Improve top-1 quality for cases that miss the expected tool.
+    ImproveTop1Quality,
+    /// Add challenger cases where adaptive signals beat text-only ranking.
+    AddChallengerCases,
+    /// Add policy-filter cases for unsafe, unauthorized, unhealthy, or low-trust tools.
+    AddPolicyPrefilterCases,
+}
+
+/// Aggregate offline ranking evaluation report.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RankingEvalReport {
+    /// Number of fixture cases evaluated.
+    pub case_count: usize,
+    /// Number of cases where adaptive ranking selected the expected tool.
+    pub top1_hits: usize,
+    /// Number of cases where the text-only baseline selected the expected tool.
+    pub baseline_top1_hits: usize,
+    /// Cases where adaptive ranking hit and the text-only baseline missed.
+    pub improvements_over_baseline: usize,
+    /// Cases where the text-only baseline hit and adaptive ranking missed.
+    pub regressions_vs_baseline: usize,
+    /// Total valid candidates suppressed by policy prefilters.
+    pub filtered_candidates: usize,
+    /// Total malformed candidate objects ignored.
+    pub invalid_candidates: usize,
+    /// Adaptive top-1 hit rate in `0.0..=1.0`.
+    pub top1_hit_rate: f64,
+    /// Text-only baseline top-1 hit rate in `0.0..=1.0`.
+    pub baseline_top1_hit_rate: f64,
+    /// Per-case results without query payloads.
+    pub cases: Vec<RankingEvalCaseResult>,
+    /// Measurable next improvement targets.
+    pub improvement_targets: Vec<RankingImprovementTarget>,
 }
 
 /// Search ranker with usage-based weighting
@@ -437,6 +371,16 @@ impl SearchRanker {
         let words: Vec<&str> = query_lower.split_whitespace().collect();
 
         for result in &mut results {
+            if let Some(exclusion) = exclusion_for(&result.signals) {
+                result.exclusion = Some(exclusion.clone());
+                result.explanation = RankingExplanation {
+                    included: false,
+                    reasons: vec![exclusion.reason],
+                };
+                result.score = 0.0;
+                continue;
+            }
+
             let text_relevance =
                 score_text_relevance(&result.tool, &result.description, &query_lower, &words);
 
@@ -448,10 +392,15 @@ impl SearchRanker {
                 0.0
             };
 
-            // Multiplicative: usage amplifies relevance, can't promote irrelevant tools
-            result.score = text_relevance * (1.0 + usage_factor);
+            result.signals.relevance = text_relevance;
+            result.signals.usage_count = usage;
+            result.signals.user_feedback = usage_factor;
+
+            result.score = text_relevance * (1.0 + usage_factor) * result.signals.multiplier();
+            result.explanation = explanation_for(result);
         }
 
+        results.retain(|result| result.exclusion.is_none());
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -459,6 +408,40 @@ impl SearchRanker {
         });
 
         results
+    }
+
+    /// Evaluate ranking quality against deterministic offline fixtures.
+    ///
+    /// The comparison baseline is text-only relevance with original-order
+    /// tie-breaking. It intentionally ignores adaptive signals and policy
+    /// prefilters so the report can quantify safety and trust lift.
+    #[must_use]
+    pub fn evaluate_offline(&self, cases: &[RankingEvalCase]) -> RankingEvalReport {
+        let mut report = RankingEvalReport::empty(cases.len());
+
+        for case in cases {
+            let candidates: Vec<SearchResult> = case
+                .candidates
+                .iter()
+                .filter_map(json_to_search_result)
+                .collect();
+            let invalid_candidates = case.candidates.len().saturating_sub(candidates.len());
+            let baseline_top_tool = baseline_top_tool(&candidates, &case.query);
+            let ranked = self.rank(candidates.clone(), &case.query);
+            let actual_top_tool = ranked.first().map(|result| result.tool.clone());
+            let filtered_candidates = candidates.len().saturating_sub(ranked.len());
+
+            let case_result = build_eval_case_result(
+                case,
+                actual_top_tool,
+                baseline_top_tool,
+                filtered_candidates,
+                invalid_candidates,
+            );
+            report.record_case(case_result);
+        }
+
+        report.finish()
     }
 
     /// Save usage counts to JSON file
@@ -513,6 +496,41 @@ impl Default for SearchRanker {
     }
 }
 
+impl RankingEvalReport {
+    fn empty(case_count: usize) -> Self {
+        Self {
+            case_count,
+            top1_hits: 0,
+            baseline_top1_hits: 0,
+            improvements_over_baseline: 0,
+            regressions_vs_baseline: 0,
+            filtered_candidates: 0,
+            invalid_candidates: 0,
+            top1_hit_rate: 0.0,
+            baseline_top1_hit_rate: 0.0,
+            cases: Vec::with_capacity(case_count),
+            improvement_targets: Vec::new(),
+        }
+    }
+
+    fn record_case(&mut self, case: RankingEvalCaseResult) {
+        self.top1_hits += usize::from(case.top1_hit);
+        self.baseline_top1_hits += usize::from(case.baseline_top1_hit);
+        self.improvements_over_baseline += usize::from(case.top1_hit && !case.baseline_top1_hit);
+        self.regressions_vs_baseline += usize::from(!case.top1_hit && case.baseline_top1_hit);
+        self.filtered_candidates += case.filtered_candidates;
+        self.invalid_candidates += case.invalid_candidates;
+        self.cases.push(case);
+    }
+
+    fn finish(mut self) -> Self {
+        self.top1_hit_rate = ratio(self.top1_hits, self.case_count);
+        self.baseline_top1_hit_rate = ratio(self.baseline_top1_hits, self.case_count);
+        self.improvement_targets = improvement_targets_for(&self);
+        self
+    }
+}
+
 /// Usage entry for serialization
 #[derive(Debug, Serialize, Deserialize)]
 struct UsageEntry {
@@ -524,12 +542,431 @@ struct UsageEntry {
 /// Convert a JSON search result to a `SearchResult`
 #[must_use]
 pub fn json_to_search_result(value: &Value) -> Option<SearchResult> {
-    Some(SearchResult {
-        server: value.get("server")?.as_str()?.to_string(),
-        tool: value.get("tool")?.as_str()?.to_string(),
-        description: value.get("description")?.as_str()?.to_string(),
-        score: 0.0,
-    })
+    let mut result = SearchResult::new(
+        value.get("server")?.as_str()?,
+        value.get("tool")?.as_str()?,
+        value.get("description")?.as_str()?,
+    );
+    result.signals = RankingSignals::from_json(value);
+    Some(result)
+}
+
+fn build_eval_case_result(
+    case: &RankingEvalCase,
+    actual_top_tool: Option<String>,
+    baseline_top_tool: Option<String>,
+    filtered_candidates: usize,
+    invalid_candidates: usize,
+) -> RankingEvalCaseResult {
+    let top1_hit = actual_top_tool.as_deref() == Some(case.expected_top_tool.as_str());
+    let baseline_top1_hit = baseline_top_tool.as_deref() == Some(case.expected_top_tool.as_str());
+
+    RankingEvalCaseResult {
+        id: case.id.clone(),
+        expected_top_tool: case.expected_top_tool.clone(),
+        actual_top_tool,
+        baseline_top_tool,
+        top1_hit,
+        baseline_top1_hit,
+        filtered_candidates,
+        invalid_candidates,
+    }
+}
+
+fn baseline_top_tool(candidates: &[SearchResult], query: &str) -> Option<String> {
+    let query_lower = query.to_lowercase();
+    let words: Vec<&str> = query_lower.split_whitespace().collect();
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(index, result)| {
+            (
+                index,
+                result.tool.clone(),
+                score_text_relevance(&result.tool, &result.description, &query_lower, &words),
+            )
+        })
+        .max_by(|left, right| {
+            left.2
+                .partial_cmp(&right.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.0.cmp(&left.0))
+        })
+        .map(|(_, tool, _)| tool)
+}
+
+fn explanation_for(result: &SearchResult) -> RankingExplanation {
+    let mut reasons = Vec::new();
+    if result.signals.relevance > 0.0 {
+        reasons.push("intent_match".to_string());
+    } else {
+        reasons.push("weak_intent_match".to_string());
+    }
+    if result.signals.safety >= 1.0 {
+        reasons.push("safety_ok".to_string());
+    }
+    if result.signals.grant >= 1.0 {
+        reasons.push("grant_ok".to_string());
+    }
+    if result.signals.risk < 0.75 {
+        reasons.push("risk_downgraded".to_string());
+    } else {
+        reasons.push("risk_fit".to_string());
+    }
+    if result.signals.policy_fit < 0.75 {
+        reasons.push("policy_downgraded".to_string());
+    } else {
+        reasons.push("policy_fit".to_string());
+    }
+    if result.signals.permission_fit < 0.75 {
+        reasons.push("permission_downgraded".to_string());
+    } else {
+        reasons.push("permission_fit".to_string());
+    }
+    if result.signals.trust < 0.75 {
+        reasons.push("trust_downgraded".to_string());
+    } else {
+        reasons.push("trust_ok".to_string());
+    }
+    if result.signals.cost_efficiency < 0.75 {
+        reasons.push("cost_downgraded".to_string());
+    } else {
+        reasons.push("cost_fit".to_string());
+    }
+    if result.signals.latency < 0.75 {
+        reasons.push("latency_downgraded".to_string());
+    } else {
+        reasons.push("latency_fit".to_string());
+    }
+    if result.signals.success_rate < 0.75 {
+        reasons.push("success_rate_downgraded".to_string());
+    } else {
+        reasons.push("success_rate_fit".to_string());
+    }
+    if result.signals.user_preference < 0.75 {
+        reasons.push("user_preference_downgraded".to_string());
+    } else {
+        reasons.push("user_preference_fit".to_string());
+    }
+    if result.signals.organization_preference < 0.75 {
+        reasons.push("organization_preference_downgraded".to_string());
+    } else {
+        reasons.push("organization_preference_fit".to_string());
+    }
+    if result.signals.user_feedback > 0.0 {
+        reasons.push("local_feedback_boost".to_string());
+    }
+
+    RankingExplanation {
+        included: true,
+        reasons,
+    }
+}
+
+fn exclusion_for(signals: &RankingSignals) -> Option<RankingExclusion> {
+    if signals.safety <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unsafe,
+            reason: "suppressed_unsafe".to_string(),
+        });
+    }
+    if signals.risk <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unsafe,
+            reason: "suppressed_high_risk".to_string(),
+        });
+    }
+    if signals.grant <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unauthorized,
+            reason: "suppressed_unauthorized".to_string(),
+        });
+    }
+    if signals.permission_fit <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unauthorized,
+            reason: "suppressed_permission_denied".to_string(),
+        });
+    }
+    if signals.policy_fit <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::PolicyDenied,
+            reason: "suppressed_policy".to_string(),
+        });
+    }
+    if signals.runtime_health <= 0.0 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Unhealthy,
+            reason: "suppressed_unhealthy".to_string(),
+        });
+    }
+    if signals.trust < 0.20 {
+        return Some(RankingExclusion {
+            kind: RankingExclusionKind::Untrusted,
+            reason: "suppressed_untrusted".to_string(),
+        });
+    }
+    None
+}
+
+fn parse_numeric_signal(value: &Value, keys: &[&str], default: f64) -> f64 {
+    parse_optional_numeric_signal(value, keys).unwrap_or(default)
+}
+
+fn parse_optional_numeric_signal(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_f64))
+        .map(|score| score.clamp(0.0, 1.0))
+}
+
+fn parse_safety_signal(value: &Value) -> f64 {
+    if value
+        .get("unsafe")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return 0.0;
+    }
+    if value
+        .get("risk_level")
+        .or_else(|| value.get("risk"))
+        .and_then(Value::as_str)
+        .is_some_and(|risk| matches!(risk, "high" | "critical" | "unsafe"))
+    {
+        return 0.0;
+    }
+    parse_numeric_signal(value, &["safety_score", "safety"], 1.0)
+}
+
+fn parse_risk_signal(value: &Value) -> f64 {
+    if let Some(level) = value
+        .get("risk_level")
+        .or_else(|| value.get("risk"))
+        .and_then(Value::as_str)
+    {
+        return match level.to_ascii_lowercase().as_str() {
+            "critical" | "high" | "unsafe" | "blocked" => 0.0,
+            "medium" | "elevated" => 0.65,
+            "low" => 0.9,
+            _ => 1.0,
+        };
+    }
+    if let Some(fit) =
+        parse_optional_numeric_signal(value, &["risk_fit_score", "risk_fit", "risk_safety_score"])
+    {
+        return fit;
+    }
+    if let Some(score) = value.get("risk_score").and_then(Value::as_f64) {
+        // `risk_score` is interpreted as risk severity, where higher means
+        // riskier. `risk_fit` aliases above represent the inverse.
+        return (1.0 - score).clamp(0.0, 1.0);
+    }
+    1.0
+}
+
+fn parse_grant_signal(value: &Value) -> f64 {
+    if value.get("authorized").and_then(Value::as_bool) == Some(false) {
+        return 0.0;
+    }
+    if value
+        .get("grant_status")
+        .or_else(|| value.get("grant"))
+        .and_then(Value::as_str)
+        .is_some_and(|grant| matches!(grant, "denied" | "missing" | "unauthorized"))
+    {
+        return 0.0;
+    }
+    parse_numeric_signal(value, &["grant_score", "grant"], 1.0)
+}
+
+fn parse_permission_fit_signal(value: &Value, grant_default: f64) -> f64 {
+    if value.get("authorized").and_then(Value::as_bool) == Some(false) {
+        return 0.0;
+    }
+    if value
+        .get("permission_status")
+        .or_else(|| value.get("grant_status"))
+        .or_else(|| value.get("permission"))
+        .or_else(|| value.get("grant"))
+        .and_then(Value::as_str)
+        .is_some_and(|grant| matches!(grant, "denied" | "missing" | "unauthorized"))
+    {
+        return 0.0;
+    }
+    parse_optional_numeric_signal(
+        value,
+        &[
+            "permission_fit_score",
+            "permission_fit",
+            "permission_score",
+            "grant_score",
+            "grant",
+        ],
+    )
+    .unwrap_or(grant_default)
+}
+
+fn parse_policy_fit_signal(value: &Value) -> f64 {
+    if value
+        .get("policy_denied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return 0.0;
+    }
+    if let Some(verdict) = value
+        .get("policy_verdict")
+        .or_else(|| value.get("policy_decision"))
+        .or_else(|| value.get("policy"))
+        .and_then(Value::as_str)
+    {
+        return match verdict.to_ascii_lowercase().as_str() {
+            "deny" | "denied" | "block" | "blocked" | "quarantine" | "rejected" => 0.0,
+            "warn" | "warning" | "advisory" | "review" => 0.65,
+            _ => 1.0,
+        };
+    }
+    parse_numeric_signal(
+        value,
+        &[
+            "policy_fit_score",
+            "policy_fit",
+            "policy_score",
+            "license_policy_fit",
+        ],
+        1.0,
+    )
+}
+
+fn parse_runtime_health_signal(value: &Value) -> f64 {
+    if value
+        .get("status")
+        .or_else(|| value.get("runtime_status"))
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "disabled" | "unhealthy" | "down"))
+    {
+        return 0.0;
+    }
+    if value
+        .get("health")
+        .and_then(Value::as_str)
+        .is_some_and(|health| matches!(health, "unhealthy" | "down"))
+    {
+        return 0.0;
+    }
+    parse_numeric_signal(value, &["runtime_health", "health_score"], 1.0)
+}
+
+fn parse_success_rate_signal(value: &Value) -> f64 {
+    if let Some(rate) = parse_optional_numeric_signal(
+        value,
+        &["success_rate", "success_score", "reliability_score"],
+    ) {
+        return rate;
+    }
+    if let Some(percent) = value.get("success_rate_percent").and_then(Value::as_f64) {
+        return (percent / 100.0).clamp(0.0, 1.0);
+    }
+    let successes = value.get("success_count").and_then(Value::as_u64);
+    let failures = value.get("failure_count").and_then(Value::as_u64);
+    if let (Some(successes), Some(failures)) = (successes, failures) {
+        let total = successes.saturating_add(failures);
+        if total > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                return (successes as f64 / total as f64).clamp(0.0, 1.0);
+            }
+        }
+    }
+    1.0
+}
+
+fn parse_cost_efficiency_signal(value: &Value) -> f64 {
+    if let Some(score) = value.get("cost_efficiency").and_then(Value::as_f64) {
+        return score.clamp(0.0, 1.0);
+    }
+    if let Some(category) = value
+        .get("cost_category")
+        .or_else(|| value.get("cost_tier"))
+        .and_then(Value::as_str)
+    {
+        return match category {
+            "free" => 1.0,
+            "low" => 0.85,
+            "medium" => 0.65,
+            "high" => 0.35,
+            _ => 0.75,
+        };
+    }
+    if let Some(cost) = value.get("cost_usd").and_then(Value::as_f64) {
+        return (1.0 / (1.0 + (cost * 100.0))).clamp(0.0, 1.0);
+    }
+    1.0
+}
+
+fn parse_latency_signal(value: &Value) -> f64 {
+    if let Some(score) = value.get("latency_score").and_then(Value::as_f64) {
+        return score.clamp(0.0, 1.0);
+    }
+    if let Some(latency_ms) = value.get("latency_ms").and_then(Value::as_f64) {
+        return (1.0 / (1.0 + (latency_ms / 1000.0))).clamp(0.0, 1.0);
+    }
+    1.0
+}
+
+fn ratio(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            numerator as f64 / denominator as f64
+        }
+    }
+}
+
+fn improvement_targets_for(report: &RankingEvalReport) -> Vec<RankingImprovementTarget> {
+    const MIN_FIXTURE_CASES: usize = 10;
+    let mut targets = Vec::new();
+
+    if report.case_count < MIN_FIXTURE_CASES {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::ExpandFixtureCorpus,
+            current: count_as_metric(report.case_count),
+            target: count_as_metric(MIN_FIXTURE_CASES),
+            reason: "fixture_corpus_below_minimum".to_string(),
+        });
+    }
+    if report.top1_hit_rate < 1.0 {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::ImproveTop1Quality,
+            current: report.top1_hit_rate,
+            target: 1.0,
+            reason: "adaptive_top1_hit_rate_below_target".to_string(),
+        });
+    }
+    if report.improvements_over_baseline == 0 {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::AddChallengerCases,
+            current: 0.0,
+            target: 1.0,
+            reason: "no_fixture_demonstrates_adaptive_lift".to_string(),
+        });
+    }
+    if report.filtered_candidates == 0 {
+        targets.push(RankingImprovementTarget {
+            kind: RankingImprovementTargetKind::AddPolicyPrefilterCases,
+            current: 0.0,
+            target: 1.0,
+            reason: "no_fixture_exercises_policy_prefilters".to_string(),
+        });
+    }
+
+    targets
+}
+
+fn count_as_metric(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use mcp_gateway::{cli::ConnectionMode, config::Config};
 
 use super::{
     ClientSpec, ExportAction, ExportTarget, build_gateway_entry, client_specs, export_one,
-    merge_into_config, resolve_mode,
+    merge_into_config, merge_into_config_with_safety, resolve_mode, rollback_client_config,
 };
 
 fn default_config() -> Config {
@@ -274,4 +274,70 @@ fn merge_creates_parent_directory() {
     // THEN: parent is created and file is written
     assert!(matches!(action, ExportAction::Created));
     assert!(path.exists());
+}
+
+#[test]
+fn safe_merge_existing_file_creates_backup_and_verifies() {
+    // GIVEN: an existing client config with a stale gateway entry
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("client.json");
+    let original = r#"{"mcpServers":{"gateway":{"url":"http://old:1234/mcp"}}}"#;
+    std::fs::write(&path, original).unwrap();
+
+    let entry = json!({"url": "http://127.0.0.1:39400/mcp"});
+
+    // WHEN: applying the safe merge path used by setup export
+    let result = merge_into_config_with_safety(&path, "mcpServers", "gateway", &entry).unwrap();
+
+    // THEN: it updates, keeps a byte-for-byte backup, and verifies the write
+    assert!(matches!(result.action, ExportAction::Updated));
+    assert!(result.verified);
+    let backup_path = result
+        .backup_path
+        .expect("existing config must be backed up");
+    assert_eq!(std::fs::read_to_string(&backup_path).unwrap(), original);
+
+    let parsed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        parsed["mcpServers"]["gateway"]["url"],
+        "http://127.0.0.1:39400/mcp"
+    );
+}
+
+#[test]
+fn safe_merge_new_file_verifies_without_backup() {
+    // GIVEN: no existing client config
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("client.json");
+    let entry = json!({"url": "http://127.0.0.1:39400/mcp"});
+
+    // WHEN: applying the safe merge path
+    let result = merge_into_config_with_safety(&path, "mcpServers", "gateway", &entry).unwrap();
+
+    // THEN: new files are verified and do not create pointless backups
+    assert!(matches!(result.action, ExportAction::Created));
+    assert!(result.verified);
+    assert!(result.backup_path.is_none());
+}
+
+#[test]
+fn rollback_restores_backup_to_original_config_path() {
+    // GIVEN: a safe merge backup and a modified original
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("client.json");
+    let original = r#"{"mcpServers":{"gateway":{"url":"http://old:1234/mcp"}}}"#;
+    std::fs::write(&path, original).unwrap();
+
+    let entry = json!({"url": "http://127.0.0.1:39400/mcp"});
+    let backup_path = merge_into_config_with_safety(&path, "mcpServers", "gateway", &entry)
+        .unwrap()
+        .backup_path
+        .expect("existing config must be backed up");
+
+    // WHEN: rolling back from that backup
+    let restored = rollback_client_config(&backup_path).unwrap();
+
+    // THEN: the original client config content is restored
+    assert_eq!(restored, path);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 }

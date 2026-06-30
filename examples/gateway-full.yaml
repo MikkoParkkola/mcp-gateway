@@ -161,6 +161,14 @@ capabilities:
 #         action: Warn
 #         scan: [Credentials, SqlInjection]
 
+# --- Context Integrity (tool-result boundary protection) ---
+
+# security:
+#   context_integrity:
+#     # monitor_only is the default safe rollout. Use team_shared to enforce the
+#     # free/core shared-team baseline. enterprise_strict is enterprise scope.
+#     preset: monitor_only          # monitor_only, local_developer, team_shared, audit_only, enterprise_strict
+
 # --- Config Export (RFC-0070) ---
 
 # config_export:

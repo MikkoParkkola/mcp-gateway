@@ -24,6 +24,7 @@ use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::config::SurfacedToolConfig;
 use crate::config_reload::ReloadContext;
+use crate::context_integrity::ContextIntegrityKernel;
 use crate::cost_accounting::CostTracker;
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::enforcer::BudgetEnforcer;
@@ -31,17 +32,20 @@ use crate::cost_accounting::enforcer::BudgetEnforcer;
 use crate::cost_accounting::registry::CostRegistry;
 use crate::gateway::state::SessionStateStore;
 use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
+use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
-use crate::protocol::{
-    JsonRpcResponse, LoggingLevel, RequestId, ToolsListResult, negotiate_version,
-};
+use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
 use crate::stats::UsageStats;
 use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
+use crate::trust::{
+    project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
+    tools_list_result_with_trust_cards,
+};
 use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
@@ -73,6 +77,37 @@ pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerpri
 /// Configurable in future; hard-coded for Phase 3 initial implementation.
 #[cfg(feature = "spec-preview")]
 const MAX_PROMOTED_PER_SESSION: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CallerIdentityHeaderTrust {
+    Disabled,
+    Enabled,
+}
+
+impl CallerIdentityHeaderTrust {
+    const fn from_enabled(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+
+    pub(super) const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+/// Authenticated caller context for a `tools/call` dispatch.
+#[derive(Debug, Clone, Default)]
+pub struct MetaMcpCallerContext<'a> {
+    /// Static or temporary API-key name, used for accounting and fallback grants.
+    pub api_key_name: Option<&'a str>,
+    /// Optional caller agent identifier.
+    pub agent_id: Option<&'a str>,
+    /// Verified caller subject for identity-grant evaluation.
+    pub grant_subject: Option<GrantSubject>,
+}
 
 // ============================================================================
 // MetaMcp struct
@@ -202,6 +237,25 @@ pub struct MetaMcp {
     /// calls whose token is missing or invalid with JSON-RPC -32002. Ignored
     /// when `attestation_validator` is `None`.
     pub(super) attestation_mode: crate::attestation::AttestationMode,
+
+    /// Local identity grant evaluator for personal capability dispatch.
+    ///
+    /// Empty by default. Public and shared tools still evaluate as allowed, but
+    /// capabilities marked `personal` fail closed without matching caller,
+    /// owner, and live grant evidence.
+    pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
+
+    /// Trust caller identity headers from an authenticated edge proxy.
+    ///
+    /// Disabled by default because direct clients can otherwise spoof headers.
+    pub(super) caller_identity_header_trust: CallerIdentityHeaderTrust,
+
+    /// Tool-result boundary classifier and policy envelope.
+    ///
+    /// Defaults to monitor-only. Clean benign results are returned unchanged;
+    /// suspicious results receive `_context_integrity` audit metadata before
+    /// response caching, idempotency completion, signing, and delivery.
+    pub(super) context_integrity_kernel: RwLock<ContextIntegrityKernel>,
 }
 
 // ============================================================================
@@ -256,6 +310,9 @@ impl MetaMcp {
             response_contract: None,
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
+            identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
+            context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
         }
     }
 
@@ -356,6 +413,27 @@ impl MetaMcp {
         self
     }
 
+    /// Attach a local identity grant store for personal capability dispatch.
+    #[must_use]
+    pub fn with_identity_grants(mut self, grants: LocalIdentityGrantStore) -> Self {
+        self.identity_grants = RwLock::new(grants);
+        self
+    }
+
+    /// Enable or disable trusted caller identity headers.
+    #[must_use]
+    pub fn with_trusted_identity_headers(mut self, enabled: bool) -> Self {
+        self.caller_identity_header_trust = CallerIdentityHeaderTrust::from_enabled(enabled);
+        self
+    }
+
+    /// Attach a context integrity kernel for live tool-result wrapping.
+    #[must_use]
+    pub fn with_context_integrity_kernel(mut self, kernel: ContextIntegrityKernel) -> Self {
+        self.context_integrity_kernel = RwLock::new(kernel);
+        self
+    }
+
     /// Attach a secret injector for credential brokering.
     #[must_use]
     pub fn with_secret_injector(
@@ -435,6 +513,29 @@ impl MetaMcp {
     /// Set the capability backend.
     pub fn set_capabilities(&self, capabilities: Arc<CapabilityBackend>) {
         *self.capabilities.write() = Some(capabilities);
+    }
+
+    /// Replace the local identity grant store.
+    pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
+        *self.identity_grants.write() = grants;
+    }
+
+    /// Snapshot all identity-grant rows for read-only projection (e.g. the
+    /// control-plane inventory). Returns owned clones so the lock is not held.
+    #[must_use]
+    pub fn identity_grant_rows(&self) -> Vec<crate::identity_grants::IdentityGrant> {
+        self.identity_grants.read().values().cloned().collect()
+    }
+
+    /// Return whether trusted caller identity headers are enabled.
+    #[must_use]
+    pub const fn trust_caller_identity_headers(&self) -> bool {
+        self.caller_identity_header_trust.is_enabled()
+    }
+
+    /// Replace the context integrity kernel.
+    pub fn set_context_integrity_kernel(&self, kernel: ContextIntegrityKernel) {
+        *self.context_integrity_kernel.write() = kernel;
     }
 
     /// Attach a [`ToolRegistry`] for O(1) tool schema resolution (consuming builder).
@@ -677,7 +778,7 @@ impl MetaMcp {
         id: RequestId,
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
-        let mut tools = if self.code_mode_enabled {
+        let tools = if self.code_mode_enabled {
             build_code_mode_tools()
         } else {
             let (tool_count, server_count) = self.backend_counts();
@@ -690,12 +791,23 @@ impl MetaMcp {
                 server_count,
             )
         };
+        let mut tool_descriptors =
+            project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
 
         // Append surfaced tools (skip in Code Mode — it uses a fixed 2-tool schema).
         if !self.code_mode_enabled {
             for surfaced in &self.surfaced_tools {
                 if let Some(tool) = self.resolve_surfaced_tool(surfaced, session_id) {
-                    tools.push(tool);
+                    let server_id = if self.backends.get(&surfaced.server).is_some() {
+                        format!("backend:{}", surfaced.server)
+                    } else {
+                        format!("capability:{}", surfaced.server)
+                    };
+                    tool_descriptors.push(project_tool_descriptor_trust_card(
+                        server_id,
+                        &surfaced.server,
+                        &tool,
+                    ));
                 }
             }
         }
@@ -707,18 +819,20 @@ impl MetaMcp {
         if !self.code_mode_enabled {
             let promoted = self.promoted_tools_for_session(session_id);
             for tool in promoted {
-                let already_present = tools.iter().any(|t| t.name == tool.name);
+                let already_present = tool_descriptors
+                    .iter()
+                    .any(|t| t.get("name").and_then(Value::as_str) == Some(tool.name.as_str()));
                 if !already_present {
-                    tools.push(tool);
+                    tool_descriptors.push(project_tool_descriptor_trust_card(
+                        "gateway:promoted",
+                        "mcp-gateway",
+                        &tool,
+                    ));
                 }
             }
         }
 
-        let result = ToolsListResult {
-            tools,
-            next_cursor: None,
-        };
-        JsonRpcResponse::success_serialized(id, result)
+        JsonRpcResponse::success(id, tools_list_result_with_trust_cards(tool_descriptors))
     }
 
     /// Dispatch the `tools/list` request with optional params — entry point for the router.
@@ -760,11 +874,13 @@ impl MetaMcp {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
             // URL-activated Code Mode: return the two fixed tools directly.
-            let result = ToolsListResult {
-                tools: build_code_mode_tools(),
-                next_cursor: None,
-            };
-            return JsonRpcResponse::success_serialized(id, result);
+            let tools = build_code_mode_tools();
+            let tool_descriptors =
+                project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
+            return JsonRpcResponse::success(
+                id,
+                tools_list_result_with_trust_cards(tool_descriptors),
+            );
         }
         // No override (or static config already handles it): follow normal path.
         self.handle_tools_list_with_params(id, params, session_id)
@@ -784,8 +900,7 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         session_id: Option<&str>,
-        api_key_name: Option<&str>,
-        agent_id: Option<&str>,
+        caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
         if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
@@ -795,7 +910,13 @@ impl MetaMcp {
                 "arguments": arguments,
             });
             let result = self
-                .invoke_tool(&invoke_args, session_id, api_key_name, agent_id)
+                .invoke_tool(
+                    &invoke_args,
+                    session_id,
+                    caller.api_key_name,
+                    caller.agent_id,
+                    caller.grant_subject.clone(),
+                )
                 .await;
             return match result {
                 // `invoke_tool` already returns a complete MCP tools/call result
@@ -818,8 +939,14 @@ impl MetaMcp {
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
             "gateway_invoke" => {
-                self.invoke_tool(&arguments, session_id, api_key_name, agent_id)
-                    .await
+                self.invoke_tool(
+                    &arguments,
+                    session_id,
+                    caller.api_key_name,
+                    caller.agent_id,
+                    caller.grant_subject,
+                )
+                .await
             }
             "gateway_get_stats" => self.get_stats(&arguments).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id).await,

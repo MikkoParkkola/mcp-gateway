@@ -1,0 +1,1176 @@
+//! `CatalogTrustLab` evaluation and certification schema.
+//!
+//! The lab is an advisory evaluator for candidate MCP servers. It combines
+//! TrustCard/CBOM validation, existing MCP tool-poisoning checks, schema-drift
+//! comparison, policy thresholds, and safe active-eval planning into one
+//! versioned evidence record.
+
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    hashing::canonical_json_sha256,
+    protocol::Tool,
+    runtime::{
+        RuntimeDenyReason, RuntimeLicenseTier, RuntimePlan, RuntimeProviderKind,
+        RuntimeProviderSelection,
+    },
+    trust::{CbomComponentKind, TrustCard, TrustEvidenceKind, TrustFinding, TrustFindingSeverity},
+    validator::{Rule, ToolPoisoningRule},
+};
+
+mod analysis;
+
+use analysis::{
+    annotation_findings, canonical_struct_sha256, evidence_from_findings,
+    findings_from_tool_poisoning_result, lab_finding, remediation_plan_from_findings,
+    risk_findings, scanner_status_from_severity, schema_drift_findings, score_findings,
+};
+
+/// Stable `TrustLab` evaluation schema version.
+pub const TRUST_LAB_SCHEMA_VERSION: &str = "trust_lab.v1";
+
+/// Existing scanner adapter id for AX-010 tool-poisoning checks.
+pub const TRUST_LAB_TOOL_POISONING_SCANNER: &str = "mcp-gateway.ax010.tool_poisoning";
+
+/// Scanner adapter id for isolated active fixture execution evidence.
+pub const TRUST_LAB_ACTIVE_FIXTURE_SCANNER: &str = "mcp-gateway.active_fixture_runtime";
+
+/// `CatalogTrustLab` evaluator with a policy threshold.
+#[derive(Debug, Clone)]
+pub struct CatalogTrustLab {
+    policy: TrustLabPolicy,
+}
+
+impl CatalogTrustLab {
+    /// Create a lab from a policy.
+    #[must_use]
+    pub const fn new(policy: TrustLabPolicy) -> Self {
+        Self { policy }
+    }
+
+    /// Return the policy used by this lab.
+    #[must_use]
+    pub const fn policy(&self) -> &TrustLabPolicy {
+        &self.policy
+    }
+
+    /// Evaluate a `TrustCard` with the current clock and no baseline.
+    #[must_use]
+    pub fn evaluate_card(&self, card: &TrustCard) -> TrustLabEvaluation {
+        self.evaluate_card_with_baseline_at(card, None, Utc::now())
+    }
+
+    /// Evaluate a `TrustCard` at a specific time and optional baseline.
+    #[must_use]
+    pub fn evaluate_card_with_baseline_at(
+        &self,
+        card: &TrustCard,
+        baseline: Option<&TrustLabBaseline>,
+        evaluated_at: DateTime<Utc>,
+    ) -> TrustLabEvaluation {
+        let validated_card = card.clone().with_validation();
+        let mut findings = validated_card.findings.clone();
+        let mut scanners = vec![TrustLabScannerEvidence::from_findings(
+            "mcp-gateway.trust_card_validator",
+            "TrustCard validator",
+            "1",
+            &validated_card.findings,
+        )];
+
+        findings.extend(risk_findings(&validated_card));
+
+        if let Some(baseline) = baseline {
+            let drift_findings = schema_drift_findings(&validated_card, baseline);
+            scanners.push(TrustLabScannerEvidence::from_findings(
+                "mcp-gateway.schema_drift",
+                "Schema drift detector",
+                "1",
+                &drift_findings,
+            ));
+            findings.extend(drift_findings);
+        }
+
+        let runtime = TrustLabRuntimeEvidence::static_advisory();
+        let score = score_findings(&findings);
+        let policy_verdict = self.policy.verdict(score, &findings);
+        let remediation_plan = remediation_plan_from_findings(&findings, policy_verdict);
+        let certification = TrustLabCertification::new(
+            &validated_card,
+            &self.policy,
+            score,
+            policy_verdict,
+            evaluated_at,
+        );
+
+        TrustLabEvaluation {
+            schema_version: TRUST_LAB_SCHEMA_VERSION.to_string(),
+            evaluated_at,
+            input: TrustLabInput::from_card(&validated_card, baseline),
+            runtime,
+            scanners,
+            evidence: evidence_from_findings(&findings),
+            findings,
+            score,
+            policy_verdict,
+            remediation_plan,
+            certification,
+        }
+    }
+
+    /// Evaluate a `TrustCard` and attach active runtime fixture evidence.
+    #[must_use]
+    pub fn evaluate_card_with_runtime_at(
+        &self,
+        card: &TrustCard,
+        baseline: Option<&TrustLabBaseline>,
+        evaluated_at: DateTime<Utc>,
+        runtime: TrustLabRuntimeEvidence,
+    ) -> TrustLabEvaluation {
+        let validated_card = card.clone().with_validation();
+        let mut evaluation =
+            self.evaluate_card_with_baseline_at(&validated_card, baseline, evaluated_at);
+        self.attach_runtime_evidence(&mut evaluation, &validated_card, runtime, evaluated_at);
+        evaluation
+    }
+
+    /// Evaluate one protocol tool through `TrustCard` plus scanner adapters.
+    #[must_use]
+    pub fn evaluate_tool_at(
+        &self,
+        server_name: impl Into<String>,
+        tool: &Tool,
+        baseline: Option<&TrustLabBaseline>,
+        evaluated_at: DateTime<Utc>,
+    ) -> TrustLabEvaluation {
+        let card = TrustCard::from_tool(server_name, tool);
+        let mut evaluation = self.evaluate_card_with_baseline_at(&card, baseline, evaluated_at);
+
+        let mut tool_findings = annotation_findings(tool);
+        let scanner_result = ToolPoisoningRule.check(tool);
+        match scanner_result {
+            Ok(result) => {
+                tool_findings.extend(findings_from_tool_poisoning_result(&result));
+                evaluation.scanners.push(TrustLabScannerEvidence {
+                    scanner_id: TRUST_LAB_TOOL_POISONING_SCANNER.to_string(),
+                    name: "AX-010 Tool Poisoning Detection".to_string(),
+                    version: "1".to_string(),
+                    status: scanner_status_from_severity(result.severity),
+                    score: scanner_score_percent(result.score),
+                    findings_count: result.issues.len(),
+                });
+            }
+            Err(err) => {
+                tool_findings.push(lab_finding(
+                    "TRUSTLAB_SCANNER_ERROR",
+                    TrustFindingSeverity::Warn,
+                    "scanner.ax010",
+                    format!("Tool-poisoning scanner did not complete: {err}"),
+                    "Rerun the evaluation and inspect the tool descriptor manually.",
+                    TrustEvidenceKind::Observed,
+                ));
+                evaluation.scanners.push(TrustLabScannerEvidence {
+                    scanner_id: TRUST_LAB_TOOL_POISONING_SCANNER.to_string(),
+                    name: "AX-010 Tool Poisoning Detection".to_string(),
+                    version: "1".to_string(),
+                    status: TrustLabScannerStatus::Warn,
+                    score: 60,
+                    findings_count: 1,
+                });
+            }
+        }
+
+        evaluation
+            .evidence
+            .extend(evidence_from_findings(&tool_findings));
+        evaluation.findings.extend(tool_findings);
+        evaluation.score = score_findings(&evaluation.findings);
+        evaluation.policy_verdict = self.policy.verdict(evaluation.score, &evaluation.findings);
+        evaluation.remediation_plan =
+            remediation_plan_from_findings(&evaluation.findings, evaluation.policy_verdict);
+        evaluation.certification = TrustLabCertification::new(
+            &card.with_validation(),
+            &self.policy,
+            evaluation.score,
+            evaluation.policy_verdict,
+            evaluated_at,
+        );
+        evaluation
+    }
+
+    /// Produce an active-eval plan that can only invoke declared-safe fixtures.
+    #[must_use]
+    pub fn plan_active_fixture_calls(
+        fixtures: &[TrustLabFixtureCall],
+    ) -> Vec<TrustLabFixtureCallReport> {
+        fixtures
+            .iter()
+            .map(|fixture| {
+                let arguments_digest_sha256 = canonical_json_sha256(&fixture.arguments);
+                TrustLabFixtureCallReport {
+                    tool_name: fixture.tool_name.clone(),
+                    arguments_digest_sha256,
+                    declared_safe: fixture.declared_safe,
+                    invoked: fixture.declared_safe,
+                    status: if fixture.declared_safe {
+                        TrustLabFixtureCallStatus::Planned
+                    } else {
+                        TrustLabFixtureCallStatus::Skipped
+                    },
+                    result_digest_sha256: None,
+                    error: None,
+                    skipped_reason: if fixture.declared_safe {
+                        None
+                    } else {
+                        Some("fixture was not explicitly declared safe".to_string())
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Execute declared-safe fixture calls through an isolated runner.
+    ///
+    /// This method deliberately refuses to invoke fixtures unless both
+    /// conditions are true: the fixture is explicitly declared safe and the
+    /// caller reports an isolated runtime. The actual runner is injected so
+    /// CLI, tests, and future `RuntimeProvider` integration can share the same
+    /// fail-closed evidence model.
+    #[must_use]
+    pub fn run_active_fixture_calls<F>(
+        provider: impl Into<String>,
+        isolated: bool,
+        fixtures: &[TrustLabFixtureCall],
+        mut runner: F,
+    ) -> TrustLabRuntimeEvidence
+    where
+        F: FnMut(&TrustLabFixtureCall) -> TrustLabFixtureExecution,
+    {
+        let fixture_calls = fixtures
+            .iter()
+            .map(|fixture| {
+                let arguments_digest_sha256 = canonical_json_sha256(&fixture.arguments);
+                if !fixture.declared_safe {
+                    return TrustLabFixtureCallReport {
+                        tool_name: fixture.tool_name.clone(),
+                        arguments_digest_sha256,
+                        declared_safe: false,
+                        invoked: false,
+                        status: TrustLabFixtureCallStatus::Skipped,
+                        result_digest_sha256: None,
+                        error: None,
+                        skipped_reason: Some(
+                            "fixture was not explicitly declared safe".to_string(),
+                        ),
+                    };
+                }
+
+                if !isolated {
+                    return TrustLabFixtureCallReport {
+                        tool_name: fixture.tool_name.clone(),
+                        arguments_digest_sha256,
+                        declared_safe: true,
+                        invoked: false,
+                        status: TrustLabFixtureCallStatus::Skipped,
+                        result_digest_sha256: None,
+                        error: None,
+                        skipped_reason: Some("runtime isolation was not enabled".to_string()),
+                    };
+                }
+
+                let execution = runner(fixture);
+                TrustLabFixtureCallReport {
+                    tool_name: fixture.tool_name.clone(),
+                    arguments_digest_sha256,
+                    declared_safe: true,
+                    invoked: true,
+                    status: if execution.passed {
+                        TrustLabFixtureCallStatus::Passed
+                    } else {
+                        TrustLabFixtureCallStatus::Failed
+                    },
+                    result_digest_sha256: execution.output.as_ref().map(canonical_json_sha256),
+                    error: execution.error,
+                    skipped_reason: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let active_eval = fixture_calls.iter().any(|report| report.invoked);
+        let safe_fixture_only = fixture_calls.iter().all(|report| report.declared_safe);
+
+        TrustLabRuntimeEvidence {
+            provider: provider.into(),
+            isolated,
+            active_eval,
+            safe_fixture_only,
+            fixture_calls,
+            runtime_provider_plan: None,
+        }
+    }
+
+    /// Attach a dry-run active fixture plan without invoking a candidate server.
+    ///
+    /// This is intended for CLI and CI evidence before a live `RuntimeProvider`
+    /// runner is available. It proves the fixture set and fail-closed
+    /// eligibility decisions, but keeps the evaluation provisional through a
+    /// warning finding until a real isolated runner executes the calls.
+    #[must_use]
+    pub fn dry_run_active_fixture_calls(
+        provider: impl Into<String>,
+        isolated: bool,
+        fixtures: &[TrustLabFixtureCall],
+    ) -> TrustLabRuntimeEvidence {
+        let fixture_calls = fixtures
+            .iter()
+            .map(|fixture| {
+                let arguments_digest_sha256 = canonical_json_sha256(&fixture.arguments);
+                if !fixture.declared_safe {
+                    return TrustLabFixtureCallReport {
+                        tool_name: fixture.tool_name.clone(),
+                        arguments_digest_sha256,
+                        declared_safe: false,
+                        invoked: false,
+                        status: TrustLabFixtureCallStatus::Skipped,
+                        result_digest_sha256: None,
+                        error: None,
+                        skipped_reason: Some(
+                            "fixture was not explicitly declared safe".to_string(),
+                        ),
+                    };
+                }
+
+                if !isolated {
+                    return TrustLabFixtureCallReport {
+                        tool_name: fixture.tool_name.clone(),
+                        arguments_digest_sha256,
+                        declared_safe: true,
+                        invoked: false,
+                        status: TrustLabFixtureCallStatus::Skipped,
+                        result_digest_sha256: None,
+                        error: None,
+                        skipped_reason: Some("runtime isolation was not enabled".to_string()),
+                    };
+                }
+
+                TrustLabFixtureCallReport {
+                    tool_name: fixture.tool_name.clone(),
+                    arguments_digest_sha256,
+                    declared_safe: true,
+                    invoked: false,
+                    status: TrustLabFixtureCallStatus::DryRun,
+                    result_digest_sha256: None,
+                    error: None,
+                    skipped_reason: Some(
+                        "dry-run evidence only; fixture was not invoked".to_string(),
+                    ),
+                }
+            })
+            .collect::<Vec<_>>();
+        let active_eval = false;
+        let safe_fixture_only = fixture_calls.iter().all(|report| report.declared_safe);
+
+        TrustLabRuntimeEvidence {
+            provider: provider.into(),
+            isolated,
+            active_eval,
+            safe_fixture_only,
+            fixture_calls,
+            runtime_provider_plan: None,
+        }
+    }
+
+    fn attach_runtime_evidence(
+        &self,
+        evaluation: &mut TrustLabEvaluation,
+        card: &TrustCard,
+        runtime: TrustLabRuntimeEvidence,
+        evaluated_at: DateTime<Utc>,
+    ) {
+        let runtime_findings = runtime_findings(&runtime);
+        if !runtime.fixture_calls.is_empty() {
+            evaluation
+                .scanners
+                .push(TrustLabScannerEvidence::from_findings(
+                    TRUST_LAB_ACTIVE_FIXTURE_SCANNER,
+                    "Active fixture runtime",
+                    "1",
+                    &runtime_findings,
+                ));
+        }
+        evaluation
+            .evidence
+            .extend(evidence_from_findings(&runtime_findings));
+        evaluation.findings.extend(runtime_findings);
+        evaluation.runtime = runtime;
+        evaluation.score = score_findings(&evaluation.findings);
+        evaluation.policy_verdict = self.policy.verdict(evaluation.score, &evaluation.findings);
+        evaluation.remediation_plan =
+            remediation_plan_from_findings(&evaluation.findings, evaluation.policy_verdict);
+        evaluation.certification = TrustLabCertification::new(
+            card,
+            &self.policy,
+            evaluation.score,
+            evaluation.policy_verdict,
+            evaluated_at,
+        );
+    }
+}
+
+fn scanner_score_percent(score: f64) -> u8 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (score.clamp(0.0, 1.0) * 100.0).round() as u8
+    }
+}
+
+impl Default for CatalogTrustLab {
+    fn default() -> Self {
+        Self::new(TrustLabPolicy::default())
+    }
+}
+
+/// Policy profile for the evaluation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabProfile {
+    /// Free/core one-shot local evaluation.
+    LocalOneShot,
+    /// Enterprise continuous evaluation and evidence export.
+    EnterpriseContinuous,
+}
+
+/// License tier associated with the evaluation feature surface.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabLicenseTier {
+    /// Free/core local evaluation.
+    FreeCore,
+    /// Enterprise continuous governance.
+    Enterprise,
+}
+
+/// Policy for converting score and findings into an enablement verdict.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabPolicy {
+    /// Local or enterprise evaluation profile.
+    pub profile: TrustLabProfile,
+    /// Minimum score for policy allow.
+    pub minimum_score: u8,
+    /// Minimum score for certification.
+    pub certification_score: u8,
+    /// Block when any failing finding exists.
+    pub fail_on_blocking_findings: bool,
+    /// Advisory mode records would-block evidence without blocking.
+    pub advisory_only: bool,
+}
+
+impl TrustLabPolicy {
+    /// Return the license tier for this policy profile.
+    #[must_use]
+    pub const fn license_tier(&self) -> TrustLabLicenseTier {
+        match self.profile {
+            TrustLabProfile::LocalOneShot => TrustLabLicenseTier::FreeCore,
+            TrustLabProfile::EnterpriseContinuous => TrustLabLicenseTier::Enterprise,
+        }
+    }
+
+    fn verdict(&self, score: u8, findings: &[TrustFinding]) -> TrustLabPolicyVerdict {
+        let has_blocking = findings
+            .iter()
+            .any(|finding| finding.severity == TrustFindingSeverity::Fail);
+        let would_block =
+            score < self.minimum_score || (self.fail_on_blocking_findings && has_blocking);
+
+        if self.advisory_only && would_block {
+            TrustLabPolicyVerdict::Advisory
+        } else if would_block {
+            TrustLabPolicyVerdict::Block
+        } else if findings
+            .iter()
+            .any(|finding| finding.severity == TrustFindingSeverity::Warn)
+        {
+            TrustLabPolicyVerdict::Warn
+        } else {
+            TrustLabPolicyVerdict::Allow
+        }
+    }
+}
+
+impl Default for TrustLabPolicy {
+    fn default() -> Self {
+        Self {
+            profile: TrustLabProfile::LocalOneShot,
+            minimum_score: 75,
+            certification_score: 90,
+            fail_on_blocking_findings: true,
+            advisory_only: true,
+        }
+    }
+}
+
+/// Baseline schema digests used for drift detection.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabBaseline {
+    /// Stable baseline identifier.
+    pub baseline_id: String,
+    /// Expected tool schema digest by CBOM component name.
+    #[serde(default)]
+    pub tool_schema_digests: BTreeMap<String, String>,
+}
+
+impl TrustLabBaseline {
+    /// Build a baseline from a `TrustCard`'s current tool digests.
+    #[must_use]
+    pub fn from_card(baseline_id: impl Into<String>, card: &TrustCard) -> Self {
+        let tool_schema_digests = card
+            .cbom
+            .components
+            .iter()
+            .filter(|component| component.kind == CbomComponentKind::Tool)
+            .filter_map(|component| {
+                component
+                    .digest_sha256
+                    .as_ref()
+                    .map(|digest| (component.name.clone(), digest.clone()))
+            })
+            .collect();
+
+        Self {
+            baseline_id: baseline_id.into(),
+            tool_schema_digests,
+        }
+    }
+}
+
+/// Inputs recorded in every `TrustLab` evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabInput {
+    /// `TrustCard` schema version.
+    pub trust_card_schema_version: String,
+    /// Digest of the validated `TrustCard`.
+    pub trust_card_digest_sha256: String,
+    /// Digest of the CBOM section.
+    pub cbom_digest_sha256: String,
+    /// Candidate server name.
+    pub server_name: String,
+    /// Number of tool components evaluated.
+    pub tool_count: usize,
+    /// Optional baseline id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_id: Option<String>,
+    /// Optional baseline digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_digest_sha256: Option<String>,
+}
+
+impl TrustLabInput {
+    fn from_card(card: &TrustCard, baseline: Option<&TrustLabBaseline>) -> Self {
+        Self {
+            trust_card_schema_version: card.schema_version.clone(),
+            trust_card_digest_sha256: canonical_struct_sha256(card),
+            cbom_digest_sha256: canonical_struct_sha256(&card.cbom),
+            server_name: card.server.name.clone(),
+            tool_count: card
+                .cbom
+                .components
+                .iter()
+                .filter(|component| component.kind == CbomComponentKind::Tool)
+                .count(),
+            baseline_id: baseline.map(|baseline| baseline.baseline_id.clone()),
+            baseline_digest_sha256: baseline.map(canonical_struct_sha256),
+        }
+    }
+}
+
+/// Scanner status inside the `TrustLab` evidence record.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabScannerStatus {
+    /// Scanner passed.
+    Pass,
+    /// Scanner produced warnings.
+    Warn,
+    /// Scanner produced failing findings.
+    Fail,
+    /// Scanner was skipped.
+    Skipped,
+}
+
+/// Evidence for one scanner run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabScannerEvidence {
+    /// Stable scanner identifier.
+    pub scanner_id: String,
+    /// Human-readable scanner name.
+    pub name: String,
+    /// Scanner adapter version.
+    pub version: String,
+    /// Scanner status.
+    pub status: TrustLabScannerStatus,
+    /// Scanner score from 0 to 100.
+    pub score: u8,
+    /// Number of findings emitted.
+    pub findings_count: usize,
+}
+
+impl TrustLabScannerEvidence {
+    fn from_findings(
+        scanner_id: &str,
+        name: &str,
+        version: &str,
+        findings: &[TrustFinding],
+    ) -> Self {
+        let status = if findings
+            .iter()
+            .any(|finding| finding.severity == TrustFindingSeverity::Fail)
+        {
+            TrustLabScannerStatus::Fail
+        } else if findings
+            .iter()
+            .any(|finding| finding.severity == TrustFindingSeverity::Warn)
+        {
+            TrustLabScannerStatus::Warn
+        } else {
+            TrustLabScannerStatus::Pass
+        };
+
+        Self {
+            scanner_id: scanner_id.to_string(),
+            name: name.to_string(),
+            version: version.to_string(),
+            status,
+            score: score_findings(findings),
+            findings_count: findings.len(),
+        }
+    }
+}
+
+/// Runtime evidence captured for the evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabRuntimeEvidence {
+    /// Runtime provider identifier.
+    pub provider: String,
+    /// Whether runtime isolation was used or the run was static-only.
+    pub isolated: bool,
+    /// Whether active fixture calls were enabled.
+    pub active_eval: bool,
+    /// Whether every planned call was explicitly safe.
+    pub safe_fixture_only: bool,
+    /// Planned or invoked fixture calls.
+    #[serde(default)]
+    pub fixture_calls: Vec<TrustLabFixtureCallReport>,
+    /// Optional `RuntimeProvider` plan evidence for active fixture execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_provider_plan: Option<TrustLabRuntimeProviderPlanEvidence>,
+}
+
+impl TrustLabRuntimeEvidence {
+    fn static_advisory() -> Self {
+        Self {
+            provider: "static_advisory".to_string(),
+            isolated: true,
+            active_eval: false,
+            safe_fixture_only: true,
+            fixture_calls: Vec::new(),
+            runtime_provider_plan: None,
+        }
+    }
+
+    /// Attach a `RuntimeProvider` plan summary without mutating fixture-call
+    /// execution evidence.
+    #[must_use]
+    pub fn with_runtime_provider_plan(mut self, plan: TrustLabRuntimeProviderPlanEvidence) -> Self {
+        self.runtime_provider_plan = Some(plan);
+        self
+    }
+}
+
+fn runtime_findings(runtime: &TrustLabRuntimeEvidence) -> Vec<TrustFinding> {
+    let mut findings = Vec::new();
+
+    if let Some(plan) = &runtime.runtime_provider_plan {
+        if !plan.denied_reasons.is_empty() {
+            findings.push(lab_finding(
+                "TRUSTLAB_RUNTIME_PROVIDER_PLAN_DENIED",
+                TrustFindingSeverity::Fail,
+                "runtime.runtime_provider_plan.denied_reasons",
+                "RuntimeProvider plan denied active fixture execution",
+                "Resolve the denied RuntimeProvider preflight before treating active fixture evidence as certifying.",
+                TrustEvidenceKind::Observed,
+            ));
+        }
+        if !plan.confirmation_ids.is_empty() {
+            findings.push(lab_finding(
+                "TRUSTLAB_RUNTIME_PROVIDER_CONFIRMATION_REQUIRED",
+                TrustFindingSeverity::Fail,
+                "runtime.runtime_provider_plan.confirmation_ids",
+                "RuntimeProvider plan requires human approval before active execution",
+                "Approve the required runtime confirmations or choose a lower-risk provider policy before certification.",
+                TrustEvidenceKind::Observed,
+            ));
+        }
+    }
+
+    if !runtime.fixture_calls.is_empty() && !runtime.isolated {
+        findings.push(lab_finding(
+            "TRUSTLAB_ACTIVE_RUNTIME_NOT_ISOLATED",
+            TrustFindingSeverity::Fail,
+            "runtime.isolated",
+            "Active fixture evaluation requires an isolated runtime",
+            "Run active evaluation through RuntimeProvider isolation before trusting runtime evidence.",
+            TrustEvidenceKind::Observed,
+        ));
+    }
+
+    for fixture in &runtime.fixture_calls {
+        if !fixture.declared_safe {
+            findings.push(lab_finding(
+                "TRUSTLAB_UNSAFE_FIXTURE_SKIPPED",
+                TrustFindingSeverity::Warn,
+                format!("runtime.fixture_calls[{}]", fixture.tool_name),
+                "Fixture was skipped because it was not explicitly declared safe",
+                "Review the fixture and mark it safe only when it cannot mutate state or exfiltrate data.",
+                TrustEvidenceKind::Observed,
+            ));
+        } else if fixture.status == TrustLabFixtureCallStatus::Skipped {
+            findings.push(lab_finding(
+                "TRUSTLAB_ACTIVE_FIXTURE_SKIPPED",
+                TrustFindingSeverity::Warn,
+                format!("runtime.fixture_calls[{}]", fixture.tool_name),
+                "Declared-safe fixture was not invoked",
+                "Rerun active evaluation after resolving the runtime skip reason.",
+                TrustEvidenceKind::Observed,
+            ));
+        } else if fixture.status == TrustLabFixtureCallStatus::DryRun {
+            findings.push(lab_finding(
+                "TRUSTLAB_ACTIVE_FIXTURE_DRY_RUN",
+                TrustFindingSeverity::Warn,
+                format!("runtime.fixture_calls[{}]", fixture.tool_name),
+                "Declared-safe fixture was dry-run only and was not invoked",
+                "Run the fixture through an isolated RuntimeProvider-backed runner before certification.",
+                TrustEvidenceKind::Observed,
+            ));
+        } else if fixture.status == TrustLabFixtureCallStatus::Failed {
+            findings.push(lab_finding(
+                "TRUSTLAB_ACTIVE_FIXTURE_FAILED",
+                TrustFindingSeverity::Fail,
+                format!("runtime.fixture_calls[{}]", fixture.tool_name),
+                fixture
+                    .error
+                    .as_deref()
+                    .unwrap_or("Active fixture call failed"),
+                "Keep the candidate disabled until the safe fixture passes in isolation.",
+                TrustEvidenceKind::Observed,
+            ));
+        }
+    }
+
+    findings
+}
+
+/// `RuntimeProvider` plan summary attached to active fixture evidence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabRuntimeProviderPlanEvidence {
+    /// Planned provider kind.
+    pub provider_kind: String,
+    /// License tier for the planned provider.
+    pub license_tier: String,
+    /// Runtime policy id.
+    pub policy_id: String,
+    /// How the provider was selected.
+    pub selected_by: String,
+    /// Required preflight checks.
+    #[serde(default)]
+    pub preflight_checks: Vec<String>,
+    /// Confirmation ids required before apply.
+    #[serde(default)]
+    pub confirmation_ids: Vec<String>,
+    /// Denied reason codes.
+    #[serde(default)]
+    pub denied_reasons: Vec<String>,
+    /// Structured launch program, if the provider can emit one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_program: Option<String>,
+    /// Digest of structured launch args, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_args_digest_sha256: Option<String>,
+    /// Provider health check instruction.
+    pub health_check: String,
+    /// Rollback instruction.
+    pub rollback_step: String,
+}
+
+impl TrustLabRuntimeProviderPlanEvidence {
+    /// Convert a `RuntimeProvider` plan into value-free `TrustLab` evidence.
+    #[must_use]
+    pub fn from_runtime_plan(plan: &RuntimePlan) -> Self {
+        Self {
+            provider_kind: runtime_provider_kind_name(plan.provider).to_string(),
+            license_tier: runtime_license_tier_name(plan.audit.license_tier).to_string(),
+            policy_id: plan.policy.id.clone(),
+            selected_by: runtime_selection_name(plan.recommendation.selected_by).to_string(),
+            preflight_checks: plan
+                .preflight_checks
+                .iter()
+                .map(|check| check.check.clone())
+                .collect(),
+            confirmation_ids: plan
+                .confirmations
+                .iter()
+                .map(|confirmation| confirmation.id.clone())
+                .collect(),
+            denied_reasons: plan
+                .denied
+                .iter()
+                .map(|denial| runtime_deny_reason_name(denial.reason).to_string())
+                .collect(),
+            launch_program: plan
+                .launch_command
+                .as_ref()
+                .map(|command| command.program.clone()),
+            launch_args_digest_sha256: plan
+                .launch_command
+                .as_ref()
+                .map(crate::runtime::RuntimeLaunchCommand::args_digest_sha256),
+            health_check: plan.lifecycle.health_check.clone(),
+            rollback_step: plan.rollback_step.clone(),
+        }
+    }
+}
+
+fn runtime_provider_kind_name(kind: RuntimeProviderKind) -> &'static str {
+    match kind {
+        RuntimeProviderKind::LocalProcess => "local_process",
+        RuntimeProviderKind::Docker => "docker",
+        RuntimeProviderKind::Podman => "podman",
+        RuntimeProviderKind::Systemd => "systemd",
+        RuntimeProviderKind::Launchd => "launchd",
+        RuntimeProviderKind::Kubernetes => "kubernetes",
+    }
+}
+
+fn runtime_license_tier_name(tier: RuntimeLicenseTier) -> &'static str {
+    match tier {
+        RuntimeLicenseTier::FreeCore => "free_core",
+        RuntimeLicenseTier::Enterprise => "enterprise",
+    }
+}
+
+fn runtime_selection_name(selection: RuntimeProviderSelection) -> &'static str {
+    match selection {
+        RuntimeProviderSelection::OperatorPreference => "operator_preference",
+        RuntimeProviderSelection::IsolationPreferred => "isolation_preferred",
+        RuntimeProviderSelection::CompatibilityFallback => "compatibility_fallback",
+    }
+}
+
+fn runtime_deny_reason_name(reason: RuntimeDenyReason) -> &'static str {
+    match reason {
+        RuntimeDenyReason::RuntimeUnavailable => "runtime_unavailable",
+        RuntimeDenyReason::MissingContainerImage => "missing_container_image",
+        RuntimeDenyReason::InvalidResourcePolicy => "invalid_resource_policy",
+        RuntimeDenyReason::ForbiddenMount => "forbidden_mount",
+    }
+}
+
+/// Candidate fixture call for active evaluation planning.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabFixtureCall {
+    /// Tool name.
+    pub tool_name: String,
+    /// JSON arguments.
+    pub arguments: serde_json::Value,
+    /// Whether the fixture was explicitly reviewed as safe.
+    pub declared_safe: bool,
+}
+
+/// Fixture execution result returned by an active-eval runner.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabFixtureExecution {
+    /// Whether the fixture passed.
+    pub passed: bool,
+    /// Optional output captured from the fixture call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Value>,
+    /// Optional failure detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl TrustLabFixtureExecution {
+    /// Build a passing fixture execution.
+    #[must_use]
+    pub fn passed(output: serde_json::Value) -> Self {
+        Self {
+            passed: true,
+            output: Some(output),
+            error: None,
+        }
+    }
+
+    /// Build a failing fixture execution.
+    #[must_use]
+    pub fn failed(error: impl Into<String>) -> Self {
+        Self {
+            passed: false,
+            output: None,
+            error: Some(error.into()),
+        }
+    }
+}
+
+/// Active fixture-call status.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabFixtureCallStatus {
+    /// Safe fixture was planned but not executed by this report.
+    Planned,
+    /// Safe fixture executed and passed.
+    Passed,
+    /// Safe fixture was validated in a dry run but not invoked.
+    DryRun,
+    /// Safe fixture executed and failed.
+    Failed,
+    /// Fixture was skipped.
+    #[default]
+    Skipped,
+}
+
+/// Planned or executed fixture-call outcome.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabFixtureCallReport {
+    /// Tool name.
+    pub tool_name: String,
+    /// Digest of fixture arguments.
+    pub arguments_digest_sha256: String,
+    /// Whether the fixture was explicitly reviewed as safe.
+    pub declared_safe: bool,
+    /// Whether the lab may invoke it.
+    pub invoked: bool,
+    /// Planned or executed status.
+    #[serde(default)]
+    pub status: TrustLabFixtureCallStatus,
+    /// Digest of the fixture output when captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_digest_sha256: Option<String>,
+    /// Failure detail when execution failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Skip reason when not invoked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
+}
+
+/// Evidence item for audit/export consumers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabEvidence {
+    /// Evidence code.
+    pub code: String,
+    /// Evidence field.
+    pub field: String,
+    /// Digest of the finding that produced this evidence.
+    pub digest_sha256: String,
+}
+
+/// Policy verdict for enablement.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabPolicyVerdict {
+    /// Candidate is allowed by policy.
+    Allow,
+    /// Candidate is allowed with warnings.
+    Warn,
+    /// Candidate is blocked.
+    Block,
+    /// Candidate would block, but this policy is advisory-only.
+    Advisory,
+}
+
+/// Certification status derived from score and policy.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabCertificationStatus {
+    /// Certified by the configured policy.
+    Certified,
+    /// Advisory or warning result.
+    Provisional,
+    /// Rejected by the configured policy.
+    Rejected,
+}
+
+/// Certification record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabCertification {
+    /// Deterministic certification id.
+    pub certification_id: String,
+    /// Certification status.
+    pub status: TrustLabCertificationStatus,
+    /// License tier that owns this feature mode.
+    pub license_tier: TrustLabLicenseTier,
+    /// Timestamp when this record was issued.
+    pub issued_at: DateTime<Utc>,
+    /// Optional expiry timestamp for continuous enterprise evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Recommended enablement outcome after remediation planning.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabRemediationOutcome {
+    /// Enable without additional work.
+    Enable,
+    /// Apply safe metadata or configuration fixes before enabling.
+    Fix,
+    /// Block enablement until the issue is resolved.
+    Block,
+    /// Quarantine the candidate from routing and catalog promotion.
+    Quarantine,
+}
+
+/// Normalized remediation category for `TrustLab` findings.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLabRemediationCategory {
+    /// Add or correct `TrustCard` or protocol metadata.
+    AddMetadata,
+    /// Regenerate `TrustCard` or CBOM evidence from source descriptors.
+    RegenerateEvidence,
+    /// Restrict runtime permissions, network, filesystem, or execution access.
+    RestrictRuntime,
+    /// Require explicit human approval or risk acceptance.
+    RequireApproval,
+    /// Review and approve a baseline update.
+    UpdateBaseline,
+    /// Quarantine the candidate because the descriptor appears hostile.
+    Quarantine,
+    /// Keep the candidate disabled until findings are resolved.
+    BlockEnablement,
+    /// Rerun or inspect scanner output.
+    ReviewScanner,
+}
+
+/// One machine-readable remediation action.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabRemediationAction {
+    /// Finding code that produced this action.
+    pub finding_code: String,
+    /// Remediation category.
+    pub category: TrustLabRemediationCategory,
+    /// Field or target affected by this action.
+    pub target: String,
+    /// Operator-facing action title.
+    pub title: String,
+    /// Detailed next action.
+    pub detail: String,
+    /// Whether a safe reviewable metadata/config diff can be proposed.
+    pub reviewable_diff_available: bool,
+    /// Whether a human approval gate is required.
+    pub human_approval_required: bool,
+    /// Verification command or check to run after applying the action.
+    pub verification: String,
+    /// Rollback or undo guidance for the action.
+    pub rollback: String,
+}
+
+/// Machine-readable remediation plan derived from findings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabRemediationPlan {
+    /// Recommended enablement outcome.
+    pub outcome: TrustLabRemediationOutcome,
+    /// Short summary.
+    pub summary: String,
+    /// Whether any action can be proposed as a safe reviewable diff.
+    pub reviewable_diff_available: bool,
+    /// Whether any action requires human approval.
+    pub human_approval_required: bool,
+    /// Ordered actions.
+    #[serde(default)]
+    pub actions: Vec<TrustLabRemediationAction>,
+}
+
+impl Default for TrustLabRemediationPlan {
+    fn default() -> Self {
+        Self {
+            outcome: TrustLabRemediationOutcome::Enable,
+            summary: "No remediation plan recorded.".to_string(),
+            reviewable_diff_available: false,
+            human_approval_required: false,
+            actions: Vec::new(),
+        }
+    }
+}
+
+impl TrustLabCertification {
+    fn new(
+        card: &TrustCard,
+        policy: &TrustLabPolicy,
+        score: u8,
+        policy_verdict: TrustLabPolicyVerdict,
+        issued_at: DateTime<Utc>,
+    ) -> Self {
+        let status = if matches!(policy_verdict, TrustLabPolicyVerdict::Block) {
+            TrustLabCertificationStatus::Rejected
+        } else if score >= policy.certification_score
+            && matches!(policy_verdict, TrustLabPolicyVerdict::Allow)
+        {
+            TrustLabCertificationStatus::Certified
+        } else {
+            TrustLabCertificationStatus::Provisional
+        };
+
+        let digest = canonical_json_sha256(&serde_json::json!({
+            "schema": TRUST_LAB_SCHEMA_VERSION,
+            "card": card,
+            "minimum_score": policy.minimum_score,
+            "certification_score": policy.certification_score,
+        }));
+
+        Self {
+            certification_id: format!("trustlab:{}", &digest[..16]),
+            status,
+            license_tier: policy.license_tier(),
+            issued_at,
+            expires_at: match policy.profile {
+                TrustLabProfile::LocalOneShot => None,
+                TrustLabProfile::EnterpriseContinuous => Some(issued_at + Duration::days(30)),
+            },
+        }
+    }
+}
+
+/// Full `TrustLab` evaluation record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustLabEvaluation {
+    /// Schema version.
+    pub schema_version: String,
+    /// Evaluation timestamp.
+    pub evaluated_at: DateTime<Utc>,
+    /// Inputs evaluated.
+    pub input: TrustLabInput,
+    /// Runtime evidence.
+    pub runtime: TrustLabRuntimeEvidence,
+    /// Scanner evidence.
+    #[serde(default)]
+    pub scanners: Vec<TrustLabScannerEvidence>,
+    /// Audit evidence items.
+    #[serde(default)]
+    pub evidence: Vec<TrustLabEvidence>,
+    /// Findings.
+    #[serde(default)]
+    pub findings: Vec<TrustFinding>,
+    /// Score from 0 to 100.
+    pub score: u8,
+    /// Policy verdict.
+    pub policy_verdict: TrustLabPolicyVerdict,
+    /// Machine-readable remediation plan.
+    #[serde(default)]
+    pub remediation_plan: TrustLabRemediationPlan,
+    /// Certification record.
+    pub certification: TrustLabCertification,
+}
+
+#[cfg(test)]
+mod tests;

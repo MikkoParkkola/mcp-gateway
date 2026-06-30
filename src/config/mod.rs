@@ -28,11 +28,13 @@ use crate::{Error, Result};
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, FailsafeConfig,
-    HealthCheckConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
-    KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
-    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
-    SecurityConfig, StreamingConfig, ToolContractConfig, WebhookConfig,
+    CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig,
+    ContextIntegrityPresetConfig, FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig,
+    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
+    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
+    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
+    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, StreamingConfig, ToolContractConfig,
+    WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -86,6 +88,9 @@ pub struct Config {
     /// Agent Auth — OAuth 2.0 agent-scoped tool permissions.
     #[serde(default)]
     pub agent_auth: AgentAuthConfig,
+    /// `RuntimeProvider` planning and isolation profiles.
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
     /// Plugin marketplace and local plugin directory.
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
@@ -291,6 +296,8 @@ impl Config {
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
         self.validate_required_env_references()?;
+        self.runtime.validate()?;
+        self.validate_backend_runtime_profiles()?;
         Ok(())
     }
 
@@ -418,6 +425,31 @@ impl Config {
             return Err(Error::ConfigValidation(format!(
                 "{field} references environment variable '{var_name}' with non-UTF-8 contents"
             )));
+        }
+
+        Ok(())
+    }
+
+    fn validate_backend_runtime_profiles(&self) -> Result<()> {
+        for (name, backend) in &self.backends {
+            let Some(profile_name) = backend.runtime_profile.as_deref() else {
+                continue;
+            };
+            if profile_name.is_empty() {
+                return Err(Error::ConfigValidation(format!(
+                    "backends.{name}.runtime_profile must not be empty"
+                )));
+            }
+            if !matches!(backend.transport, TransportConfig::Stdio { .. }) {
+                return Err(Error::ConfigValidation(format!(
+                    "backends.{name}.runtime_profile is currently supported only for stdio backends"
+                )));
+            }
+            if !self.runtime.profiles.contains_key(profile_name) {
+                return Err(Error::ConfigValidation(format!(
+                    "backends.{name}.runtime_profile references unknown runtime profile '{profile_name}'"
+                )));
+            }
         }
 
         Ok(())
@@ -598,6 +630,9 @@ pub struct BackendConfig {
     /// fully-trusted internal backends. Default: `false`.
     #[serde(default)]
     pub passthrough: bool,
+    /// Runtime profile name resolved from top-level `runtime.profiles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_profile: Option<String>,
 }
 
 impl Default for BackendConfig {
@@ -613,6 +648,7 @@ impl Default for BackendConfig {
             oauth: None,
             secrets: Vec::new(),
             passthrough: false,
+            runtime_profile: None,
         }
     }
 }

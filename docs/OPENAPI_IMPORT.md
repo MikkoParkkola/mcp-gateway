@@ -2,9 +2,28 @@
 
 Convert any OpenAPI 3.0/3.1 (or Swagger 2.0) specification into gateway capability YAML files.
 
+## Safe Protocol Import Preview
+
+The canonical import path now has two layers:
+
+1. `cap import` keeps the existing direct OpenAPI-to-capability workflow for local development.
+2. The protocol import planner produces disabled `CapabilityDraft` records first, with TrustCard provenance and activation-review summaries, risk annotations, safe policy defaults, deterministic plan digests, and review gates before any active routing changes.
+
+The planner is intentionally broader than OpenAPI. It covers OpenAPI, selected GraphQL operations, Postman collections, and OCI MCP package metadata. Drafts are reversible until applied, and mutating, broad, ambiguous-auth, unbounded-query, missing-license, and missing-provenance cases are gated for review.
+
+| Area | Free/core | Enterprise license category |
+|------|-----------|-----------------------------|
+| Local OpenAPI import | Generate and validate capability files | Organization import policies and approval workflows |
+| Protocol import planner | Disabled drafts, deterministic diffs, TrustCard activation-review summaries, risk annotations | Private registry sync, OCI package policy, centralized review evidence |
+| GraphQL/Postman/OCI metadata planning | Local preview and safe draft generation | Org templates, package provenance enforcement, fleet rollout controls |
+| Rollback | Reversible pre-activation drafts | Audited rollback and change-control integrations |
+
 ## Quick Start
 
 ```bash
+# Preview a safe disabled import plan without writing files or enabling tools
+mcp-gateway import preview --kind openapi openapi.yaml --format table
+
 # Import from a local file
 mcp-gateway cap import openapi.yaml
 
@@ -48,6 +67,87 @@ capabilities/<name>.yaml (one per operation)
 The importer tries YAML parsing first, then falls back to JSON, so the file extension does not matter.
 
 ## CLI Reference
+
+### Safe Preview
+
+```
+mcp-gateway import preview --kind <KIND> [OPTIONS] <FILE>
+```
+
+Preview produces a deterministic `ImportPlan` with disabled drafts, TrustCard
+activation-review summaries, risk annotations, review gates, and safe policy
+defaults. It does not write capability files and does not enable generated
+tools.
+
+JSON preview output includes `draft.trust_card.activation_review` with stable
+policy-consumer fields: `enabled_by_default`, `verdict`,
+`highest_risk_level`, `risk_count`, `review_gate_count`,
+`manual_review_gate_count`, `auto_resolvable_gate_count`, and
+`human_review_required`. This lets local review tools and enterprise approval
+systems reason about the generated draft without re-parsing every risk entry.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<FILE>` | Yes | Source file to preview |
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--kind <KIND>` | Required | `openapi`, `graphql`, `postman`, or `oci-mcp-package` |
+| `--source-name <NAME>` | File stem | Source name for OpenAPI and GraphQL plan metadata |
+| `-f, --format <FORMAT>` | `table` | `table`, `json`, or `plain` |
+| `--context-integrity-profile <PROFILE>` | `imported_tool_baseline` | Policy profile attached to generated draft defaults |
+
+Use JSON output when reviewing diffs or storing evidence:
+
+```bash
+mcp-gateway import preview --kind graphql graphql-import.yaml --format json
+```
+
+### Safe Draft Apply
+
+```
+mcp-gateway import apply --kind <KIND> [OPTIONS] <FILE>
+```
+
+Apply reruns the same deterministic planner and writes only reversible draft
+capability YAML to disk. The default output directory is `capability-drafts/`,
+which is intentionally outside the default active `capabilities/` directory.
+Generated tools are not loaded, routed, or enabled by this command.
+
+`import apply` also writes a JSON manifest with the plan digest, source digest,
+written files, skipped drafts, review-gate counts, next review steps, and a
+simple rollback command. OpenAPI, GraphQL, and Postman drafts carry reversible
+capability YAML and can be written as inactive local drafts. OCI MCP package
+drafts remain preview/review evidence until an executable `oci_mcp` adapter
+exists, so apply records them as skipped rather than pretending incomplete
+adapters are executable.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<FILE>` | Yes | Source file to apply |
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--kind <KIND>` | Required | `openapi`, `graphql`, `postman`, or `oci-mcp-package` |
+| `-o, --output <DIR>` | `capability-drafts` | Inactive draft directory for generated YAML and the manifest |
+| `--source-name <NAME>` | File stem | Source name for OpenAPI and GraphQL plan metadata |
+| `-f, --format <FORMAT>` | `table` | `table`, `json`, or `plain` |
+| `--context-integrity-profile <PROFILE>` | `imported_tool_baseline` | Policy profile attached to generated draft defaults |
+| `--force` | Off | Replace existing draft files and manifest |
+
+Example:
+
+```bash
+mcp-gateway import apply --kind openapi petstore.yaml --output capability-drafts/petstore
+mcp-gateway import apply --kind graphql github-graphql.yaml --output capability-drafts/github
+mcp-gateway import apply --kind postman collection.json --output capability-drafts/postman
+```
+
+Review the generated files and manifest before moving any draft into a
+configured capability directory. After manual edits, validate each file with
+`mcp-gateway cap validate <draft-file>` before activation.
+
+### Direct OpenAPI Generation
 
 ```
 mcp-gateway cap import [OPTIONS] <SPEC>

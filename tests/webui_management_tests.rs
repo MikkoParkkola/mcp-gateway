@@ -21,16 +21,21 @@
 //!   POST /ui/api/import/openapi         — import tools from inline spec
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use axum::routing::post;
+use axum::{Json, Router};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
-use axum::Router;
-use mcp_gateway::backend::BackendRegistry;
-use mcp_gateway::config::Config;
+use mcp_gateway::backend::{Backend, BackendRegistry};
+use mcp_gateway::config::{
+    ApiKeyConfig, AuthConfig, BackendConfig, Config, FailsafeConfig, TransportConfig,
+};
 use mcp_gateway::config_reload::{LiveConfig, ReloadContext};
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
@@ -92,6 +97,14 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         firewall: None,
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
     })
+}
+
+fn make_app_state_with_auth_config(auth_config: &AuthConfig) -> Arc<AppState> {
+    let mut state = make_app_state(None, None);
+    Arc::get_mut(&mut state)
+        .expect("test AppState should be uniquely owned")
+        .auth_config = Arc::new(ResolvedAuthConfig::from_config(auth_config));
+    state
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -247,7 +260,299 @@ metadata:
   read_only: true
 "#;
 
+fn register_http_backend(state: &Arc<AppState>, name: &str) {
+    register_http_backend_with_url(state, name, format!("http://127.0.0.1:9/{name}"));
+}
+
+fn register_http_backend_with_url(
+    state: &Arc<AppState>,
+    name: &str,
+    http_url: String,
+) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        name,
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url,
+                streamable_http: true,
+                protocol_version: None,
+            },
+            enabled: true,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    state.backends.register(Arc::clone(&backend));
+    backend
+}
+
+async fn spawn_mcp_tools_fixture() -> (String, JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/mcp", post(mcp_tools_fixture_handler));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}/mcp"), server)
+}
+
+async fn mcp_tools_fixture_handler(Json(body): Json<Value>) -> Json<Value> {
+    let id = body.get("id").cloned().unwrap_or_else(|| json!(1));
+    let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+    let result = match method {
+        "initialize" => json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": { "tools": { "listChanged": false } },
+            "serverInfo": { "name": "docs-fixture", "version": "test" }
+        }),
+        "tools/list" => json!({
+            "tools": [{
+                "name": "search_docs",
+                "description": "Search local documentation",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"]
+                },
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                }
+            }]
+        }),
+        _ => {
+            return Json(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32601, "message": "Method not found" }
+            }));
+        }
+    };
+
+    Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+#[tokio::test]
+async fn test_webui_embeds_control_plane_read_only_page() {
+    let state = make_app_state(None, None);
+    let router = create_router(state);
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/ui")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8(bytes.to_vec()).unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("data-page=\"control-plane\""));
+    assert!(html.contains("id=\"page-control-plane\""));
+    assert!(html.contains("refreshControlPlane()"));
+    assert!(html.contains("/ui/api/control-plane"));
+    assert!(html.contains("Decision Queue"));
+    assert!(html.contains("Feature Boundary"));
+    assert!(html.contains("TrustCards"));
+    assert!(html.contains("cp-trustcards-tbody"));
+    assert!(html.contains("renderControlPlaneTrustCards"));
+    assert!(html.contains("ShadowRadar"));
+    assert!(html.contains("cp-shadow-tbody"));
+    assert!(html.contains("renderControlPlaneShadow"));
+}
+
 // ── Registry tests ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
+    let state = make_app_state(None, None);
+    let (backend_url, server) = spawn_mcp_tools_fixture().await;
+    let backend = register_http_backend_with_url(&state, "docs", backend_url);
+    backend.get_tools_shared().await.unwrap();
+    let router = create_router(state);
+
+    let (status, body) = send_json(&router, Method::GET, "/ui/api/control-plane", None).await;
+
+    assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
+    assert_control_plane_route_metadata(&body);
+    assert_control_plane_inventory_counts(&body);
+    assert_control_plane_shadow_boundary(&body);
+    assert_control_plane_views(&body);
+
+    server.abort();
+}
+
+fn assert_control_plane_route_metadata(body: &Value) {
+    assert_eq!(body["schema_version"], "control_plane.api.v1");
+    assert_eq!(body["source"], "local_runtime_snapshot");
+    assert_eq!(body["route"]["read_only"], true);
+    assert_eq!(body["route"]["mutation_endpoint"], false);
+    assert_eq!(body["actor"]["role"], "admin");
+    assert_eq!(body["features"][0]["feature"], "local_status");
+    assert_eq!(body["features"][0]["license_tier"], "free_core");
+    assert_eq!(body["features"][0]["available_in_this_route"], true);
+    assert_eq!(body["coverage"]["servers"], true);
+    assert_eq!(body["coverage"]["trust_cards"], true);
+    assert_eq!(body["coverage"]["runtime_health"], true);
+}
+
+fn assert_control_plane_inventory_counts(body: &Value) {
+    assert_eq!(body["inventory_counts"]["servers"], 1);
+    assert_eq!(body["inventory_counts"]["tools"], 1);
+    assert_eq!(body["inventory_counts"]["trust_cards"], 1);
+    assert_eq!(body["inventory_counts"]["runtime_health"], 1);
+    assert!(body["inventory_counts"]["shadow_assets"].is_u64());
+    assert!(body["inventory_counts"]["shadow_high_or_critical_assets"].is_u64());
+}
+
+fn assert_control_plane_shadow_boundary(body: &Value) {
+    assert_eq!(
+        body["shadow_radar"]["schema_version"],
+        "shadow_radar.handoff.v1"
+    );
+    assert_eq!(
+        body["shadow_radar"]["source_report_schema"],
+        "shadow_radar.v1"
+    );
+    assert_eq!(body["shadow_radar"]["source"], "local_passive_discovery");
+    assert_eq!(body["shadow_radar"]["passive"], true);
+    assert_eq!(body["shadow_radar"]["tools_invoked"], false);
+    assert!(body["shadow_radar"]["control_plane_assets"].is_array());
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["schema_version"],
+        "shadow_radar.enterprise_boundary.v1"
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["free_core_scan"]["license_tier"],
+        "free_core"
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["free_core_scan"]["activity"],
+        "passive"
+    );
+    let free_denied =
+        body["shadow_radar"]["enterprise_boundary"]["free_core_scan"]["denied_capabilities"]
+            .as_array()
+            .expect("free/core denied capabilities should be an array");
+    assert!(
+        free_denied
+            .iter()
+            .any(|capability| capability.as_str() == Some("network_range_scan"))
+    );
+    assert!(
+        free_denied
+            .iter()
+            .any(|capability| capability.as_str() == Some("scheduled_scan"))
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["enterprise_scan"]["license_tier"],
+        "enterprise"
+    );
+    assert_eq!(
+        body["shadow_radar"]["enterprise_boundary"]["enterprise_scan"]["activity"],
+        "passive"
+    );
+    let enterprise_allowed =
+        body["shadow_radar"]["enterprise_boundary"]["enterprise_scan"]["allowed_capabilities"]
+            .as_array()
+            .expect("enterprise allowed capabilities should be an array");
+    assert!(
+        enterprise_allowed
+            .iter()
+            .any(|capability| capability.as_str() == Some("network_range_scan"))
+    );
+    assert!(
+        enterprise_allowed
+            .iter()
+            .any(|capability| capability.as_str() == Some("scheduled_scan"))
+    );
+    assert!(
+        enterprise_allowed
+            .iter()
+            .any(|capability| capability.as_str() == Some("fleet_scope"))
+    );
+    let exports = body["shadow_radar"]["enterprise_boundary"]["evidence_exports"]
+        .as_array()
+        .expect("enterprise evidence exports should be an array");
+    assert!(exports.iter().all(|export| {
+        export["requires_enterprise_license"] == true
+            && export["sensitive_values_included"] == false
+    }));
+}
+
+fn assert_control_plane_views(body: &Value) {
+    assert_eq!(body["view"]["servers"][0]["name"], "docs");
+    assert_eq!(body["view"]["tools"][0]["name"], "search_docs");
+    assert_eq!(body["view"]["trust_cards"][0]["server_id"], "backend:docs");
+    assert_eq!(
+        body["view"]["trust_cards"][0]["schema_version"],
+        "trust_card.v1"
+    );
+    let digest = body["view"]["trust_cards"][0]["trust_card_digest_sha256"]
+        .as_str()
+        .expect("trust card digest should be a string");
+    assert_eq!(digest.len(), 64);
+    assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
+    assert_eq!(body["view"]["runtime_health"][0]["health"], "healthy");
+    assert_eq!(
+        body["authorizations"]["mutate_policy"]["audit_required"],
+        true
+    );
+    assert_eq!(body["current_limits"][0], "read_only_api");
+
+    assert!(body["decision_queue"]["items"].is_array());
+}
+
+#[tokio::test]
+async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
+    let auth_config = AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![ApiKeyConfig {
+            key: "auditor-key".to_string(),
+            name: "auditor-client".to_string(),
+            rate_limit: 0,
+            backends: vec!["docs".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }],
+        public_paths: vec!["/health".to_string()],
+        client_circuit_breaker: None,
+    };
+    let state = make_app_state_with_auth_config(&auth_config);
+    register_http_backend(&state, "docs");
+    let router = create_router(state);
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/ui/api/control-plane")
+        .header("authorization", "Bearer auditor-key")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
+    assert_eq!(body["route"]["read_only"], true);
+    assert_eq!(body["actor"]["role"], "auditor");
+    assert_eq!(body["actor"]["display_name"], "auditor-client");
+    assert_eq!(body["view"]["servers"][0]["name"], "docs");
+    assert_eq!(body["authorizations"]["read_inventory"]["allowed"], true);
+    assert_eq!(body["authorizations"]["read_evidence"]["allowed"], true);
+    assert_eq!(body["authorizations"]["mutate_policy"]["allowed"], false);
+    assert_eq!(body["authorizations"]["mutate_grant"]["allowed"], false);
+}
 
 #[tokio::test]
 async fn test_registry_list_returns_entries() {

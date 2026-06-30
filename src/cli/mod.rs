@@ -26,6 +26,7 @@
 //! ```
 
 pub mod completion;
+pub mod identity;
 pub mod invoke;
 pub mod output;
 pub mod skills;
@@ -33,13 +34,18 @@ pub mod subcommands;
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 use crate::cli::output::OutputFormat;
 
+pub use identity::{IdentityCommand, IdentityGrantScopeArg, IdentityGrantsCommand};
 pub use skills::SkillsCommand;
-pub use subcommands::{AuditCommand, CapCommand, PluginCommand, TlsCommand};
+pub use subcommands::{
+    AuditCommand, CapCommand, KubernetesCommand, PluginCommand, ProtocolImportCommand,
+    ProtocolImportKind, RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand,
+    TrustLabCommand,
+};
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
 // Defined here (library crate) so both the CLI parser and the binary-only
@@ -79,6 +85,24 @@ pub enum ExportTarget {
     Generic,
     /// All supported clients
     All,
+}
+
+/// Starter configuration profile for `mcp-gateway init`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitProfile {
+    /// Self-contained local developer setup with zero-key sample capabilities.
+    Local,
+    /// Minimal skeleton config for operators who want to add everything manually.
+    Minimal,
+}
+
+impl std::fmt::Display for InitProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Local => "local",
+            Self::Minimal => "minimal",
+        })
+    }
 }
 
 /// Universal MCP Gateway - single-port multiplexing for MCP servers and REST APIs
@@ -151,6 +175,21 @@ pub enum Command {
     #[command(subcommand, about = "Capability management commands")]
     Cap(CapCommand),
 
+    /// Preview safe protocol imports before writing or enabling generated tools
+    #[command(
+        subcommand,
+        about = "Preview safe imports from API and MCP package sources"
+    )]
+    Import(ProtocolImportCommand),
+
+    /// Plan enterprise Kubernetes reconciliation and validation.
+    #[command(subcommand, about = "Kubernetes enterprise deployment commands")]
+    Kubernetes(KubernetesCommand),
+
+    /// Evaluate deterministic adaptive ranking fixtures.
+    #[command(subcommand, about = "Adaptive ranking evaluation commands")]
+    Ranking(RankingCommand),
+
     /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
     #[command(
         subcommand,
@@ -158,12 +197,24 @@ pub enum Command {
     )]
     Tls(TlsCommand),
 
+    /// Generate, inspect, and validate `TrustCard` and CBOM metadata.
+    #[command(subcommand, about = "TrustCard and CBOM metadata commands")]
+    Trust(TrustCommand),
+
+    /// Manage caller identity and local personal-capability grants.
+    #[command(subcommand, about = "Identity and local grant administration")]
+    Identity(IdentityCommand),
+
     /// Generate a starter gateway.yaml with sensible defaults
     #[command(about = "Create a new gateway configuration file")]
     Init {
         /// File path to write the generated configuration to
         #[arg(short, long, default_value = "gateway.yaml")]
         output: PathBuf,
+
+        /// Starter profile to generate
+        #[arg(long, default_value = "local", value_enum)]
+        profile: InitProfile,
 
         /// Include example capability definitions and backend stubs
         #[arg(long, default_value = "true")]
@@ -362,6 +413,10 @@ pub enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
 
+        /// Output format for health checks
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+
         /// Emit operator-facing DLP/firewall regex rules for network-layer MCP
         /// detection instead of running the normal health checks.
         ///
@@ -519,6 +574,10 @@ pub enum SetupCommand {
         /// Show what would be written without actually writing anything
         #[arg(long)]
         dry_run: bool,
+
+        /// Restore a client config from a backup created by this command
+        #[arg(long, value_name = "BACKUP")]
+        rollback: Option<PathBuf>,
 
         /// Gateway config file to read
         #[arg(short, long, default_value = "gateway.yaml")]

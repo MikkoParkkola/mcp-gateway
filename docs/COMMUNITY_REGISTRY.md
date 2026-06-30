@@ -37,6 +37,20 @@ mcp-gateway cap install my_tool --from-github --output ./my-capabilities
 
 The installer looks for capability YAMLs in category subdirectories within the repository's `capabilities/` directory.
 
+## Check for shadow MCP servers before adopting more tools
+
+Before adding community tools on a workstation with existing AI clients, run:
+
+```bash
+mcp-gateway cap discover --shadow --format json
+```
+
+The ShadowRadar report groups unmanaged MCP servers by actionability, not only
+severity. Each finding has a stable ID, data-risk classification, recommended
+action, confidence, confirmation requirement, verification step, and rollback
+step. The scanner is passive by default and never invokes discovered tools.
+Use `--write-config` only after reviewing adoptable local findings.
+
 ## Creating a Capability
 
 ### YAML Template

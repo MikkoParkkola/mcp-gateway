@@ -1,0 +1,83 @@
+apiVersion: mcpgateway.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  name: default-kubernetes
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  provider: kubernetes
+  restartPolicy: on_failure
+  resources:
+    cpu: 500m
+    memory: 256Mi
+  networkPolicyRef: mcp-gateway-default
+  health:
+    readinessPath: /health
+    livenessPath: /health
+---
+apiVersion: mcpgateway.io/v1alpha1
+kind: Policy
+metadata:
+  name: default-policy
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  networkEgress: deny_all
+  allowedHosts: []
+  runtime:
+    allowPrivileged: false
+    defaultCpu: 500m
+    defaultMemory: 256Mi
+  contextIntegrity:
+    mode: monitor_only
+  exceptions: []
+---
+apiVersion: mcpgateway.io/v1alpha1
+kind: TrustCardReference
+metadata:
+  name: bundled-tools
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  name: bundled-tools
+  digest: sha256:replace-with-published-trustcard-digest
+  source: catalog
+  evidenceEndpoint: /trust/evidence
+---
+apiVersion: mcpgateway.io/v1alpha1
+kind: Gateway
+metadata:
+  name: mcp-gateway
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  replicas: 2
+  service:
+    port: 39400
+  runtimeProfileRef: default-kubernetes
+  policyRef: default-policy
+  trustCardRefs:
+    - bundled-tools
+  evidence:
+    enabled: true
+    endpoint: /trust/evidence
+  protectedValueRefs: []
+---
+apiVersion: mcpgateway.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: example-remote
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  transport: streamable_http
+  endpoint: https://example.invalid/mcp
+  runtimeProfileRef: default-kubernetes
+  policyRef: default-policy
+  trustCardRef: bundled-tools
+  protectedValueRefs: []

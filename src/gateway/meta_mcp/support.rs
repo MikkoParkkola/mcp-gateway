@@ -99,12 +99,9 @@ pub(super) fn json_to_code_mode_search_result(v: &Value) -> Option<crate::rankin
     let description = v.get("description")?.as_str().unwrap_or("").to_string();
     let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
     let server = server_opt?.to_string();
-    Some(crate::ranking::SearchResult {
-        server,
-        tool: tool_name.to_string(),
-        description,
-        score: 0.0,
-    })
+    let mut result = crate::ranking::SearchResult::new(server, tool_name, description);
+    result.signals = crate::ranking::RankingSignals::from_json(v);
+    Some(result)
 }
 
 /// Reconstruct ranked Code Mode results from ranked `SearchResult` objects.
@@ -126,6 +123,20 @@ pub(super) fn ranked_results_to_code_mode_json(
                 .iter()
                 .find(|v| v.get("tool").and_then(Value::as_str) == Some(&tool_ref))
                 .cloned()
+                .map(|mut value| {
+                    if let Value::Object(ref mut map) = value {
+                        map.insert("score".to_string(), json!(r.score));
+                        map.insert(
+                            "ranking".to_string(),
+                            json!({
+                                "included": r.explanation.included,
+                                "reasons": r.explanation.reasons,
+                                "signals": r.signals
+                            }),
+                        );
+                    }
+                    value
+                })
         })
         .collect()
 }
@@ -144,7 +155,7 @@ impl ToolInvoker for MetaMcpInvoker<'_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         let args = internal_invoke_args(server, tool, arguments);
         // Playbook steps are internal invocations with no caller agent.
-        self.meta.invoke_tool(&args, None, None, None).await
+        self.meta.invoke_tool(&args, None, None, None, None).await
     }
 }
 

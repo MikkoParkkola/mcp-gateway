@@ -30,12 +30,13 @@ RUN rm -rf src
 # Copy real source and build
 COPY src ./src
 COPY benches ./benches
+COPY capabilities ./capabilities
 RUN touch src/main.rs && cargo build --release
 
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 LABEL io.modelcontextprotocol.server.name="io.github.MikkoParkkola/mcp-gateway"
 

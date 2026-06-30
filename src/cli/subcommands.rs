@@ -1,11 +1,14 @@
 //! Secondary subcommand enums for `mcp-gateway`.
 //!
-//! This module contains [`CapCommand`], [`PluginCommand`], and [`TlsCommand`]
-//! — all extracted from `cli/mod.rs` to keep each file under 800 lines.
+//! This module contains [`CapCommand`], [`PluginCommand`], [`TlsCommand`], and
+//! [`TrustCommand`] — all extracted from `cli/mod.rs` to keep each file under
+//! 800 lines.
 
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+
+use crate::cli::output::OutputFormat;
 
 /// Capability management subcommands
 #[derive(Subcommand, Debug)]
@@ -79,9 +82,11 @@ pub enum CapCommand {
     /// Checks Claude Desktop, VS Code, Cursor, Windsurf, ~/.config/mcp/,
     /// running MCP processes, and `MCP_SERVER_*` environment variables.
     ///
-    /// Use `--shadow` to show only servers that are *not* already registered
-    /// as backends in the gateway configuration (i.e. shadow / unregistered
-    /// servers).
+    /// Use `--shadow` for a passive `ShadowRadar` report of servers that are
+    /// *not* already registered as backends in the gateway configuration. The
+    /// report classifies ownership, transport exposure, trust status, data
+    /// risk, recommended action, confidence, verification, and rollback. It
+    /// never invokes discovered tools.
     #[command(about = "Auto-discover existing MCP servers on this machine")]
     Discover {
         /// Output format: "table" (human-readable), "json", or "yaml"
@@ -96,8 +101,8 @@ pub enum CapCommand {
         #[arg(long)]
         config_path: Option<PathBuf>,
 
-        /// Show only servers that are NOT registered in the gateway config
-        /// (shadow / unregistered servers).
+        /// Emit a passive `ShadowRadar` report for servers that are NOT
+        /// registered in the gateway config.
         #[arg(long)]
         shadow: bool,
 
@@ -187,6 +192,422 @@ pub enum CapCommand {
         #[arg(long)]
         cost_per_call: Option<f64>,
     },
+}
+
+/// Safe protocol import subcommands.
+#[derive(Subcommand, Debug)]
+pub enum ProtocolImportCommand {
+    /// Preview disabled capability drafts from an API or MCP package source.
+    #[command(about = "Preview disabled import drafts without writing or enabling tools")]
+    Preview {
+        /// Source format to import.
+        #[arg(long, value_enum)]
+        kind: ProtocolImportKind,
+
+        /// Source file to preview.
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Source name used in generated plan metadata for OpenAPI/GraphQL.
+        #[arg(long)]
+        source_name: Option<String>,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+
+        /// Context-integrity profile attached to generated draft policy defaults.
+        #[arg(long, default_value = "imported_tool_baseline")]
+        context_integrity_profile: String,
+    },
+
+    /// Write reviewed import drafts to an inactive draft directory.
+    #[command(about = "Apply reversible import drafts to disk without enabling tools")]
+    Apply {
+        /// Source format to import.
+        #[arg(long, value_enum)]
+        kind: ProtocolImportKind,
+
+        /// Source file to apply.
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Directory to write generated draft files into.
+        #[arg(short, long, default_value = "capability-drafts")]
+        output: PathBuf,
+
+        /// Source name used in generated plan metadata for OpenAPI/GraphQL.
+        #[arg(long)]
+        source_name: Option<String>,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+
+        /// Context-integrity profile attached to generated draft policy defaults.
+        #[arg(long, default_value = "imported_tool_baseline")]
+        context_integrity_profile: String,
+
+        /// Overwrite existing draft files and manifest.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+/// Adaptive ranking evaluation subcommands.
+#[derive(Subcommand, Debug)]
+pub enum RankingCommand {
+    /// Evaluate deterministic offline ranking fixtures.
+    #[command(about = "Evaluate adaptive ranking against a fixture corpus")]
+    Eval {
+        /// JSON file containing a fixture array or an object with a cases array.
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+}
+
+/// Protocol source formats accepted by the safe import preview command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ProtocolImportKind {
+    /// `OpenAPI` 3.x or Swagger 2.0 file.
+    #[value(name = "openapi", alias = "open-api")]
+    OpenApi,
+    /// GraphQL import specification file.
+    Graphql,
+    /// Postman collection JSON file.
+    Postman,
+    /// OCI MCP package metadata file.
+    #[value(name = "oci-mcp-package", alias = "oci")]
+    OciMcpPackage,
+}
+
+/// Kubernetes enterprise deployment commands.
+#[derive(Subcommand, Debug)]
+pub enum KubernetesCommand {
+    /// Build a non-mutating reconcile plan from enterprise custom resources.
+    #[command(about = "Plan Kubernetes enterprise reconciliation without mutating the cluster")]
+    Plan {
+        /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
+        #[arg(required = true)]
+        resources: PathBuf,
+
+        /// Target namespace.
+        #[arg(short, long, default_value = "mcp-gateway")]
+        namespace: String,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Run the deterministic controller-manager reconcile loop.
+    #[command(about = "Run Kubernetes enterprise controller-manager reconciliation")]
+    Controller {
+        /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
+        #[arg(required = true)]
+        resources: PathBuf,
+
+        /// Target namespace.
+        #[arg(short, long, default_value = "mcp-gateway")]
+        namespace: String,
+
+        /// Seconds between reconcile cycles.
+        #[arg(long, default_value_t = 30)]
+        interval_seconds: u64,
+
+        /// Number of reconcile cycles to run when not watching continuously.
+        #[arg(long, default_value_t = 1)]
+        cycles: usize,
+
+        /// Keep reconciling until the process is stopped.
+        #[arg(long)]
+        watch: bool,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Build a gated live-cluster apply command plan.
+    #[command(
+        name = "apply-plan",
+        about = "Plan Kubernetes enterprise cluster apply commands with explicit mutation gates"
+    )]
+    ApplyPlan {
+        /// YAML file containing `Gateway`, `MCPServer`, `Policy`, `RuntimeProfile`, and `TrustCardReference` resources.
+        #[arg(required = true)]
+        resources: PathBuf,
+
+        /// Target namespace.
+        #[arg(short, long, default_value = "mcp-gateway")]
+        namespace: String,
+
+        /// Enable mutating apply, evidence, verify, and rollback commands in the plan.
+        #[arg(long)]
+        approve_apply: bool,
+
+        /// Execute enabled non-rollback commands after building the reviewed plan.
+        #[arg(long)]
+        execute: bool,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::cli::{
+        Cli, Command, ProtocolImportCommand, ProtocolImportKind, RankingCommand,
+        output::OutputFormat,
+    };
+
+    fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut raw_args = Vec::with_capacity(args.len() + 1);
+        raw_args.push("mcp-gateway");
+        raw_args.extend(args.iter().copied());
+        Cli::try_parse_from(raw_args)
+    }
+
+    #[test]
+    fn import_apply_parses_inactive_output_dir_and_force() {
+        let cli = parse_args(&[
+            "import",
+            "apply",
+            "--kind",
+            "openapi",
+            "fixtures/openapi.yaml",
+            "--output",
+            "capability-drafts/review",
+            "--source-name",
+            "users-api",
+            "--format",
+            "plain",
+            "--force",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Import(ProtocolImportCommand::Apply {
+                kind,
+                file,
+                output,
+                source_name,
+                format,
+                force,
+                ..
+            })) => {
+                assert_eq!(kind, ProtocolImportKind::OpenApi);
+                assert_eq!(file, std::path::PathBuf::from("fixtures/openapi.yaml"));
+                assert_eq!(output, std::path::PathBuf::from("capability-drafts/review"));
+                assert_eq!(source_name.as_deref(), Some("users-api"));
+                assert_eq!(format, OutputFormat::Plain);
+                assert!(force);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ranking_eval_parses_fixture_path_and_format() {
+        let cli = parse_args(&[
+            "ranking",
+            "eval",
+            "fixtures/ranking-eval.json",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Ranking(RankingCommand::Eval { file, format })) => {
+                assert_eq!(file, std::path::PathBuf::from("fixtures/ranking-eval.json"));
+                assert_eq!(format, OutputFormat::Json);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+}
+
+/// `TrustCard` and CBOM advisory metadata commands.
+#[derive(Subcommand, Debug)]
+pub enum TrustCommand {
+    /// Generate `TrustCard` and CBOM metadata from local capability YAML files.
+    #[command(about = "Generate TrustCard metadata from local capabilities")]
+    Generate {
+        /// Directory containing capability YAML definitions.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Output format.
+        #[arg(short, long, default_value = "json", value_enum)]
+        format: OutputFormat,
+
+        /// Optional file path for machine JSON output.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Inspect one generated `TrustCard` from the local capability catalogue.
+    #[command(about = "Inspect a generated TrustCard for one capability")]
+    Inspect {
+        /// Capability/server name to inspect.
+        #[arg(required = true)]
+        name: String,
+
+        /// Directory containing capability YAML definitions.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Validate a `TrustCard` file or generated local capability `TrustCard`s.
+    #[command(about = "Validate TrustCard metadata")]
+    Validate {
+        /// `TrustCard` JSON or YAML file to validate. If omitted, generated
+        /// `TrustCard`s from --capabilities are validated.
+        #[arg(long)]
+        file: Option<PathBuf>,
+
+        /// Directory containing capability YAML definitions, used when --file
+        /// is omitted.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Return a non-zero exit code for warning findings, not only failures.
+        #[arg(long)]
+        strict: bool,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+
+    /// Evaluate generated `TrustCard`s with `CatalogTrustLab`.
+    #[command(subcommand, about = "CatalogTrustLab advisory evaluation commands")]
+    Lab(TrustLabCommand),
+}
+
+/// `CatalogTrustLab` evaluation commands.
+#[derive(Subcommand, Debug)]
+pub enum TrustLabCommand {
+    /// Evaluate one or all local capability `TrustCard`s.
+    #[command(about = "Evaluate generated TrustCards with CatalogTrustLab")]
+    Evaluate {
+        /// Optional capability/server name to evaluate. If omitted, every
+        /// generated local `TrustCard` is evaluated.
+        name: Option<String>,
+
+        /// Directory containing capability YAML definitions.
+        #[arg(
+            short = 'C',
+            long,
+            default_value = "capabilities",
+            env = "MCP_GATEWAY_CAPABILITIES"
+        )]
+        capabilities: PathBuf,
+
+        /// Return non-zero when policy verdict is block. Default mode is
+        /// advisory-only and records would-block evidence without failing.
+        #[arg(long)]
+        enforce: bool,
+
+        /// Optional `TrustLab` baseline JSON/YAML file for schema-drift checks.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+
+        /// Write the current generated tool schema digests as a baseline file.
+        #[arg(long)]
+        write_baseline: Option<PathBuf>,
+
+        /// Managed local baseline registry directory. When --baseline is not
+        /// set, the named baseline is loaded from this registry.
+        #[arg(long)]
+        baseline_registry: Option<PathBuf>,
+
+        /// Create or update the named baseline inside --baseline-registry.
+        #[arg(long)]
+        update_baseline_registry: bool,
+
+        /// JSON/YAML file with active fixture evidence. By default the CLI
+        /// records dry-run eligibility only and does not call a candidate
+        /// server.
+        #[arg(long)]
+        active_fixtures: Option<PathBuf>,
+
+        /// Execute declared-safe active fixtures through the local capability
+        /// executor. Requires --active-fixtures and an isolated fixture spec.
+        #[arg(long, requires = "active_fixtures")]
+        execute_active_fixtures: bool,
+
+        /// Attach `RuntimeProvider` planning evidence for active fixture
+        /// execution. This does not provision the runtime yet.
+        #[arg(long, value_enum, requires = "active_fixtures")]
+        runtime_provider_plan: Option<RuntimeProviderArg>,
+
+        /// Container image reference used when planning Docker or Podman
+        /// active fixture execution.
+        #[arg(long, requires = "runtime_provider_plan")]
+        runtime_image: Option<String>,
+
+        /// Baseline identifier used when --write-baseline is set.
+        #[arg(long, default_value = "local-baseline")]
+        baseline_id: String,
+
+        /// Minimum score for policy allow.
+        #[arg(long, default_value_t = 75)]
+        minimum_score: u8,
+
+        /// Minimum score for certification.
+        #[arg(long, default_value_t = 90)]
+        certification_score: u8,
+
+        /// Output format.
+        #[arg(short, long, default_value = "table", value_enum)]
+        format: OutputFormat,
+    },
+}
+
+/// Runtime provider families exposed by `TrustLab` planning flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum RuntimeProviderArg {
+    /// Existing direct local process path.
+    LocalProcess,
+    /// Docker container runtime.
+    Docker,
+    /// Podman container runtime.
+    Podman,
+    /// Linux systemd user service runtime.
+    Systemd,
+    /// macOS launchd runtime.
+    Launchd,
+    /// Kubernetes workload runtime.
+    Kubernetes,
 }
 
 /// Plugin marketplace subcommands

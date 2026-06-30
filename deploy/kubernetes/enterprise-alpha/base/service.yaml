@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-gateway
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mcp-gateway
+  ports:
+    - name: http
+      protocol: TCP
+      port: 39400
+      targetPort: http

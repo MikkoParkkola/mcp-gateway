@@ -1,0 +1,341 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gateways.mcpgateway.io
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  group: mcpgateway.io
+  scope: Namespaced
+  names:
+    plural: gateways
+    singular: gateway
+    kind: Gateway
+    shortNames: ["mcpgw"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["replicas", "service", "runtimeProfileRef"]
+              properties:
+                replicas:
+                  type: integer
+                  minimum: 2
+                  default: 2
+                service:
+                  type: object
+                  required: ["port"]
+                  properties:
+                    port:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
+                      default: 39400
+                runtimeProfileRef:
+                  type: string
+                policyRef:
+                  type: string
+                trustCardRefs:
+                  type: array
+                  items:
+                    type: string
+                evidence:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    endpoint:
+                      type: string
+                protectedValueRefs:
+                  type: array
+                  items:
+                    type: object
+                    required: ["name"]
+                    properties:
+                      name:
+                        type: string
+                      mountPath:
+                        type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: ["type", "status", "reason"]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                observedGeneration:
+                  type: integer
+                driftDetected:
+                  type: boolean
+                rollbackRevision:
+                  type: string
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mcpservers.mcpgateway.io
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  group: mcpgateway.io
+  scope: Namespaced
+  names:
+    plural: mcpservers
+    singular: mcpserver
+    kind: MCPServer
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["transport", "endpoint"]
+              properties:
+                transport:
+                  type: string
+                  enum: ["stdio", "streamable_http", "sse"]
+                endpoint:
+                  type: string
+                runtimeProfileRef:
+                  type: string
+                policyRef:
+                  type: string
+                trustCardRef:
+                  type: string
+                protectedValueRefs:
+                  type: array
+                  items:
+                    type: object
+                    required: ["name"]
+                    properties:
+                      name:
+                        type: string
+                      env:
+                        type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: policies.mcpgateway.io
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  group: mcpgateway.io
+  scope: Namespaced
+  names:
+    plural: policies
+    singular: policy
+    kind: Policy
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              properties:
+                networkEgress:
+                  type: string
+                  enum: ["deny_all", "allow_list"]
+                  default: "deny_all"
+                allowedHosts:
+                  type: array
+                  items:
+                    type: string
+                runtime:
+                  type: object
+                  properties:
+                    allowPrivileged:
+                      type: boolean
+                      default: false
+                    defaultCpu:
+                      type: string
+                    defaultMemory:
+                      type: string
+                contextIntegrity:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum: ["monitor_only", "enforce"]
+                      default: "monitor_only"
+                exceptions:
+                  type: array
+                  items:
+                    type: object
+                    required: ["reason", "expiresAt"]
+                    properties:
+                      reason:
+                        type: string
+                      expiresAt:
+                        type: string
+                        format: date-time
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: runtimeprofiles.mcpgateway.io
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  group: mcpgateway.io
+  scope: Namespaced
+  names:
+    plural: runtimeprofiles
+    singular: runtimeprofile
+    kind: RuntimeProfile
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              properties:
+                provider:
+                  type: string
+                  enum: ["kubernetes", "container", "local_process"]
+                  default: "kubernetes"
+                restartPolicy:
+                  type: string
+                  enum: ["always", "on_failure", "never"]
+                  default: "on_failure"
+                resources:
+                  type: object
+                  properties:
+                    cpu:
+                      type: string
+                    memory:
+                      type: string
+                networkPolicyRef:
+                  type: string
+                health:
+                  type: object
+                  properties:
+                    readinessPath:
+                      type: string
+                      default: "/health"
+                    livenessPath:
+                      type: string
+                      default: "/health"
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: trustcardreferences.mcpgateway.io
+  labels:
+    app.kubernetes.io/name: mcp-gateway
+    app.kubernetes.io/part-of: mcp-gateway-enterprise
+    mcp-gateway.io/license-tier: enterprise
+spec:
+  group: mcpgateway.io
+  scope: Namespaced
+  names:
+    plural: trustcardreferences
+    singular: trustcardreference
+    kind: TrustCardReference
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["name", "digest"]
+              properties:
+                name:
+                  type: string
+                digest:
+                  type: string
+                source:
+                  type: string
+                evidenceEndpoint:
+                  type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+      subresources:
+        status: {}

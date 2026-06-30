@@ -103,6 +103,58 @@ No token cost for loading GitMCP's schemas into the model: the gateway's
 Meta-MCP surface keeps discovery compact and the AI only pays for the tool it
 actually calls.
 
+## ShadowRadar before trusting remote endpoints
+
+Use passive discovery to find remote or local MCP endpoints that bypass the
+gateway:
+
+```bash
+mcp-gateway cap discover --shadow --format json
+```
+
+The `shadow_radar.v1` report lists unmanaged assets only and includes stable
+IDs, source, ownership, transport exposure, trust status, data risk,
+recommended action, confidence, confirmation requirement, verification step,
+and rollback step. The default scan is local and passive: it reads known client
+configs, environment hints, and the local process table, but it does not
+handshake with discovered servers or invoke their tools.
+The machine-readable schema and risk-code contract are documented in
+[`SHADOW_SCAN.md`](SHADOW_SCAN.md).
+
+Code that renders TrustCards, doctor findings, or control-plane inventory
+consumes the derived `shadow_radar.handoff.v1` feed from
+`ShadowScanReport::consumer_handoff()`. `mcp-gateway doctor --format json`
+includes passive ShadowRadar findings as advisory warnings with category, risk,
+manual review, verification, and rollback metadata; it does not trust, start, or
+invoke unmanaged servers. The `/ui/api/control-plane` response and Control Plane
+tab include the local passive ShadowRadar summary, unmanaged asset count,
+severity, recommended action, and human-review requirement. The handoff keeps
+the scan passive, preserves stable asset IDs, and carries only human-safe
+evidence pointers such as sanitized endpoints, executable basenames, ports, and
+config paths.
+
+The same handoff also carries `shadow_radar.enterprise_boundary.v1`, an
+explicit contract for the dual-license split. `free_core_scan` is always local,
+passive, and lists network-range discovery, scheduled scans, fleet scope, tool
+invocation, and config mutation under `denied_capabilities`. `enterprise_scan`
+allows network-range discovery, scheduled scans, and fleet scope while still
+denying tool invocation and config mutation; drift evidence, SIEM export, owner
+assignment, and policy remediation remain enterprise capabilities. Evidence
+export contracts are marked
+`requires_enterprise_license: true` and `sensitive_values_included: false` so
+downstream control planes can automate routing without carrying sensitive
+values or turning local discovery into a network scanner.
+
+For reviewed local findings, adoption is explicit:
+
+```bash
+mcp-gateway cap discover --shadow --write-config
+```
+
+Free/core includes local passive inventory and risk hints. Enterprise fleet
+features are scheduled org-wide inventory, network-range discovery, drift
+evidence, SIEM export, owner assignment, and policy remediation.
+
 ## Authenticated remote backends
 
 For remote servers that need auth, add headers or OAuth:

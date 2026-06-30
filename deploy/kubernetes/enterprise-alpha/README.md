@@ -1,0 +1,161 @@
+# mcp-gateway Kubernetes Enterprise Alpha
+
+This package is the first Kubernetes deployment contract for enterprise
+mcp-gateway installations. Operators can review, plan, dry-run, and validate
+the resources with the same deterministic contract used by the controller
+manager.
+
+The shipped controller surface has two parts. `mcp-gateway kubernetes plan
+<resources.yaml>` parses reviewed custom resources, resolves references, emits
+status conditions, lists reconcile actions, provides server-side dry-run plus
+rollback handles, and builds sensitive-data-free evidence exports for
+Kubernetes status, Events, OTel, and SIEM adapters. `mcp-gateway kubernetes
+controller <resources.yaml>` runs the deterministic controller-manager loop
+over that same resource stream, with bounded cycles for CI and continuous mode
+for operators.
+
+## License Boundary
+
+Free/core keeps Docker, Docker Compose, and single-node service templates.
+This Kubernetes package is enterprise scope because it covers HA, cluster
+policy reconciliation, managed rollout, multi-tenant namespace patterns, and
+fleet evidence export.
+
+## Workflow Contract
+
+1. `preflight`: verify kubectl access, namespace ownership, storage class,
+   ingress class, cert manager if TLS automation is requested, network policy
+   support, Prometheus/OTel endpoints, and RBAC permissions.
+2. `plan`: run `mcp-gateway kubernetes plan base/example-gateway.yaml` to
+   render reconcile actions, reference checks, status conditions, dry-run
+   command, and rollback handles.
+3. `controller`: run `mcp-gateway kubernetes controller
+   base/example-gateway.yaml --cycles 2` to exercise the same reconcile and
+   evidence contract as a controller-manager loop.
+4. `apply-plan`: run `mcp-gateway kubernetes apply-plan
+   base/example-gateway.yaml` to render preflight, server-side dry-run, gated
+   apply, verify, evidence export, and rollback commands. Add `--execute` to
+   run enabled non-rollback commands after the plan is reviewed.
+5. `apply`: execute mutating commands only after human approval
+   for namespace, ingress domain, protected value provider, tenancy, and policy
+   exceptions.
+6. `verify`: wait for status conditions, probes, service endpoints, policy
+   convergence, and gateway health.
+7. `explain`: show why every generated resource exists and which acceptance
+   criterion it supports.
+8. `rollback`: use the previous release revision or previous custom resource
+   generation, and require confirmation for destructive namespace changes.
+
+## Included Files
+
+- `crds/*.yaml`: Gateway, MCPServer, Policy, RuntimeProfile, and TrustCard
+  reference schemas.
+- `base/*.yaml`: service account, RBAC, network policy, service, deployment,
+  and example custom resource.
+- `values.enterprise.example.yaml`: Helm-style values used by the planner.
+- `scripts/preflight.sh`: read-only preflight checks for local clusters.
+- `scripts/server-dry-run.sh`: non-mutating API-server validation wrapper.
+- `scripts/kind-smoke.sh`: disposable kind cluster fixture for local smoke
+  validation.
+
+## Human Gates
+
+Automation should infer everything else. Humans choose only:
+
+- Namespace.
+- Ingress domain.
+- Protected value provider.
+- Tenancy model.
+- Explicit policy exceptions.
+- Destructive rollback approval.
+
+## Reconcile Plan
+
+```bash
+mcp-gateway kubernetes plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --format table
+```
+
+The command is local and non-mutating. It returns a blocked plan when required
+references such as `runtimeProfileRef`, `policyRef`, or `trustCardRef` do not
+resolve within the supplied custom-resource document stream.
+
+## Controller Manager
+
+```bash
+mcp-gateway kubernetes controller \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --cycles 2 \
+  --interval-seconds 30 \
+  --format table
+```
+
+The controller command runs the same planner in a reconcile loop and emits
+`kubernetes.controller_report.v1`. Bounded cycles are intended for CI and local
+acceptance evidence. `--watch` keeps reconciling until the process is stopped.
+Blocked plans stop the loop before a future cluster adapter could attempt
+mutating work.
+
+## Cluster Apply Plan
+
+```bash
+mcp-gateway kubernetes apply-plan \
+  deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml \
+  --namespace mcp-gateway \
+  --format table
+```
+
+The apply plan emits `kubernetes.cluster_apply_plan.v1`. By default, preflight
+and server-side dry-run are enabled while mutating apply, status evidence,
+event evidence, verification, and rollback commands are present but disabled.
+Passing `--execute` runs only enabled, non-rollback commands and emits
+`kubernetes.cluster_execution_report.v1`; without `--approve-apply`, that means
+only preflight and server-side dry-run execute. Passing both `--approve-apply`
+and `--execute` lets a Ready plan run apply, verification, and enabled evidence
+export commands. Blocked plans invoke no commands, and rollback remains a
+human-confirmed recovery handle rather than an automatic final step.
+
+## Evidence Exports
+
+The plan includes `evidence_exports` with schema
+`kubernetes.evidence_export.v1`. The current adapter contract emits four
+targets:
+
+- Gateway status subresource.
+- Kubernetes Event.
+- OpenTelemetry collector/exporter path.
+- SIEM webhook adapter path.
+
+The payload contains low-cardinality plan attributes, action/condition reason
+codes, counts, namespace, source, and rollout-safety flags. It does not include
+raw manifests, protected-value material, or sensitive values. Status and Event
+exports are command previews for a future controller to execute; OTel and SIEM
+exports are adapter payloads with empty command vectors.
+
+## Server-Side Dry-Run
+
+```bash
+deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh mcp-gateway
+```
+
+The wrapper runs preflight first and uses `kubectl apply --server-side
+--dry-run=server`. It does not mutate cluster state.
+
+## Kind Fixture
+
+```bash
+deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh
+```
+
+The fixture creates a disposable kind cluster, installs the CRDs in that
+cluster, and runs the server-side dry-run wrapper. Set
+`MCP_GATEWAY_KIND_KEEP=1` to keep the cluster for inspection.
+
+## Current Gaps
+
+- No long-lived in-cluster controller deployment yet; the current live-cluster
+  adapter is a gated CLI execution path used by CI, operator review, and
+  operator-run apply workflows.

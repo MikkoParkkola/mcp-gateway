@@ -11,9 +11,9 @@ mcp-gateway serve                            # 3. run
 mcp-gateway doctor                           # 4. verify
 ```
 
-The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.dev, and Codex for existing MCP servers, imports them into `gateway.yaml`, and writes the gateway entry back into each client. Done.
+The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.dev, and Codex for existing MCP servers, imports them into `gateway.yaml`, previews the gateway client entry, writes it into detected clients, verifies the write, and prints any backup/rollback paths.
 
-> **Nothing to import yet?** `mcp-gateway init --with-examples` writes a starter `gateway.yaml` with free capabilities (weather, Wikipedia) so you can confirm the gateway works.
+> **Nothing to import yet?** `mcp-gateway setup wizard --configure-client` now bootstraps the local starter profile when no existing MCP servers are found. You can still run `mcp-gateway init --profile local` directly if you only want to create `gateway.yaml` plus zero-key sample capability files.
 
 ## The manual way (learn what's happening)
 
@@ -37,10 +37,10 @@ cargo install mcp-gateway
 ### 2. Create a Config
 
 ```bash
-mcp-gateway init --with-examples
+mcp-gateway init --profile local
 ```
 
-This writes `gateway.yaml` with sensible defaults and two free capabilities. Or create it manually:
+This writes `gateway.yaml` with sensible defaults and two free capability files under `capabilities/knowledge/`. Or create it manually:
 
 ```yaml
 server:
@@ -59,7 +59,7 @@ backends: {}
 
 ### 3. Add Capabilities
 
-The `init --with-examples` command creates these automatically. If you're writing config by hand, create a `capabilities/` directory and add capability YAML files (no API keys needed):
+The `init --profile local` command creates these automatically. If you're writing config by hand, create a `capabilities/` directory and add capability YAML files (no API keys needed):
 
 **capabilities/weather.yaml**
 ```yaml
@@ -198,9 +198,15 @@ curl -s http://localhost:39400/mcp \
 ### 6. Connect to your AI client
 
 ```bash
-mcp-gateway setup export --target all          # auto-write to all detected clients
-mcp-gateway setup export --target claude-code  # or a specific client
 mcp-gateway setup export --target all --dry-run  # preview first
+mcp-gateway setup export --target all            # write, back up, and verify
+mcp-gateway setup export --target claude-code    # or a specific client
+```
+
+When an existing client config is updated, the command prints a backup path and a rollback command such as:
+
+```bash
+mcp-gateway setup export --rollback ~/.claude.json.mcp-gateway.bak.123456789
 ```
 
 Or manually — add to your client config:
@@ -220,6 +226,37 @@ Restart your client. The gateway's compact Meta-MCP surface (12-15 tools) replac
 
 See [examples/claude-desktop.json](../examples/claude-desktop.json) for a full example config.
 
+### 7. Pick a deployment recipe
+
+Use the same config model everywhere:
+
+```bash
+# Local developer
+mcp-gateway init --profile local
+mcp-gateway setup export --target all --dry-run
+mcp-gateway serve
+mcp-gateway doctor --format json
+scripts/dev/first-run-smoke.sh  # repo checkout: clean init -> routed tool call
+scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + routed tool call
+
+# Container
+docker run --rm -p 39400:39400 \
+  -v "$PWD/gateway.yaml:/config.yaml:ro" \
+  -v "$PWD/capabilities:/capabilities:ro" \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml
+scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
+
+# Native service templates
+docker compose -f deploy/single-node/docker-compose.yaml config
+scripts/dev/service-template-smoke.sh  # repo checkout: systemd/launchd path + start smoke
+
+# Team-shared gateway
+mcp-gateway doctor --format json
+mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out ./tls
+```
+
+For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distribute only the generated client entry or managed config profile to users.
+
 </details>
 
 ## Next Steps
@@ -228,8 +265,10 @@ See [examples/claude-desktop.json](../examples/claude-desktop.json) for a full e
 - **Add more capabilities**: Copy any YAML from the `capabilities/` directory that ships with the gateway. 110+ work with zero config.
 - **Import OpenAPI specs**: `mcp-gateway cap import stripe-openapi.yaml --output capabilities/`
 - **Add remote backends**: For a zero-auth remote backend you can try in seconds, see [Adding remote MCP backends](REMOTE_BACKENDS.md).
+- **Find unmanaged MCP servers**: `mcp-gateway cap discover --shadow --format json` emits a passive ShadowRadar report with stable finding IDs, ownership, transport exposure, trust status, data risk, recommended action, confidence, verification, and rollback. It does not invoke discovered tools. Add `--write-config` only after reviewing adoptable local findings.
+- **Inspect the local control plane**: Open `http://127.0.0.1:39400/ui#control-plane` for read-only inventory, runtime health, decision queue, RBAC, and license-boundary status.
 - **Enable caching**: Add `cache: { enabled: true, default_ttl: 60s }` to your config.
 - **Enable auth**: Add `auth: { enabled: true, bearer_token: "auto" }` for token-based access control.
 - **Install from registry**: Run `mcp-gateway cap search finance` and `mcp-gateway cap install stock_quote`.
-- **Check health**: `mcp-gateway doctor` diagnoses config, port, env vars, and backend status. `mcp-gateway doctor --fix` auto-fixes where possible.
+- **Check health**: `mcp-gateway doctor` diagnoses config, port, runtime health, MCP handshake, tool listing, env vars, client config, and passive ShadowRadar unmanaged-MCP findings. Use `mcp-gateway doctor --format json` for automation-friendly results with fix hints, risk, confirmation, verification, and rollback metadata. In a repo checkout, `scripts/dev/usability-smoke.sh` verifies the local first-use path stays noninteractive by default and only uses backup/rollback for config mutation, and `scripts/dev/service-template-smoke.sh` verifies the Docker Compose, systemd, and launchd templates consume the same generated config layout.
 - **Full config reference**: See the [README](../README.md) or [examples/gateway-full.yaml](../examples/gateway-full.yaml).
