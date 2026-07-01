@@ -15,7 +15,7 @@ use super::proxy::ProxyManager;
 use super::streaming::NotificationMultiplexer;
 use crate::backend::BackendRegistry;
 use crate::config::{AgentIdentityConfig, StreamingConfig};
-use crate::control_plane::ControlPlaneStore;
+use crate::control_plane::{ControlPlaneRoleMappingConfig, ControlPlaneStore};
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
 use crate::security::ToolPolicy;
@@ -84,6 +84,9 @@ pub struct AppState {
     /// `None` when the control-plane data directory could not be opened, in
     /// which case governance mutation routes return 503 (MIK-6686).
     pub control_plane_store: Option<Arc<dyn ControlPlaneStore>>,
+    /// Identity-to-role mapping for the control-plane governance surface
+    /// (MIK-6688). Empty by default (legacy admin-key projection applies).
+    pub control_plane_role_mapping: Arc<ControlPlaneRoleMappingConfig>,
 }
 
 /// Create the router.

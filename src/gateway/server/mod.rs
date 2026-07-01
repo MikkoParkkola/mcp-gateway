@@ -791,6 +791,7 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
+            control_plane_role_mapping: Arc::new(self.config.control_plane.role_mapping.clone()),
         });
 
         // Create router

@@ -94,6 +94,9 @@ pub struct Config {
     /// Plugin marketplace and local plugin directory.
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
+    /// Enterprise control-plane governance (identity-to-role mapping, MIK-6688).
+    #[serde(default)]
+    pub control_plane: crate::control_plane::ControlPlaneConfig,
     /// Cost governance — per-tool budget enforcement and alerting.
     #[cfg(feature = "cost-governance")]
     #[serde(default)]
@@ -298,6 +301,7 @@ impl Config {
         self.validate_required_env_references()?;
         self.runtime.validate()?;
         self.validate_backend_runtime_profiles()?;
+        self.control_plane.role_mapping.validate()?;
         Ok(())
     }
 

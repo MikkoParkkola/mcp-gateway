@@ -6,8 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod role_mapping;
 pub mod store;
 
+pub use role_mapping::{ControlPlaneConfig, ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
 pub use store::{
     AuditFilter, ControlPlaneStore, FileControlPlaneStore, InMemoryControlPlaneStore, StoreError,
     StoreResult,
