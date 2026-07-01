@@ -51,6 +51,17 @@ jobs:
       - name: Validate noninteractive setup and routed first call
         run: scripts/dev/usability-smoke.sh
 
+  helm-chart-smoke:
+    name: Helm chart lint + render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+      - name: Validate helm chart smoke script
+        run: bash -n scripts/dev/helm-chart-smoke.sh
+      - name: Lint, render, and schema-validate the chart
+        run: scripts/dev/helm-chart-smoke.sh
+
   k8s-kind-rollback:
     name: K8s kind apply+upgrade+rollback
     runs-on: ubuntu-latest

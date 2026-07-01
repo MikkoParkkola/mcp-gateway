@@ -1,0 +1,65 @@
+# Default values for mcp-gateway.
+# The values file is the supported enterprise deployment contract (ADR-004).
+
+# nameOverride / fullnameOverride feed the pod selector (app.kubernetes.io/name),
+# which Kubernetes makes IMMUTABLE after install. Set them at install time and do
+# not change them on upgrade (a changed selector is rejected). The release-scoped
+# app.kubernetes.io/instance label prevents cross-install pod routing.
+# nameOverride: ""
+# fullnameOverride: ""
+
+replicaCount: 2
+
+image:
+  registry: ghcr.io
+  repository: mikkoparkkola/mcp-gateway
+  # Prefer a digest for immutable, supply-chain-safe deploys (set by A5/6684).
+  # When `digest` is set it takes precedence over `tag`.
+  tag: "2.19.0"
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 39400
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# Gateway config rendered into a ConfigMap and mounted read-only.
+config:
+  server:
+    host: 0.0.0.0
+    port: 39400
+  security:
+    firewall:
+      enabled: true
+      scan_requests: true
+      scan_responses: true
+  backends: []
+
+serviceAccount:
+  create: true
+  name: ""
+  # Data-plane gateway needs no API token; automount stays off unless required.
+  automountToken: false
+
+# RBAC is off by default: the data-plane gateway needs no cluster permissions
+# without the (deferred) operator. A3/least-privilege refines this.
+rbac:
+  create: false
+
+# NetworkPolicy is opt-in; A3 hardens it to default-deny + explicit egress.
+networkPolicy:
+  enabled: false
+
+logging:
+  format: json
+  level: info
