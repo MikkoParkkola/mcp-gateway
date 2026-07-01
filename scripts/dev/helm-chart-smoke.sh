@@ -73,4 +73,23 @@ echo "$rbac" | grep -q 'rules: \[\]' \
 ! echo "$rbac" | grep -qE '^kind: ClusterRole' \
   || { echo "FAIL: chart renders a ClusterRole (not namespace-scoped least-priv)" >&2; exit 1; }
 
+echo "== app chart renders ZERO CRDs (CRDs are a separate opt-in chart) =="
+# Must use --include-crds: plain `helm template` omits a chart's crds/ dir, so a
+# default render would falsely pass even if the app chart wrongly bundled CRDs.
+! "$HELM" template t "$CHART" --include-crds | grep -q '^kind: CustomResourceDefinition' \
+  || { echo "FAIL: app chart bundles CRDs (should be in mcp-gateway-crds)" >&2; exit 1; }
+[ ! -d "$CHART/crds" ] \
+  || { echo "FAIL: app chart has a crds/ dir (CRDs belong in mcp-gateway-crds)" >&2; exit 1; }
+
+echo "== separate CRDs chart lints and carries the CRDs =="
+CRDS_CHART="$(dirname "$CHART")/mcp-gateway-crds"
+"$HELM" lint "$CRDS_CHART" >/dev/null
+[ -f "$CRDS_CHART/crds/mcpgateway.io.yaml" ] \
+  || { echo "FAIL: crds chart missing the CRD file" >&2; exit 1; }
+
+echo "== CRDs chart copy matches the enterprise-alpha source (drift guard) =="
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/deploy/kubernetes/enterprise-alpha/crds/mcpgateway.io.yaml"
+diff -q "$SRC" "$CRDS_CHART/crds/mcpgateway.io.yaml" >/dev/null \
+  || { echo "FAIL: crds chart CRD drifted from enterprise-alpha source" >&2; exit 1; }
+
 echo "helm chart smoke passed"
