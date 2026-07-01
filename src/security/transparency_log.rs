@@ -129,6 +129,18 @@ impl TransparencyLogger {
 
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
 
+        // Make the log file's directory entry durable, so a governance audit
+        // file created on the first append cannot be lost by a crash while a
+        // control-plane commit that depends on it is already durable. Unix only
+        // (opening a directory as a file is not portable); best-effort.
+        #[cfg(unix)]
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+            && let Ok(dir) = File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+
         Ok(Self {
             inner: Mutex::new(Inner {
                 writer: BufWriter::new(file),
@@ -298,6 +310,14 @@ impl TransparencyLogger {
 
         writeln!(inner.writer, "{line}")?;
         inner.writer.flush()?;
+        // The synced path (governance audit) fsyncs for durability parity with
+        // the control-plane store's fsync'd collection writes, so a power loss
+        // cannot preserve a committed mutation while losing its audit record.
+        // The hot invocation path only flushes (fsync-per-entry there is too
+        // costly and its durability bar is lower).
+        if resync {
+            inner.writer.get_ref().sync_all()?;
+        }
 
         // ── Advance chain state only after the write succeeded ─────────────────
         inner.counter = counter;
