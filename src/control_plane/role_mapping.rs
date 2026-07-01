@@ -29,6 +29,12 @@ pub struct ControlPlaneConfig {
 }
 
 /// Ordered, first-match-wins identity-to-role rules.
+///
+/// NOTE: changes to the mapping are applied at gateway startup; they are not
+/// hot-reloaded today. To revoke a role (e.g. remove a `role: admin` rule),
+/// restart the gateway — a `/reload` does not yet re-apply this section
+/// (tracked as a follow-up). The mapping is still validated fail-closed on
+/// every load/reload, so an invalid change is always rejected.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlPlaneRoleMappingConfig {
@@ -67,14 +73,17 @@ impl ControlPlaneRoleRule {
         {
             return false;
         }
-        if let Some(email) = &self.email
-            && &identity.email != email
-        {
-            return false;
+        if let Some(email) = &self.email {
+            // An empty rule email (or a missing identity email) must never
+            // match: a token with no `email` claim resolves to "" and must not
+            // satisfy an email discriminator.
+            if email.is_empty() || identity.email.is_empty() || &identity.email != email {
+                return false;
+            }
         }
         if let Some(domain) = &self.domain {
             let email_domain = identity.email.split('@').next_back().unwrap_or("");
-            if email_domain != domain {
+            if domain.is_empty() || email_domain.is_empty() || email_domain != domain {
                 return false;
             }
         }
@@ -100,6 +109,24 @@ impl ControlPlaneRoleMappingConfig {
                     "control_plane.role_mapping rule {i} must set a non-empty issuer \
                      (issuer-scoped rules block cross-provider role escalation)"
                 )));
+            }
+            // A discriminator that is present but empty/whitespace is rejected:
+            // an empty `email`/`domain` would otherwise match a token that has
+            // no email claim (email == ""), silently widening the rule.
+            for (field, value) in [
+                ("group", &rule.group),
+                ("email", &rule.email),
+                ("domain", &rule.domain),
+            ] {
+                if let Some(v) = value
+                    && v.trim().is_empty()
+                {
+                    return Err(Error::ConfigValidation(format!(
+                        "control_plane.role_mapping rule {i} (issuer '{}') has an empty '{field}' \
+                         discriminator; omit it or give it a non-empty value",
+                        rule.issuer
+                    )));
+                }
             }
             let has_discriminator =
                 rule.group.is_some() || rule.email.is_some() || rule.domain.is_some();
@@ -280,6 +307,53 @@ mod tests {
             )],
         };
         assert!(ok.validate().is_ok());
+    }
+
+    // MIK-6688.ROLE.5 — an empty discriminator is rejected: an empty email/domain
+    // would otherwise match a token with a missing email claim (email == "").
+    #[test]
+    fn empty_discriminator_rejected_and_missing_email_never_matches() {
+        for bad in [
+            rule(
+                "https://idp.corp",
+                None,
+                Some(""),
+                None,
+                ControlPlaneRole::Admin,
+            ),
+            rule(
+                "https://idp.corp",
+                None,
+                None,
+                Some("  "),
+                ControlPlaneRole::Admin,
+            ),
+            rule(
+                "https://idp.corp",
+                Some(""),
+                None,
+                None,
+                ControlPlaneRole::Admin,
+            ),
+        ] {
+            let m = ControlPlaneRoleMappingConfig { rules: vec![bad] };
+            assert!(
+                m.validate().is_err(),
+                "empty discriminator must be rejected"
+            );
+        }
+
+        // Defense in depth: even if an empty-email rule existed, a token with no
+        // email claim must not match it.
+        let sneaky = ControlPlaneRoleRule {
+            issuer: "https://idp.corp".to_string(),
+            group: None,
+            email: Some(String::new()),
+            domain: None,
+            role: ControlPlaneRole::Admin,
+        };
+        let no_email = identity("https://idp.corp", "", &[]);
+        assert!(!sneaky.matches(&no_email));
     }
 
     // Email + domain discriminators, still issuer-scoped.
