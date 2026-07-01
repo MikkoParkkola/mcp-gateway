@@ -63,3 +63,8 @@ networkPolicy:
 logging:
   format: json
   level: info
+
+# HTTP /health probes. Default on. Disable only for images that don't serve the
+# health endpoint (e.g. lifecycle/CI tests with a placeholder image).
+probes:
+  enabled: true

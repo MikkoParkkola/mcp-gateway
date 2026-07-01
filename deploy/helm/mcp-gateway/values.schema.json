@@ -66,6 +66,11 @@
         "format": { "type": "string", "enum": ["json", "text"] },
         "level": { "type": "string", "enum": ["trace", "debug", "info", "warn", "error"] }
       }
+    },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
     }
   }
 }
