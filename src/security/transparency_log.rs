@@ -139,6 +139,13 @@ impl TransparencyLogger {
         })
     }
 
+    /// Path the log writes to, with any leading `~/` expanded. Lets callers
+    /// (e.g. the control-plane audit view) read the governance log back.
+    #[must_use]
+    pub fn path(&self) -> PathBuf {
+        expand_tilde(&self.config.path)
+    }
+
     /// Append one entry covering the completed `request → response` pair.
     ///
     /// Hash-chain guarantees:
@@ -166,6 +173,53 @@ impl TransparencyLogger {
     ) -> io::Result<()> {
         let timestamp = Utc::now().to_rfc3339();
 
+        // Domain fields for an invocation entry. `counter`, `prev_entry_hash`,
+        // `entry_hash`, and `sig`/`key_id` are added by `append_core`.
+        let mut fields = serde_json::Map::new();
+        fields.insert("caller".into(), caller.into());
+        fields.insert("request_hash".into(), request_hash.into());
+        fields.insert("response_hash".into(), response_hash.into());
+        fields.insert("server".into(), server.into());
+        fields.insert("session_id".into(), session_id.into());
+        fields.insert("timestamp".into(), timestamp.into());
+        fields.insert("tool".into(), tool.into());
+
+        self.append_core(fields).map(|_| ())
+    }
+
+    /// Append an arbitrary governance/audit entry into the same tamper-evident
+    /// hash chain. Callers supply their own domain fields (e.g. `actor_id`,
+    /// `action`, `target_id`); the chain fields (`counter`, `prev_entry_hash`,
+    /// `entry_hash`, and `sig`/`key_id` when signing is active) are added here.
+    ///
+    /// The reserved chain-field keys are rejected so a caller cannot forge them.
+    /// Returns the entry's `entry_hash` so the caller can use it as a dedupe key.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::Error` if a reserved key is supplied, or if serialisation or
+    /// the file write fails.
+    pub fn append_event(
+        &self,
+        fields: serde_json::Map<String, serde_json::Value>,
+    ) -> io::Result<String> {
+        for reserved in ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"] {
+            if fields.contains_key(reserved) {
+                return Err(io::Error::other(format!(
+                    "transparency log: reserved chain field '{reserved}' cannot be supplied by caller"
+                )));
+            }
+        }
+        self.append_core(fields)
+    }
+
+    /// Chain one entry from caller-supplied domain `fields`, returning its
+    /// `entry_hash`. Shared by [`Self::log_invocation`] and
+    /// [`Self::append_event`] so the chain logic exists exactly once.
+    fn append_core(
+        &self,
+        mut fields: serde_json::Map<String, serde_json::Value>,
+    ) -> io::Result<String> {
         let mut inner = self
             .inner
             .lock()
@@ -175,65 +229,38 @@ impl TransparencyLogger {
         let counter = inner.counter;
         let prev_entry_hash = inner.last_entry_hash.clone();
 
-        // ── Step 1: Build entry core (without entry_hash / sig / key_id) ──────
+        // ── Step 1: complete the entry core (without entry_hash / sig / key_id) ─
         //
-        // serde_json::json! builds a BTreeMap, so keys are sorted alphabetically
-        // on every serialisation — the hash is deterministic and reproducible.
-        let entry_core = serde_json::json!({
-            "caller":          caller,
-            "counter":         counter,
-            "prev_entry_hash": prev_entry_hash,
-            "request_hash":    request_hash,
-            "response_hash":   response_hash,
-            "server":          server,
-            "session_id":      session_id,
-            "timestamp":       timestamp,
-            "tool":            tool,
-        });
+        // serde_json Map serialises with sorted keys (BTreeMap), so the hash is
+        // deterministic and reproducible regardless of insertion order.
+        fields.insert("counter".into(), counter.into());
+        fields.insert("prev_entry_hash".into(), prev_entry_hash.into());
 
         // ── Step 2: entry_hash = sha256(canonical JSON of core) ───────────────
-        let core_json = serde_json::to_string(&entry_core).map_err(io::Error::other)?;
+        let core_json = serde_json::to_string(&serde_json::Value::Object(fields.clone()))
+            .map_err(io::Error::other)?;
         let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
         let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
 
         // ── Step 3: sig = hmac_sha256(secret, entry_hash_bytes) ──────────────
-        let (sig_opt, key_id_opt) = if self.config.shared_secret.is_empty() {
-            (None, None)
-        } else {
+        if !self.config.shared_secret.is_empty() {
             let sig_hex = hmac_sha256_hex(self.config.shared_secret.as_bytes(), &entry_hash_bytes);
-            (
-                Some(format!("hmac-sha256:{sig_hex}")),
-                Some(self.config.key_id.clone()),
-            )
-        };
-
-        // ── Assemble the full entry ───────────────────────────────────────────
-        let mut full_entry = entry_core;
-        {
-            let obj = full_entry
-                .as_object_mut()
-                .ok_or_else(|| io::Error::other("entry is not an object"))?;
-
-            obj.insert(
-                "entry_hash".to_string(),
-                serde_json::Value::String(entry_hash.clone()),
-            );
-            if let (Some(sig), Some(kid)) = (sig_opt, key_id_opt) {
-                obj.insert("sig".to_string(), serde_json::Value::String(sig));
-                obj.insert("key_id".to_string(), serde_json::Value::String(kid));
-            }
+            fields.insert("sig".into(), format!("hmac-sha256:{sig_hex}").into());
+            fields.insert("key_id".into(), self.config.key_id.clone().into());
         }
 
-        // ── Write to file ─────────────────────────────────────────────────────
-        let line = serde_json::to_string(&full_entry).map_err(io::Error::other)?;
+        // ── Assemble + write the full entry ───────────────────────────────────
+        fields.insert("entry_hash".into(), entry_hash.clone().into());
+        let line =
+            serde_json::to_string(&serde_json::Value::Object(fields)).map_err(io::Error::other)?;
 
         writeln!(inner.writer, "{line}")?;
         inner.writer.flush()?;
 
         // ── Advance chain state ───────────────────────────────────────────────
-        inner.last_entry_hash = entry_hash;
+        inner.last_entry_hash.clone_from(&entry_hash);
 
-        Ok(())
+        Ok(entry_hash)
     }
 }
 
