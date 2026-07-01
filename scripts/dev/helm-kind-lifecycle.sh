@@ -44,8 +44,18 @@ if ! "$KIND" get clusters | grep -qx "$CLUSTER"; then
 fi
 "$KUBECTL" config use-context "kind-$CLUSTER" >/dev/null
 
+# Authoritative Pod Security proof: enforce the built-in `restricted` standard on
+# the namespace so the API server REJECTS any pod that violates it at admission.
+# If the chart's securityContext regresses, `helm install --wait` fails here —
+# far stronger than string-matching the rendered YAML (MIK-6695 / HELM.3).
+"$KUBECTL" create namespace "$NAMESPACE" --dry-run=client -o yaml \
+  | "$KUBECTL" apply -f -
+"$KUBECTL" label --overwrite namespace "$NAMESPACE" \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/enforce-version=latest
+
 common_args=(
-  --namespace "$NAMESPACE" --create-namespace
+  --namespace "$NAMESPACE"
   --set image.registry="$IMG_REG"
   --set image.repository="$IMG_REPO"
   --set probes.enabled=false

@@ -51,9 +51,12 @@ CRDs remain experimental and ship in a *separate* opt-in chart.
 - **MIK-6691.HELM.2** kind CI: `helm install` the chart, `helm upgrade` to a new
   image, assert rollout, `helm rollback`, assert convergence (extends MIK-6679,
   now via the chart not raw manifests).
-- **MIK-6691.HELM.3** rendered pods satisfy Pod Security `restricted` (CI policy
-  assertion via `kubeconform`/`conftest`); NetworkPolicy is default-deny with an
-  explicit DNS egress rule.
+- **MIK-6691.HELM.3** rendered pods satisfy Pod Security `restricted` — enforced
+  authoritatively in kind CI via a namespace labeled
+  `pod-security.kubernetes.io/enforce=restricted` (admission rejects violators),
+  with a fast offline field pre-check; the NetworkPolicy is workload-scoped and
+  restrictive (ingress to the service port, egress to HTTPS + DNS), not a
+  namespace-wide default-deny (an app chart must not impose that on the namespace).
 - **MIK-6691.HELM.4** CRDs live in a separate `mcp-gateway-crds` chart; the app
   chart installs and runs with zero CRDs present.
 - **MIK-6691.HELM.5** `helm package` + push to an **ephemeral OCI registry**,

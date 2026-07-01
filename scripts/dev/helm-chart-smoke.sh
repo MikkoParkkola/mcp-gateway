@@ -41,4 +41,36 @@ echo "== pod selector is release-scoped (immutable-selector + cross-route guard)
 "$HELM" template rel1 "$CHART" | grep -q 'app.kubernetes.io/instance: rel1' \
   || { echo "FAIL: selector/labels not release-scoped" >&2; exit 1; }
 
+echo "== Pod Security 'restricted' fields present (fast pre-check; kind CI enforces authoritatively) =="
+render="$("$HELM" template t "$CHART")"
+for field in \
+  'runAsNonRoot: true' \
+  'seccompProfile:' \
+  'type: RuntimeDefault' \
+  'allowPrivilegeEscalation: false' \
+  'readOnlyRootFilesystem: true' \
+  'drop: \["ALL"\]'; do
+  echo "$render" | grep -q "$field" \
+    || { echo "FAIL: restricted field missing: $field" >&2; exit 1; }
+done
+# Negative: no privilege-escalating or host-namespace escapes that restricted forbids.
+for bad in 'privileged: true' 'hostNetwork: true' 'hostPID: true' 'hostPath:' 'runAsUser: 0' 'allowPrivilegeEscalation: true'; do
+  ! echo "$render" | grep -q "$bad" \
+    || { echo "FAIL: restricted-forbidden field present: $bad" >&2; exit 1; }
+done
+
+echo "== NetworkPolicy is workload-scoped + restrictive with DNS egress (when enabled) =="
+np="$("$HELM" template t "$CHART" --set networkPolicy.enabled=true)"
+echo "$np" | grep -q 'policyTypes: \["Ingress", "Egress"\]' \
+  || { echo "FAIL: NetworkPolicy is not both Ingress+Egress (not restrictive)" >&2; exit 1; }
+echo "$np" | grep -q 'port: 53' \
+  || { echo "FAIL: NetworkPolicy lacks a DNS (53) egress rule" >&2; exit 1; }
+
+echo "== RBAC is least-privilege: empty Role, namespace-scoped only (no ClusterRole) =="
+rbac="$("$HELM" template t "$CHART" --set rbac.create=true)"
+echo "$rbac" | grep -q 'rules: \[\]' \
+  || { echo "FAIL: RBAC Role is not empty/least-privilege" >&2; exit 1; }
+! echo "$rbac" | grep -qE '^kind: ClusterRole' \
+  || { echo "FAIL: chart renders a ClusterRole (not namespace-scoped least-priv)" >&2; exit 1; }
+
 echo "helm chart smoke passed"
