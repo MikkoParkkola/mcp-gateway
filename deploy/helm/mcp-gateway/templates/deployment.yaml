@@ -59,6 +59,7 @@ spec:
             - name: config
               mountPath: /etc/mcp-gateway
               readOnly: true
+          {{- if .Values.probes.enabled }}
           readinessProbe:
             httpGet:
               path: /health
@@ -81,6 +82,7 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 12
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:

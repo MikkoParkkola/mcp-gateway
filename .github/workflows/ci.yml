@@ -80,6 +80,13 @@ jobs:
           MCP_GATEWAY_KIND_CLUSTER: mcp-gateway-rollback-smoke
           MCP_GATEWAY_KIND_KEEP: "1"
         run: deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh
+      - name: Validate helm kind lifecycle script
+        run: bash -n scripts/dev/helm-kind-lifecycle.sh
+      - name: Helm install, upgrade, and rollback on the real cluster
+        env:
+          MCP_GATEWAY_KIND_CLUSTER: mcp-gateway-rollback-smoke
+          MCP_GATEWAY_KIND_KEEP: "1"
+        run: scripts/dev/helm-kind-lifecycle.sh
 
   check:
     name: Clippy (pedantic)
