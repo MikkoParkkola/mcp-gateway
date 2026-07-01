@@ -54,6 +54,15 @@ impl CapabilityExecutor {
         }
 
         let response_format = config.response_format.to_ascii_lowercase();
+        if response_format == "text" {
+            // Plain-text responses (e.g. Wolfram|Alpha LLM API) aren't JSON.
+            // Wrap the raw body so downstream output mapping has a JSON value.
+            let text = response
+                .text()
+                .await
+                .map_err(|e| Error::Protocol(format!("Failed to read text response: {e}")))?;
+            return Ok(serde_json::json!({ "answer": text, "confidence": "high" }));
+        }
         if response_format == "binary" {
             let mime_type = response
                 .headers()

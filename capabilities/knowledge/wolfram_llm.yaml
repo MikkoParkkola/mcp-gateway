@@ -1,4 +1,4 @@
-sha256: 954dd55587bbf274e84144cc7abdf9917442eb70e6707c500cb1ef76d4fb4ff6
+sha256: 7d7881af47ce0151cddf20c9747ae7c2b220911afbca4e259e18833d16ad7fb2
 fulcrum: "1.0"
 name: wolfram_llm_query
 description: >
@@ -53,12 +53,12 @@ providers:
       base_url: https://www.wolframalpha.com
       path: /api/v1/llm-api
       method: GET
+      response_format: text
       headers:
         Accept: "text/plain"
       params:
         input: "{query}"
         units: "{units}"
-        appid: "{env.WOLFRAM_APPID}"
 
 cache:
   strategy: exact
