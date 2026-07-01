@@ -298,6 +298,14 @@ impl TransparencyLogger {
 
         writeln!(inner.writer, "{line}")?;
         inner.writer.flush()?;
+        // The synced path (governance audit) fsyncs for durability parity with
+        // the control-plane store's fsync'd collection writes, so a power loss
+        // cannot preserve a committed mutation while losing its audit record.
+        // The hot invocation path only flushes (fsync-per-entry there is too
+        // costly and its durability bar is lower).
+        if resync {
+            inner.writer.get_ref().sync_all()?;
+        }
 
         // ── Advance chain state only after the write succeeded ─────────────────
         inner.counter = counter;

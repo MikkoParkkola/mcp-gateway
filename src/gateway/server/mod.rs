@@ -79,6 +79,62 @@ async fn load_configured_identity_grants(
     }
 }
 
+/// Open the durable control-plane store (grants/policies plus a
+/// governance-scoped audit log, separate from the invocation transparency log;
+/// ADR-005, MIK-6685).
+///
+/// Returns `None` — disabling the governance mutation routes (they answer 503) —
+/// when auth is disabled, since an auth-disabled gateway treats every caller as
+/// an anonymous admin and a durable governance mutation surface must not be open
+/// to unauthenticated callers. Also returns `None` if the data directory or the
+/// audit log cannot be opened; never fatal to startup.
+///
+/// The store is rooted next to the config file when one is known
+/// (`<config-dir>/control-plane`), so distinct gateway instances do not share
+/// governance state; otherwise it falls back to `~/.mcp-gateway/control-plane`.
+/// Governance audit entries reuse the transparency log's signing identity, so
+/// they are signed iff the invocation log is.
+fn build_control_plane_store(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+) -> Option<Arc<dyn crate::control_plane::ControlPlaneStore>> {
+    use crate::control_plane::FileControlPlaneStore;
+    use crate::security::TransparencyLogger;
+    use crate::security::transparency_log::TransparencyLogConfig;
+
+    if !config.auth.enabled {
+        info!(
+            "control-plane governance mutations disabled: auth is off (would expose an anonymous-admin mutation surface)"
+        );
+        return None;
+    }
+
+    let base = config_path.and_then(|p| p.parent()).map_or_else(
+        || expand_home_path("~/.mcp-gateway/control-plane"),
+        |dir| dir.join("control-plane"),
+    );
+    let audit_cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: base.join("audit.jsonl").to_string_lossy().into_owned(),
+        key_id: config.security.transparency_log.key_id.clone(),
+        shared_secret: config.security.transparency_log.shared_secret.clone(),
+    });
+    let audit = match TransparencyLogger::open(audit_cfg) {
+        Ok(logger) => Arc::new(logger),
+        Err(e) => {
+            warn!(error = %e, "control-plane audit log unavailable; governance mutations disabled");
+            return None;
+        }
+    };
+    match FileControlPlaneStore::open(base.join("store"), audit) {
+        Ok(store) => Some(Arc::new(store) as Arc<dyn crate::control_plane::ControlPlaneStore>),
+        Err(e) => {
+            warn!(error = %e, "control-plane store unavailable; governance mutations disabled");
+            None
+        }
+    }
+}
+
 /// MCP Gateway server
 pub struct Gateway {
     /// Configuration
@@ -697,6 +753,9 @@ impl Gateway {
         // persistence and graceful shutdown cost saves use this handle).
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
 
+        let control_plane_store =
+            build_control_plane_store(&self.config, self.config_path.as_deref());
+
         let state = Arc::new(AppState {
             backends: Arc::clone(&self.backends),
             meta_mcp,
@@ -723,6 +782,7 @@ impl Gateway {
             #[cfg(feature = "firewall")]
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
+            control_plane_store,
         });
 
         // Create router

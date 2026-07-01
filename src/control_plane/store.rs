@@ -206,8 +206,37 @@ pub trait ControlPlaneStore: Send + Sync {
     /// Read audit events in chain order, honouring the filter's limit/offset.
     ///
     /// # Errors
-    /// Errors on an invalid filter, I/O failure, or a corrupt log line.
+    /// Errors on an invalid filter, an I/O failure, a corrupt log line.
     fn read_audit(&self, filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>>;
+
+    /// Atomically append a write-ahead audit event, then upsert the grant, as a
+    /// single serialized unit. Guarantees a committed grant is never unaudited
+    /// and that audit order matches commit order. The default appends then
+    /// commits; durable backends override to hold one lock across both.
+    ///
+    /// # Errors
+    /// Errors on an I/O failure, a serialisation failure, a corrupt collection.
+    fn commit_grant_audited(
+        &self,
+        grant: ControlPlaneGrant,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<()> {
+        self.append_audit(event)?;
+        self.put_grant(grant)
+    }
+
+    /// Policy counterpart of [`Self::commit_grant_audited`].
+    ///
+    /// # Errors
+    /// Errors on an I/O failure, a serialisation failure, a corrupt collection.
+    fn commit_policy_audited(
+        &self,
+        policy: ControlPlanePolicy,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<()> {
+        self.append_audit(event)?;
+        self.put_policy(policy)
+    }
 }
 
 // ── Audit event <-> transparency-log entry mapping ─────────────────────────────
@@ -504,6 +533,16 @@ impl FileControlPlaneStore {
             }
         }
     }
+
+    /// Append one governance audit entry, assuming the caller already holds the
+    /// audit lock. Re-syncs the chain tail from disk under the lock (so separate
+    /// processes never write the same counter) and fsyncs for durability.
+    fn append_audit_locked(&self, event: &ControlPlaneAuditEvent) -> StoreResult<()> {
+        self.audit
+            .append_event_synced(audit_fields(event))
+            .map(|_| ())
+            .map_err(StoreError::from)
+    }
 }
 
 impl ControlPlaneStore for FileControlPlaneStore {
@@ -562,16 +601,44 @@ impl ControlPlaneStore for FileControlPlaneStore {
     }
 
     fn append_audit(&self, event: &ControlPlaneAuditEvent) -> StoreResult<()> {
-        // Cross-process safety: a CLI and the server each hold their own logger
-        // with a cached counter. Serialise audit appends across processes with a
-        // dedicated lock and re-sync the chain tail from disk under it, so two
-        // processes never write the same counter (which would fork the chain and
-        // fail `verify_log`).
         let _lock = ExclusiveFileLock::acquire(&self.dir.join(".audit.lock"))?;
-        self.audit
-            .append_event_synced(audit_fields(event))
-            .map(|_| ())
-            .map_err(StoreError::from)
+        self.append_audit_locked(event)
+    }
+
+    fn commit_grant_audited(
+        &self,
+        grant: ControlPlaneGrant,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<()> {
+        // Hold the audit lock across BOTH the write-ahead audit and the commit
+        // so the pair is one serialized, ordered unit: no interleaving can make
+        // the audit order disagree with the committed order, and a committed
+        // grant is never unaudited.
+        let _lock = ExclusiveFileLock::acquire(&self.dir.join(".audit.lock"))?;
+        self.append_audit_locked(event)?;
+        self.mutate::<ControlPlaneGrant, _>(&self.grants_file(), |items| {
+            if let Some(existing) = items.iter_mut().find(|g| g.grant_id == grant.grant_id) {
+                *existing = grant.clone();
+            } else {
+                items.push(grant.clone());
+            }
+        })
+    }
+
+    fn commit_policy_audited(
+        &self,
+        policy: ControlPlanePolicy,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<()> {
+        let _lock = ExclusiveFileLock::acquire(&self.dir.join(".audit.lock"))?;
+        self.append_audit_locked(event)?;
+        self.mutate::<ControlPlanePolicy, _>(&self.policies_file(), |items| {
+            if let Some(existing) = items.iter_mut().find(|p| p.policy_id == policy.policy_id) {
+                *existing = policy.clone();
+            } else {
+                items.push(policy.clone());
+            }
+        })
     }
 
     fn read_audit(&self, filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>> {
@@ -1160,5 +1227,30 @@ mod tests {
             store.read_audit(&AuditFilter::new(10)),
             Err(StoreError::Corrupt(_))
         ));
+    }
+
+    // MIK-6686.CP.2 — the audited commit persists the grant AND appends a
+    // verifiable audit entry as one unit, under a single lock.
+    #[test]
+    fn audited_commit_persists_grant_and_appends_verifiable_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = governance_logger(dir.path());
+        let store =
+            FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+
+        let g = grant("g1", ControlPlaneGrantStatus::Approved);
+        let event = audit_event("e1", "alice", ControlPlaneAction::MutateGrant);
+        store.commit_grant_audited(g, &event).unwrap();
+
+        assert_eq!(store.list_grants().unwrap().len(), 1);
+        let audit = store.read_audit(&AuditFilter::new(10)).unwrap();
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].event_id, "e1");
+        let result = crate::security::transparency_log::verify_log(&logger.path()).unwrap();
+        assert!(
+            result.ok,
+            "audit chain must verify: {:?}",
+            result.error_message
+        );
     }
 }

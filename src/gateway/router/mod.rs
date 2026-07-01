@@ -15,6 +15,7 @@ use super::proxy::ProxyManager;
 use super::streaming::NotificationMultiplexer;
 use crate::backend::BackendRegistry;
 use crate::config::{AgentIdentityConfig, StreamingConfig};
+use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
 use crate::security::ToolPolicy;
@@ -79,6 +80,10 @@ pub struct AppState {
     pub firewall: Option<Arc<Firewall>>,
     /// Per-agent identity configuration (OWASP ASI03).
     pub agent_identity_config: AgentIdentityConfig,
+    /// Durable control-plane store (grants/policies + governance audit log).
+    /// `None` when the control-plane data directory could not be opened, in
+    /// which case governance mutation routes return 503 (MIK-6686).
+    pub control_plane_store: Option<Arc<dyn ControlPlaneStore>>,
 }
 
 /// Create the router.

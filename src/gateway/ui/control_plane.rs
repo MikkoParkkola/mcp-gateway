@@ -6,19 +6,22 @@ use std::sync::Arc;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 
 use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
 use super::errors::auth_required;
 use crate::control_plane::{
-    ControlPlaneAction, ControlPlaneActor, ControlPlaneAuthorization, ControlPlaneDecisionQueue,
-    ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus,
-    ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneRbac, ControlPlaneReadOnlyView,
-    ControlPlaneRole, ControlPlaneRuntimeHealth, ControlPlaneServer, ControlPlaneServerStatus,
-    ControlPlaneSnapshot, ControlPlaneTool, ControlPlaneTrustCard, ControlPlaneUser,
+    ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneAuthorization,
+    ControlPlaneDecisionQueue, ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant,
+    ControlPlaneGrantStatus, ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneMutation,
+    ControlPlanePolicy, ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole,
+    ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth, ControlPlaneServer,
+    ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore, ControlPlaneTool,
+    ControlPlaneTrustCard, ControlPlaneUser,
 };
 use crate::discovery::AutoDiscovery;
 use crate::discovery::shadow::{
@@ -28,9 +31,13 @@ use crate::discovery::shadow::{
 use crate::hashing::canonical_json_sha256;
 use crate::trust::TrustCard;
 
-/// Build the read-only control-plane API router.
+/// Build the control-plane API router: a read-only snapshot plus governance
+/// mutation routes (grants/policies) gated by RBAC + mandatory audit (MIK-6686).
 pub fn control_plane_router() -> Router<Arc<AppState>> {
-    Router::new().route("/ui/api/control-plane", get(control_plane_snapshot))
+    Router::new()
+        .route("/ui/api/control-plane", get(control_plane_snapshot))
+        .route("/ui/api/control-plane/grants", post(mutate_grant))
+        .route("/ui/api/control-plane/policies", post(mutate_policy))
 }
 
 async fn control_plane_snapshot(
@@ -55,8 +62,171 @@ async fn control_plane_snapshot(
         view,
         decision_queue,
         shadow_radar,
+        state.control_plane_store.is_some(),
     );
     Json(response).into_response()
+}
+
+/// Request body for a grant upsert mutation.
+#[derive(Debug, Deserialize)]
+struct GrantMutationRequest {
+    /// The grant to upsert (insert/replace).
+    grant: ControlPlaneGrant,
+    /// Reason (ticket id) for the audit trail.
+    reason: String,
+    /// Rollback plan recorded with the audit event.
+    rollback: ControlPlaneRollbackPlan,
+}
+
+/// Request body for a policy upsert mutation.
+#[derive(Debug, Deserialize)]
+struct PolicyMutationRequest {
+    /// The policy to upsert (insert/replace).
+    policy: ControlPlanePolicy,
+    /// Reason (ticket id) for the audit trail.
+    reason: String,
+    /// Rollback plan recorded with the audit event.
+    rollback: ControlPlaneRollbackPlan,
+}
+
+/// Result of a governance mutation.
+#[derive(Debug, Serialize)]
+struct MutationResponse {
+    ok: bool,
+    reason_code: String,
+    reason: String,
+}
+
+/// POST a grant upsert: RBAC plus mandatory audit via `validate_for_actor`,
+/// then persist to the control-plane store and append the audit event.
+async fn mutate_grant(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    Json(req): Json<GrantMutationRequest>,
+) -> impl IntoResponse {
+    let actor = actor_from_client(client.map(|Extension(c)| c).as_ref());
+    let target_id = req.grant.grant_id.clone();
+    apply_mutation(
+        state.control_plane_store.as_ref(),
+        &actor,
+        ControlPlaneAction::MutateGrant,
+        target_id,
+        format!("upsert grant {}", req.grant.grant_id),
+        req.reason,
+        req.rollback,
+        |store, event| store.commit_grant_audited(req.grant.clone(), event),
+    )
+}
+
+/// POST a policy upsert: same RBAC plus audit contract as [`mutate_grant`].
+async fn mutate_policy(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    Json(req): Json<PolicyMutationRequest>,
+) -> impl IntoResponse {
+    let actor = actor_from_client(client.map(|Extension(c)| c).as_ref());
+    let target_id = req.policy.policy_id.clone();
+    apply_mutation(
+        state.control_plane_store.as_ref(),
+        &actor,
+        ControlPlaneAction::MutatePolicy,
+        target_id,
+        format!("upsert policy {}", req.policy.policy_id),
+        req.reason,
+        req.rollback,
+        |store, event| store.commit_policy_audited(req.policy.clone(), event),
+    )
+}
+
+/// Shared mutation path: build the audited mutation, authorize it with
+/// `validate_for_actor`, then commit it as one audited unit (write-ahead audit
+/// plus persistence under a single lock, provided by the store).
+#[allow(clippy::too_many_arguments)]
+fn apply_mutation(
+    store: Option<&Arc<dyn ControlPlaneStore>>,
+    actor: &ControlPlaneActor,
+    action: ControlPlaneAction,
+    target_id: String,
+    summary: String,
+    reason: String,
+    rollback: ControlPlaneRollbackPlan,
+    commit: impl FnOnce(
+        &Arc<dyn ControlPlaneStore>,
+        &ControlPlaneAuditEvent,
+    ) -> Result<(), crate::control_plane::StoreError>,
+) -> axum::response::Response {
+    let Some(store) = store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(MutationResponse {
+                ok: false,
+                reason_code: "CONTROL_STORE_UNAVAILABLE".to_string(),
+                reason: "Control-plane store is not configured".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    // event_id embeds a millisecond timestamp, giving both a unique id and a
+    // coarse time for the audit trail (the hash chain provides ordering).
+    let event = ControlPlaneAuditEvent {
+        event_id: format!("cpa-{}-{target_id}", Utc::now().timestamp_millis()),
+        actor_id: actor.actor_id.clone(),
+        action,
+        target_id: target_id.clone(),
+        reason,
+        rollback,
+    };
+    let mutation = ControlPlaneMutation {
+        action,
+        target_id,
+        summary,
+        audit_event: Some(event.clone()),
+    };
+
+    let report = mutation.validate_for_actor(actor);
+    if !report.allowed {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(MutationResponse {
+                ok: false,
+                reason_code: report.reason_code,
+                reason: report.reason,
+            }),
+        )
+            .into_response();
+    }
+
+    // The store commits the write-ahead audit and the persistence as one
+    // serialized, ordered unit (see `commit_grant_audited`).
+    if let Err(e) = commit(store, &event) {
+        return internal_error("CONTROL_MUTATION_WRITE_FAILED", &e);
+    }
+
+    (
+        StatusCode::OK,
+        Json(MutationResponse {
+            ok: true,
+            reason_code: report.reason_code,
+            reason: report.reason,
+        }),
+    )
+        .into_response()
+}
+
+/// Log the underlying error server-side and return a generic client message, so
+/// filesystem paths and other internals are not leaked in the HTTP response.
+fn internal_error(code: &str, err: &crate::control_plane::StoreError) -> axum::response::Response {
+    tracing::error!(reason_code = code, error = %err, "control-plane mutation failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(MutationResponse {
+            ok: false,
+            reason_code: code.to_string(),
+            reason: "Control-plane mutation could not be persisted".to_string(),
+        }),
+    )
+        .into_response()
 }
 
 fn actor_from_client(client: Option<&AuthenticatedClient>) -> ControlPlaneActor {
@@ -289,13 +459,33 @@ impl ControlPlaneApiResponse {
         view: ControlPlaneReadOnlyView,
         decision_queue: ControlPlaneDecisionQueue,
         shadow_radar: ControlPlaneShadowRadar,
+        mutation_enabled: bool,
     ) -> Self {
         let coverage = snapshot.domain_coverage();
         let inventory_counts = ControlPlaneInventoryCounts::from_snapshot(snapshot, &shadow_radar);
+        let current_limits = if mutation_enabled {
+            vec![
+                "local_runtime_only",
+                "mutation_endpoint_active",
+                "no_enterprise_export",
+            ]
+        } else {
+            vec![
+                "read_only_api",
+                "local_runtime_only",
+                "no_persistence",
+                "no_mutation_endpoint",
+                "no_enterprise_export",
+            ]
+        };
         Self {
             schema_version: "control_plane.api.v1",
             source: "local_runtime_snapshot",
-            route: ControlPlaneRouteMode::default(),
+            route: ControlPlaneRouteMode {
+                read_only: !mutation_enabled,
+                mutation_endpoint: mutation_enabled,
+                mutating_actions_require_audit: true,
+            },
             features: feature_entitlements(),
             authorizations: ControlPlaneAuthorizationSet::for_actor(&actor),
             coverage,
@@ -305,13 +495,7 @@ impl ControlPlaneApiResponse {
             actor,
             view,
             decision_queue,
-            current_limits: vec![
-                "read_only_api",
-                "local_runtime_only",
-                "no_persistence",
-                "no_mutation_endpoint",
-                "no_enterprise_export",
-            ],
+            current_limits,
         }
     }
 }
@@ -542,5 +726,102 @@ mod grant_projection_tests {
             control_plane_grant_from_identity(g, Utc::now()).subject_id,
             "oidc:sub-123"
         );
+    }
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::apply_mutation;
+    use crate::control_plane::{
+        AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneGrant,
+        ControlPlaneGrantStatus, ControlPlaneRole, ControlPlaneRollbackPlan, ControlPlaneStore,
+        InMemoryControlPlaneStore,
+    };
+    use axum::http::StatusCode;
+    use std::sync::Arc;
+
+    fn actor(role: ControlPlaneRole) -> ControlPlaneActor {
+        ControlPlaneActor {
+            actor_id: "gateway-client:tester".to_string(),
+            display_name: "tester".to_string(),
+            role,
+            group_ids: vec!["g".to_string()],
+        }
+    }
+
+    fn grant() -> ControlPlaneGrant {
+        ControlPlaneGrant {
+            grant_id: "grant-1".to_string(),
+            subject_id: "user-1".to_string(),
+            server_id: "srv-1".to_string(),
+            tool_id: None,
+            status: ControlPlaneGrantStatus::Approved,
+        }
+    }
+
+    fn rollback() -> ControlPlaneRollbackPlan {
+        ControlPlaneRollbackPlan {
+            summary: "revert".to_string(),
+            step: "restore prior grant".to_string(),
+        }
+    }
+
+    // MIK-6686.CP.2 — an admin mutation is authorized, persisted, and audited.
+    #[test]
+    fn admin_grant_mutation_persists_and_audits() {
+        let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
+        let g = grant();
+        let resp = apply_mutation(
+            Some(&store),
+            &actor(ControlPlaneRole::Admin),
+            ControlPlaneAction::MutateGrant,
+            g.grant_id.clone(),
+            "upsert".to_string(),
+            "MIK-1".to_string(),
+            rollback(),
+            |s, event| s.commit_grant_audited(g.clone(), event),
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(store.list_grants().unwrap().len(), 1);
+        let audit = store.read_audit(&AuditFilter::new(10)).unwrap();
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].action, ControlPlaneAction::MutateGrant);
+        assert_eq!(audit[0].actor_id, "gateway-client:tester");
+    }
+
+    // MIK-6686.CP.2 — a non-admin is denied; nothing is persisted or audited.
+    #[test]
+    fn auditor_grant_mutation_is_denied_with_no_side_effects() {
+        let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
+        let g = grant();
+        let resp = apply_mutation(
+            Some(&store),
+            &actor(ControlPlaneRole::Auditor),
+            ControlPlaneAction::MutateGrant,
+            g.grant_id.clone(),
+            "upsert".to_string(),
+            "MIK-1".to_string(),
+            rollback(),
+            |s, event| s.commit_grant_audited(g.clone(), event),
+        );
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(store.list_grants().unwrap().is_empty());
+        assert!(store.read_audit(&AuditFilter::new(10)).unwrap().is_empty());
+    }
+
+    // MIK-6686.CP.2 — with no store configured the route reports 503.
+    #[test]
+    fn mutation_without_store_returns_503() {
+        let resp = apply_mutation(
+            None,
+            &actor(ControlPlaneRole::Admin),
+            ControlPlaneAction::MutateGrant,
+            "grant-1".to_string(),
+            "upsert".to_string(),
+            "MIK-1".to_string(),
+            rollback(),
+            |_s, _event| Ok(()),
+        );
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
