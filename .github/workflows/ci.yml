@@ -84,6 +84,7 @@ jobs:
           done
           # Pull the app chart back and render the pulled artifact.
           ver="$(grep -E '^version:' deploy/helm/mcp-gateway/Chart.yaml | awk '{print $2}')"
+          mkdir -p "$out/pulled"
           helm pull oci://localhost:5000/charts/mcp-gateway --version "$ver" -d "$out/pulled" --plain-http
           test -f "$out/pulled/mcp-gateway-$ver.tgz"
           helm template t "$out/pulled/mcp-gateway-$ver.tgz" | grep -q '^kind: Deployment'
