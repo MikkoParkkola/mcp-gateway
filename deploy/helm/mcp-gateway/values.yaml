@@ -56,7 +56,10 @@ serviceAccount:
 rbac:
   create: false
 
-# NetworkPolicy is opt-in; A3 hardens it to default-deny + explicit egress.
+# NetworkPolicy is opt-in. When enabled it is WORKLOAD-SCOPED (selects only the
+# gateway's own pods) and restrictive: ingress limited to the service port,
+# egress limited to HTTPS + DNS. It is NOT a namespace-wide default-deny — that
+# affects other workloads and is the cluster operator's responsibility.
 networkPolicy:
   enabled: false
 
