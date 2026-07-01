@@ -97,6 +97,9 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         firewall: None,
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
+        control_plane_role_mapping: std::sync::Arc::new(
+            mcp_gateway::control_plane::ControlPlaneRoleMappingConfig::default(),
+        ),
     })
 }
 
@@ -164,6 +167,9 @@ fn make_app_state_with_reload(
             firewall: None,
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
+            control_plane_role_mapping: std::sync::Arc::new(
+                mcp_gateway::control_plane::ControlPlaneRoleMappingConfig::default(),
+            ),
         }),
         live_config,
     )

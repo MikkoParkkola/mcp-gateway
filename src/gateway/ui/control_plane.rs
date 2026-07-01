@@ -19,9 +19,9 @@ use crate::control_plane::{
     ControlPlaneDecisionQueue, ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant,
     ControlPlaneGrantStatus, ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneMutation,
     ControlPlanePolicy, ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole,
-    ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth, ControlPlaneServer,
-    ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore, ControlPlaneTool,
-    ControlPlaneTrustCard, ControlPlaneUser,
+    ControlPlaneRoleMappingConfig, ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth,
+    ControlPlaneServer, ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore,
+    ControlPlaneTool, ControlPlaneTrustCard, ControlPlaneUser,
 };
 use crate::discovery::AutoDiscovery;
 use crate::discovery::shadow::{
@@ -29,6 +29,7 @@ use crate::discovery::shadow::{
     ShadowEnterpriseBoundary, ShadowScanReport, ShadowScanSummary,
 };
 use crate::hashing::canonical_json_sha256;
+use crate::key_server::oidc::VerifiedIdentity;
 use crate::trust::TrustCard;
 
 /// Build the control-plane API router: a read-only snapshot plus governance
@@ -43,9 +44,15 @@ pub fn control_plane_router() -> Router<Arc<AppState>> {
 async fn control_plane_snapshot(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
 ) -> impl IntoResponse {
     let client = client.map(|Extension(client)| client);
-    let actor = actor_from_client(client.as_ref());
+    let identity = identity.map(|Extension(id)| id);
+    let actor = actor_from_client(
+        client.as_ref(),
+        identity.as_ref(),
+        &state.control_plane_role_mapping,
+    );
     let snapshot = local_runtime_snapshot(&state, client.as_ref(), &actor);
     let shadow_radar = local_shadow_radar(&state).await;
 
@@ -102,9 +109,14 @@ struct MutationResponse {
 async fn mutate_grant(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     Json(req): Json<GrantMutationRequest>,
 ) -> impl IntoResponse {
-    let actor = actor_from_client(client.map(|Extension(c)| c).as_ref());
+    let actor = actor_from_client(
+        client.map(|Extension(c)| c).as_ref(),
+        identity.map(|Extension(id)| id).as_ref(),
+        &state.control_plane_role_mapping,
+    );
     let target_id = req.grant.grant_id.clone();
     apply_mutation(
         state.control_plane_store.as_ref(),
@@ -122,9 +134,14 @@ async fn mutate_grant(
 async fn mutate_policy(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     Json(req): Json<PolicyMutationRequest>,
 ) -> impl IntoResponse {
-    let actor = actor_from_client(client.map(|Extension(c)| c).as_ref());
+    let actor = actor_from_client(
+        client.map(|Extension(c)| c).as_ref(),
+        identity.map(|Extension(id)| id).as_ref(),
+        &state.control_plane_role_mapping,
+    );
     let target_id = req.policy.policy_id.clone();
     apply_mutation(
         state.control_plane_store.as_ref(),
@@ -229,7 +246,30 @@ fn internal_error(code: &str, err: &crate::control_plane::StoreError) -> axum::r
         .into_response()
 }
 
-fn actor_from_client(client: Option<&AuthenticatedClient>) -> ControlPlaneActor {
+/// Resolve the control-plane actor.
+///
+/// When a verified identity is present, the role comes from the issuer-scoped
+/// role mapping (MIK-6688); an identity that matches no rule gets `Auditor`
+/// (least privilege). With no verified identity, the legacy admin-key
+/// projection applies (admin key -> Admin, else Auditor) — backward compatible.
+fn actor_from_client(
+    client: Option<&AuthenticatedClient>,
+    identity: Option<&VerifiedIdentity>,
+    role_mapping: &ControlPlaneRoleMappingConfig,
+) -> ControlPlaneActor {
+    if let Some(id) = identity {
+        let role = role_mapping
+            .resolve_role(id)
+            .unwrap_or(ControlPlaneRole::Auditor);
+        let display_name = id.name.clone().unwrap_or_else(|| id.email.clone());
+        return ControlPlaneActor {
+            actor_id: format!("oidc:{}:{}", id.issuer, id.subject),
+            display_name,
+            role,
+            group_ids: id.groups.clone(),
+        };
+    }
+
     let (name, role, group_id) = match client {
         Some(client) if client.admin => (
             client.name.clone(),
@@ -823,5 +863,87 @@ mod mutation_tests {
             |_s, _event| Ok(()),
         );
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+
+#[cfg(test)]
+mod role_wiring_tests {
+    use super::actor_from_client;
+    use crate::control_plane::{
+        ControlPlaneAction, ControlPlaneRbac, ControlPlaneRole, ControlPlaneRoleMappingConfig,
+        ControlPlaneRoleRule,
+    };
+    use crate::gateway::auth::AuthenticatedClient;
+    use crate::key_server::oidc::VerifiedIdentity;
+
+    fn client(admin: bool) -> AuthenticatedClient {
+        AuthenticatedClient {
+            name: "c".to_string(),
+            rate_limit: 0,
+            backends: Vec::new(),
+            allowed_tools: None,
+            denied_tools: None,
+            admin,
+        }
+    }
+
+    fn identity(issuer: &str, groups: &[&str]) -> VerifiedIdentity {
+        VerifiedIdentity {
+            subject: "s".to_string(),
+            email: "a@corp".to_string(),
+            name: None,
+            groups: groups.iter().map(|g| (*g).to_string()).collect(),
+            issuer: issuer.to_string(),
+        }
+    }
+
+    // MIK-6688.ROLE.3 — no verified identity -> legacy admin-key projection.
+    #[test]
+    fn no_identity_uses_legacy_admin_key_projection() {
+        let empty = ControlPlaneRoleMappingConfig::default();
+        assert_eq!(
+            actor_from_client(Some(&client(true)), None, &empty).role,
+            ControlPlaneRole::Admin
+        );
+        assert_eq!(
+            actor_from_client(Some(&client(false)), None, &empty).role,
+            ControlPlaneRole::Auditor
+        );
+        assert_eq!(
+            actor_from_client(None, None, &empty).role,
+            ControlPlaneRole::Auditor
+        );
+    }
+
+    // MIK-6688.ROLE.2 — a verified identity with no matching rule is Auditor,
+    // even when an admin API key is also present (identity path wins).
+    #[test]
+    fn verified_identity_without_rule_is_auditor_not_admin() {
+        let empty = ControlPlaneRoleMappingConfig::default();
+        let actor = actor_from_client(
+            Some(&client(true)),
+            Some(&identity("https://idp", &["x"])),
+            &empty,
+        );
+        assert_eq!(actor.role, ControlPlaneRole::Auditor);
+        assert_eq!(actor.actor_id, "oidc:https://idp:s");
+    }
+
+    // MIK-6688.ROLE.6 — a mapped SecurityReviewer can read evidence but cannot mutate.
+    #[test]
+    fn mapped_security_reviewer_reads_but_cannot_mutate() {
+        let mapping = ControlPlaneRoleMappingConfig {
+            rules: vec![ControlPlaneRoleRule {
+                issuer: "https://idp".to_string(),
+                group: Some("sec".to_string()),
+                email: None,
+                domain: None,
+                role: ControlPlaneRole::SecurityReviewer,
+            }],
+        };
+        let actor = actor_from_client(None, Some(&identity("https://idp", &["sec"])), &mapping);
+        assert_eq!(actor.role, ControlPlaneRole::SecurityReviewer);
+        assert!(ControlPlaneRbac::authorize(&actor, ControlPlaneAction::ReadEvidence).allowed);
+        assert!(!ControlPlaneRbac::authorize(&actor, ControlPlaneAction::MutateGrant).allowed);
     }
 }
