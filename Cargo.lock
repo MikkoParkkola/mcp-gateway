@@ -1819,6 +1819,7 @@ dependencies = [
  "regex",
  "reqwest",
  "ring",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",

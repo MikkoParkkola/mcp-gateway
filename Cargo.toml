@@ -109,6 +109,11 @@ ring = "0.17"
 jsonwebtoken = { version = "10.4", features = ["use_pem", "aws_lc_rs"] }
 # Constant-time comparison (prevent timing attacks in admin token check)
 subtle = "2.6"
+# OS advisory file locking for the control-plane store's cross-process
+# read-modify-write (MIK-6685). Already a transitive dep (tempfile, clap →
+# terminal_size); promoted to direct with the `fs` feature — no new crate is
+# compiled, only a manifest entry (verified via `cargo tree`).
+rustix = { version = "1.1", features = ["fs"] }
 
 # mTLS / TLS
 # PQC hardening (issue #116): tls12 feature removed — TLS 1.3 is the enforced minimum.

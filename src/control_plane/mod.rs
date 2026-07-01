@@ -6,6 +6,13 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod store;
+
+pub use store::{
+    AuditFilter, ControlPlaneStore, FileControlPlaneStore, InMemoryControlPlaneStore, StoreError,
+    StoreResult,
+};
+
 /// License tier for control-plane capabilities.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
