@@ -62,6 +62,33 @@ jobs:
       - name: Lint, render, and schema-validate the chart
         run: scripts/dev/helm-chart-smoke.sh
 
+  helm-oci-roundtrip:
+    name: Helm OCI package/push/pull
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+      - name: Package, push to OCI, pull, and render the same artifact
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)"
+          helm package deploy/helm/mcp-gateway -d "$out"
+          helm package deploy/helm/mcp-gateway-crds -d "$out"
+          for tgz in "$out"/*.tgz; do
+            helm push "$tgz" oci://localhost:5000/charts --plain-http
+          done
+          # Pull the app chart back and render the pulled artifact.
+          ver="$(grep -E '^version:' deploy/helm/mcp-gateway/Chart.yaml | awk '{print $2}')"
+          helm pull oci://localhost:5000/charts/mcp-gateway --version "$ver" -d "$out/pulled" --plain-http
+          test -f "$out/pulled/mcp-gateway-$ver.tgz"
+          helm template t "$out/pulled/mcp-gateway-$ver.tgz" | grep -q '^kind: Deployment'
+          echo "OCI round-trip ok: pushed + pulled + rendered mcp-gateway $ver"
+
   k8s-kind-rollback:
     name: K8s kind apply+upgrade+rollback
     runs-on: ubuntu-latest

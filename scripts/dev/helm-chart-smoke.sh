@@ -92,4 +92,14 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/deploy/kubernetes/enter
 diff -q "$SRC" "$CRDS_CHART/crds/mcpgateway.io.yaml" >/dev/null \
   || { echo "FAIL: crds chart CRD drifted from enterprise-alpha source" >&2; exit 1; }
 
+echo "== chart packages to a versioned artifact + schema carries a version marker =="
+pkgdir="$(mktemp -d)"
+trap 'rm -rf "$pkgdir"' EXIT
+"$HELM" package "$CHART" -d "$pkgdir" >/dev/null
+ver="$(grep -E '^version:' "$CHART/Chart.yaml" | awk '{print $2}')"
+[ -f "$pkgdir/mcp-gateway-$ver.tgz" ] \
+  || { echo "FAIL: helm package did not produce mcp-gateway-$ver.tgz" >&2; exit 1; }
+grep -q 'schemaVersion:' "$CHART/values.schema.json" \
+  || { echo "FAIL: values.schema.json lacks a schemaVersion marker" >&2; exit 1; }
+
 echo "helm chart smoke passed"
