@@ -103,8 +103,10 @@ existing tamper-evident log, not a new DB (ADR-005).
   read-modify-write, plus a monotonic `generation` field for compare-and-swap so
   a stale write is rejected. Malformed JSON fails closed: load errors and the
   last-good file is never overwritten. Files are `0600`, owned by the gateway
-  user. Versioned JSON, one file per collection. `flock` comes from an
-  already-present crate (verified in review), not a new heavy dependency.
+  user. Versioned JSON, one file per collection. File locking uses
+  `rustix::fs::flock` — `rustix` is already a **transitive** dependency
+  (`Cargo.lock`), so it is *promoted to a direct dependency*: a manifest change
+  with zero new compile cost, not "already present." No new crate is compiled.
 - **Audit backend**: reuse `TransparencyLogger` (hash-chain, append-only,
   `verify_log`) as a governance-scoped log instance, kept *separate* from the
   invocation log. `read_audit(filter)` returns entries in chain order with an
@@ -128,7 +130,9 @@ existing tamper-evident log, not a new DB (ADR-005).
   write never truncates the good file.
 - **MIK-6685.STORE.6** `read_audit` honors chain order + limit/offset; an invalid
   filter errors. Files are `0600`.
-- **MIK-6685.STORE.7** no new heavy dependency (verified by `cargo tree` diff).
+- **MIK-6685.STORE.7** no new *compiled* crate: file locking promotes the
+  already-transitive `rustix` to a direct dependency (verified by `cargo tree`
+  diff showing no newly-built crate, only a manifest entry).
 
 ### Fail-fast
 STORE.2 + STORE.3 first — if atomic-write is not torn-file-safe under
@@ -258,7 +262,7 @@ against a checkpoint.
 | Architecture/interface defined | ✅ | ✅ | ✅ | ✅ |
 | Fail-fast check named | ✅ | ✅ | ✅ | ✅ |
 | Test plan | ✅ | ✅ | ✅ | ✅ |
-| New deps named (build-cost tier) | none beyond Helm tooling | `flock` from an already-present crate (verify) | none | none (sink is std/http) |
+| New deps named (build-cost tier) | none beyond Helm tooling | `rustix` promoted transitive→direct (0 new compile) | none | none (sink is std/http) |
 | Reuse-first (ADR-006) | manifests | TransparencyLogger | MIK-6648 | TransparencyLogger |
 | Mac-buildable (no Spark) | ✅ | ✅ | ✅ | ✅ |
 
