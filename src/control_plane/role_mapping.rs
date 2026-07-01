@@ -68,10 +68,12 @@ impl ControlPlaneRoleRule {
         if identity.issuer != self.issuer {
             return false;
         }
-        if let Some(group) = &self.group
-            && !identity.groups.iter().any(|g| g == group)
-        {
-            return false;
+        if let Some(group) = &self.group {
+            // Symmetric with email/domain: an empty rule group, or an empty
+            // identity group entry, must never match.
+            if group.is_empty() || !identity.groups.iter().any(|g| !g.is_empty() && g == group) {
+                return false;
+            }
         }
         if let Some(email) = &self.email {
             // An empty rule email (or a missing identity email) must never
@@ -354,6 +356,18 @@ mod tests {
         };
         let no_email = identity("https://idp.corp", "", &[]);
         assert!(!sneaky.matches(&no_email));
+
+        // Group parity: an empty rule group never matches, and an identity group
+        // entry that is empty cannot satisfy a group rule.
+        let sneaky_group = ControlPlaneRoleRule {
+            issuer: "https://idp.corp".to_string(),
+            group: Some(String::new()),
+            email: None,
+            domain: None,
+            role: ControlPlaneRole::Admin,
+        };
+        let empty_group_member = identity("https://idp.corp", "a@corp", &[""]);
+        assert!(!sneaky_group.matches(&empty_group_member));
     }
 
     // Email + domain discriminators, still issuer-scoped.
