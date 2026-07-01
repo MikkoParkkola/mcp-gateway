@@ -109,9 +109,17 @@ fn build_control_plane_store(
         return None;
     }
 
-    let base = config_path.and_then(|p| p.parent()).map_or_else(
+    // Derive a per-config store directory so distinct gateway instances do not
+    // share governance state. Include the config file stem, so two config files
+    // in the SAME directory (a.yaml, b.yaml) get distinct control-plane dirs.
+    // With no config file we assume a single instance and use the global path.
+    let base = config_path.map_or_else(
         || expand_home_path("~/.mcp-gateway/control-plane"),
-        |dir| dir.join("control-plane"),
+        |p| {
+            let dir = p.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("gateway");
+            dir.join(format!("{stem}-control-plane"))
+        },
     );
     let audit_cfg = Arc::new(TransparencyLogConfig {
         enabled: true,

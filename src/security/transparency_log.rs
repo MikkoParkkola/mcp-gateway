@@ -129,6 +129,18 @@ impl TransparencyLogger {
 
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
 
+        // Make the log file's directory entry durable, so a governance audit
+        // file created on the first append cannot be lost by a crash while a
+        // control-plane commit that depends on it is already durable. Unix only
+        // (opening a directory as a file is not portable); best-effort.
+        #[cfg(unix)]
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+            && let Ok(dir) = File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+
         Ok(Self {
             inner: Mutex::new(Inner {
                 writer: BufWriter::new(file),
