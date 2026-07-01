@@ -35,6 +35,25 @@ reused; MIK-6208 per-user vault precedent is reused; MIK-6209 personal versus
 public gating is superseded by the IdentityGrantStore path. No second grant or
 ownership model should be introduced.
 
+## Architecture Decisions (updated 2026-07-01)
+
+Implementation surfaced existing primitives and demand questions that revise the
+enterprise scope. See the ADRs for full rationale:
+
+- **ADR-004 — Kubernetes: Helm chart over bespoke operator.** The enterprise K8s
+  need (templated deploy + upgrade + rollback) is met by a Helm chart; MIK-6679
+  already proves apply/upgrade/rollback on a real cluster. The custom operator
+  (kube-runtime reconcile loop, HA, admission webhook) is **deferred to a demand
+  signal** rather than built on spec.
+- **ADR-005 — Control-plane persistence: reuse, no Postgres.** The gateway has
+  no database; a tamper-evident hash-chain audit log already exists
+  (`TransparencyLogger`). Audit/SIEM reuse it; config stays file-based behind a
+  `ControlPlaneStore` trait; a server-backed durable store is demand-gated and,
+  if built, uses SurrealDB (portfolio-consistent), not Postgres.
+- **ADR-006 — Reuse-first gate.** Every remaining ticket answers "does this need
+  to exist / what existing primitive covers it" before implementation; failing
+  the demand test moves a ticket to Blocked with a written gate condition.
+
 ## Child Rows
 
 ## MIK-6551: Public Repo Hygiene
@@ -224,7 +243,10 @@ ownership model should be introduced.
 - License tier: Free/core for read-only local status; Enterprise for mutation,
   RBAC, approvals, durable storage, and SIEM export.
 - Build vs integrate: Build+Integrate - build MCP domain model and local UI;
-  integrate OIDC, Postgres, OTel, and SIEM sinks in enterprise mode.
+  integrate OIDC and reuse the transparency-log engine for audit/SIEM in
+  enterprise mode. Persistence is file-based behind a `ControlPlaneStore` trait;
+  a server-backed durable store is demand-gated and uses SurrealDB, not Postgres
+  (see ADR-005).
 - Dependencies: Depends on MIK-6553 and MIK-6556. Benefits from MIK-6554 and
   MIK-6557.
 - Target areas: src/control_plane, src/gateway/ui/control_plane.rs, embedded
@@ -272,10 +294,12 @@ ownership model should be introduced.
 - User outcome: Enterprise teams can run mcp-gateway in Kubernetes with safe
   preflight, rollout, rollback, and evidence.
 - Contribution class: Enterprise deployment and infrastructure.
-- License tier: Enterprise for operator, HA, and fleet policy; Free/core keeps
-  Docker Compose and single-node services.
-- Build vs integrate: Build+Integrate - build gateway-specific CRDs, planner,
-  and controller behavior; integrate native Kubernetes APIs and tooling.
+- License tier: Enterprise for HA and fleet policy; Free/core keeps Docker
+  Compose and single-node services.
+- Build vs integrate: Ship a **Helm chart** as the deployment surface (templated
+  deploy + upgrade + rollback; MIK-6679 proves rollback on a real cluster). The
+  bespoke operator (kube-runtime reconcile loop, HA, admission webhook) is
+  **deferred to a demand signal** — see ADR-004. CRDs remain as typed config.
 - Dependencies: Depends on MIK-6552 and MIK-6555. Benefits from MIK-6558.
 - Target areas: deploy/kubernetes/enterprise-alpha, src/kubernetes,
   docs/DEPLOYMENT.md, and Kubernetes manifest tests.
