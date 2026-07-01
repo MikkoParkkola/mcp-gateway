@@ -1,0 +1,8 @@
+mcp-gateway CRDs (v1alpha1, EXPERIMENTAL) installed.
+
+These Custom Resource Definitions are NOT reconciled by any controller yet
+(ADR-004). They exist as typed config only. Helm does not manage CRD
+upgrade/delete lifecycle — remove them manually if you uninstall.
+
+The supported deployment contract is the mcp-gateway chart's values file, not
+these CRDs.

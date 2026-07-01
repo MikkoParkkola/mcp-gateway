@@ -1,0 +1,14 @@
+apiVersion: v2
+name: mcp-gateway-crds
+description: >-
+  EXPERIMENTAL (v1alpha1) Custom Resource Definitions for mcp-gateway. Shipped as
+  a SEPARATE, opt-in chart — they are NOT a stable API and are NOT reconciled by
+  any controller until the operator ships (ADR-004). Install only if you intend
+  to author these resources as typed config. Helm does not manage CRD
+  upgrade/delete lifecycle; see https://helm.sh/docs/chart_best_practices/custom_resource_definitions/
+type: application
+version: 0.1.0
+appVersion: "2.19.0"
+home: https://github.com/MikkoParkkola/mcp-gateway
+maintainers:
+  - name: Mikko Parkkola
