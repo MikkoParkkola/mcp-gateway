@@ -21,6 +21,15 @@
 //!   rejected and must re-read.
 //! - Malformed collection JSON fails closed: a load errors and a write never
 //!   truncates the good file.
+//!
+//! ## Audit tamper-evidence scope
+//!
+//! The governance audit log reuses [`TransparencyLogger`]'s hash chain, which
+//! `verify_log` checks for truncation, reordering, and un-rechained edits. Full
+//! re-chain forgery by an attacker with write access AND the HMAC secret is not
+//! caught by `verify_log` today (it does not verify the per-entry HMAC); that
+//! external-anchor / signature-verification hardening is tracked separately and
+//! is also mitigated by the SIEM export's trusted checkpoint anchor (MIK-6689).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -553,8 +562,14 @@ impl ControlPlaneStore for FileControlPlaneStore {
     }
 
     fn append_audit(&self, event: &ControlPlaneAuditEvent) -> StoreResult<()> {
+        // Cross-process safety: a CLI and the server each hold their own logger
+        // with a cached counter. Serialise audit appends across processes with a
+        // dedicated lock and re-sync the chain tail from disk under it, so two
+        // processes never write the same counter (which would fork the chain and
+        // fail `verify_log`).
+        let _lock = ExclusiveFileLock::acquire(&self.dir.join(".audit.lock"))?;
         self.audit
-            .append_event(audit_fields(event))
+            .append_event_synced(audit_fields(event))
             .map(|_| ())
             .map_err(StoreError::from)
     }
@@ -575,7 +590,16 @@ impl ControlPlaneStore for FileControlPlaneStore {
             }
             let entry: serde_json::Value = serde_json::from_str(trimmed)
                 .map_err(|e| StoreError::Corrupt(format!("audit line {}: {e}", line_no + 1)))?;
-            if let Some(event) = audit_event_from_entry(&entry) {
+            // A line tagged as a control-plane audit event MUST reconstruct; a
+            // malformed one fails closed rather than silently vanishing from the
+            // view. Lines of any other kind are not ours and are skipped.
+            if entry.get("kind").and_then(serde_json::Value::as_str) == Some(AUDIT_KIND) {
+                let event = audit_event_from_entry(&entry).ok_or_else(|| {
+                    StoreError::Corrupt(format!(
+                        "audit line {}: malformed control-plane audit entry",
+                        line_no + 1
+                    ))
+                })?;
                 events.push(event);
             }
         }
@@ -595,6 +619,8 @@ fn write_atomic(target: &Path, bytes: &[u8], fault: FaultPoint) -> std::io::Resu
     let dir = target.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "target has no parent dir")
     })?;
+    #[cfg(not(unix))]
+    let _ = dir; // dir is only used for the unix directory fsync below
     // ponytail: fixed temp name per collection. A temp orphaned by a crash is
     // ignored by the loader (it reads only the real file) and overwritten by
     // the next write.
@@ -605,6 +631,10 @@ fn write_atomic(target: &Path, bytes: &[u8], fault: FaultPoint) -> std::io::Resu
         opts.create(true).write(true).truncate(true);
         set_owner_only(&mut opts);
         let mut f = opts.open(&tmp)?;
+        // `mode` on OpenOptions only applies when creating; a stale temp keeps
+        // its old mode and would survive the rename. Force 0600 explicitly so
+        // the final collection is always owner-only.
+        force_owner_only(&f)?;
         f.write_all(bytes)?;
         if fault == FaultPoint::AfterTempWrite {
             return Err(injected_fault());
@@ -620,7 +650,11 @@ fn write_atomic(target: &Path, bytes: &[u8], fault: FaultPoint) -> std::io::Resu
         return Err(injected_fault());
     }
 
-    // Directory fsync makes the rename durable across power loss.
+    // Directory fsync makes the rename durable across power loss. Unix only:
+    // opening a directory as a file is not portable (Windows rejects it), and
+    // the file backend's durability target is Linux. The rename itself is still
+    // atomic elsewhere.
+    #[cfg(unix)]
     std::fs::File::open(dir)?.sync_all()?;
     if fault == FaultPoint::AfterDirFsync {
         return Err(injected_fault());
@@ -646,6 +680,20 @@ fn set_owner_only(opts: &mut std::fs::OpenOptions) {
 /// No-op on non-unix: file permissions are managed by the platform ACLs.
 #[cfg(not(unix))]
 fn set_owner_only(_opts: &mut std::fs::OpenOptions) {}
+
+/// Force an already-open file to owner-only (`0600`) on unix, regardless of the
+/// mode it was created with (handles a pre-existing temp file).
+#[cfg(unix)]
+fn force_owner_only(f: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+/// No-op on non-unix.
+#[cfg(not(unix))]
+fn force_owner_only(_f: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
+}
 
 // ── OS advisory file lock ────────────────────────────────────────────────────────
 
@@ -1043,5 +1091,74 @@ mod tests {
                 "after {fault:?}: expected complete old or new, got {ids:?}"
             );
         }
+    }
+
+    // MIK-6685.STORE.4 — cross-process audit append stays verifiable. Two
+    // loggers over the same log file (separate "processes") append via the
+    // synced path; the chain must not fork and must pass verify_log.
+    #[test]
+    fn cross_process_audit_append_stays_verifiable() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger_a = governance_logger(dir.path());
+        let logger_b = governance_logger(dir.path()); // second handle, same file
+        let store_dir = dir.path().join("store");
+        let a = FileControlPlaneStore::open(store_dir.clone(), Arc::clone(&logger_a)).unwrap();
+        let b = FileControlPlaneStore::open(store_dir, Arc::clone(&logger_b)).unwrap();
+
+        // Interleave appends across the two handles.
+        a.append_audit(&audit_event("e1", "alice", ControlPlaneAction::MutateGrant))
+            .unwrap();
+        b.append_audit(&audit_event("e2", "bob", ControlPlaneAction::MutatePolicy))
+            .unwrap();
+        a.append_audit(&audit_event(
+            "e3",
+            "carol",
+            ControlPlaneAction::ApproveServer,
+        ))
+        .unwrap();
+
+        let view = a.read_audit(&AuditFilter::new(10)).unwrap();
+        assert_eq!(
+            view.iter().map(|e| e.event_id.as_str()).collect::<Vec<_>>(),
+            ["e1", "e2", "e3"]
+        );
+        let result = crate::security::transparency_log::verify_log(&logger_a.path()).unwrap();
+        assert!(
+            result.ok,
+            "chain must not fork across processes: {:?}",
+            result.error_message
+        );
+        assert_eq!(result.entries_checked, 3);
+    }
+
+    // MIK-6685.STORE.6 — a malformed control-plane audit line fails closed
+    // (errors) rather than silently vanishing from the view.
+    #[test]
+    fn malformed_audit_entry_fails_closed() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let logger = governance_logger(dir.path());
+        let store =
+            FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+        store
+            .append_audit(&audit_event(
+                "ok1",
+                "alice",
+                ControlPlaneAction::MutateGrant,
+            ))
+            .unwrap();
+
+        // Append a line tagged as a control-plane audit event but missing fields.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(logger.path())
+            .unwrap();
+        writeln!(f, r#"{{"kind":"control_plane_audit","event_id":"broken"}}"#).unwrap();
+        drop(f);
+
+        assert!(matches!(
+            store.read_audit(&AuditFilter::new(10)),
+            Err(StoreError::Corrupt(_))
+        ));
     }
 }

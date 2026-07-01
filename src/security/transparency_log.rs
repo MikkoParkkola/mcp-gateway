@@ -184,7 +184,7 @@ impl TransparencyLogger {
         fields.insert("timestamp".into(), timestamp.into());
         fields.insert("tool".into(), tool.into());
 
-        self.append_core(fields).map(|_| ())
+        self.append_core(fields, false).map(|_| ())
     }
 
     /// Append an arbitrary governance/audit entry into the same tamper-evident
@@ -203,6 +203,33 @@ impl TransparencyLogger {
         &self,
         fields: serde_json::Map<String, serde_json::Value>,
     ) -> io::Result<String> {
+        Self::reject_reserved_keys(&fields)?;
+        self.append_core(fields, false)
+    }
+
+    /// Like [`Self::append_event`], but re-syncs chain state (`counter`,
+    /// `last_entry_hash`) from the on-disk tail before appending. This is the
+    /// cross-process-safe path: when an external OS lock serialises separate
+    /// processes (e.g. a CLI and the server) writing the same log, each opened
+    /// its own logger and cached a stale counter. Re-syncing under the lock
+    /// picks up entries the other process appended, so the chain never forks.
+    ///
+    /// The underlying file is opened in append mode (`O_APPEND`), so the write
+    /// still lands at the true end of file.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::Error` if a reserved key is supplied, or if the tail read,
+    /// serialisation, or the file write fails.
+    pub fn append_event_synced(
+        &self,
+        fields: serde_json::Map<String, serde_json::Value>,
+    ) -> io::Result<String> {
+        Self::reject_reserved_keys(&fields)?;
+        self.append_core(fields, true)
+    }
+
+    fn reject_reserved_keys(fields: &serde_json::Map<String, serde_json::Value>) -> io::Result<()> {
         for reserved in ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"] {
             if fields.contains_key(reserved) {
                 return Err(io::Error::other(format!(
@@ -210,23 +237,38 @@ impl TransparencyLogger {
                 )));
             }
         }
-        self.append_core(fields)
+        Ok(())
     }
 
     /// Chain one entry from caller-supplied domain `fields`, returning its
-    /// `entry_hash`. Shared by [`Self::log_invocation`] and
-    /// [`Self::append_event`] so the chain logic exists exactly once.
+    /// `entry_hash`. Shared by [`Self::log_invocation`], [`Self::append_event`],
+    /// and [`Self::append_event_synced`] so the chain logic exists exactly once.
+    ///
+    /// When `resync` is set, the in-memory `counter`/`last_entry_hash` are first
+    /// refreshed from the on-disk tail (for cross-process appends). In-memory
+    /// state is advanced only **after** a successful write+flush, so a failed
+    /// write leaves no counter gap.
     fn append_core(
         &self,
         mut fields: serde_json::Map<String, serde_json::Value>,
+        resync: bool,
     ) -> io::Result<String> {
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| io::Error::other("transparency log mutex poisoned"))?;
 
-        inner.counter += 1;
-        let counter = inner.counter;
+        if resync {
+            let path = expand_tilde(&self.config.path);
+            if path.exists() {
+                let (counter, last_entry_hash) = recover_chain_state(&path)?;
+                inner.counter = counter;
+                inner.last_entry_hash = last_entry_hash;
+            }
+        }
+
+        // Compute the next counter locally; commit to `inner` only on success.
+        let counter = inner.counter + 1;
         let prev_entry_hash = inner.last_entry_hash.clone();
 
         // ── Step 1: complete the entry core (without entry_hash / sig / key_id) ─
@@ -257,7 +299,8 @@ impl TransparencyLogger {
         writeln!(inner.writer, "{line}")?;
         inner.writer.flush()?;
 
-        // ── Advance chain state ───────────────────────────────────────────────
+        // ── Advance chain state only after the write succeeded ─────────────────
+        inner.counter = counter;
         inner.last_entry_hash.clone_from(&entry_hash);
 
         Ok(entry_hash)
