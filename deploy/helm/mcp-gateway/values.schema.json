@@ -1,5 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/MikkoParkkola/mcp-gateway/deploy/helm/mcp-gateway/values.schema.json",
+  "$comment": "schemaVersion: 1 — evolve additively within a chart minor; a breaking values change requires a chart major + a note in the release.",
   "title": "mcp-gateway Helm values",
   "type": "object",
   "additionalProperties": true,
