@@ -302,6 +302,33 @@ impl Config {
         self.runtime.validate()?;
         self.validate_backend_runtime_profiles()?;
         self.control_plane.role_mapping.validate()?;
+        self.validate_identity_propagation()?;
+        Ok(())
+    }
+
+    /// Validate per-backend identity-propagation config (MIK-6704 / ADR-007),
+    /// failing closed at load so a misconfigured propagation backend never
+    /// starts. Also rejects `SessionMode::PerUser` until the per-user transport
+    /// pool ships (a required `PerUser` backend would otherwise reuse one shared
+    /// MCP session across users — IDP.7); `Stateless` is supported now.
+    fn validate_identity_propagation(&self) -> Result<()> {
+        use crate::identity_propagation::SessionMode;
+        for (name, backend) in &self.backends {
+            let Some(idp) = backend.identity_propagation.as_ref() else {
+                continue;
+            };
+            idp.validate().map_err(|e| {
+                Error::ConfigValidation(format!("backend '{name}' identity_propagation: {e}"))
+            })?;
+            if idp.session_mode == SessionMode::PerUser {
+                return Err(Error::ConfigValidation(format!(
+                    "backend '{name}' identity_propagation.session_mode=per_user is not yet \
+                     supported (needs the per-user transport pool, MIK-6728 slice 2c); use \
+                     stateless for a backend that keeps no per-session state, or wait for the \
+                     pool. Refusing to start rather than reuse a shared session (IDP.7)."
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -637,6 +664,12 @@ pub struct BackendConfig {
     /// Runtime profile name resolved from top-level `runtime.profiles`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_profile: Option<String>,
+    /// End-user identity propagation (MIK-6704 / ADR-007). When set, the gateway
+    /// mints a per-user credential for outbound calls to this backend instead of
+    /// presenting only the shared static credential. Absent → unchanged
+    /// static-credential behavior (IDP.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_propagation: Option<crate::identity_propagation::IdentityPropagationConfig>,
 }
 
 impl Default for BackendConfig {
@@ -653,6 +686,7 @@ impl Default for BackendConfig {
             secrets: Vec::new(),
             passthrough: false,
             runtime_profile: None,
+            identity_propagation: None,
         }
     }
 }

@@ -559,3 +559,104 @@ fn validate_rejects_tampered_remote_backend_provenance_signature() {
         "error should name the backend and invalid signature: {msg}"
     );
 }
+
+// ── MIK-6728 slice 2a: identity_propagation config validation (fail-closed) ──
+
+use crate::identity_propagation::{
+    IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+};
+
+fn backend_with_idp(idp: IdentityPropagationConfig) -> BackendConfig {
+    BackendConfig {
+        transport: TransportConfig::Http {
+            http_url: "https://backend.internal/mcp".to_string(),
+            streamable_http: false,
+            protocol_version: None,
+        },
+        identity_propagation: Some(idp),
+        ..BackendConfig::default()
+    }
+}
+
+#[test]
+fn validate_accepts_stateless_signed_assertion_backend() {
+    let mut config = Config::default();
+    config.backends.insert(
+        "memory".to_string(),
+        backend_with_idp(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "https://memory.internal".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+        }),
+    );
+    assert!(
+        config.validate().is_ok(),
+        "stateless signed-assertion must validate"
+    );
+}
+
+#[test]
+fn validate_rejects_per_user_session_mode_until_pool_ships() {
+    // IDP.7: per_user needs the transport pool (slice 2c); refuse rather than
+    // reuse a shared session.
+    let mut config = Config::default();
+    config.backends.insert(
+        "mem".to_string(),
+        backend_with_idp(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "https://mem".to_string(),
+            required: true,
+            session_mode: SessionMode::PerUser,
+        }),
+    );
+    let err = config.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("per_user"),
+        "error should name per_user: {err}"
+    );
+    assert!(err.contains("mem"), "error should name the backend: {err}");
+}
+
+#[test]
+fn validate_rejects_empty_audience_backend() {
+    // IDP.3: empty audience defeats isolation; fail closed at load.
+    let mut config = Config::default();
+    config.backends.insert(
+        "b".to_string(),
+        backend_with_idp(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: String::new(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+        }),
+    );
+    assert!(matches!(
+        config.validate(),
+        Err(crate::Error::ConfigValidation(_))
+    ));
+}
+
+#[test]
+fn validate_rejects_required_unimplemented_strategy() {
+    // IDP.2: a required backend on an unimplemented strategy must not silently
+    // run without propagation.
+    let mut config = Config::default();
+    config.backends.insert(
+        "b".to_string(),
+        backend_with_idp(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::TokenExchange,
+            audience: "https://mail".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+        }),
+    );
+    assert!(config.validate().is_err());
+}
+
+#[test]
+fn validate_backend_without_idp_is_unchanged() {
+    // IDP.5: absent config keeps today's behavior — default config validates.
+    let config = Config::default();
+    assert!(config.validate().is_ok());
+}
