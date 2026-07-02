@@ -544,6 +544,13 @@ impl MetaMcp {
     pub fn set_multi_user(&self, multi_user: bool) {
         self.multi_user
             .store(multi_user, std::sync::atomic::Ordering::Relaxed);
+        // Propagate to the capability backend too (MIK-6751, ADR-008 parity):
+        // it enforces its own OAuth-isolation guard and cannot see this field
+        // directly. `set_capabilities` re-syncs the reverse case (capabilities
+        // attached after this call).
+        if let Some(cap) = self.capabilities.read().as_ref() {
+            cap.set_multi_user(multi_user);
+        }
     }
 
     /// ADR-008 INV-2 fail-closed guard, shared by the meta-MCP dispatch
@@ -595,6 +602,10 @@ impl MetaMcp {
 
     /// Set the capability backend.
     pub fn set_capabilities(&self, capabilities: Arc<CapabilityBackend>) {
+        // Sync current multi-user state onto the newly attached backend
+        // (MIK-6751): this may run before or after `set_multi_user` at
+        // startup / hot-reload, so both setters push their own state.
+        capabilities.set_multi_user(self.multi_user.load(std::sync::atomic::Ordering::Relaxed));
         *self.capabilities.write() = Some(capabilities);
     }
 

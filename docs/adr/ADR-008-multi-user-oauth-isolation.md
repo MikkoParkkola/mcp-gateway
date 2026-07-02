@@ -99,6 +99,15 @@ instead of an austere refusal.
 - **A — fail-closed guard (INV-1/INV-2), MIK-6743.** Unconditional floor. A
   per-user backend refuses rather than serving a shared/other-user token;
   `shared_account: true` required to share. **Ships first (this slice).**
+  Initially covered MCP backends only (`MetaMcp::enforce_oauth_isolation`);
+  GPT-5.5 adversarial review found capability-backed REST connectors
+  (`capabilities/*.yaml` resolving `oauth:<provider>` via
+  `CapabilityExecutor::fetch_oauth_token`) bypassed the guard entirely — same
+  INV-2 leak, different code path. Closed in MIK-6751:
+  `validate_oauth_isolation` (`src/capability/execution_context.rs`) refuses
+  `-32001` unless the capability sets `auth.shared_account = true` (mirrors
+  `OAuthConfig.shared_account`) or is `exposure: personal` with a caller
+  identity already proven by `validate_personal_capability_identity`.
 - **D — client-supplied passthrough, MIK-6746.** Promoted to primary: caller
   attaches its own credential via `request_with_headers`; gateway stores nothing.
 - **Inbound auth-requirement advertisement (new).** Gateway publishes per-backend

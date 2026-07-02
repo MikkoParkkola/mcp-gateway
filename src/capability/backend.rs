@@ -28,7 +28,7 @@ use super::hash::compute_capability_hash;
 use super::schema_validator::validate_arguments;
 use super::{
     CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
-    validate_personal_capability_identity,
+    validate_oauth_isolation, validate_personal_capability_identity,
 };
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
@@ -134,6 +134,12 @@ pub struct CapabilityBackend {
     /// until the operator clears the state (e.g. by re-running
     /// `mcp-gateway cap pin` after reviewing the diff).
     rug_pull_state: RwLock<HashMap<String, RugPullRecord>>,
+    /// Declares whether the owning gateway serves more than one principal
+    /// (ADR-008 INV-2 parity, MIK-6751). Mirrors `MetaMcp::multi_user`;
+    /// `MetaMcp::set_multi_user`/`set_capabilities` keep the two in sync since
+    /// they may be set in either order at startup. Read by
+    /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
+    multi_user: std::sync::atomic::AtomicBool,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -158,7 +164,17 @@ impl CapabilityBackend {
             capabilities: RwLock::new(IndexedCapabilities::default()),
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Declare whether the owning gateway serves more than one principal
+    /// (ADR-008 INV-2 parity, MIK-6751). Called by
+    /// `MetaMcp::set_multi_user`/`set_capabilities` to keep this backend's
+    /// view in sync with `MetaMcp::multi_user` regardless of setter order.
+    pub fn set_multi_user(&self, multi_user: bool) {
+        self.multi_user
+            .store(multi_user, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Whether the capability backend is currently considered healthy by its
@@ -382,6 +398,11 @@ impl CapabilityBackend {
             .get(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         validate_personal_capability_identity(&capability, &context)?;
+        validate_oauth_isolation(
+            &capability,
+            &context,
+            self.multi_user.load(std::sync::atomic::Ordering::Relaxed),
+        )?;
 
         // Validate arguments against the YAML schema before making any HTTP call.
         let input_schema = &capability.schema.input;
