@@ -902,12 +902,17 @@ impl Gateway {
             info!("End-user identity propagation enabled (signed-assertion strategy)");
         }
 
-        // ADR-008 INV-2: declare multi-user status so dispatch can fail closed
-        // on gateway-held OAuth tokens that are not per-user isolated. A gateway
-        // is multi-user when auth is on AND it fronts more than one principal —
-        // more than one API key, or any OIDC issuer (many end users).
-        let multi_user = auth_config.enabled
-            && (auth_config.api_keys.len() > 1 || !self.config.key_server.oidc.is_empty());
+        // ADR-008 INV-2 (MIK-6752): declare multi-user status so dispatch can
+        // fail closed on gateway-held OAuth tokens that are not per-user
+        // isolated. Detection is fail-closed — any enabled auth is treated as
+        // multi-user (a single shared API key or bearer can be handed to a whole
+        // team; count alone cannot prove otherwise) unless the operator sets
+        // `auth.single_user = true`. More than one API key or any OIDC issuer is
+        // a hard multi-user signal. See `AuthConfig::implies_multi_user`.
+        let multi_user = self
+            .config
+            .auth
+            .implies_multi_user(!self.config.key_server.oidc.is_empty());
         meta_mcp.set_multi_user(multi_user);
         if multi_user {
             info!(

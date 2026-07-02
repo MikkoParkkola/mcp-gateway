@@ -60,7 +60,15 @@ build a parallel subsystem. Credential resolution returns one of:
 Every request carries a `Principal`: `User(stable_actor_id)` (OIDC) ·
 `ApiKey(key_name)` · `Local` (auth off). A single-user gateway is always `Local`,
 so shared+single-user collapse to the same code path.
-`is_multi_user = auth.enabled && (api_keys > 1 || oidc configured)`.
+
+`is_multi_user` is **fail-closed** (MIK-6752, `AuthConfig::implies_multi_user`):
+auth disabled → `false`; auth enabled → `true` **unless** the operator explicitly
+declares `auth.single_user = true`. More than one API key or any OIDC issuer is a
+hard multi-user signal that overrides the `single_user` hint. Rationale: a single
+shared API key or bearer token can be handed to a whole team, so count-based
+detection (`api_keys > 1 || oidc`) fails open — a shared single key read as
+single-user and disabled the INV-2 guard. The previous formula was
+`auth.enabled && (api_keys > 1 || oidc configured)`.
 
 ### Invariants
 

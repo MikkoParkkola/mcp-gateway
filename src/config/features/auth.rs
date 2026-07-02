@@ -28,6 +28,18 @@ pub struct AuthConfig {
     /// Optional per-client circuit breaker applied after authenticated identity is established.
     #[serde(default)]
     pub client_circuit_breaker: Option<CircuitBreakerConfig>,
+    /// ADR-008 INV-2 (MIK-6752): explicit operator declaration that this
+    /// authenticated gateway serves exactly one principal.
+    ///
+    /// Default `false` is deliberately fail-closed: a single shared API key or
+    /// bearer token can be handed to a whole team, and the gateway cannot prove
+    /// from credential count alone that only one human is behind the auth. So
+    /// unless the operator asserts `single_user = true`, any enabled auth is
+    /// treated as multi-user and the per-user OAuth isolation guard stays on.
+    /// More than one API key or any OIDC issuer is a hard multi-user signal that
+    /// overrides this hint (see [`AuthConfig::implies_multi_user`]).
+    #[serde(default)]
+    pub single_user: bool,
 }
 
 fn default_public_paths() -> Vec<String> {
@@ -42,7 +54,29 @@ impl Default for AuthConfig {
             api_keys: Vec::new(),
             public_paths: default_public_paths(),
             client_circuit_breaker: None,
+            single_user: false,
         }
+    }
+}
+
+impl AuthConfig {
+    /// ADR-008 INV-2 (MIK-6752): does this auth configuration imply the gateway
+    /// may serve more than one principal?
+    ///
+    /// Fail-closed. When auth is disabled there is no cross-user boundary to
+    /// protect, so this is `false`. When auth is enabled we assume multiple
+    /// principals *could* be behind it — a single shared API key or bearer token
+    /// can be distributed to a whole team and the gateway cannot prove otherwise
+    /// — UNLESS the operator explicitly declares [`single_user`](Self::single_user).
+    /// More than one API key, or any configured OIDC issuer (`has_oidc`), is a
+    /// hard multi-user signal that overrides the `single_user` hint.
+    #[must_use]
+    pub fn implies_multi_user(&self, has_oidc: bool) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let hard_multi_user = self.api_keys.len() > 1 || has_oidc;
+        hard_multi_user || !self.single_user
     }
 }
 
@@ -201,5 +235,102 @@ impl AgentDefinitionConfig {
                 Ok(Some(s.clone()))
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod multi_user_tests {
+    use super::*;
+
+    fn api_key(name: &str) -> ApiKeyConfig {
+        ApiKeyConfig {
+            key: format!("k-{name}"),
+            name: name.to_string(),
+            rate_limit: 0,
+            backends: Vec::new(),
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }
+    }
+
+    #[test]
+    fn disabled_auth_is_never_multi_user() {
+        let cfg = AuthConfig::default(); // enabled=false
+        assert!(!cfg.implies_multi_user(false));
+        assert!(
+            !cfg.implies_multi_user(true),
+            "no auth boundary = nothing to isolate"
+        );
+    }
+
+    #[test]
+    fn single_shared_api_key_fails_closed_to_multi_user() {
+        // The MIK-6752 fix: one API key handed to a team must NOT read as single-user.
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("team")],
+            ..AuthConfig::default()
+        };
+        assert!(
+            cfg.implies_multi_user(false),
+            "a single shared API key is treated as multi-user unless explicitly declared single_user"
+        );
+    }
+
+    #[test]
+    fn shared_bearer_only_fails_closed_to_multi_user() {
+        // Previously the bearer-token path was ignored entirely by count-based detection.
+        let cfg = AuthConfig {
+            enabled: true,
+            bearer_token: Some("shared-secret".to_string()),
+            api_keys: Vec::new(),
+            ..AuthConfig::default()
+        };
+        assert!(
+            cfg.implies_multi_user(false),
+            "a shared bearer with no api_keys still fails closed"
+        );
+    }
+
+    #[test]
+    fn explicit_single_user_opts_out() {
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("me")],
+            single_user: true,
+            ..AuthConfig::default()
+        };
+        assert!(
+            !cfg.implies_multi_user(false),
+            "operator may declare a genuine single-user deployment"
+        );
+    }
+
+    #[test]
+    fn multiple_api_keys_are_hard_multi_user_even_if_single_user_set() {
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("a"), api_key("b")],
+            single_user: true, // contradictory hint is overridden by the hard signal
+            ..AuthConfig::default()
+        };
+        assert!(
+            cfg.implies_multi_user(false),
+            ">1 API key is a hard multi-user signal"
+        );
+    }
+
+    #[test]
+    fn oidc_is_hard_multi_user_even_if_single_user_set() {
+        let cfg = AuthConfig {
+            enabled: true,
+            single_user: true,
+            ..AuthConfig::default()
+        };
+        assert!(
+            cfg.implies_multi_user(true),
+            "any OIDC issuer means many end users"
+        );
     }
 }

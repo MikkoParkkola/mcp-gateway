@@ -368,6 +368,14 @@ impl HttpTransport {
         headers.insert("MCP-Protocol-Version", version.parse().unwrap());
 
         // OAuth token — SSE path emits an extra debug line.
+        //
+        // ADR-008 INV-2 (MIK-6752): this is the gateway's own static OAuth login
+        // to the backend (gateway->backend), a single shared credential. Whether
+        // a caller is allowed to ride it is decided UPSTREAM at dispatch by the
+        // per-user isolation guard (`validate_oauth_isolation` /
+        // `MetaMcp::enforce_oauth_isolation`); by the time we build headers the
+        // isolation decision has already been made. `insert` replaces (never
+        // appends) Authorization, so no caller-supplied header is duplicated.
         if let Some(token) = self.get_oauth_token().await? {
             headers.insert(
                 header::AUTHORIZATION,
