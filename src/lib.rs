@@ -49,6 +49,7 @@ pub mod gateway;
 mod hashing;
 pub mod idempotency;
 pub mod identity_grants;
+pub mod identity_propagation;
 pub mod key_server;
 pub mod kill_switch;
 pub mod kubernetes;
