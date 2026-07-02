@@ -90,6 +90,27 @@ jobs:
           helm template t "$out/pulled/mcp-gateway-$ver.tgz" | grep -q '^kind: Deployment'
           echo "OCI round-trip ok: pushed + pulled + rendered mcp-gateway $ver"
 
+  helm-supply-chain:
+    name: Helm supply chain (cosign + SBOM)
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+      - name: Install cosign
+        # ponytail: floating major tag until pinned to a SHA (follow-up).
+        uses: sigstore/cosign-installer@v3
+      - name: Install syft (SBOM)
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Validate supply-chain smoke script
+        run: bash -n scripts/dev/helm-supply-chain-smoke.sh
+      - name: Sign + verify chart and image by digest, assert SBOM
+        run: scripts/dev/helm-supply-chain-smoke.sh
+
   k8s-kind-rollback:
     name: K8s kind apply+upgrade+rollback
     runs-on: ubuntu-latest
@@ -224,6 +245,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # keyless cosign signing (OIDC)
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -241,6 +263,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
@@ -250,3 +273,40 @@ jobs:
             ghcr.io/mikkoparkkola/mcp-gateway:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        # ponytail: floating major tag until pinned to a SHA (follow-up); the
+        # rest of this workflow is SHA-pinned per repo convention.
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install syft (SBOM)
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Cosign keyless-sign the released image by digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
+      - name: Generate + attest an SBOM (SPDX JSON) for the released image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          syft "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}" -o spdx-json > sbom.spdx.json
+          test -s sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+
+      - name: Verify the release signature + SBOM attestation
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity-regexp 'https://github.com/MikkoParkkola/mcp-gateway/.*' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
+          cosign verify-attestation --type spdxjson \
+            --certificate-identity-regexp 'https://github.com/MikkoParkkola/mcp-gateway/.*' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
