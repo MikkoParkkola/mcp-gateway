@@ -11,13 +11,14 @@
 //! - **Non-blocking + bounded.** The exporter polls the on-disk log; appends
 //!   (`log_invocation`) never wait on it. Each poll forwards at most
 //!   `max_batch` entries, so memory stays bounded regardless of backlog.
-//! - **Hash-verified.** Each entry's chain link (`prev_entry_hash`) and its
-//!   recomputed `entry_hash` are checked before forwarding; a failed check
-//!   halts export and never forwards the entry. Note: like `verify_log`, this
-//!   does NOT authenticate the per-entry HMAC, so a full-file replacement with a
-//!   self-consistent forged chain would pass — closing that needs signed
-//!   checkpoints / HMAC verification (tracked in MIK-6700). A re-anchor is
-//!   surfaced (`PollOutcome::reanchored`) so it can be alerted on.
+//! - **Hash-verified (+ optional HMAC).** Each entry's chain link
+//!   (`prev_entry_hash`) and its recomputed `entry_hash` are checked before
+//!   forwarding; a failed check halts export and never forwards the entry. When
+//!   a signing secret is configured (`with_signing_secret`, wired at runtime by
+//!   MIK-6703), each entry's per-entry HMAC is also authenticated, so a
+//!   self-consistent re-chained forgery is rejected too (MIK-6700). Without a
+//!   secret it degrades to hash-only. A re-anchor is surfaced
+//!   (`PollOutcome::reanchored`) so it can be alerted on.
 //! - **Rotation-safe (in-place).** The cursor anchors on the last forwarded
 //!   `entry_hash`; a truncated/rewritten-in-place file whose anchor is gone is
 //!   re-anchored from the start. Rename-style external logrotate that strands an
@@ -498,8 +499,23 @@ impl ExportSink for FileExportSink {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        f.write_all(buf.as_bytes())?;
-        f.flush()?;
+        // All-or-nothing append (MIK-6703 review): record the pre-write length so
+        // a PARTIAL write_all (prefix written, then error) can be rolled back.
+        // Otherwise the torn prefix would stay and a later retry would append the
+        // full batch after it, corrupting the NDJSON stream while the retry's
+        // success advances the cursor — silently "delivering" an unparseable line.
+        let start_len = f.metadata()?.len();
+        if let Err(e) = f.write_all(buf.as_bytes()) {
+            // Roll the file back to its pre-batch length; the cursor did not
+            // advance, so the whole batch is re-sent cleanly next poll.
+            let _ = f.set_len(start_len);
+            let _ = f.sync_all();
+            return Err(e.into());
+        }
+        // fsync before the ack: the cursor advances only after deliver returns
+        // Ok, so the sink write must be durable first to hold at-least-once
+        // across a power loss (flush alone leaves an OS-buffer window).
+        f.sync_all()?;
         Ok(())
     }
 }
@@ -863,6 +879,43 @@ mod tests {
     #[test]
     fn export_config_is_opt_in() {
         assert!(!ExportConfig::default().enabled);
+    }
+
+    // MIK-6703 review — deliver is all-or-nothing + durable: repeated batches
+    // produce a stream where EVERY line is complete valid JSON (no torn lines),
+    // and each entry appears exactly once (no duplication across delivers).
+    #[test]
+    fn file_sink_stream_stays_valid_across_repeated_delivers() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink_path = dir.path().join("siem.ndjson");
+        let sink = FileExportSink::open(sink_path.clone()).unwrap();
+        let entry = |c: u64| ExportEntry {
+            source: ExportSource::Governance,
+            counter: c,
+            entry_hash: format!("sha256:{c:064x}"),
+            prev_entry_hash: "sha256:prev".to_string(),
+            checkpoint: "genesis".to_string(),
+            raw: serde_json::json!({ "counter": c }),
+        };
+        sink.deliver(&[entry(1), entry(2)]).unwrap();
+        sink.deliver(&[entry(3)]).unwrap();
+        sink.deliver(&[]).unwrap(); // empty batch: no-op, no torn output
+
+        let contents = std::fs::read_to_string(&sink_path).unwrap();
+        let counters: Vec<u64> = contents
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let v: serde_json::Value =
+                    serde_json::from_str(l).expect("every sink line must be complete valid JSON");
+                v["counter"].as_u64().unwrap()
+            })
+            .collect();
+        assert_eq!(
+            counters,
+            vec![1, 2, 3],
+            "each entry once, in order, no torn lines"
+        );
     }
 
     // SIEM.RUN.1 — status counters fold poll outcomes: forwarded accumulates,
