@@ -559,13 +559,35 @@ impl HttpTransport {
 
     /// Send a raw request to the message endpoint
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+        self.send_request_with_headers(request, &[]).await
+    }
+
+    /// Send a raw request, merging `extra_headers` into the outbound header set
+    /// after the standard headers are built. Used for per-request identity
+    /// credentials (MIK-6704): the credential is applied here, on the value
+    /// passed down the call stack, never on shared `&self` state.
+    async fn send_request_with_headers(
+        &self,
+        request: &JsonRpcRequest,
+        extra_headers: &[(String, String)],
+    ) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
 
-        let headers = self
+        let mut headers = self
             .build_mcp_headers(HeaderMode::Request {
                 method: &request.method,
             })
             .await?;
+        // Per-request identity credential headers (e.g. Authorization: Bearer
+        // <assertion>) override any static header of the same name for this call.
+        for (k, v) in extra_headers {
+            if let (Ok(name), Ok(value)) = (
+                k.parse::<header::HeaderName>(),
+                v.parse::<header::HeaderValue>(),
+            ) {
+                headers.insert(name, value);
+            }
+        }
 
         let response = self
             .client
@@ -643,6 +665,15 @@ impl HttpTransport {
 #[async_trait]
 impl Transport for HttpTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        self.request_with_headers(method, params, &[]).await
+    }
+
+    async fn request_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+    ) -> Result<JsonRpcResponse> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: self.next_id(),
@@ -650,7 +681,9 @@ impl Transport for HttpTransport {
             params,
         };
 
-        let result = self.send_request(&request).await;
+        let result = self
+            .send_request_with_headers(&request, extra_headers)
+            .await;
 
         // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
         // or a remote invalidating the MCP session on OAuth token refresh), every
@@ -682,7 +715,9 @@ impl Transport for HttpTransport {
             );
             *self.session_id.write() = None;
             self.initialize().await?;
-            return self.send_request(&request).await;
+            return self
+                .send_request_with_headers(&request, extra_headers)
+                .await;
         }
 
         result

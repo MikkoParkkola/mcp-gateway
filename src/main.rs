@@ -495,7 +495,10 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
         }
     };
 
-    if let Err(e) = gateway.run_stdio().await {
+    // Box::pin: the run_stdio future is large (>16KB) since MetaMcpCallerContext
+    // gained the identity-propagation field (MIK-6734); boxing keeps it off the
+    // stack and satisfies clippy::large_futures.
+    if let Err(e) = Box::pin(gateway.run_stdio()).await {
         eprintln!("stdio gateway error: {e}");
         return ExitCode::FAILURE;
     }
