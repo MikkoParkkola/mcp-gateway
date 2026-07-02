@@ -602,6 +602,8 @@ impl ControlPlaneSnapshot {
             tools: self.tools.clone(),
             trust_cards: self.trust_cards.clone(),
             trust_evaluations: self.trust_evaluations.clone(),
+            grants: self.grants.clone(),
+            policies: self.policies.clone(),
             runtime_health: self.runtime_health.clone(),
             audit_events: self.audit_events.clone(),
         })
@@ -855,6 +857,17 @@ pub struct ControlPlaneReadOnlyView {
     pub trust_cards: Vec<ControlPlaneTrustCard>,
     /// `TrustLab` evaluations.
     pub trust_evaluations: Vec<ControlPlaneTrustEvaluation>,
+    /// Capability grants (all statuses — requested, approved, revoked).
+    ///
+    /// Exposed as rows (not just a count) so a persisted grant from the durable
+    /// store is visible on GET, including approved grants that never enter the
+    /// decision queue (MIK-6701).
+    pub grants: Vec<ControlPlaneGrant>,
+    /// Governance policies (enforced and not-yet-enforced).
+    ///
+    /// Exposed as rows for the same reason as `grants`: an enforced policy has
+    /// no decision-queue entry, so a count alone would hide it (MIK-6701).
+    pub policies: Vec<ControlPlanePolicy>,
     /// Runtime health.
     pub runtime_health: Vec<ControlPlaneRuntimeHealth>,
     /// Audit evidence.

@@ -15,11 +15,11 @@ use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
 use super::errors::auth_required;
 use crate::control_plane::{
-    ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneAuthorization,
-    ControlPlaneDecisionQueue, ControlPlaneDecisionTargetKind, ControlPlaneDomainCoverage,
-    ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlaneHealth,
-    ControlPlaneLicenseTier, ControlPlaneMutation, ControlPlanePolicy, ControlPlaneRbac,
-    ControlPlaneReadOnlyView, ControlPlaneRole, ControlPlaneRoleMappingConfig,
+    AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
+    ControlPlaneAuthorization, ControlPlaneDecisionQueue, ControlPlaneDecisionTargetKind,
+    ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus,
+    ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneMutation, ControlPlanePolicy,
+    ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole, ControlPlaneRoleMappingConfig,
     ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth, ControlPlaneServer,
     ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore, ControlPlaneTool,
     ControlPlaneTrustCard, ControlPlaneUser,
@@ -55,7 +55,7 @@ async fn control_plane_snapshot(
         identity.as_ref(),
         &state.control_plane_role_mapping,
     );
-    let snapshot = local_runtime_snapshot(&state, client.as_ref(), &actor);
+    let (snapshot, store_read_degraded) = local_runtime_snapshot(&state, client.as_ref(), &actor);
     let shadow_radar = local_shadow_radar(&state).await;
 
     let Some(view) = snapshot.read_only_view(&actor) else {
@@ -72,6 +72,7 @@ async fn control_plane_snapshot(
         decision_queue,
         shadow_radar,
         state.control_plane_store.is_some(),
+        store_read_degraded,
     );
     Json(response).into_response()
 }
@@ -455,11 +456,16 @@ fn actor_from_client(
     }
 }
 
+/// Build the local runtime snapshot for the control-plane API.
+///
+/// Returns the snapshot plus a `store_read_degraded` flag: `true` when a durable
+/// store is configured but at least one read failed, so the view fell back to
+/// the local projection (MIK-6701).
 fn local_runtime_snapshot(
     state: &AppState,
     client: Option<&AuthenticatedClient>,
     actor: &ControlPlaneActor,
-) -> ControlPlaneSnapshot {
+) -> (ControlPlaneSnapshot, bool) {
     let mut snapshot = ControlPlaneSnapshot::default();
     snapshot.users.push(ControlPlaneUser {
         user_id: actor.actor_id.clone(),
@@ -531,7 +537,80 @@ fn local_runtime_snapshot(
             .push(control_plane_grant_from_identity(grant, now));
     }
 
-    snapshot
+    // Reflect the durable governance store (MIK-6701): persisted grants/policies
+    // are merged in (store rows win by id over the local projection), and the
+    // audit-events view is populated from the store. Read errors degrade to the
+    // local projection rather than breaking the whole snapshot (fail-soft read),
+    // and the degraded flag is surfaced so an empty view is not mistaken for an
+    // authoritative empty result.
+    let store_read_degraded = state
+        .control_plane_store
+        .as_ref()
+        .is_some_and(|store| merge_store_into_snapshot(store.as_ref(), &mut snapshot));
+
+    (snapshot, store_read_degraded)
+}
+
+/// Merge persisted control-plane store rows into a runtime snapshot: grants and
+/// policies upsert by id (store wins), and `audit_events` are taken from the
+/// store's tamper-evident log.
+///
+/// Returns `true` if any store read failed (the view is then degraded: it falls
+/// back to the local projection and the audit view may be incomplete). The
+/// caller surfaces this so a client cannot mistake a failed read for an
+/// authoritative empty result (MIK-6701).
+#[must_use]
+fn merge_store_into_snapshot(
+    store: &dyn ControlPlaneStore,
+    snapshot: &mut ControlPlaneSnapshot,
+) -> bool {
+    let mut degraded = false;
+    match store.list_grants() {
+        Ok(grants) => {
+            for g in grants {
+                if let Some(existing) = snapshot
+                    .grants
+                    .iter_mut()
+                    .find(|x| x.grant_id == g.grant_id)
+                {
+                    *existing = g;
+                } else {
+                    snapshot.grants.push(g);
+                }
+            }
+        }
+        Err(e) => {
+            degraded = true;
+            tracing::warn!(error = %e, "control-plane store list_grants failed; using local projection");
+        }
+    }
+    match store.list_policies() {
+        Ok(policies) => {
+            for p in policies {
+                if let Some(existing) = snapshot
+                    .policies
+                    .iter_mut()
+                    .find(|x| x.policy_id == p.policy_id)
+                {
+                    *existing = p;
+                } else {
+                    snapshot.policies.push(p);
+                }
+            }
+        }
+        Err(e) => {
+            degraded = true;
+            tracing::warn!(error = %e, "control-plane store list_policies failed; using local projection");
+        }
+    }
+    match store.read_audit(&AuditFilter::new(200)) {
+        Ok(events) => snapshot.audit_events = events,
+        Err(e) => {
+            degraded = true;
+            tracing::warn!(error = %e, "control-plane store read_audit failed; audit view left empty");
+        }
+    }
+    degraded
 }
 
 /// Project a local [`IdentityGrant`] into a read-only [`ControlPlaneGrant`].
@@ -646,6 +725,11 @@ struct ControlPlaneApiResponse {
     coverage_complete: bool,
     inventory_counts: ControlPlaneInventoryCounts,
     shadow_radar: ControlPlaneShadowRadar,
+    /// `true` when a durable store is configured but a read failed, so `view`,
+    /// `inventory_counts`, and `decision_queue` fell back to the local
+    /// projection and may be incomplete. Distinguishes "no rows" from
+    /// "store unreadable" (MIK-6701).
+    store_read_degraded: bool,
     view: ControlPlaneReadOnlyView,
     decision_queue: ControlPlaneDecisionQueue,
     current_limits: Vec<&'static str>,
@@ -659,6 +743,7 @@ impl ControlPlaneApiResponse {
         decision_queue: ControlPlaneDecisionQueue,
         shadow_radar: ControlPlaneShadowRadar,
         mutation_enabled: bool,
+        store_read_degraded: bool,
     ) -> Self {
         let coverage = snapshot.domain_coverage();
         let inventory_counts = ControlPlaneInventoryCounts::from_snapshot(snapshot, &shadow_radar);
@@ -685,12 +770,13 @@ impl ControlPlaneApiResponse {
                 mutation_endpoint: mutation_enabled,
                 mutating_actions_require_audit: true,
             },
-            features: feature_entitlements(),
+            features: feature_entitlements(mutation_enabled),
             authorizations: ControlPlaneAuthorizationSet::for_actor(&actor),
             coverage,
             coverage_complete: coverage.is_complete(),
             inventory_counts,
             shadow_radar,
+            store_read_degraded,
             actor,
             view,
             decision_queue,
@@ -783,7 +869,14 @@ struct ControlPlaneFeatureEntitlement {
     available_in_this_route: bool,
 }
 
-fn feature_entitlements() -> Vec<ControlPlaneFeatureEntitlement> {
+/// Report which control-plane features are usable on the current route.
+///
+/// `LocalStatus` is always available (read surface); `GovernanceMutation` is
+/// available when the mutation endpoint is active (CP.READ.3 — the entitlement
+/// must track `route.mutation_endpoint`, not report read-only unconditionally).
+/// `FleetInventory` and `EvidenceExport` are enterprise features not served by
+/// this local route.
+fn feature_entitlements(mutation_enabled: bool) -> Vec<ControlPlaneFeatureEntitlement> {
     [
         ControlPlaneFeature::LocalStatus,
         ControlPlaneFeature::FleetInventory,
@@ -794,7 +887,11 @@ fn feature_entitlements() -> Vec<ControlPlaneFeatureEntitlement> {
     .map(|feature| ControlPlaneFeatureEntitlement {
         feature,
         license_tier: feature.license_tier(),
-        available_in_this_route: feature == ControlPlaneFeature::LocalStatus,
+        available_in_this_route: match feature {
+            ControlPlaneFeature::LocalStatus => true,
+            ControlPlaneFeature::GovernanceMutation => mutation_enabled,
+            ControlPlaneFeature::FleetInventory | ControlPlaneFeature::EvidenceExport => false,
+        },
     })
     .collect()
 }
@@ -1239,5 +1336,245 @@ mod role_wiring_tests {
         assert_eq!(actor.role, ControlPlaneRole::SecurityReviewer);
         assert!(ControlPlaneRbac::authorize(&actor, ControlPlaneAction::ReadEvidence).allowed);
         assert!(!ControlPlaneRbac::authorize(&actor, ControlPlaneAction::MutateGrant).allowed);
+    }
+}
+
+#[cfg(test)]
+mod read_reflect_tests {
+    use super::merge_store_into_snapshot;
+    use crate::control_plane::{
+        AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
+        ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlanePolicy, ControlPlaneRole,
+        ControlPlaneRollbackPlan, ControlPlaneSnapshot, ControlPlaneStore,
+        InMemoryControlPlaneStore, StoreError, StoreResult,
+    };
+
+    fn auditor() -> ControlPlaneActor {
+        ControlPlaneActor {
+            actor_id: "auditor".to_string(),
+            display_name: "auditor".to_string(),
+            role: ControlPlaneRole::Auditor,
+            group_ids: vec![],
+        }
+    }
+
+    /// A store whose every read fails — used to prove the degraded flag.
+    struct FailingStore;
+    impl ControlPlaneStore for FailingStore {
+        fn list_grants(&self) -> StoreResult<Vec<ControlPlaneGrant>> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn get_grant(&self, _id: &str) -> StoreResult<Option<ControlPlaneGrant>> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn put_grant(&self, _grant: ControlPlaneGrant) -> StoreResult<()> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn delete_grant(&self, _id: &str) -> StoreResult<()> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn list_policies(&self) -> StoreResult<Vec<ControlPlanePolicy>> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn get_policy(&self, _id: &str) -> StoreResult<Option<ControlPlanePolicy>> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn put_policy(&self, _policy: ControlPlanePolicy) -> StoreResult<()> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn delete_policy(&self, _id: &str) -> StoreResult<()> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn append_audit(&self, _event: &ControlPlaneAuditEvent) -> StoreResult<()> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+        fn read_audit(&self, _filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>> {
+            Err(StoreError::Corrupt("boom".to_string()))
+        }
+    }
+
+    // MIK-6701.CP.READ.1/2 — persisted store rows are reflected in the snapshot:
+    // grants/policies upsert by id (store wins), audit_events come from the store.
+    #[test]
+    fn store_rows_reflected_and_upserted() {
+        let store = InMemoryControlPlaneStore::new();
+        store
+            .put_grant(ControlPlaneGrant {
+                grant_id: "g1".to_string(),
+                subject_id: "store-user".to_string(),
+                server_id: "srv".to_string(),
+                tool_id: None,
+                status: ControlPlaneGrantStatus::Approved,
+            })
+            .unwrap();
+        store
+            .put_policy(ControlPlanePolicy {
+                policy_id: "p1".to_string(),
+                name: "p".to_string(),
+                enforced: true,
+            })
+            .unwrap();
+        store
+            .append_audit(&ControlPlaneAuditEvent {
+                event_id: "e1".to_string(),
+                actor_id: "alice".to_string(),
+                action: ControlPlaneAction::MutateGrant,
+                target_id: "g1".to_string(),
+                reason: "MIK-1".to_string(),
+                rollback: ControlPlaneRollbackPlan {
+                    summary: "revert".to_string(),
+                    step: "restore".to_string(),
+                },
+            })
+            .unwrap();
+
+        // A snapshot that already has a LOCAL projection of g1 (different status).
+        let mut snapshot = ControlPlaneSnapshot::default();
+        snapshot.grants.push(ControlPlaneGrant {
+            grant_id: "g1".to_string(),
+            subject_id: "local-projection".to_string(),
+            server_id: "srv".to_string(),
+            tool_id: None,
+            status: ControlPlaneGrantStatus::Requested,
+        });
+
+        let degraded = merge_store_into_snapshot(&store, &mut snapshot);
+        assert!(!degraded, "a healthy store read must not report degraded");
+
+        // Store row wins by id — no duplicate, status reflects the store.
+        assert_eq!(
+            snapshot
+                .grants
+                .iter()
+                .filter(|g| g.grant_id == "g1")
+                .count(),
+            1
+        );
+        let g = snapshot.grants.iter().find(|g| g.grant_id == "g1").unwrap();
+        assert_eq!(g.status, ControlPlaneGrantStatus::Approved);
+        assert_eq!(g.subject_id, "store-user");
+        // Policy + audit reflected.
+        assert!(
+            snapshot
+                .policies
+                .iter()
+                .any(|p| p.policy_id == "p1" && p.enforced)
+        );
+        assert_eq!(snapshot.audit_events.len(), 1);
+        assert_eq!(snapshot.audit_events[0].event_id, "e1");
+        // AuditFilter is exercised via read_audit inside the merge.
+        assert!(store.read_audit(&AuditFilter::new(10)).is_ok());
+    }
+
+    // A grant present only locally (not in the store) is preserved.
+    #[test]
+    fn local_only_grant_is_kept() {
+        let store: &dyn ControlPlaneStore = &InMemoryControlPlaneStore::new();
+        let mut snapshot = ControlPlaneSnapshot::default();
+        snapshot.grants.push(ControlPlaneGrant {
+            grant_id: "local-1".to_string(),
+            subject_id: "u".to_string(),
+            server_id: "s".to_string(),
+            tool_id: None,
+            status: ControlPlaneGrantStatus::Approved,
+        });
+        let degraded = merge_store_into_snapshot(store, &mut snapshot);
+        assert!(!degraded);
+        assert!(snapshot.grants.iter().any(|g| g.grant_id == "local-1"));
+    }
+
+    // MIK-6701.CP.READ.1 (API contract) — the store's approved grant + enforced
+    // policy are exposed as ROWS in the read-only view (not just as a count).
+    // This is the API contract the direct-helper test above cannot see: before
+    // the fix the view had no grants/policies fields, so a persisted approved
+    // grant/enforced policy was invisible on GET except in derived counts.
+    #[test]
+    fn read_only_view_exposes_store_grants_and_policies_as_rows() {
+        let store = InMemoryControlPlaneStore::new();
+        store
+            .put_grant(ControlPlaneGrant {
+                grant_id: "g-approved".to_string(),
+                subject_id: "u".to_string(),
+                server_id: "srv".to_string(),
+                tool_id: None,
+                status: ControlPlaneGrantStatus::Approved,
+            })
+            .unwrap();
+        store
+            .put_policy(ControlPlanePolicy {
+                policy_id: "p-enforced".to_string(),
+                name: "p".to_string(),
+                enforced: true,
+            })
+            .unwrap();
+
+        let mut snapshot = ControlPlaneSnapshot::default();
+        let degraded = merge_store_into_snapshot(&store, &mut snapshot);
+        assert!(!degraded);
+
+        let view = snapshot
+            .read_only_view(&auditor())
+            .expect("auditor can read inventory + evidence");
+        assert!(
+            view.grants.iter().any(|g| g.grant_id == "g-approved"),
+            "approved grant must be a row in the view"
+        );
+        assert!(
+            view.policies.iter().any(|p| p.policy_id == "p-enforced"),
+            "enforced policy must be a row in the view"
+        );
+
+        // The serialized JSON must carry the row arrays (not just counts).
+        let json = serde_json::to_value(&view).unwrap();
+        assert!(json["grants"].is_array());
+        assert!(json["policies"].is_array());
+        assert_eq!(json["grants"][0]["grant_id"], "g-approved");
+        assert_eq!(json["policies"][0]["policy_id"], "p-enforced");
+    }
+
+    // MIK-6701.CP.READ.2 (failure mode) — a store read failure sets the degraded
+    // flag so an empty/stale view is not mistaken for an authoritative empty
+    // result.
+    #[test]
+    fn store_read_failure_marks_degraded() {
+        let mut snapshot = ControlPlaneSnapshot::default();
+        let degraded = merge_store_into_snapshot(&FailingStore, &mut snapshot);
+        assert!(degraded, "a failing store read must report degraded");
+    }
+
+    // MIK-6701.CP.READ.3 — feature entitlements report GovernanceMutation as
+    // available exactly when the mutation endpoint is active, instead of always
+    // reporting only LocalStatus.
+    #[test]
+    fn governance_mutation_entitlement_tracks_mutation_route() {
+        use super::feature_entitlements;
+        use crate::control_plane::ControlPlaneFeature;
+
+        let read_only = feature_entitlements(false);
+        let gov = read_only
+            .iter()
+            .find(|e| e.feature == ControlPlaneFeature::GovernanceMutation)
+            .expect("GovernanceMutation entitlement present");
+        assert!(
+            !gov.available_in_this_route,
+            "GovernanceMutation must be unavailable on a read-only route"
+        );
+
+        let mutating = feature_entitlements(true);
+        let gov = mutating
+            .iter()
+            .find(|e| e.feature == ControlPlaneFeature::GovernanceMutation)
+            .expect("GovernanceMutation entitlement present");
+        assert!(
+            gov.available_in_this_route,
+            "GovernanceMutation must be available when the mutation endpoint is active"
+        );
+        // LocalStatus stays available on both routes.
+        assert!(
+            mutating
+                .iter()
+                .any(|e| e.feature == ControlPlaneFeature::LocalStatus
+                    && e.available_in_this_route)
+        );
     }
 }
