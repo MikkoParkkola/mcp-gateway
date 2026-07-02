@@ -546,6 +546,48 @@ impl MetaMcp {
             .store(multi_user, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// ADR-008 INV-2 fail-closed guard, shared by the meta-MCP dispatch
+    /// (`invoke_tool_traced`) and the direct backend route (`POST /mcp/{name}`,
+    /// `backend_handlers`). On a multi-user gateway a backend whose OAuth token
+    /// is held once by the gateway (keyed by backend, not by user —
+    /// `src/oauth/storage.rs`) must NOT have that token attached for an
+    /// arbitrary caller: doing so serves user A's login to user B. Refuse UNLESS
+    /// a per-user credential was resolved (`has_per_user_credential`) or the
+    /// operator blessed the account as shared (`oauth.shared_account = true`). A
+    /// single-user gateway never enters this branch, and this never falls back
+    /// to the shared token (INV-1): it refuses.
+    pub(crate) fn enforce_oauth_isolation(
+        &self,
+        server: &str,
+        has_per_user_credential: bool,
+    ) -> Result<()> {
+        if self.multi_user.load(std::sync::atomic::Ordering::Relaxed)
+            && !has_per_user_credential
+            && self
+                .backends
+                .get(server)
+                .is_some_and(|b| b.oauth_requires_per_user_isolation())
+        {
+            warn!(
+                server = %server,
+                "refused: multi-user gateway would serve a gateway-held OAuth token \
+                 that is not isolated per user (ADR-008 INV-2)"
+            );
+            return Err(Error::json_rpc(
+                -32001,
+                format!(
+                    "Backend '{server}' uses a gateway-held OAuth login that is not \
+                     isolated per user. On a multi-user gateway this call is refused so \
+                     one user's token is never served to another. Fix: supply a per-user \
+                     credential (enable identity propagation for this backend), or set \
+                     `oauth.shared_account = true` if this is a genuinely shared service \
+                     account."
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// Attach a `TransitionTracker` for predictive tool prefetch.
     pub fn set_transition_tracker(&self, tracker: Arc<TransitionTracker>) {
         *self.transition_tracker.write() = Some(tracker);

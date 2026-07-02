@@ -298,6 +298,31 @@ pub(super) async fn backend_handler(
         Vec::new()
     };
 
+    // ADR-008 INV-2: the direct backend route bypasses `invoke_tool_traced`, so
+    // it must enforce the same fail-closed OAuth-isolation guard. This covers
+    // every caller-data method that forwards with the gateway-held token —
+    // `tools/call`, `resources/read`, `prompts/get`, etc. — not just
+    // `tools/call`. Discovery/plumbing (`initialize`, `tools/list`, `ping`,
+    // `notifications/*`) is exempt: it carries no user data. A per-user
+    // credential was resolved above iff `propagated_headers` is non-empty (only
+    // populated for `tools/call`); any other guarded method has none, so a
+    // per-user OAuth backend on a multi-user gateway is refused rather than
+    // served the shared token.
+    let isolation_guarded = !matches!(method.as_str(), "initialize" | "tools/list" | "ping")
+        && !method.starts_with("notifications/");
+    if isolation_guarded
+        && let Err(e) = state
+            .meta_mcp
+            .enforce_oauth_isolation(&name, !propagated_headers.is_empty())
+    {
+        return build_http_error_response(
+            Some(id.clone()),
+            e.to_rpc_code(),
+            e.to_string(),
+            StatusCode::FORBIDDEN,
+        );
+    }
+
     // SECURITY: apply tool policy, name validation, and input sanitization to
     // tools/call requests unless the backend explicitly opts into pass-through
     // mode (passthrough: true in config — only for fully-trusted internals).
