@@ -127,7 +127,7 @@ axum-server = { version = "0.8", features = ["tls-rustls"] }
 tokio-rustls = "0.26"
 
 # XML parsing (for APIs that return XML, e.g. ECB exchange rates)
-quick-xml = "0.40"
+quick-xml = "0.41"
 
 # Environment file loading
 dotenvy = "0.15"

@@ -138,3 +138,46 @@ fn local_name(raw: &[u8]) -> String {
         None => s.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::xml_to_json;
+    use serde_json::json;
+
+    // Correctness contract (guards quick-xml bumps — MIK-6731): namespace prefix
+    // stripped, attributes -> "@" fields, text -> "#text", repeated children ->
+    // array. Mirrors the ECB exchange-rate feed shape.
+    #[test]
+    fn xml_to_json_maps_attrs_text_and_repeated_children() {
+        let xml = r#"<gesmes:Envelope>
+            <Cube>
+                <Cube currency="USD" rate="1.05"/>
+                <Cube currency="GBP" rate="0.85"/>
+            </Cube>
+            <note>hello</note>
+        </gesmes:Envelope>"#;
+
+        let v = xml_to_json(xml).expect("parse ok");
+        // Single root <Envelope> is unwrapped; namespace prefix stripped.
+        // The outer <Cube> wraps the two repeated inner <Cube> elements, which
+        // collapse into an array with @-prefixed attributes.
+        let inner = &v["Cube"]["Cube"];
+        assert!(
+            inner.is_array(),
+            "repeated inner <Cube> must be an array: {v}"
+        );
+        let arr = inner.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["@currency"], json!("USD"));
+        assert_eq!(arr[0]["@rate"], json!("1.05"));
+        assert_eq!(arr[1]["@currency"], json!("GBP"));
+        // Text content -> "#text".
+        assert_eq!(v["note"]["#text"], json!("hello"));
+    }
+
+    #[test]
+    fn xml_to_json_reports_parse_error() {
+        // Malformed (unclosed tag) must surface an Err, not panic.
+        assert!(xml_to_json("<a><b></a>").is_err());
+    }
+}
