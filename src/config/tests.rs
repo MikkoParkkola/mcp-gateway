@@ -619,6 +619,31 @@ fn validate_rejects_per_user_session_mode_until_pool_ships() {
 }
 
 #[test]
+fn validate_rejects_identity_propagation_on_non_http_transport() {
+    // IDP.2: stdio/websocket transports silently drop per-request headers, so a
+    // propagation-configured non-HTTP backend must fail closed at load rather
+    // than dispatch without the credential (MIK-6734 review finding).
+    let mut config = Config::default();
+    let mut backend = backend_with_idp(IdentityPropagationConfig {
+        strategy: PropagationStrategyKind::SignedAssertion,
+        audience: "https://mem".to_string(),
+        required: true,
+        session_mode: SessionMode::Stateless,
+    });
+    backend.transport = TransportConfig::Stdio {
+        command: "echo".to_string(),
+        cwd: None,
+        protocol_version: None,
+    };
+    config.backends.insert("mem".to_string(), backend);
+    let err = config.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("http transport"),
+        "error should require http transport: {err}"
+    );
+}
+
+#[test]
 fn validate_rejects_empty_audience_backend() {
     // IDP.3: empty audience defeats isolation; fail closed at load.
     let mut config = Config::default();
