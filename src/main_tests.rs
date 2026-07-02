@@ -842,3 +842,17 @@ fn cli_ws_port_present_in_config_enables_ws_listener() {
     config.server.ws_port = Some(39401);
     assert_eq!(config.server.ws_port, Some(39401));
 }
+
+// MIK-6700 review #2: `audit verify` must FAIL CLOSED on a config load error,
+// never silently downgrade to hash-only. An explicit --config path that does
+// not exist is a load error, so resolve_audit_log_config returns Err (the
+// Verify arm then exits non-zero rather than verifying hash-only).
+#[test]
+fn audit_config_load_failure_is_fail_closed() {
+    let missing = std::path::Path::new("/nonexistent/mcp-gateway/does-not-exist.yaml");
+    let result = resolve_audit_log_config(Some(missing));
+    assert!(
+        result.is_err(),
+        "a missing explicit config path must be an Err (fail closed), not a default empty-secret config"
+    );
+}
