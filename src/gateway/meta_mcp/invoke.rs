@@ -1313,6 +1313,29 @@ impl MetaMcp {
         }
     }
 
+    /// Resolve the per-user propagation headers for a backend by name, for the
+    /// direct backend route (`/mcp/{name}`) which does not go through
+    /// `dispatch_to_backend` (MIK-6704). Returns the empty vec when the backend
+    /// is not propagation-configured (unchanged static path); fail-closed `Err`
+    /// for a `required` backend with no identity/strategy.
+    pub async fn resolve_propagation_headers(
+        &self,
+        server: &str,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<Vec<(String, String)>> {
+        let Some(idp_cfg) = self
+            .backends
+            .get(server)
+            .and_then(|b| b.identity_propagation_config().cloned())
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .resolve_caller_credential(server, &idp_cfg, verified_identity)
+            .await?
+            .headers)
+    }
+
     /// Resolve the per-user identity-propagation credential for a backend
     /// configured with `identity_propagation` (MIK-6704 / ADR-007). This is the
     /// single identity gate: minting, fail-closed enforcement, and the cache
@@ -2752,5 +2775,50 @@ mod identity_propagation_enforcement_tests {
             .expect("optional ok");
         assert!(cred.headers.is_empty());
         assert!(cred.cache_binding.is_none());
+    }
+
+    // Direct backend route (/mcp/{name}) — resolve_propagation_headers mints the
+    // per-user credential for a propagation-configured backend so the direct
+    // passthrough carries it too (MIK-6734 review finding 4).
+    #[tokio::test]
+    async fn direct_route_resolves_bearer_for_identity() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let headers = m
+            .resolve_propagation_headers("mem", Some(&identity()))
+            .await
+            .expect("resolve ok");
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v.starts_with("Bearer ")),
+            "direct route must resolve the per-user Bearer credential: {headers:?}"
+        );
+    }
+
+    // Direct route fails closed for a required backend with no identity — never
+    // forwards with only the static credential.
+    #[tokio::test]
+    async fn direct_route_fails_closed_without_identity() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let err = m
+            .resolve_propagation_headers("mem", None)
+            .await
+            .expect_err("must refuse");
+        assert!(
+            err.to_string().contains("required"),
+            "fail-closed error: {err}"
+        );
+    }
+
+    // Direct route to a backend with no identity_propagation config is unchanged
+    // (empty headers → static path).
+    #[tokio::test]
+    async fn direct_route_unconfigured_backend_yields_no_headers() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let headers = m
+            .resolve_propagation_headers("no-such-backend", Some(&identity()))
+            .await
+            .expect("resolve ok");
+        assert!(headers.is_empty());
     }
 }
