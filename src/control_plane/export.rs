@@ -11,13 +11,14 @@
 //! - **Non-blocking + bounded.** The exporter polls the on-disk log; appends
 //!   (`log_invocation`) never wait on it. Each poll forwards at most
 //!   `max_batch` entries, so memory stays bounded regardless of backlog.
-//! - **Hash-verified.** Each entry's chain link (`prev_entry_hash`) and its
-//!   recomputed `entry_hash` are checked before forwarding; a failed check
-//!   halts export and never forwards the entry. Note: like `verify_log`, this
-//!   does NOT authenticate the per-entry HMAC, so a full-file replacement with a
-//!   self-consistent forged chain would pass — closing that needs signed
-//!   checkpoints / HMAC verification (tracked in MIK-6700). A re-anchor is
-//!   surfaced (`PollOutcome::reanchored`) so it can be alerted on.
+//! - **Hash-verified (+ optional HMAC).** Each entry's chain link
+//!   (`prev_entry_hash`) and its recomputed `entry_hash` are checked before
+//!   forwarding; a failed check halts export and never forwards the entry. When
+//!   a signing secret is configured (`with_signing_secret`, wired at runtime by
+//!   MIK-6703), each entry's per-entry HMAC is also authenticated, so a
+//!   self-consistent re-chained forgery is rejected too (MIK-6700). Without a
+//!   secret it degrades to hash-only. A re-anchor is surfaced
+//!   (`PollOutcome::reanchored`) so it can be alerted on.
 //! - **Rotation-safe (in-place).** The cursor anchors on the last forwarded
 //!   `entry_hash`; a truncated/rewritten-in-place file whose anchor is gone is
 //!   re-anchored from the start. Rename-style external logrotate that strands an
@@ -433,6 +434,202 @@ pub fn default_cursor_path(log_path: &Path) -> PathBuf {
     log_path.with_extension("export-cursor.json")
 }
 
+/// Runtime SIEM-export configuration (MIK-6703). Opt-in; disabled by default so
+/// the export background task is only spawned when an operator configures it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportConfig {
+    /// Enable the background export task.
+    pub enabled: bool,
+    /// Destination NDJSON file the sink appends forwarded entries to (the SIEM
+    /// agent tails this). One JSON object per line. This is the core sink; an
+    /// OTel/HTTP sink is a separate enterprise follow-up.
+    pub sink_path: String,
+    /// Poll cadence in seconds (how often the task tails the logs).
+    pub poll_interval_secs: u64,
+    /// Max entries forwarded per poll per source (memory bound).
+    pub max_batch: usize,
+}
+
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sink_path: "~/.mcp-gateway/export/siem.ndjson".to_string(),
+            poll_interval_secs: 15,
+            max_batch: LogExporter::DEFAULT_MAX_BATCH,
+        }
+    }
+}
+
+/// Core NDJSON [`ExportSink`]: appends each forwarded entry as one JSON line to
+/// a local file the SIEM agent tails. Fully synchronous (no async bridging), so
+/// it composes with the sync [`LogExporter::poll`] contract. Delivery is the
+/// ack: the file write must succeed (and be fsynced) before the cursor advances.
+pub struct FileExportSink {
+    path: PathBuf,
+    /// Fail-closed latch (MIK-6703 review). Set `false` if a partial write can
+    /// NOT be rolled back, so the torn-prefix stream integrity can no longer be
+    /// guaranteed; all subsequent deliveries then refuse (export halts, cursor
+    /// never advances) rather than risk appending after a torn prefix.
+    healthy: std::sync::atomic::AtomicBool,
+}
+
+impl FileExportSink {
+    /// Open (create-append) the sink at `path`, creating parent dirs.
+    ///
+    /// # Errors
+    /// Errors if the parent directory cannot be created.
+    pub fn open(path: PathBuf) -> Result<Self, ExportError> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        Ok(Self {
+            path,
+            healthy: std::sync::atomic::AtomicBool::new(true),
+        })
+    }
+}
+
+impl ExportSink for FileExportSink {
+    fn deliver(&self, entries: &[ExportEntry]) -> Result<(), ExportError> {
+        use std::io::Write;
+        use std::sync::atomic::Ordering::{Acquire, Release};
+
+        // Fail closed: once integrity can no longer be guaranteed (a partial
+        // write that could not be rolled back), refuse all further deliveries so
+        // the cursor never advances over a torn stream (MIK-6703 review #1).
+        if !self.healthy.load(Acquire) {
+            return Err(ExportError::SinkRejected(
+                "export sink halted after an unrecoverable partial write".to_string(),
+            ));
+        }
+
+        let mut buf = String::new();
+        for e in entries {
+            let line = serde_json::to_string(e)
+                .map_err(|err| ExportError::SinkRejected(format!("serialize: {err}")))?;
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        // All-or-nothing append: record the pre-write length so a PARTIAL
+        // write_all (prefix written, then error) can be rolled back. Otherwise
+        // the torn prefix stays and a later retry appends the full batch after
+        // it, corrupting the stream while the retry's success advances the
+        // cursor — silently "delivering" an unparseable line.
+        let start_len = f.metadata()?.len();
+        if let Err(e) = f.write_all(buf.as_bytes()) {
+            // Roll back to pre-batch length. If the rollback itself fails we can
+            // NOT guarantee the stream is clean, so latch unhealthy (fail-closed)
+            // — subsequent deliveries refuse rather than append after a torn
+            // prefix (MIK-6703 review #1).
+            if f.set_len(start_len).and_then(|()| f.sync_all()).is_err() {
+                self.healthy.store(false, Release);
+            }
+            return Err(e.into());
+        }
+        // fsync before the ack: the cursor advances only after deliver returns
+        // Ok, so the sink write must be durable first to hold at-least-once
+        // across a power loss (flush alone leaves an OS-buffer window).
+        f.sync_all()?;
+        // Also fsync the parent directory so a first-create's directory entry is
+        // durable before the cursor advances (a crash could otherwise lose the
+        // newly-created sink file). Done unconditionally — no `existed` sample —
+        // to avoid a TOCTOU miss, and an empty parent (a bare relative path) is
+        // resolved to "." so the case is not skipped (MIK-6703 review #2). A dir
+        // fsync when nothing changed is a cheap no-op at the 15s poll cadence.
+        // Unix-only (portable directory fsync).
+        #[cfg(unix)]
+        {
+            let parent = self
+                .path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+}
+
+/// Observable status of the export task for one source, updated after each poll
+/// and read by the control-plane export-status route (MIK-6703 SIEM.RUN.2).
+/// Uses atomics so the async route can read it without locking the task.
+#[derive(Debug, Default)]
+pub struct SourceExportStatus {
+    /// Total entries forwarded+acked since startup.
+    pub forwarded_total: std::sync::atomic::AtomicU64,
+    /// Entries still pending after the last poll (current lag).
+    pub last_lag: std::sync::atomic::AtomicU64,
+    /// Max lag observed since startup (feeds the max-lag alert).
+    pub max_lag: std::sync::atomic::AtomicU64,
+    /// Number of re-anchor events (rotation/truncation detected).
+    pub reanchor_total: std::sync::atomic::AtomicU64,
+    /// Number of poll errors (verification failures / sink rejections).
+    pub error_total: std::sync::atomic::AtomicU64,
+}
+
+impl SourceExportStatus {
+    /// Fold one poll outcome into the running counters.
+    pub fn record(&self, outcome: &PollOutcome) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.forwarded_total
+            .fetch_add(outcome.forwarded as u64, Relaxed);
+        let lag = outcome.lag_entries as u64;
+        self.last_lag.store(lag, Relaxed);
+        self.max_lag.fetch_max(lag, Relaxed);
+        if outcome.reanchored {
+            self.reanchor_total.fetch_add(1, Relaxed);
+        }
+    }
+
+    /// Record a poll error.
+    pub fn record_error(&self) {
+        self.error_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Snapshot as a serialisable map for the status route.
+    #[must_use]
+    pub fn snapshot(&self) -> serde_json::Value {
+        use std::sync::atomic::Ordering::Relaxed;
+        serde_json::json!({
+            "forwarded_total": self.forwarded_total.load(Relaxed),
+            "last_lag": self.last_lag.load(Relaxed),
+            "max_lag": self.max_lag.load(Relaxed),
+            "reanchor_total": self.reanchor_total.load(Relaxed),
+            "error_total": self.error_total.load(Relaxed),
+        })
+    }
+}
+
+/// Shared export status for both log sources (invocation + governance).
+#[derive(Debug, Default)]
+pub struct ExportStatus {
+    /// Invocation-log export counters.
+    pub invocation: SourceExportStatus,
+    /// Governance-log export counters.
+    pub governance: SourceExportStatus,
+}
+
+impl ExportStatus {
+    /// Snapshot both sources for the status route.
+    #[must_use]
+    pub fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "invocation": self.invocation.snapshot(),
+            "governance": self.governance.snapshot(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,5 +880,142 @@ mod tests {
         let out = exp.poll(&sink).unwrap();
         assert_eq!(out.forwarded, 2);
         assert_eq!(sink.delivered().len(), 2);
+    }
+
+    // MIK-6703 SIEM.RUN.1 — the core NDJSON file sink appends one JSON line per
+    // forwarded entry, and forwarding advances the cursor (at-least-once ack).
+    #[test]
+    fn file_sink_writes_ndjson_and_forwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("gov.jsonl");
+        let log = logger(&log_path);
+        gov_event(&log, "e1");
+        gov_event(&log, "e2");
+        drop(log);
+
+        let sink_path = dir.path().join("siem.ndjson");
+        let sink = FileExportSink::open(sink_path.clone()).unwrap();
+        let mut exp = exporter(dir.path(), ExportSource::Governance, &log_path);
+        let out = exp.poll(&sink).unwrap();
+        assert_eq!(out.forwarded, 2);
+
+        let contents = std::fs::read_to_string(&sink_path).unwrap();
+        let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 2, "one NDJSON line per forwarded entry");
+        for line in &lines {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(v["source"], "governance");
+            assert!(v["entry_hash"].is_string());
+        }
+
+        // Cursor advanced: a second poll with no new entries forwards nothing.
+        let out2 = exp.poll(&sink).unwrap();
+        assert_eq!(out2.forwarded, 0);
+    }
+
+    // SIEM.RUN.2 — ExportConfig is opt-in (disabled by default) so the task is
+    // never spawned unless an operator configures it.
+    #[test]
+    fn export_config_is_opt_in() {
+        assert!(!ExportConfig::default().enabled);
+    }
+
+    // MIK-6703 review #1 — fail-closed latch: once the sink is unhealthy (a
+    // partial write it could not roll back), every subsequent deliver refuses,
+    // so the cursor can never advance over a torn stream.
+    #[test]
+    fn unhealthy_sink_refuses_delivery() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileExportSink::open(dir.path().join("siem.ndjson")).unwrap();
+        // Healthy: an empty deliver succeeds.
+        assert!(sink.deliver(&[]).is_ok());
+        // Latch unhealthy (simulating an unrecoverable partial write).
+        sink.healthy
+            .store(false, std::sync::atomic::Ordering::Release);
+        let err = sink.deliver(&[]).unwrap_err();
+        assert!(
+            matches!(err, ExportError::SinkRejected(_)),
+            "an unhealthy sink must refuse (fail-closed), got {err:?}"
+        );
+    }
+
+    // MIK-6703 review #2 — first-create durability: delivering to a fresh path
+    // creates the sink file with the content (the dir-fsync path runs).
+    #[test]
+    fn file_sink_first_create_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink_path = dir.path().join("nested/siem.ndjson");
+        let sink = FileExportSink::open(sink_path.clone()).unwrap();
+        assert!(!sink_path.exists(), "file not created until first deliver");
+        let entry = ExportEntry {
+            source: ExportSource::Invocation,
+            counter: 1,
+            entry_hash: "sha256:aa".to_string(),
+            prev_entry_hash: "genesis".to_string(),
+            checkpoint: "genesis".to_string(),
+            raw: serde_json::json!({ "k": "v" }),
+        };
+        sink.deliver(std::slice::from_ref(&entry)).unwrap();
+        let contents = std::fs::read_to_string(&sink_path).unwrap();
+        assert_eq!(contents.lines().filter(|l| !l.is_empty()).count(), 1);
+    }
+
+    // MIK-6703 review — deliver is all-or-nothing + durable: repeated batches
+    // produce a stream where EVERY line is complete valid JSON (no torn lines),
+    // and each entry appears exactly once (no duplication across delivers).
+    #[test]
+    fn file_sink_stream_stays_valid_across_repeated_delivers() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink_path = dir.path().join("siem.ndjson");
+        let sink = FileExportSink::open(sink_path.clone()).unwrap();
+        let entry = |c: u64| ExportEntry {
+            source: ExportSource::Governance,
+            counter: c,
+            entry_hash: format!("sha256:{c:064x}"),
+            prev_entry_hash: "sha256:prev".to_string(),
+            checkpoint: "genesis".to_string(),
+            raw: serde_json::json!({ "counter": c }),
+        };
+        sink.deliver(&[entry(1), entry(2)]).unwrap();
+        sink.deliver(&[entry(3)]).unwrap();
+        sink.deliver(&[]).unwrap(); // empty batch: no-op, no torn output
+
+        let contents = std::fs::read_to_string(&sink_path).unwrap();
+        let counters: Vec<u64> = contents
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let v: serde_json::Value =
+                    serde_json::from_str(l).expect("every sink line must be complete valid JSON");
+                v["counter"].as_u64().unwrap()
+            })
+            .collect();
+        assert_eq!(
+            counters,
+            vec![1, 2, 3],
+            "each entry once, in order, no torn lines"
+        );
+    }
+
+    // SIEM.RUN.1 — status counters fold poll outcomes: forwarded accumulates,
+    // max_lag is monotonic, last_lag tracks the latest.
+    #[test]
+    fn source_status_records_outcomes() {
+        let s = SourceExportStatus::default();
+        s.record(&PollOutcome {
+            forwarded: 3,
+            lag_entries: 5,
+            reanchored: false,
+        });
+        s.record(&PollOutcome {
+            forwarded: 2,
+            lag_entries: 1,
+            reanchored: true,
+        });
+        let snap = s.snapshot();
+        assert_eq!(snap["forwarded_total"], 5);
+        assert_eq!(snap["last_lag"], 1);
+        assert_eq!(snap["max_lag"], 5, "max_lag is monotonic across polls");
+        assert_eq!(snap["reanchor_total"], 1);
     }
 }

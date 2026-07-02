@@ -11,8 +11,9 @@ pub mod role_mapping;
 pub mod store;
 
 pub use export::{
-    CollectingSink, ExportCursor, ExportEntry, ExportError, ExportSink, ExportSource, LogExporter,
-    PollOutcome, default_cursor_path,
+    CollectingSink, ExportConfig, ExportCursor, ExportEntry, ExportError, ExportSink, ExportSource,
+    ExportStatus, FileExportSink, LogExporter, PollOutcome, SourceExportStatus,
+    default_cursor_path,
 };
 pub use role_mapping::{ControlPlaneConfig, ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
 pub use store::{

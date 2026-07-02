@@ -100,6 +100,7 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
             mcp_gateway::config::Config::default(),
         )),
+        export_status: None,
     })
 }
 
@@ -170,6 +171,7 @@ fn make_app_state_with_reload(
             live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
                 mcp_gateway::config::Config::default(),
             )),
+            export_status: None,
         }),
         live_config,
     )

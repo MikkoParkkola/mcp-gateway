@@ -41,6 +41,40 @@ pub fn control_plane_router() -> Router<Arc<AppState>> {
         .route("/ui/api/control-plane/grants", post(mutate_grant))
         .route("/ui/api/control-plane/policies", post(mutate_policy))
         .route("/ui/api/control-plane/decisions", post(resolve_decision))
+        .route(
+            "/ui/api/control-plane/export-status",
+            get(export_status_handler),
+        )
+}
+
+/// GET the SIEM export status (MIK-6703 SIEM.RUN.2): per-source forwarded/lag/
+/// max-lag/re-anchor/error counters. Requires read-inventory RBAC. Returns 404
+/// (via a `configured: false` body) when export is not running.
+async fn export_status_handler(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
+) -> impl IntoResponse {
+    let actor = actor_from_client(
+        client.map(|Extension(c)| c).as_ref(),
+        identity.map(|Extension(id)| id).as_ref(),
+        &state.live_config.get().control_plane.role_mapping,
+    );
+    if !ControlPlaneRbac::authorize(&actor, ControlPlaneAction::ReadInventory).allowed {
+        return auth_required(StatusCode::FORBIDDEN).into_response();
+    }
+    match state.export_status.as_ref() {
+        Some(status) => Json(serde_json::json!({
+            "configured": true,
+            "sources": status.snapshot(),
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "configured": false })),
+        )
+            .into_response(),
+    }
 }
 
 async fn control_plane_snapshot(
@@ -71,8 +105,11 @@ async fn control_plane_snapshot(
         view,
         decision_queue,
         shadow_radar,
-        state.control_plane_store.is_some(),
-        store_read_degraded,
+        &ControlPlaneResponseFlags {
+            mutation_enabled: state.control_plane_store.is_some(),
+            store_read_degraded,
+            export_configured: state.export_status.is_some(),
+        },
     );
     Json(response).into_response()
 }
@@ -735,6 +772,17 @@ struct ControlPlaneApiResponse {
     current_limits: Vec<&'static str>,
 }
 
+/// Boolean flags threaded into the control-plane API response, grouped to keep
+/// [`ControlPlaneApiResponse::from_snapshot`] within the argument-count budget.
+struct ControlPlaneResponseFlags {
+    /// Governance mutation endpoint is active (a store is configured).
+    mutation_enabled: bool,
+    /// A durable store read failed; the view fell back to the local projection.
+    store_read_degraded: bool,
+    /// The SIEM export task is running.
+    export_configured: bool,
+}
+
 impl ControlPlaneApiResponse {
     fn from_snapshot(
         actor: ControlPlaneActor,
@@ -742,9 +790,13 @@ impl ControlPlaneApiResponse {
         view: ControlPlaneReadOnlyView,
         decision_queue: ControlPlaneDecisionQueue,
         shadow_radar: ControlPlaneShadowRadar,
-        mutation_enabled: bool,
-        store_read_degraded: bool,
+        flags: &ControlPlaneResponseFlags,
     ) -> Self {
+        let &ControlPlaneResponseFlags {
+            mutation_enabled,
+            store_read_degraded,
+            export_configured,
+        } = flags;
         let coverage = snapshot.domain_coverage();
         let inventory_counts = ControlPlaneInventoryCounts::from_snapshot(snapshot, &shadow_radar);
         let current_limits = if mutation_enabled {
@@ -770,7 +822,7 @@ impl ControlPlaneApiResponse {
                 mutation_endpoint: mutation_enabled,
                 mutating_actions_require_audit: true,
             },
-            features: feature_entitlements(mutation_enabled),
+            features: feature_entitlements(mutation_enabled, export_configured),
             authorizations: ControlPlaneAuthorizationSet::for_actor(&actor),
             coverage,
             coverage_complete: coverage.is_complete(),
@@ -876,7 +928,10 @@ struct ControlPlaneFeatureEntitlement {
 /// must track `route.mutation_endpoint`, not report read-only unconditionally).
 /// `FleetInventory` and `EvidenceExport` are enterprise features not served by
 /// this local route.
-fn feature_entitlements(mutation_enabled: bool) -> Vec<ControlPlaneFeatureEntitlement> {
+fn feature_entitlements(
+    mutation_enabled: bool,
+    export_configured: bool,
+) -> Vec<ControlPlaneFeatureEntitlement> {
     [
         ControlPlaneFeature::LocalStatus,
         ControlPlaneFeature::FleetInventory,
@@ -890,7 +945,8 @@ fn feature_entitlements(mutation_enabled: bool) -> Vec<ControlPlaneFeatureEntitl
         available_in_this_route: match feature {
             ControlPlaneFeature::LocalStatus => true,
             ControlPlaneFeature::GovernanceMutation => mutation_enabled,
-            ControlPlaneFeature::FleetInventory | ControlPlaneFeature::EvidenceExport => false,
+            ControlPlaneFeature::EvidenceExport => export_configured,
+            ControlPlaneFeature::FleetInventory => false,
         },
     })
     .collect()
@@ -1622,7 +1678,7 @@ mod read_reflect_tests {
         use super::feature_entitlements;
         use crate::control_plane::ControlPlaneFeature;
 
-        let read_only = feature_entitlements(false);
+        let read_only = feature_entitlements(false, false);
         let gov = read_only
             .iter()
             .find(|e| e.feature == ControlPlaneFeature::GovernanceMutation)
@@ -1632,7 +1688,7 @@ mod read_reflect_tests {
             "GovernanceMutation must be unavailable on a read-only route"
         );
 
-        let mutating = feature_entitlements(true);
+        let mutating = feature_entitlements(true, false);
         let gov = mutating
             .iter()
             .find(|e| e.feature == ControlPlaneFeature::GovernanceMutation)
@@ -1647,6 +1703,32 @@ mod read_reflect_tests {
                 .iter()
                 .any(|e| e.feature == ControlPlaneFeature::LocalStatus
                     && e.available_in_this_route)
+        );
+    }
+
+    // MIK-6703 SIEM.RUN.2 — EvidenceExport entitlement is available exactly when
+    // export is configured, and unavailable otherwise.
+    #[test]
+    fn evidence_export_entitlement_tracks_export_configured() {
+        use super::feature_entitlements;
+        use crate::control_plane::ControlPlaneFeature;
+
+        let off = feature_entitlements(false, false);
+        assert!(
+            !off.iter()
+                .find(|e| e.feature == ControlPlaneFeature::EvidenceExport)
+                .unwrap()
+                .available_in_this_route,
+            "EvidenceExport must be unavailable when export is not configured"
+        );
+
+        let on = feature_entitlements(false, true);
+        assert!(
+            on.iter()
+                .find(|e| e.feature == ControlPlaneFeature::EvidenceExport)
+                .unwrap()
+                .available_in_this_route,
+            "EvidenceExport must be available when export is configured"
         );
     }
 }
