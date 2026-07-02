@@ -29,7 +29,8 @@
 //!
 //! 1. Build the entry **without** `entry_hash`, `sig`, and `key_id`.
 //! 2. `entry_hash = sha256(serde_json::to_string(&entry_without_those_fields))`
-//! 3. `sig = hmac_sha256(shared_secret, raw_entry_hash_bytes)`
+//! 3. `sig = hmac_sha256(shared_secret, raw_entry_hash_bytes || key_id_bytes)`
+//!    — `key_id` is bound into the signed message so it cannot be altered.
 //!
 //! Because `serde_json::Map` is a `BTreeMap` (keys sorted alphabetically, no
 //! `preserve_order` feature), serialisation is deterministic and the hash
@@ -296,9 +297,12 @@ impl TransparencyLogger {
         let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
         let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
 
-        // ── Step 3: sig = hmac_sha256(secret, entry_hash_bytes) ──────────────
+        // ── Step 3: sig = hmac_sha256(secret, entry_hash_bytes || key_id) ─────
+        // key_id is bound INTO the signed message (not just written alongside)
+        // so a stripped or altered key_id fails verification (MIK-6700 review).
         if !self.config.shared_secret.is_empty() {
-            let sig_hex = hmac_sha256_hex(self.config.shared_secret.as_bytes(), &entry_hash_bytes);
+            let msg = sig_message(&entry_hash_bytes, &self.config.key_id);
+            let sig_hex = hmac_sha256_hex(self.config.shared_secret.as_bytes(), &msg);
             fields.insert("sig".into(), format!("hmac-sha256:{sig_hex}").into());
             fields.insert("key_id".into(), self.config.key_id.clone().into());
         }
@@ -598,16 +602,18 @@ pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
 /// Verify one entry's HMAC `sig` against `secret`, given the entry's
 /// already-hash-verified `entry_hash` string (`"sha256:<hex>"`).
 ///
-/// The signature is `HMAC-SHA256(secret, raw_entry_hash_bytes)` (the 32 raw
-/// bytes of the SHA-256, matching how `append_core` signs). Comparison is
-/// constant-time via `Mac::verify_slice`. A missing, malformed, or non-matching
-/// `sig` is an error — under a configured secret every entry must be signed, so
-/// stripping the `sig` cannot bypass the check (MIK-6700 HMAC.1).
+/// The signature is `HMAC-SHA256(secret, sig_message(entry_hash_bytes, key_id))`
+/// where `key_id` is bound INTO the signed message (matching `append_core`), so a
+/// stripped/altered `key_id` also fails verification, not only a
+/// stripped/altered `sig` (MIK-6700). Comparison is constant-time via
+/// `Mac::verify_slice`. Under a configured secret every entry must carry both a
+/// `sig` and a `key_id`; a missing/malformed field is an error, so neither can
+/// be dropped to bypass.
 ///
 /// # Errors
 ///
 /// Returns a human-readable reason string when the signature is absent,
-/// malformed, or does not authenticate.
+/// malformed, unsigned, or fails to authenticate.
 pub fn verify_entry_sig(
     entry: &serde_json::Value,
     entry_hash: &str,
@@ -617,6 +623,10 @@ pub fn verify_entry_sig(
         .get("sig")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "missing 'sig' while a shared secret is configured".to_string())?;
+    let key_id = entry
+        .get("key_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing 'key_id' while a shared secret is configured".to_string())?;
     let sig_hex = sig
         .strip_prefix("hmac-sha256:")
         .ok_or_else(|| format!("malformed sig (expected 'hmac-sha256:' prefix): {sig}"))?;
@@ -626,11 +636,27 @@ pub fn verify_entry_sig(
         .ok_or_else(|| format!("malformed entry_hash (expected 'sha256:' prefix): {entry_hash}"))?;
     let hash_bytes =
         hex::decode(hash_hex).map_err(|e| format!("entry_hash is not valid hex: {e}"))?;
+    let hash_arr: [u8; 32] = hash_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("entry_hash is not 32 bytes: {entry_hash}"))?;
 
+    let msg = sig_message(&hash_arr, key_id);
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
-    mac.update(&hash_bytes);
+    mac.update(&msg);
     mac.verify_slice(&sig_bytes)
-        .map_err(|_| "HMAC sig mismatch (possible re-chain forgery with a stale sig)".to_string())
+        .map_err(|_| "HMAC sig mismatch (possible re-chain forgery or altered key_id)".to_string())
+}
+
+/// Build the HMAC message for an entry's `sig`: the 32 raw `entry_hash` bytes
+/// followed by the `key_id` bytes. Binding `key_id` into the signed material
+/// (rather than leaving it as unauthenticated metadata) means it cannot be
+/// stripped or altered without invalidating the signature (MIK-6700).
+fn sig_message(entry_hash_bytes: &[u8; 32], key_id: &str) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(32 + key_id.len());
+    msg.extend_from_slice(entry_hash_bytes);
+    msg.extend_from_slice(key_id.as_bytes());
+    msg
 }
 
 /// Raw (non-hex) SHA-256 digest.
@@ -1006,6 +1032,57 @@ mod tests {
         // Hash chain still fine (recompute strips sig anyway), but signed fails.
         assert!(verify_log(tmp.path()).unwrap().ok);
         assert!(!verify_log_signed(tmp.path(), &cfg).unwrap().ok);
+    }
+
+    // MIK-6700 review #1: key_id is bound into the sig, so altering it fails
+    // signed verify even though the hash chain (which strips key_id) still holds.
+    #[test]
+    fn altered_key_id_fails_signed_verify() {
+        let tmp = NamedTempFile::new().unwrap();
+        let cfg = cfg_with_sig(tmp.path());
+        let logger = TransparencyLogger::open(cfg.clone()).unwrap();
+        write_entry(&logger, "sess", "1");
+        drop(logger);
+
+        let mut entries = read_entries(tmp.path());
+        entries[0]["key_id"] = serde_json::Value::String("attacker-key".to_string());
+        std::fs::write(
+            tmp.path(),
+            format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
+        )
+        .unwrap();
+
+        // Hash-only verify passes (key_id is not in entry_hash); signed fails.
+        assert!(verify_log(tmp.path()).unwrap().ok);
+        assert!(
+            !verify_log_signed(tmp.path(), &cfg).unwrap().ok,
+            "altered key_id must fail signed verify"
+        );
+    }
+
+    // MIK-6700 review #1: stripping key_id (leaving a valid-looking sig) fails
+    // signed verify — a signed entry must carry a key_id.
+    #[test]
+    fn stripped_key_id_fails_signed_verify() {
+        let tmp = NamedTempFile::new().unwrap();
+        let cfg = cfg_with_sig(tmp.path());
+        let logger = TransparencyLogger::open(cfg.clone()).unwrap();
+        write_entry(&logger, "sess", "1");
+        drop(logger);
+
+        let mut entries = read_entries(tmp.path());
+        entries[0].as_object_mut().unwrap().remove("key_id");
+        std::fs::write(
+            tmp.path(),
+            format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
+        )
+        .unwrap();
+
+        assert!(verify_log(tmp.path()).unwrap().ok);
+        assert!(
+            !verify_log_signed(tmp.path(), &cfg).unwrap().ok,
+            "stripped key_id must fail signed verify"
+        );
     }
 
     // HMAC.2 (backward compat): an unsigned log verifies identically whether

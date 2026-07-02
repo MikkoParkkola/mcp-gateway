@@ -258,42 +258,47 @@ fn run_runtime_command(cmd: mcp_gateway::cli::RuntimeCommand) -> ExitCode {
     }
 }
 
-/// Dispatch an `audit` subcommand (transparency log chain verification / session query).
-fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{
-        TransparencyLogConfig, show_session_entries, verify_log_signed,
-    };
-    use std::path::PathBuf;
+/// Resolve the transparency-log signing config from the gateway config, so
+/// `audit verify` authenticates the per-entry HMAC when a secret is set
+/// (MIK-6700 HMAC.3). A config LOAD FAILURE is propagated as `Err` (fail
+/// closed) — never silently downgraded to an empty secret, which would let
+/// a stale-sig forgery pass with exit 0 when the config is missing or
+/// malformed. A successfully-loaded config with no secret legitimately
+/// verifies hash-only.
+fn resolve_audit_log_config(
+    config_path: Option<&std::path::Path>,
+) -> mcp_gateway::Result<mcp_gateway::security::transparency_log::TransparencyLogConfig> {
+    use mcp_gateway::security::transparency_log::TransparencyLogConfig;
+    let c = Config::load(config_path)?;
+    Ok(TransparencyLogConfig {
+        key_id: c.security.transparency_log.key_id.clone(),
+        shared_secret: c.security.transparency_log.shared_secret.clone(),
+        ..TransparencyLogConfig::default()
+    })
+}
 
-    /// Resolve the transparency-log signing config from the gateway config, so
-    /// `audit verify` authenticates the per-entry HMAC when a secret is set
-    /// (MIK-6700 HMAC.3). On any load failure, fall back to an empty secret —
-    /// the verify then degrades to hash-chain-only, never a false pass.
-    fn resolve_log_config(config_path: Option<&std::path::Path>) -> TransparencyLogConfig {
-        Config::load(config_path).map_or_else(
-            |_| TransparencyLogConfig::default(),
-            |c| TransparencyLogConfig {
-                key_id: c.security.transparency_log.key_id.clone(),
-                shared_secret: c.security.transparency_log.shared_secret.clone(),
-                ..TransparencyLogConfig::default()
+/// Resolve the audit log path: use the provided `--path` flag, or fall back to
+/// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
+fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    path.unwrap_or_else(|| {
+        dirs::home_dir().map_or_else(
+            || PathBuf::from("transparency.jsonl"),
+            |h| {
+                h.join(".mcp-gateway")
+                    .join("transparency")
+                    .join("transparency.jsonl")
             },
         )
-    }
+    })
+}
 
-    /// Resolve the log path: use the provided `--path` flag, or fall back to
-    /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
-    fn resolve_path(path: Option<PathBuf>) -> PathBuf {
-        path.unwrap_or_else(|| {
-            dirs::home_dir().map_or_else(
-                || PathBuf::from("transparency.jsonl"),
-                |h| {
-                    h.join(".mcp-gateway")
-                        .join("transparency")
-                        .join("transparency.jsonl")
-                },
-            )
-        })
-    }
+/// Dispatch an `audit` subcommand (transparency log chain verification / session query).
+fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
+    use mcp_gateway::security::transparency_log::{show_session_entries, verify_log_signed};
+
+    let resolve_log_config = resolve_audit_log_config;
+    let resolve_path = resolve_audit_log_path;
 
     match cmd {
         AuditCommand::Verify { path } => {
@@ -305,7 +310,20 @@ fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -
                 );
                 return ExitCode::FAILURE;
             }
-            let log_config = resolve_log_config(config_path);
+            let log_config = match resolve_log_config(config_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    // Fail closed: a config we cannot load must NOT downgrade to
+                    // hash-only and report success (MIK-6700 review finding #2).
+                    eprintln!(
+                        "Error: could not load gateway config for signed verification: {e}. \
+                         Refusing to verify (a config load failure must not silently \
+                         downgrade to hash-only). Fix the config or pass --path to a log \
+                         you intend to verify hash-only via an explicit empty-secret config."
+                    );
+                    return ExitCode::FAILURE;
+                }
+            };
             let signed = !log_config.shared_secret.is_empty();
             match verify_log_signed(&log_path, &log_config) {
                 Err(e) => {
