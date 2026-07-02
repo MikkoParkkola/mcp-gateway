@@ -26,6 +26,8 @@ use super::ControlPlaneRole;
 pub struct ControlPlaneConfig {
     /// Identity-to-role mapping for the governance surface.
     pub role_mapping: ControlPlaneRoleMappingConfig,
+    /// SIEM evidence-export runtime configuration (MIK-6703). Opt-in.
+    pub export: super::ExportConfig,
 }
 
 /// Ordered, first-match-wins identity-to-role rules.

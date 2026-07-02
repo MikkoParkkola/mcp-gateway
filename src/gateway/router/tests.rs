@@ -68,6 +68,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        export_status: None,
     })
 }
 
@@ -114,6 +115,7 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        export_status: None,
     })
 }
 
@@ -156,6 +158,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        export_status: None,
     })
 }
 
@@ -207,6 +210,7 @@ fn test_router_app_state_with_ssrf(
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        export_status: None,
     })
 }
 
@@ -266,6 +270,7 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        export_status: None,
     })
 }
 

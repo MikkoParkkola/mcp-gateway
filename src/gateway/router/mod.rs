@@ -90,6 +90,9 @@ pub struct AppState {
     /// removed admin rule stops granting Admin (MIK-6702 CP.RELOAD.1). The
     /// config-reload loop swaps the inner `Arc<Config>` on every applied reload.
     pub live_config: Arc<crate::config_reload::LiveConfig>,
+    /// SIEM export status, present when the export background task is running
+    /// (MIK-6703). Drives the `EvidenceExport` entitlement + export-status route.
+    pub export_status: Option<Arc<crate::control_plane::ExportStatus>>,
 }
 
 /// Create the router.

@@ -94,6 +94,20 @@ async fn load_configured_identity_grants(
 /// governance state; otherwise it falls back to `~/.mcp-gateway/control-plane`.
 /// Governance audit entries reuse the transparency log's signing identity, so
 /// they are signed iff the invocation log is.
+/// Per-config control-plane base directory (governance store + audit log).
+/// Shared by [`build_control_plane_store`] and the SIEM export wiring so both
+/// resolve the identical `audit.jsonl` path (MIK-6703).
+fn control_plane_base(config_path: Option<&std::path::Path>) -> std::path::PathBuf {
+    config_path.map_or_else(
+        || expand_home_path("~/.mcp-gateway/control-plane"),
+        |p| {
+            let dir = p.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("gateway");
+            dir.join(format!("{stem}-control-plane"))
+        },
+    )
+}
+
 fn build_control_plane_store(
     config: &Config,
     config_path: Option<&std::path::Path>,
@@ -110,17 +124,8 @@ fn build_control_plane_store(
     }
 
     // Derive a per-config store directory so distinct gateway instances do not
-    // share governance state. Include the config file stem, so two config files
-    // in the SAME directory (a.yaml, b.yaml) get distinct control-plane dirs.
-    // With no config file we assume a single instance and use the global path.
-    let base = config_path.map_or_else(
-        || expand_home_path("~/.mcp-gateway/control-plane"),
-        |p| {
-            let dir = p.parent().unwrap_or_else(|| std::path::Path::new("."));
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("gateway");
-            dir.join(format!("{stem}-control-plane"))
-        },
-    );
+    // share governance state (see control_plane_base).
+    let base = control_plane_base(config_path);
     let audit_cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: base.join("audit.jsonl").to_string_lossy().into_owned(),
@@ -139,6 +144,130 @@ fn build_control_plane_store(
         Err(e) => {
             warn!(error = %e, "control-plane store unavailable; governance mutations disabled");
             None
+        }
+    }
+}
+
+/// Spawn the SIEM evidence-export background task (MIK-6703).
+///
+/// Returns `Some(status)` when export is enabled and both log exporters open;
+/// the task then tails the invocation + governance transparency logs on a timer
+/// and forwards verified entries to the NDJSON sink. Non-blocking: it reads the
+/// on-disk logs off the async runtime via `spawn_blocking`, so tool invocations
+/// (which append to the logs) never wait on export. HMAC secret is threaded so
+/// re-anchored entries are signature-verified (SIEM.SIG.1, needs MIK-6700).
+fn spawn_export_task(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+) -> Option<Arc<crate::control_plane::ExportStatus>> {
+    use crate::control_plane::{
+        ExportSink, ExportSource, ExportStatus, FileExportSink, LogExporter, default_cursor_path,
+    };
+    use std::sync::Mutex;
+
+    let ecfg = &config.control_plane.export;
+    if !ecfg.enabled {
+        return None;
+    }
+    if !config.auth.enabled {
+        warn!("SIEM export configured but auth is off; the governance log may be absent");
+    }
+
+    let inv_path = expand_home_path(&config.security.transparency_log.path);
+    let gov_path = control_plane_base(config_path).join("audit.jsonl");
+    let secret = config.security.transparency_log.shared_secret.clone();
+    let sink_path = expand_home_path(&ecfg.sink_path);
+
+    let sink: Arc<dyn ExportSink> = match FileExportSink::open(sink_path.clone()) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            warn!(error = %e, path = %sink_path.display(), "SIEM export sink unavailable; export disabled");
+            return None;
+        }
+    };
+
+    let open = |source, path: &std::path::Path| {
+        LogExporter::open(source, path.to_path_buf(), default_cursor_path(path)).map(|e| {
+            e.with_max_batch(ecfg.max_batch)
+                .with_signing_secret(secret.clone())
+        })
+    };
+    let inv = match open(ExportSource::Invocation, &inv_path) {
+        Ok(e) => Arc::new(Mutex::new(e)),
+        Err(e) => {
+            warn!(error = %e, "SIEM export: invocation exporter open failed; export disabled");
+            return None;
+        }
+    };
+    let gov = match open(ExportSource::Governance, &gov_path) {
+        Ok(e) => Arc::new(Mutex::new(e)),
+        Err(e) => {
+            warn!(error = %e, "SIEM export: governance exporter open failed; export disabled");
+            return None;
+        }
+    };
+
+    let status = Arc::new(ExportStatus::default());
+    let interval_secs = ecfg.poll_interval_secs.max(1);
+    let (task_status, task_sink) = (Arc::clone(&status), Arc::clone(&sink));
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    poll_export_source(&inv, &task_sink, &task_status.invocation, "invocation").await;
+                    poll_export_source(&gov, &task_sink, &task_status.governance, "governance").await;
+                }
+                _ = shutdown_rx.recv() => break,
+            }
+        }
+        info!("SIEM export task stopped");
+    });
+
+    info!(sink = %sink_path.display(), "SIEM export task started");
+    Some(status)
+}
+
+/// Poll one exporter off the async runtime and fold the outcome into `status`.
+async fn poll_export_source(
+    exporter: &Arc<std::sync::Mutex<crate::control_plane::LogExporter>>,
+    sink: &Arc<dyn crate::control_plane::ExportSink>,
+    status: &crate::control_plane::SourceExportStatus,
+    label: &str,
+) {
+    let (exporter_arc, sink_ref) = (Arc::clone(exporter), Arc::clone(sink));
+    // The exporter reads the on-disk log synchronously; run it on the blocking
+    // pool so the async runtime is never stalled by a large tail read.
+    let result = tokio::task::spawn_blocking(move || {
+        let mut e = exporter_arc.lock().expect("export mutex poisoned");
+        e.poll(sink_ref.as_ref())
+    })
+    .await;
+    match result {
+        Ok(Ok(outcome)) => {
+            status.record(&outcome);
+            let lag = u32::try_from(outcome.lag_entries).unwrap_or(u32::MAX);
+            telemetry_metrics::gauge!("siem_export_lag_entries", "source" => label.to_string())
+                .set(f64::from(lag));
+            if outcome.forwarded > 0 || outcome.reanchored {
+                debug!(
+                    source = label,
+                    forwarded = outcome.forwarded,
+                    lag = outcome.lag_entries,
+                    reanchored = outcome.reanchored,
+                    "SIEM export poll"
+                );
+            }
+        }
+        Ok(Err(e)) => {
+            status.record_error();
+            warn!(source = label, error = %e, "SIEM export poll failed");
+        }
+        Err(e) => {
+            status.record_error();
+            warn!(source = label, error = %e, "SIEM export blocking task join failed");
         }
     }
 }
@@ -643,6 +772,13 @@ impl Gateway {
         // never changes.
         let live_config = Arc::new(LiveConfig::new(self.config.clone()));
 
+        // SIEM evidence-export background task (MIK-6703). None when disabled.
+        let export_status = spawn_export_task(
+            &self.config,
+            self.config_path.as_deref(),
+            shutdown_tx.subscribe(),
+        );
+
         // Wire config hot-reload if a config path was provided.
         let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
             let reload_ctx = Arc::new(ReloadContext::new(
@@ -798,6 +934,7 @@ impl Gateway {
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
             live_config: Arc::clone(&live_config),
+            export_status,
         });
 
         // Create router

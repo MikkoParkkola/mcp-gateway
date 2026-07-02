@@ -113,6 +113,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
             mcp_gateway::config::Config::default(),
         )),
+        export_status: None,
     });
 
     // Call handle_initialize directly — this is what dispatch_single calls
