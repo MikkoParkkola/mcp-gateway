@@ -37,8 +37,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::control_plane::{
-    ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneGrant, ControlPlanePolicy,
-    ControlPlaneRollbackPlan,
+    ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneGrant, ControlPlaneGrantStatus,
+    ControlPlanePolicy, ControlPlaneRollbackPlan,
 };
 use crate::security::TransparencyLogger;
 
@@ -236,6 +236,47 @@ pub trait ControlPlaneStore: Send + Sync {
     ) -> StoreResult<()> {
         self.append_audit(event)?;
         self.put_policy(policy)
+    }
+
+    /// Apply a status change to one grant as an audited unit WITHOUT overwriting
+    /// its other fields. Returns `false` when no grant with `grant_id` exists
+    /// (so callers can 404 without writing an audit record). Durable backends
+    /// override to re-read the row under the lock, so a concurrent edit to other
+    /// fields is not lost — unlike [`Self::commit_grant_audited`], which
+    /// replaces the whole row with the caller's copy.
+    ///
+    /// # Errors
+    /// Errors on an I/O failure, a serialisation failure, a corrupt collection.
+    fn set_grant_status_audited(
+        &self,
+        grant_id: &str,
+        status: ControlPlaneGrantStatus,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<bool> {
+        let Some(mut grant) = self.get_grant(grant_id)? else {
+            return Ok(false);
+        };
+        grant.status = status;
+        self.commit_grant_audited(grant, event)?;
+        Ok(true)
+    }
+
+    /// Policy counterpart of [`Self::set_grant_status_audited`] (sets `enforced`).
+    ///
+    /// # Errors
+    /// Errors on an I/O failure, a serialisation failure, a corrupt collection.
+    fn set_policy_enforced_audited(
+        &self,
+        policy_id: &str,
+        enforced: bool,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<bool> {
+        let Some(mut policy) = self.get_policy(policy_id)? else {
+            return Ok(false);
+        };
+        policy.enforced = enforced;
+        self.commit_policy_audited(policy, event)?;
+        Ok(true)
     }
 }
 
@@ -518,10 +559,10 @@ impl FileControlPlaneStore {
 
     /// Optimistic read-modify-write against a collection: load, apply `mutate`,
     /// then compare-and-swap; retry from a fresh read if a stale write loses.
-    fn mutate<T, F>(&self, file: &Path, mutate: F) -> StoreResult<()>
+    fn mutate<T, F>(&self, file: &Path, mut mutate: F) -> StoreResult<()>
     where
         T: Serialize + DeserializeOwned,
-        F: Fn(&mut Vec<T>),
+        F: FnMut(&mut Vec<T>),
     {
         loop {
             let mut current = Self::load::<T>(file)?;
@@ -639,6 +680,60 @@ impl ControlPlaneStore for FileControlPlaneStore {
                 items.push(policy.clone());
             }
         })
+    }
+
+    fn set_grant_status_audited(
+        &self,
+        grant_id: &str,
+        status: ControlPlaneGrantStatus,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<bool> {
+        let _lock = ExclusiveFileLock::acquire(&self.dir.join(".audit.lock"))?;
+        // Existence check under the lock, so a missing target 404s without
+        // writing a spurious audit record.
+        if !Self::load::<ControlPlaneGrant>(&self.grants_file())?
+            .items
+            .iter()
+            .any(|g| g.grant_id == grant_id)
+        {
+            return Ok(false);
+        }
+        self.append_audit_locked(event)?;
+        // Re-read + mutate ONLY the status field on the current row, so a
+        // concurrent edit to other fields is preserved (no stale-clone stomp).
+        let mut applied = false;
+        self.mutate::<ControlPlaneGrant, _>(&self.grants_file(), |items| {
+            if let Some(g) = items.iter_mut().find(|g| g.grant_id == grant_id) {
+                g.status = status;
+                applied = true;
+            }
+        })?;
+        Ok(applied)
+    }
+
+    fn set_policy_enforced_audited(
+        &self,
+        policy_id: &str,
+        enforced: bool,
+        event: &ControlPlaneAuditEvent,
+    ) -> StoreResult<bool> {
+        let _lock = ExclusiveFileLock::acquire(&self.dir.join(".audit.lock"))?;
+        if !Self::load::<ControlPlanePolicy>(&self.policies_file())?
+            .items
+            .iter()
+            .any(|p| p.policy_id == policy_id)
+        {
+            return Ok(false);
+        }
+        self.append_audit_locked(event)?;
+        let mut applied = false;
+        self.mutate::<ControlPlanePolicy, _>(&self.policies_file(), |items| {
+            if let Some(p) = items.iter_mut().find(|p| p.policy_id == policy_id) {
+                p.enforced = enforced;
+                applied = true;
+            }
+        })?;
+        Ok(applied)
     }
 
     fn read_audit(&self, filter: &AuditFilter) -> StoreResult<Vec<ControlPlaneAuditEvent>> {
@@ -1252,5 +1347,47 @@ mod tests {
             "audit chain must verify: {:?}",
             result.error_message
         );
+    }
+
+    // MIK-6687.CP.3 — set_grant_status_audited flips ONLY the status and
+    // preserves other fields (no stale-clone lost update), audits the change,
+    // and returns false (no audit) for a missing target.
+    #[test]
+    fn set_grant_status_audited_is_field_only_and_audited() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = governance_logger(dir.path());
+        let store =
+            FileControlPlaneStore::open(dir.path().join("store"), Arc::clone(&logger)).unwrap();
+
+        // Seed g1, then a concurrent edit changes a NON-status field.
+        store
+            .put_grant(grant("g1", ControlPlaneGrantStatus::Requested))
+            .unwrap();
+        let mut edited = grant("g1", ControlPlaneGrantStatus::Requested);
+        edited.subject_id = "user-CHANGED".to_string();
+        store.put_grant(edited).unwrap();
+
+        // A decision flips status; the concurrent field edit must survive.
+        let ev = audit_event("d1", "alice", ControlPlaneAction::MutateGrant);
+        assert!(
+            store
+                .set_grant_status_audited("g1", ControlPlaneGrantStatus::Approved, &ev)
+                .unwrap()
+        );
+        let g = store.get_grant("g1").unwrap().unwrap();
+        assert_eq!(g.status, ControlPlaneGrantStatus::Approved);
+        assert_eq!(
+            g.subject_id, "user-CHANGED",
+            "non-status field must be preserved"
+        );
+        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
+
+        // Missing target -> false, and NO extra audit entry is written.
+        assert!(
+            !store
+                .set_grant_status_audited("absent", ControlPlaneGrantStatus::Revoked, &ev)
+                .unwrap()
+        );
+        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
     }
 }

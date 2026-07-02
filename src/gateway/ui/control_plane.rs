@@ -16,12 +16,13 @@ use super::super::router::AppState;
 use super::errors::auth_required;
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneAuthorization,
-    ControlPlaneDecisionQueue, ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant,
-    ControlPlaneGrantStatus, ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneMutation,
-    ControlPlanePolicy, ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole,
-    ControlPlaneRoleMappingConfig, ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth,
-    ControlPlaneServer, ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore,
-    ControlPlaneTool, ControlPlaneTrustCard, ControlPlaneUser,
+    ControlPlaneDecisionQueue, ControlPlaneDecisionTargetKind, ControlPlaneDomainCoverage,
+    ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlaneHealth,
+    ControlPlaneLicenseTier, ControlPlaneMutation, ControlPlanePolicy, ControlPlaneRbac,
+    ControlPlaneReadOnlyView, ControlPlaneRole, ControlPlaneRoleMappingConfig,
+    ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth, ControlPlaneServer,
+    ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore, ControlPlaneTool,
+    ControlPlaneTrustCard, ControlPlaneUser,
 };
 use crate::discovery::AutoDiscovery;
 use crate::discovery::shadow::{
@@ -39,6 +40,7 @@ pub fn control_plane_router() -> Router<Arc<AppState>> {
         .route("/ui/api/control-plane", get(control_plane_snapshot))
         .route("/ui/api/control-plane/grants", post(mutate_grant))
         .route("/ui/api/control-plane/policies", post(mutate_policy))
+        .route("/ui/api/control-plane/decisions", post(resolve_decision))
 }
 
 async fn control_plane_snapshot(
@@ -153,6 +155,163 @@ async fn mutate_policy(
         req.rollback,
         |store, event| store.commit_policy_audited(req.policy.clone(), event),
     )
+}
+
+/// Approve/deny decision on a queued item.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Decision {
+    Approve,
+    Deny,
+}
+
+/// Request body for resolving a decision-queue item.
+#[derive(Debug, Deserialize)]
+struct DecisionRequest {
+    /// Kind of the queued item (only `grant`/`policy` are actionable today).
+    target_kind: ControlPlaneDecisionTargetKind,
+    /// Id of the grant/policy the decision resolves.
+    target_id: String,
+    /// Approve or deny.
+    decision: Decision,
+    /// Reason (ticket id) for the audit trail.
+    reason: String,
+    /// Rollback plan recorded with the audit event.
+    rollback: ControlPlaneRollbackPlan,
+}
+
+/// POST a decision on a queued item: load the target grant/policy, apply the
+/// approve/deny effect, and route it through the SAME `validate_for_actor` +
+/// audited-commit path as a direct mutation (MIK-6687). Items whose kind has no
+/// durable store target (server/trust-evaluation/runtime-health) are not
+/// actionable here yet and return 422.
+async fn resolve_decision(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
+    Json(req): Json<DecisionRequest>,
+) -> axum::response::Response {
+    let actor = actor_from_client(
+        client.map(|Extension(c)| c).as_ref(),
+        identity.map(|Extension(id)| id).as_ref(),
+        &state.control_plane_role_mapping,
+    );
+    resolve_decision_core(state.control_plane_store.as_ref(), &actor, req)
+}
+
+/// Sync core of [`resolve_decision`] (testable without a router). Authorizes
+/// FIRST (before any store read, so 403-vs-404 cannot leak target existence),
+/// then applies a field-only, audited status change through the store's
+/// re-read-under-lock primitive (no stale-clone lost update). Kinds without a
+/// durable store target return 422.
+fn resolve_decision_core(
+    store: Option<&Arc<dyn ControlPlaneStore>>,
+    actor: &ControlPlaneActor,
+    req: DecisionRequest,
+) -> axum::response::Response {
+    let Some(store) = store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(MutationResponse {
+                ok: false,
+                reason_code: "CONTROL_STORE_UNAVAILABLE".to_string(),
+                reason: "Control-plane store is not configured".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    // Map kind -> action; reject unsupported kinds with a static 422 (no
+    // resource lookup, so no information leak).
+    let (action, kind_label) = match req.target_kind {
+        ControlPlaneDecisionTargetKind::Grant => (ControlPlaneAction::MutateGrant, "grant"),
+        ControlPlaneDecisionTargetKind::Policy => (ControlPlaneAction::MutatePolicy, "policy"),
+        other => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(MutationResponse {
+                    ok: false,
+                    reason_code: "CONTROL_DECISION_KIND_UNSUPPORTED".to_string(),
+                    reason: format!(
+                        "decision target kind {other:?} is not actionable via this endpoint"
+                    ),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let approve = req.decision == Decision::Approve;
+    let verb = if approve { "approve" } else { "deny" };
+
+    // Build the audited mutation and authorize BEFORE touching the store, so a
+    // non-admin cannot use 403-vs-404 as an existence oracle.
+    let event = ControlPlaneAuditEvent {
+        event_id: format!("cpa-{}-{}", Utc::now().timestamp_millis(), req.target_id),
+        actor_id: actor.actor_id.clone(),
+        action,
+        target_id: req.target_id.clone(),
+        reason: req.reason,
+        rollback: req.rollback,
+    };
+    let mutation = ControlPlaneMutation {
+        action,
+        target_id: req.target_id.clone(),
+        summary: format!("{verb} {kind_label} {}", req.target_id),
+        audit_event: Some(event.clone()),
+    };
+    let report = mutation.validate_for_actor(actor);
+    if !report.allowed {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(MutationResponse {
+                ok: false,
+                reason_code: report.reason_code,
+                reason: report.reason,
+            }),
+        )
+            .into_response();
+    }
+
+    // Apply the field-only, audited status change (re-read under the store lock).
+    let applied = match req.target_kind {
+        ControlPlaneDecisionTargetKind::Grant => {
+            let status = if approve {
+                ControlPlaneGrantStatus::Approved
+            } else {
+                ControlPlaneGrantStatus::Revoked
+            };
+            store.set_grant_status_audited(&req.target_id, status, &event)
+        }
+        ControlPlaneDecisionTargetKind::Policy => {
+            store.set_policy_enforced_audited(&req.target_id, approve, &event)
+        }
+        _ => unreachable!("non grant/policy kinds returned 422 above"),
+    };
+    match applied {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(MutationResponse {
+                ok: true,
+                reason_code: report.reason_code,
+                reason: report.reason,
+            }),
+        )
+            .into_response(),
+        Ok(false) => decision_not_found(kind_label, &req.target_id),
+        Err(e) => internal_error("CONTROL_STORE_WRITE_FAILED", &e),
+    }
+}
+
+fn decision_not_found(kind: &str, id: &str) -> axum::response::Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(MutationResponse {
+            ok: false,
+            reason_code: "CONTROL_DECISION_TARGET_NOT_FOUND".to_string(),
+            reason: format!("no {kind} '{id}' in the control-plane store"),
+        }),
+    )
+        .into_response()
 }
 
 /// Shared mutation path: build the audited mutation, authorize it with
@@ -773,9 +932,9 @@ mod grant_projection_tests {
 mod mutation_tests {
     use super::apply_mutation;
     use crate::control_plane::{
-        AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneGrant,
-        ControlPlaneGrantStatus, ControlPlaneRole, ControlPlaneRollbackPlan, ControlPlaneStore,
-        InMemoryControlPlaneStore,
+        AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneDecisionTargetKind,
+        ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlaneRole, ControlPlaneRollbackPlan,
+        ControlPlaneStore, InMemoryControlPlaneStore,
     };
     use axum::http::StatusCode;
     use std::sync::Arc;
@@ -863,6 +1022,141 @@ mod mutation_tests {
             |_s, _event| Ok(()),
         );
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // MIK-6687.CP.3 — an admin decision on a queued grant flips its status
+    // through the audited-commit path (approve -> Approved, deny -> Revoked).
+    #[test]
+    fn decision_resolves_grant_through_audited_path() {
+        use super::{Decision, DecisionRequest, resolve_decision_core};
+        let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
+        let mut g = grant();
+        g.status = ControlPlaneGrantStatus::Requested;
+        store.put_grant(g).unwrap();
+
+        let resp = resolve_decision_core(
+            Some(&store),
+            &actor(ControlPlaneRole::Admin),
+            DecisionRequest {
+                target_kind: ControlPlaneDecisionTargetKind::Grant,
+                target_id: "grant-1".to_string(),
+                decision: Decision::Approve,
+                reason: "MIK-1".to_string(),
+                rollback: rollback(),
+            },
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            store.get_grant("grant-1").unwrap().unwrap().status,
+            ControlPlaneGrantStatus::Approved
+        );
+        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
+
+        let resp = resolve_decision_core(
+            Some(&store),
+            &actor(ControlPlaneRole::Admin),
+            DecisionRequest {
+                target_kind: ControlPlaneDecisionTargetKind::Grant,
+                target_id: "grant-1".to_string(),
+                decision: Decision::Deny,
+                reason: "MIK-1".to_string(),
+                rollback: rollback(),
+            },
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            store.get_grant("grant-1").unwrap().unwrap().status,
+            ControlPlaneGrantStatus::Revoked
+        );
+        // Deny is also audited: two decisions -> two audit entries.
+        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 2);
+    }
+
+    // MIK-6687.CP.3 — a policy decision flips `enforced` through the audited path.
+    #[test]
+    fn decision_resolves_policy_through_audited_path() {
+        use super::{Decision, DecisionRequest, resolve_decision_core};
+        let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
+        store
+            .put_policy(crate::control_plane::ControlPlanePolicy {
+                policy_id: "pol-1".to_string(),
+                name: "p".to_string(),
+                enforced: false,
+            })
+            .unwrap();
+
+        let resp = resolve_decision_core(
+            Some(&store),
+            &actor(ControlPlaneRole::Admin),
+            DecisionRequest {
+                target_kind: ControlPlaneDecisionTargetKind::Policy,
+                target_id: "pol-1".to_string(),
+                decision: Decision::Approve,
+                reason: "MIK-1".to_string(),
+                rollback: rollback(),
+            },
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(store.get_policy("pol-1").unwrap().unwrap().enforced);
+        assert_eq!(store.read_audit(&AuditFilter::new(10)).unwrap().len(), 1);
+    }
+
+    // MIK-6687.CP.3 — decision guards: non-admin denied (no state change), a
+    // missing target returns 404, an unsupported kind returns 422.
+    #[test]
+    fn decision_guards_rbac_missing_and_unsupported() {
+        use super::{Decision, DecisionRequest, resolve_decision_core};
+        let store: Arc<dyn ControlPlaneStore> = Arc::new(InMemoryControlPlaneStore::new());
+        let mut g = grant();
+        g.status = ControlPlaneGrantStatus::Requested;
+        store.put_grant(g).unwrap();
+
+        // Auditor is denied; grant stays Requested; no audit entry.
+        let resp = resolve_decision_core(
+            Some(&store),
+            &actor(ControlPlaneRole::Auditor),
+            DecisionRequest {
+                target_kind: ControlPlaneDecisionTargetKind::Grant,
+                target_id: "grant-1".to_string(),
+                decision: Decision::Approve,
+                reason: "MIK-1".to_string(),
+                rollback: rollback(),
+            },
+        );
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            store.get_grant("grant-1").unwrap().unwrap().status,
+            ControlPlaneGrantStatus::Requested
+        );
+        assert!(store.read_audit(&AuditFilter::new(10)).unwrap().is_empty());
+
+        // Missing target -> 404.
+        let resp = resolve_decision_core(
+            Some(&store),
+            &actor(ControlPlaneRole::Admin),
+            DecisionRequest {
+                target_kind: ControlPlaneDecisionTargetKind::Policy,
+                target_id: "absent".to_string(),
+                decision: Decision::Approve,
+                reason: "MIK-1".to_string(),
+                rollback: rollback(),
+            },
+        );
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Unsupported kind -> 422.
+        let resp = resolve_decision_core(
+            Some(&store),
+            &actor(ControlPlaneRole::Admin),
+            DecisionRequest {
+                target_kind: ControlPlaneDecisionTargetKind::RuntimeHealth,
+                target_id: "srv-1".to_string(),
+                decision: Decision::Approve,
+                reason: "MIK-1".to_string(),
+                rollback: rollback(),
+            },
+        );
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }
 
