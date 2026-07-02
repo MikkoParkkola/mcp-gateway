@@ -15,20 +15,28 @@
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 [![Install in Cursor](https://img.shields.io/badge/Cursor-Install_MCP-black?logo=cursor)](cursor://anysphere.cursor-deeplink/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 
-**Give your AI access to every tool it needs -- without burning your context window or building MCP servers.**
+**Give your AI access to every tool it needs, without burning your context window or building MCP servers.**
+
+MCP Gateway is a single Rust binary that sits between your AI client and all your tools. Connect unlimited MCP servers and REST APIs behind it, and your agent sees only a compact Meta-MCP surface (14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced), discovering the right tool on demand instead of loading hundreds of definitions into every request. You get around 89% less context overhead, no more choosing which tools fit the budget, and per-user identity, security, and cost controls built in.
 
 ![demo](demo.gif)
+
+## Highlights
+
+- **~89% less context overhead.** 100 backend tools cost roughly 1,600 tokens instead of 15,000, because the agent only loads the tools it actually uses this turn. [Benchmarks](docs/BENCHMARKS.md).
+- **Unlimited tools, discovered on demand.** Stop picking which servers fit the context budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
+- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec (`mcp-gateway cap import`). 110+ capabilities ship built in.
+- **End-user identity propagation (v3.0.0 Trust Fabric).** A backend can receive a per-user, gateway-signed credential instead of one shared key, and fail closed when identity is required. Per-user results stay isolated in the cache. Enforced across every invocation path.
+- **Secure by construction.** Tool-poisoning validator, SHA-256 capability pinning with rug-pull detection, and the OWASP Agentic AI Top 10 fully covered. `#![forbid(unsafe_code)]`.
+- **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while your AI stays connected. No restart, no lost context.
+- **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down your toolchain.
 
 ### Independent Reviews
 
 - [Five MCP hot-reload tools compared](https://ruachtov.ai/blog/five-tools-mcp-restart.html) -- Ruach Tov Collective's BPD-based comparison of mcp-gateway against four restart-focused alternatives. Includes a feature matrix and architectural analysis.
 - [mcp-gateway deep dive](https://ruachtov.ai/blog/mcp-gateway-deep-dive.html) -- Detailed walkthrough of the capability system, SHA-256 integrity pinning, and the v2.5-to-v2.9 development arc.
 
-MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface -- 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced -- and discovers the right backend tool on demand.
-
-Public quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift.
-
-The public Trust Fabric execution plan is tracked in [docs/roadmap/mik-6550-trust-fabric-roadmap.md](docs/roadmap/mik-6550-trust-fabric-roadmap.md). It keeps implementation scope, license boundaries, dependency order, and validation checks public while non-public planning material stays outside tracked docs.
+Public quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with CI checks to catch drift. The public Trust Fabric execution plan is tracked in [docs/roadmap/mik-6550-trust-fabric-roadmap.md](docs/roadmap/mik-6550-trust-fabric-roadmap.md).
 
 ## What MCP Gateway is / is not
 
@@ -291,108 +299,6 @@ mcp-gateway cap import stripe-openapi.yaml --output capabilities/ --prefix strip
 
 The gateway ships with **110+ built-in capabilities** -- weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
 
-#### HeyGen video connector
-
-mcp-gateway now ships HeyGen video-generation capabilities in `capabilities/media/`:
-
-- `video_agent_create`
-- `video_create`
-- `video_get`
-- `video_download`
-- `voice_list`
-- `avatar_list`
-
-Setup:
-
-```bash
-export HEYGEN_API_KEY=your-api-key
-```
-
-Make sure your config loads the built-in capability directory:
-
-```yaml
-capabilities:
-  enabled: true
-  directories:
-    - ./capabilities
-```
-
-The request schemas ship hand-written for the initial connector, but HeyGen's CLI can act as the schema source of truth for future regeneration:
-
-```bash
-heygen video-agent create --request-schema
-heygen video create --request-schema
-```
-
-Map that JSON into each capability's `schema.input` block when refreshing the connector.
-
-Example end-to-end workflow:
-
-```bash
-# 1. Create the video with the Video Agent
-CREATE=$(curl -s http://127.0.0.1:39401/mcp \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "jsonrpc":"2.0",
-    "id":1,
-    "method":"tools/call",
-    "params":{
-      "name":"gateway_invoke",
-      "arguments":{
-        "backend":"capabilities",
-        "tool":"video_agent_create",
-        "args":{"prompt":"A presenter explaining our product launch in 30 seconds"}
-      }
-    }
-  }')
-
-VIDEO_ID=$(printf '%s' "$CREATE" | jq -r '.result.content[0].text | fromjson | (.data.video_id // .video_id)')
-
-# 2. Poll until completed and fetch the downloadable URL
-VIDEO_URL=$(while true; do
-  BODY=$(curl -s http://127.0.0.1:39401/mcp \
-    -H 'Content-Type: application/json' \
-    -d "{
-      \"jsonrpc\":\"2.0\",
-      \"id\":1,
-      \"method\":\"tools/call\",
-      \"params\":{
-        \"name\":\"gateway_invoke\",
-        \"arguments\":{
-          \"backend\":\"capabilities\",
-          \"tool\":\"video_get\",
-          \"args\":{\"video_id\":\"$VIDEO_ID\"}
-        }
-      }
-    }")
-  STATUS=$(printf '%s' "$BODY" | jq -r '.result.content[0].text | fromjson | (.data.status // .status)')
-  if [ "$STATUS" = "completed" ]; then
-    printf '%s' "$BODY" | jq -r '.result.content[0].text | fromjson | (.data.video_url // .video_url)'
-    break
-  fi
-  sleep 5
-done)
-
-# 3. Download and save a local MP4
-curl -s http://127.0.0.1:39401/mcp \
-  -H 'Content-Type: application/json' \
-  -d "{
-    \"jsonrpc\":\"2.0\",
-    \"id\":1,
-    \"method\":\"tools/call\",
-    \"params\":{
-      \"name\":\"gateway_invoke\",
-      \"arguments\":{
-        \"backend\":\"capabilities\",
-        \"tool\":\"video_download\",
-        \"args\":{\"video_url\":\"$VIDEO_URL\"}
-      }
-    }
-  }" \
-| jq -r '.result.content[0].text | fromjson | .data' \
-| base64 --decode > heygen-explainer.mp4
-```
-
 ### 3. Change Your MCP Stack Without Losing Your AI Session
 
 Your AI connects once to `localhost:39400`. Behind it, capability YAMLs plus reloadable gateway config sections (including backend add/remove/update and routing/profile changes) can reload live via file watching, `gateway_reload_config`, or `POST /ui/api/reload`. Listener address changes report `restart_required`; `env_files` list changes stay startup-only and take effect after restart. Your AI session stays connected.
@@ -436,6 +342,7 @@ Embedded web UI at `/ui` -- live status, searchable tools, server health, read-o
 | Feature | Description | Docs |
 |---------|-------------|------|
 | **Authentication** | Bearer tokens, API keys, explicit admin keys, per-client rate limits and opt-in per-client circuit breakers | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
+| **End-User Identity Propagation** | Mint a per-user, gateway-signed credential per backend (`identity_propagation` config), fail-closed when required. Per-user cache isolation. Enforced on dispatch, Code Mode, and direct routes. | [docs/adr/ADR-007-identity-propagation.md](docs/adr/ADR-007-identity-propagation.md) |
 | **Per-Client Tool Scopes** | Allowlist/denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
 | **Security Firewall** | Credential redaction, prompt injection detection, shell/SQL/path traversal scanning | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Cost Governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |

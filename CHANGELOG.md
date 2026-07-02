@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-07-02
+
+### Added
+
+- **End-user identity propagation to backend MCP servers** (MIK-6704 epic; ADR-007 framework-first). The Trust Fabric release: the gateway can now mint a per-user credential for a backend configured with `identity_propagation` and attach it on the wire, instead of forwarding only a shared static credential. A strategy-agnostic async `IdentityPropagation` trait with a first-party `SignedAssertionStrategy` (ES256 assertions signed by the gateway key) is wired across every invocation surface: meta-MCP dispatch (`gateway_invoke`), Code Mode (`gateway_execute`, single + chain), and the direct backend route (`/mcp/{name}`).
+  - **Fail-closed (IDP.2):** a `required` backend refuses the call (never a static-credential fallback) when there is no verified identity, no strategy wired, minting fails, or a minted header does not parse. Non-HTTP transports (stdio/websocket) cannot carry the credential header and are rejected at config load.
+  - **Tenant isolation (IDP.3):** per-request credential headers are passed by value and never stored on the shared transport.
+  - **Identity-aware caching (IDP.8):** a collision-safe `cache_binding` (user + audience) is mixed into the response and idempotency cache keys, so per-user results cache in isolation rather than leaking across users or being dropped.
+  - Hardened through four rounds of adversarial review, which caught and closed four distinct trust-boundary gaps (cross-user cache hit, non-HTTP silent drop, Code Mode identity loss, direct-route bypass) before merge.
+  - Deferred as tracked follow-ups (not in this release): additional strategies token-exchange (MIK-6729) and vault (MIK-6730), per-user transport/session pooling (MIK-6735, `session_mode: per_user` stays fail-closed until then), transparency-log audit of propagation events (MIK-6740), and `McpProvider` adapter hardening (MIK-6741).
+
+### Changed
+
+- **Major version bump to 3.0.0** marking the Trust Fabric milestone: identity propagation, transparency-log per-entry HMAC verification (MIK-6700), control-plane read-reflects-store (MIK-6701), collision-safe role-mapping hot-reload (MIK-6702), and server-run SIEM evidence export (MIK-6703).
+
+### Security
+
+- Bump `cmov` 0.5.3 → 0.5.4 (GHSA-3rjw-m598-pq24). Bump `quick-xml` 0.40 → 0.41 (RUSTSEC-2026-0194/0195, MIK-6731).
+
 ## [2.19.0] - 2026-06-08
 
 ### Added
