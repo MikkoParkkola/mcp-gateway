@@ -204,7 +204,7 @@ async fn main() -> ExitCode {
             quiet,
             data_dir,
         }) => commands::run_upgrade_command(dry_run, quiet, data_dir.as_deref()),
-        Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd),
+        Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd, cli.config.as_deref()),
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
@@ -259,9 +259,26 @@ fn run_runtime_command(cmd: mcp_gateway::cli::RuntimeCommand) -> ExitCode {
 }
 
 /// Dispatch an `audit` subcommand (transparency log chain verification / session query).
-fn run_audit_command(cmd: AuditCommand) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{show_session_entries, verify_log};
+fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -> ExitCode {
+    use mcp_gateway::security::transparency_log::{
+        TransparencyLogConfig, show_session_entries, verify_log_signed,
+    };
     use std::path::PathBuf;
+
+    /// Resolve the transparency-log signing config from the gateway config, so
+    /// `audit verify` authenticates the per-entry HMAC when a secret is set
+    /// (MIK-6700 HMAC.3). On any load failure, fall back to an empty secret —
+    /// the verify then degrades to hash-chain-only, never a false pass.
+    fn resolve_log_config(config_path: Option<&std::path::Path>) -> TransparencyLogConfig {
+        Config::load(config_path).map_or_else(
+            |_| TransparencyLogConfig::default(),
+            |c| TransparencyLogConfig {
+                key_id: c.security.transparency_log.key_id.clone(),
+                shared_secret: c.security.transparency_log.shared_secret.clone(),
+                ..TransparencyLogConfig::default()
+            },
+        )
+    }
 
     /// Resolve the log path: use the provided `--path` flag, or fall back to
     /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
@@ -288,14 +305,21 @@ fn run_audit_command(cmd: AuditCommand) -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
-            match verify_log(&log_path) {
+            let log_config = resolve_log_config(config_path);
+            let signed = !log_config.shared_secret.is_empty();
+            match verify_log_signed(&log_path, &log_config) {
                 Err(e) => {
                     eprintln!("Error reading log: {e}");
                     ExitCode::FAILURE
                 }
                 Ok(result) if result.ok => {
+                    let mode = if signed {
+                        "hash chain + per-entry HMAC"
+                    } else {
+                        "hash chain (no secret configured; HMAC not checked)"
+                    };
                     println!(
-                        "✓ Chain verified — {} entries checked, no tampering detected.",
+                        "✓ Chain verified ({mode}) — {} entries checked, no tampering detected.",
                         result.entries_checked
                     );
                     ExitCode::SUCCESS

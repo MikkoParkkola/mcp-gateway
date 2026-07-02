@@ -143,6 +143,11 @@ pub struct LogExporter {
     cursor_path: PathBuf,
     cursor: ExportCursor,
     max_batch: usize,
+    /// HMAC secret for per-entry `sig` verification. `None` (or empty) verifies
+    /// the hash chain only; `Some(non-empty)` also authenticates each entry's
+    /// HMAC so a re-chain forgery is caught on the export path too (MIK-6700
+    /// HMAC.3). Runtime wiring of the secret is MIK-6703.
+    signing_secret: Option<String>,
 }
 
 impl LogExporter {
@@ -171,6 +176,7 @@ impl LogExporter {
             cursor_path,
             cursor,
             max_batch: Self::DEFAULT_MAX_BATCH,
+            signing_secret: None,
         })
     }
 
@@ -178,6 +184,20 @@ impl LogExporter {
     #[must_use]
     pub fn with_max_batch(mut self, max_batch: usize) -> Self {
         self.max_batch = max_batch.max(1);
+        self
+    }
+
+    /// Configure the HMAC secret used to authenticate each entry's `sig` during
+    /// the scan. An empty secret is treated as unset (hash-chain-only), matching
+    /// [`verify_log`](crate::security::transparency_log::verify_log).
+    #[must_use]
+    pub fn with_signing_secret(mut self, secret: impl Into<String>) -> Self {
+        let secret = secret.into();
+        self.signing_secret = if secret.is_empty() {
+            None
+        } else {
+            Some(secret)
+        };
         self
     }
 
@@ -317,6 +337,19 @@ impl LogExporter {
             if recomputed != stored_hash {
                 return Err(ExportError::VerificationFailed(format!(
                     "tampered entry: recomputed {recomputed} != stored {stored_hash}"
+                )));
+            }
+            // Per-entry HMAC check when a secret is configured (MIK-6700 HMAC.3):
+            // catches a re-chained forgery that leaves a stale `sig`.
+            if let Some(secret) = self.signing_secret.as_deref()
+                && let Err(msg) = crate::security::transparency_log::verify_entry_sig(
+                    &entry,
+                    &stored_hash,
+                    secret.as_bytes(),
+                )
+            {
+                return Err(ExportError::VerificationFailed(format!(
+                    "entry {stored_hash}: {msg}"
                 )));
             }
             let counter = entry
@@ -566,6 +599,89 @@ mod tests {
         let out = exp.poll(&sink).unwrap();
         assert!(out.reanchored, "shrunk file must re-anchor");
         assert_eq!(out.forwarded, 1);
+        assert_eq!(sink.delivered().len(), 2);
+    }
+
+    // MIK-6700 HMAC.3 — the exporter authenticates each entry's sig when a
+    // secret is configured, catching a re-chained forgery with a stale sig.
+    fn signed_logger(path: &Path, secret: &str) -> Arc<TransparencyLogger> {
+        let cfg = Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "test-key".to_string(),
+            shared_secret: secret.to_string(),
+        });
+        Arc::new(TransparencyLogger::open(cfg).expect("open signed log"))
+    }
+
+    #[test]
+    fn exporter_with_secret_rejects_stale_sig_forgery() {
+        const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("gov.jsonl");
+        let log = signed_logger(&log_path, SECRET);
+        gov_event(&log, "e1");
+        gov_event(&log, "e2");
+        drop(log);
+
+        // Forge the last entry: recompute entry_hash, leave the sig stale.
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let mut entries: Vec<serde_json::Value> = content
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let last = entries.last_mut().unwrap();
+        last["event_id"] = serde_json::Value::String("forged".to_string());
+        let new_hash = recompute_entry_hash(last).unwrap();
+        last["entry_hash"] = serde_json::Value::String(new_hash);
+        let rewritten = entries
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&log_path, format!("{rewritten}\n")).unwrap();
+
+        // Without a secret the exporter forwards (hash chain is intact).
+        let mut plain = LogExporter::open(
+            ExportSource::Governance,
+            log_path.clone(),
+            dir.path().join("cursor-plain.json"),
+        )
+        .unwrap();
+        assert!(plain.poll(&CollectingSink::new()).is_ok());
+
+        // With the secret it halts on the stale-sig entry (own cursor, so it
+        // rescans from genesis rather than resuming past the forged entry).
+        let mut signed = LogExporter::open(
+            ExportSource::Governance,
+            log_path.clone(),
+            dir.path().join("cursor-signed.json"),
+        )
+        .unwrap()
+        .with_signing_secret(SECRET);
+        let err = signed.poll(&CollectingSink::new()).unwrap_err();
+        assert!(
+            matches!(err, ExportError::VerificationFailed(_)),
+            "expected VerificationFailed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn exporter_with_secret_forwards_intact_signed_log() {
+        const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("gov.jsonl");
+        let log = signed_logger(&log_path, SECRET);
+        gov_event(&log, "e1");
+        gov_event(&log, "e2");
+        drop(log);
+
+        let sink = CollectingSink::new();
+        let mut exp =
+            exporter(dir.path(), ExportSource::Governance, &log_path).with_signing_secret(SECRET);
+        let out = exp.poll(&sink).unwrap();
+        assert_eq!(out.forwarded, 2);
         assert_eq!(sink.delivered().len(), 2);
     }
 }

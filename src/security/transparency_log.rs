@@ -341,7 +341,7 @@ pub struct VerifyResult {
     pub error_message: Option<String>,
 }
 
-/// Read `path` and verify the complete hash chain.
+/// Read `path` and verify the complete hash chain (no HMAC check).
 ///
 /// Checks, for every entry:
 /// 1. Counter is exactly `previous_counter + 1` (monotonic, no gaps).
@@ -349,10 +349,43 @@ pub struct VerifyResult {
 /// 3. `entry_hash` equals the recomputed SHA-256 of the entry without the
 ///    `entry_hash`, `sig`, and `key_id` fields.
 ///
+/// This entry point does **not** authenticate the per-entry HMAC `sig`, so a
+/// secret-holding attacker who re-chains an edited entry (recomputing every
+/// `entry_hash`) is not detected here. Use [`verify_log_signed`] when a shared
+/// secret is configured (MIK-6700).
+///
 /// # Errors
 ///
 /// Returns `io::Error` if the file cannot be read.
 pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
+    verify_log_inner(path, None)
+}
+
+/// Read `path` and verify the hash chain **and**, when `config` has a non-empty
+/// `shared_secret`, the per-entry HMAC `sig` (MIK-6700 HMAC.1).
+///
+/// With an empty secret this is byte-for-byte equivalent to [`verify_log`]
+/// (HMAC.2 backward compatibility). With a secret configured, every entry must
+/// carry a `sig` that is a valid `HMAC-SHA256(secret, raw_entry_hash_bytes)`;
+/// an entry with a valid hash but a missing, malformed, or stale `sig` fails
+/// verification — defeating a re-chain forgery.
+///
+/// # Errors
+///
+/// Returns `io::Error` if the file cannot be read.
+pub fn verify_log_signed(path: &Path, config: &TransparencyLogConfig) -> io::Result<VerifyResult> {
+    let secret = config.shared_secret.as_bytes();
+    let secret = if secret.is_empty() {
+        None
+    } else {
+        Some(secret)
+    };
+    verify_log_inner(path, secret)
+}
+
+/// Shared chain-verification core. When `secret` is `Some`, each entry's HMAC
+/// `sig` is additionally authenticated.
+fn verify_log_inner(path: &Path, secret: Option<&[u8]>) -> io::Result<VerifyResult> {
     let content = std::fs::read_to_string(path)?;
     let mut prev_hash = "genesis".to_string();
     let mut prev_counter: Option<u64> = None;
@@ -438,6 +471,18 @@ pub fn verify_log(path: &Path) -> io::Result<VerifyResult> {
                     "entry {counter}: entry_hash mismatch \
                      (computed '{recomputed}', stored '{stored_entry_hash}')"
                 )),
+            });
+        }
+
+        // ── Check 4: per-entry HMAC sig (only when a secret is configured) ────
+        if let Some(secret) = secret
+            && let Err(msg) = verify_entry_sig(&entry, stored_entry_hash, secret)
+        {
+            return Ok(VerifyResult {
+                ok: false,
+                entries_checked,
+                error_at_counter: Some(counter),
+                error_message: Some(format!("entry {counter}: {msg}")),
             });
         }
 
@@ -548,6 +593,44 @@ pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
 
     let hash_bytes = sha256_raw(core_json.as_bytes());
     Ok(format!("sha256:{}", hex::encode(hash_bytes)))
+}
+
+/// Verify one entry's HMAC `sig` against `secret`, given the entry's
+/// already-hash-verified `entry_hash` string (`"sha256:<hex>"`).
+///
+/// The signature is `HMAC-SHA256(secret, raw_entry_hash_bytes)` (the 32 raw
+/// bytes of the SHA-256, matching how `append_core` signs). Comparison is
+/// constant-time via `Mac::verify_slice`. A missing, malformed, or non-matching
+/// `sig` is an error — under a configured secret every entry must be signed, so
+/// stripping the `sig` cannot bypass the check (MIK-6700 HMAC.1).
+///
+/// # Errors
+///
+/// Returns a human-readable reason string when the signature is absent,
+/// malformed, or does not authenticate.
+pub fn verify_entry_sig(
+    entry: &serde_json::Value,
+    entry_hash: &str,
+    secret: &[u8],
+) -> Result<(), String> {
+    let sig = entry
+        .get("sig")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing 'sig' while a shared secret is configured".to_string())?;
+    let sig_hex = sig
+        .strip_prefix("hmac-sha256:")
+        .ok_or_else(|| format!("malformed sig (expected 'hmac-sha256:' prefix): {sig}"))?;
+    let sig_bytes = hex::decode(sig_hex).map_err(|e| format!("sig is not valid hex: {e}"))?;
+    let hash_hex = entry_hash
+        .strip_prefix("sha256:")
+        .ok_or_else(|| format!("malformed entry_hash (expected 'sha256:' prefix): {entry_hash}"))?;
+    let hash_bytes =
+        hex::decode(hash_hex).map_err(|e| format!("entry_hash is not valid hex: {e}"))?;
+
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(&hash_bytes);
+    mac.verify_slice(&sig_bytes)
+        .map_err(|_| "HMAC sig mismatch (possible re-chain forgery with a stale sig)".to_string())
 }
 
 /// Raw (non-hex) SHA-256 digest.
@@ -831,5 +914,114 @@ mod tests {
         assert_eq!(even.len(), 3);
         let odd = show_session_entries(tmp.path(), "odd").unwrap();
         assert_eq!(odd.len(), 2);
+    }
+
+    // ── MIK-6700: per-entry HMAC verification ─────────────────────────────────
+
+    // HMAC.1 (fail-fast): a re-chained edit that recomputes entry_hash but
+    // leaves a STALE sig passes the hash-only verify_log (the gap this ticket
+    // closes) yet FAILS verify_log_signed.
+    #[test]
+    fn rechained_forgery_with_stale_sig_fails_signed_verify() {
+        let tmp = NamedTempFile::new().unwrap();
+        let cfg = cfg_with_sig(tmp.path());
+        let logger = TransparencyLogger::open(cfg.clone()).unwrap();
+        write_entry(&logger, "sess", "1");
+        write_entry(&logger, "sess", "2");
+        write_entry(&logger, "sess", "3");
+        drop(logger);
+
+        // Forge the LAST entry: change a payload field, recompute ITS entry_hash
+        // (no downstream entries need re-chaining), but leave the sig stale.
+        let mut entries = read_entries(tmp.path());
+        let last = entries.last_mut().unwrap();
+        let forged_counter = last
+            .get("counter")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap();
+        last["tool_id"] = serde_json::Value::String("forged_tool".to_string());
+        let new_hash = recompute_entry_hash(last).unwrap();
+        // Sanity: the edit actually changed the hash.
+        assert_ne!(last["entry_hash"].as_str().unwrap(), new_hash);
+        last["entry_hash"] = serde_json::Value::String(new_hash);
+        // sig is intentionally left as the pre-edit value (the attacker cannot
+        // recompute it without... the secret — but here we prove the check).
+        let rewritten = entries
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(tmp.path(), format!("{rewritten}\n")).unwrap();
+
+        // Hash-only verify PASSES — the chain is internally consistent.
+        let plain = verify_log(tmp.path()).unwrap();
+        assert!(
+            plain.ok,
+            "hash-only verify should pass on a re-chained edit: {:?}",
+            plain.error_message
+        );
+
+        // Signed verify FAILS at the forged entry — the stale sig is caught.
+        let signed = verify_log_signed(tmp.path(), &cfg).unwrap();
+        assert!(!signed.ok, "signed verify must reject a stale-sig forgery");
+        assert_eq!(signed.error_at_counter, Some(forged_counter));
+    }
+
+    // HMAC.1: an intact signed log passes verify_log_signed.
+    #[test]
+    fn intact_signed_log_passes_signed_verify() {
+        let tmp = NamedTempFile::new().unwrap();
+        let cfg = cfg_with_sig(tmp.path());
+        let logger = TransparencyLogger::open(cfg.clone()).unwrap();
+        write_entry(&logger, "sess", "1");
+        write_entry(&logger, "sess", "2");
+        drop(logger);
+
+        let result = verify_log_signed(tmp.path(), &cfg).unwrap();
+        assert!(
+            result.ok,
+            "intact signed log must verify: {:?}",
+            result.error_message
+        );
+        assert_eq!(result.entries_checked, 2);
+    }
+
+    // HMAC.1: stripping the sig cannot bypass the check under a configured secret.
+    #[test]
+    fn stripped_sig_fails_signed_verify() {
+        let tmp = NamedTempFile::new().unwrap();
+        let cfg = cfg_with_sig(tmp.path());
+        let logger = TransparencyLogger::open(cfg.clone()).unwrap();
+        write_entry(&logger, "sess", "1");
+        drop(logger);
+
+        let mut entries = read_entries(tmp.path());
+        entries[0].as_object_mut().unwrap().remove("sig");
+        std::fs::write(
+            tmp.path(),
+            format!("{}\n", serde_json::to_string(&entries[0]).unwrap()),
+        )
+        .unwrap();
+
+        // Hash chain still fine (recompute strips sig anyway), but signed fails.
+        assert!(verify_log(tmp.path()).unwrap().ok);
+        assert!(!verify_log_signed(tmp.path(), &cfg).unwrap().ok);
+    }
+
+    // HMAC.2 (backward compat): an unsigned log verifies identically whether
+    // checked via verify_log or verify_log_signed with an empty secret.
+    #[test]
+    fn unsigned_log_backward_compatible() {
+        let tmp = NamedTempFile::new().unwrap();
+        let cfg = cfg_no_sig(tmp.path());
+        let logger = TransparencyLogger::open(cfg.clone()).unwrap();
+        write_entry(&logger, "sess", "1");
+        write_entry(&logger, "sess", "2");
+        drop(logger);
+
+        let plain = verify_log(tmp.path()).unwrap();
+        let signed = verify_log_signed(tmp.path(), &cfg).unwrap();
+        assert!(plain.ok && signed.ok);
+        assert_eq!(plain.entries_checked, signed.entries_checked);
     }
 }
