@@ -104,6 +104,8 @@ jobs:
       - name: Install cosign
         # ponytail: floating major tag until pinned to a SHA (follow-up).
         uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.5.2
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@v0
       - name: Validate supply-chain smoke script
@@ -241,7 +243,7 @@ jobs:
     name: Docker
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, test, fmt, audit, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke]
+    needs: [check, test, fmt, audit, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain]
     permissions:
       contents: read
       packages: write
@@ -276,8 +278,11 @@ jobs:
 
       - name: Install cosign
         # ponytail: floating major tag until pinned to a SHA (follow-up); the
-        # rest of this workflow is SHA-pinned per repo convention.
+        # rest of this workflow is SHA-pinned per repo convention. cosign-release
+        # is pinned so flag behavior can't drift under a v3 default.
         uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.5.2
 
       - name: Install syft (SBOM)
         uses: anchore/sbom-action/download-syft@v0
@@ -300,13 +305,16 @@ jobs:
       - name: Verify the release signature + SBOM attestation
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          # Exact signer identity: THIS workflow file at the pushed tag ref, so a
+          # different workflow with OIDC cannot satisfy the check.
+          IDENTITY: https://github.com/MikkoParkkola/mcp-gateway/.github/workflows/ci.yml@${{ github.ref }}
         run: |
           set -euo pipefail
           cosign verify \
-            --certificate-identity-regexp 'https://github.com/MikkoParkkola/mcp-gateway/.*' \
+            --certificate-identity "${IDENTITY}" \
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
             "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
           cosign verify-attestation --type spdxjson \
-            --certificate-identity-regexp 'https://github.com/MikkoParkkola/mcp-gateway/.*' \
+            --certificate-identity "${IDENTITY}" \
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
             "ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}"
