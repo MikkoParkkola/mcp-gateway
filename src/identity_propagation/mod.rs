@@ -56,10 +56,17 @@ pub struct BackendDescriptor {
 
 /// A per-user credential to present to a backend, plus the metadata caches and
 /// audit require. Returned by [`IdentityPropagation::propagate`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is implemented manually to REDACT header values: the headers carry a
+/// live bearer token/assertion, and the derived `Debug` would leak it through
+/// any `tracing!(?cred)`, error context, or test-failure dump (MIK-6728 review
+/// / IDP.4 — propagation must never log the token). Header names are shown;
+/// values are replaced with `<redacted>`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct PropagatedCredential {
     /// Outbound headers to add to the backend request (e.g.
-    /// `Authorization: Bearer <assertion>`). Never logged verbatim.
+    /// `Authorization: Bearer <assertion>`). Never logged verbatim — see the
+    /// redacting `Debug` impl below.
     pub headers: Vec<(String, String)>,
     /// Unix-seconds expiry of the credential (IDP.6). Callers may pre-emptively
     /// refuse to use an expired credential.
@@ -74,6 +81,21 @@ pub struct PropagatedCredential {
     /// is never served across users/audiences (IDP.3 / IDP.8). Derived from
     /// `(subject_key, audience)`.
     pub cache_binding: String,
+}
+
+impl std::fmt::Debug for PropagatedCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redact header VALUES (they carry the live token); show names only.
+        let header_names: Vec<&str> = self.headers.iter().map(|(k, _)| k.as_str()).collect();
+        f.debug_struct("PropagatedCredential")
+            .field("headers", &format_args!("{header_names:?} = <redacted>"))
+            .field("expires_at", &self.expires_at)
+            .field("subject_key", &self.subject_key)
+            .field("audience", &self.audience)
+            .field("scopes", &self.scopes)
+            .field("cache_binding", &self.cache_binding)
+            .finish()
+    }
 }
 
 /// Why a propagation attempt did not yield a credential.
@@ -334,6 +356,31 @@ mod tests {
             .decode(payload)
             .expect("payload is base64url");
         serde_json::from_slice(&bytes).expect("payload is json")
+    }
+
+    // IDP.4 (MIK-6728 review) — Debug output MUST NOT leak the token. The
+    // header value carries a live bearer assertion; Debug shows names + a
+    // <redacted> marker only.
+    #[tokio::test]
+    async fn debug_redacts_the_token() {
+        let s = strategy();
+        let cred = s
+            .propagate(&identity("dave", "https://idp"), &backend())
+            .await
+            .unwrap();
+        let token = cred.headers[0]
+            .1
+            .strip_prefix("Bearer ")
+            .unwrap()
+            .to_string();
+        assert!(!token.is_empty());
+        let dbg = format!("{cred:?}");
+        assert!(
+            !dbg.contains(&token),
+            "Debug must not contain the raw token"
+        );
+        assert!(dbg.contains("<redacted>"), "Debug must mark redaction");
+        assert!(dbg.contains("Authorization"), "header names may show");
     }
 
     fn identity(subject: &str, issuer: &str) -> VerifiedIdentity {
