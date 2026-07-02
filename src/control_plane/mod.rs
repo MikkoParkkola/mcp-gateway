@@ -6,9 +6,14 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod export;
 pub mod role_mapping;
 pub mod store;
 
+pub use export::{
+    CollectingSink, ExportCursor, ExportEntry, ExportError, ExportSink, ExportSource, LogExporter,
+    PollOutcome, default_cursor_path,
+};
 pub use role_mapping::{ControlPlaneConfig, ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
 pub use store::{
     AuditFilter, ControlPlaneStore, FileControlPlaneStore, InMemoryControlPlaneStore, StoreError,
