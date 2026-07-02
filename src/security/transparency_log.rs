@@ -523,8 +523,14 @@ fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
 /// Recompute the `entry_hash` for an existing entry read from the log file.
 ///
 /// Strips `entry_hash`, `sig`, and `key_id`, serialises what remains (`BTreeMap`
-/// so alphabetically sorted), and returns `"sha256:<hex>"`.
-fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
+/// so alphabetically sorted), and returns `"sha256:<hex>"`. Public so incremental
+/// consumers (e.g. the SIEM exporter, MIK-6689) can tamper-verify one entry at a
+/// time instead of re-reading the whole file.
+///
+/// # Errors
+///
+/// Returns `io::Error` if `entry` is not a JSON object or cannot be serialised.
+pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
     let obj = entry
         .as_object()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "entry is not a JSON object"))?;
