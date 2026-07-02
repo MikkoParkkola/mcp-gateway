@@ -636,9 +636,15 @@ impl Gateway {
             meta_mcp.set_webhook_registry(Arc::clone(&webhook_registry));
         }
 
+        // Live config handle: shared by the hot-reload watcher (which swaps it
+        // on every applied reload) and AppState (which reads control-plane role
+        // mapping through it, so a reload takes effect without restart —
+        // MIK-6702). Created unconditionally; without a config path it simply
+        // never changes.
+        let live_config = Arc::new(LiveConfig::new(self.config.clone()));
+
         // Wire config hot-reload if a config path was provided.
         let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
-            let live_config = Arc::new(LiveConfig::new(self.config.clone()));
             let reload_ctx = Arc::new(ReloadContext::new(
                 path.clone(),
                 Arc::clone(&live_config),
@@ -650,7 +656,7 @@ impl Gateway {
 
             match ConfigWatcher::start(
                 path.clone(),
-                live_config,
+                Arc::clone(&live_config),
                 Arc::clone(&self.backends),
                 &self.config,
                 shutdown_tx.subscribe(),
@@ -791,7 +797,7 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
-            control_plane_role_mapping: Arc::new(self.config.control_plane.role_mapping.clone()),
+            live_config: Arc::clone(&live_config),
         });
 
         // Create router

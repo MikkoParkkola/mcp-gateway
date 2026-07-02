@@ -320,6 +320,10 @@ struct MetaFields {
     agent_auth: String,
     runtime: String,
     marketplace: String,
+    /// Control-plane section (RBAC role mapping). Tracked so a role-mapping-only
+    /// edit is detected and triggers a reload — without this, removing an admin
+    /// rule would not take effect until restart (MIK-6702 CP.RELOAD.2).
+    control_plane: String,
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
 }
@@ -344,6 +348,7 @@ impl MetaFields {
             agent_auth: canonical_json(&c.agent_auth),
             runtime: canonical_json(&c.runtime),
             marketplace: canonical_json(&c.marketplace),
+            control_plane: canonical_json(&c.control_plane),
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
         }
