@@ -956,7 +956,10 @@ impl MetaMcp {
 
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id).await,
-            "gateway_execute" => self.code_mode_execute(&arguments, session_id).await,
+            "gateway_execute" => {
+                self.code_mode_execute(&arguments, session_id, &caller)
+                    .await
+            }
             "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,

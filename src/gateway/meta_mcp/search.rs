@@ -430,10 +430,11 @@ impl MetaMcp {
         &self,
         args: &Value,
         session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         // Chain mode: sequential execution
         if let Some(chain) = args.get("chain").and_then(Value::as_array) {
-            return self.execute_chain(chain.clone(), session_id).await;
+            return self.execute_chain(chain.clone(), session_id, caller).await;
         }
 
         // Single tool execution
@@ -457,16 +458,30 @@ impl MetaMcp {
             "arguments": arguments,
         });
 
-        // agent_id is None: code-mode execution is an internal operation.
-        self.invoke_tool(&invoke_args, session_id, None, None, None, None)
-            .await
+        // Code Mode carries the caller's identity + attribution through to
+        // dispatch, so an identity-required backend gets the per-user credential
+        // just like the direct gateway_invoke path (MIK-6734).
+        self.invoke_tool(
+            &invoke_args,
+            session_id,
+            caller.api_key_name,
+            caller.agent_id,
+            caller.grant_subject.clone(),
+            caller.verified_identity,
+        )
+        .await
     }
 
     /// Execute a sequential chain of `{tool, arguments}` steps.
     ///
     /// Returns a JSON array of per-step results. Stops at the first error
     /// and surfaces the failing step index in the error message.
-    async fn execute_chain(&self, chain: Vec<Value>, session_id: Option<&str>) -> Result<Value> {
+    async fn execute_chain(
+        &self,
+        chain: Vec<Value>,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
         if chain.is_empty() {
             return Err(Error::json_rpc(-32602, "Chain must not be empty"));
         }
@@ -498,7 +513,14 @@ impl MetaMcp {
             });
 
             match self
-                .invoke_tool(&invoke_args, session_id, None, None, None, None)
+                .invoke_tool(
+                    &invoke_args,
+                    session_id,
+                    caller.api_key_name,
+                    caller.agent_id,
+                    caller.grant_subject.clone(),
+                    caller.verified_identity,
+                )
                 .await
             {
                 Ok(result) => results.push(json!({

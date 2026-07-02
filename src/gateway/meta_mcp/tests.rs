@@ -313,7 +313,13 @@ async fn code_mode_execute_missing_tool_parameter_returns_error() {
     let meta = make_meta_mcp_code_mode();
     let args = json!({ "arguments": {} });
     // WHEN: code_mode_execute is called
-    let result = meta.code_mode_execute(&args, None).await;
+    let result = meta
+        .code_mode_execute(
+            &args,
+            None,
+            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+        )
+        .await;
     // THEN: error about missing 'tool'
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -329,7 +335,13 @@ async fn code_mode_execute_bare_tool_name_without_server_returns_error() {
     let meta = make_meta_mcp_code_mode();
     let args = json!({ "tool": "my_tool", "arguments": {} });
     // WHEN: code_mode_execute is called
-    let result = meta.code_mode_execute(&args, None).await;
+    let result = meta
+        .code_mode_execute(
+            &args,
+            None,
+            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+        )
+        .await;
     // THEN: error about missing server prefix
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -345,7 +357,13 @@ async fn code_mode_execute_chain_empty_array_returns_error() {
     let meta = make_meta_mcp_code_mode();
     let args = json!({ "chain": [] });
     // WHEN: code_mode_execute is called
-    let result = meta.code_mode_execute(&args, None).await;
+    let result = meta
+        .code_mode_execute(
+            &args,
+            None,
+            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+        )
+        .await;
     // THEN: error about empty chain
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -365,7 +383,13 @@ async fn code_mode_execute_chain_step_missing_tool_field_returns_error() {
         ]
     });
     // WHEN: code_mode_execute is called
-    let result = meta.code_mode_execute(&args, None).await;
+    let result = meta
+        .code_mode_execute(
+            &args,
+            None,
+            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+        )
+        .await;
     // THEN: error about missing tool field in step 0
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -385,7 +409,13 @@ async fn code_mode_execute_chain_step_bare_tool_name_returns_error() {
         ]
     });
     // WHEN: code_mode_execute is called
-    let result = meta.code_mode_execute(&args, None).await;
+    let result = meta
+        .code_mode_execute(
+            &args,
+            None,
+            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+        )
+        .await;
     // THEN: error about missing server prefix for step 0
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();

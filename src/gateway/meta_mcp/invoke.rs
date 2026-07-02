@@ -2517,6 +2517,8 @@ mod response_transform_tests {
 mod identity_propagation_enforcement_tests {
     use std::sync::Arc;
 
+    use serde_json::{Value, json};
+
     use crate::backend::BackendRegistry;
     use crate::gateway::meta_mcp::MetaMcp;
     use crate::gateway::oauth::GatewayKeyPair;
@@ -2549,6 +2551,123 @@ mod identity_propagation_enforcement_tests {
             groups: vec![],
             issuer: "https://idp".to_string(),
         }
+    }
+
+    // Header-capturing transport: records the per-request headers dispatch
+    // attaches, so a test can assert the propagated credential reached the wire.
+    type CapturedHeaders = Arc<parking_lot::Mutex<Vec<(String, String)>>>;
+
+    struct CapturingTransport {
+        captured: CapturedHeaders,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::transport::Transport for CapturingTransport {
+        async fn request(
+            &self,
+            _method: &str,
+            _params: Option<Value>,
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            Ok(crate::protocol::JsonRpcResponse::success(
+                crate::protocol::RequestId::Number(1),
+                json!({"content": [{"type": "text", "text": "ok"}]}),
+            ))
+        }
+        async fn request_with_headers(
+            &self,
+            _method: &str,
+            _params: Option<Value>,
+            extra_headers: &[(String, String)],
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            *self.captured.lock() = extra_headers.to_vec();
+            self.request(_method, _params).await
+        }
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        async fn close(&self) -> crate::Result<()> {
+            Ok(())
+        }
+    }
+
+    // Build a MetaMcp whose registry has one identity-required HTTP backend
+    // ("mem") wired to a header-capturing transport, plus the signed-assertion
+    // strategy. Returns the meta and the shared capture buffer.
+    fn meta_with_capturing_backend() -> (MetaMcp, CapturedHeaders) {
+        use crate::backend::Backend;
+        use crate::config::{BackendConfig, TransportConfig};
+
+        let registry = Arc::new(BackendRegistry::new());
+        let config = BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://mem.internal/mcp".to_string(),
+                streamable_http: true,
+                protocol_version: None,
+            },
+            identity_propagation: Some(idp_cfg(true)),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "mem",
+            config,
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let captured = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        backend.set_transport_for_test(Arc::new(CapturingTransport {
+            captured: Arc::clone(&captured),
+        }));
+        registry.register(backend);
+
+        let m = MetaMcp::new(registry);
+        let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
+        (m, captured)
+    }
+
+    // IDP.1 end-to-end via Code Mode (gateway_execute): an authenticated caller
+    // invoking an identity-required backend through code_mode_execute reaches the
+    // backend WITH the per-user Bearer credential on the wire. Regression guard
+    // for the review finding that Code Mode dropped verified_identity.
+    #[tokio::test]
+    async fn code_mode_execute_propagates_identity_to_backend() {
+        let (m, captured) = meta_with_capturing_backend();
+        let id = identity();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            verified_identity: Some(&id),
+            ..Default::default()
+        };
+        let args = json!({ "tool": "mem:read", "arguments": {} });
+        m.code_mode_execute(&args, Some("s1"), &caller)
+            .await
+            .expect("code-mode execute ok");
+
+        let headers = captured.lock().clone();
+        let auth = headers.iter().find(|(k, _)| k == "Authorization");
+        assert!(
+            auth.is_some_and(|(_, v)| v.starts_with("Bearer ")),
+            "Code Mode must propagate the per-user Bearer credential; got {headers:?}"
+        );
+    }
+
+    // Fail-closed still holds through Code Mode: a required backend with NO
+    // verified identity refuses at resolve, before dispatch.
+    #[tokio::test]
+    async fn code_mode_execute_fails_closed_without_identity() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+        let args = json!({ "tool": "mem:read", "arguments": {} });
+        let err = m
+            .code_mode_execute(&args, Some("s1"), &caller)
+            .await
+            .expect_err("must refuse without identity");
+        assert!(
+            err.to_string().contains("required"),
+            "fail-closed error: {err}"
+        );
     }
 
     // IDP.1 — with a verified identity + strategy, resolve mints an
