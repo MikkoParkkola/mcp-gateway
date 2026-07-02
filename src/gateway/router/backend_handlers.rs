@@ -185,6 +185,13 @@ pub(super) async fn backend_handler(
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
     let cert_identity = request.extensions().get::<CertIdentity>().cloned();
     let oauth_agent_identity = request.extensions().get::<OAuthAgentIdentity>().cloned();
+    // End-user identity for propagation (MIK-6704): the auth middleware may
+    // attach a VerifiedIdentity for temporary/delegated OIDC tokens. Extracted
+    // before the body is consumed so the direct route can propagate it too.
+    let verified_identity = request
+        .extensions()
+        .get::<crate::key_server::oidc::VerifiedIdentity>()
+        .cloned();
 
     // Check backend access if auth is enabled
     if let Some(ref client) = client
@@ -265,6 +272,32 @@ pub(super) async fn backend_handler(
     // For requests, id is guaranteed to exist
     let id = id.expect("id should exist for non-notification requests");
 
+    // End-user identity propagation for the direct backend route (MIK-6704 /
+    // ADR-007). Parity with the meta dispatch path: for a propagation-configured
+    // backend, resolve the per-user credential and forward it via
+    // request_with_headers; fail closed (403) for a `required` backend with no
+    // verified identity rather than silently forwarding with only the static
+    // credential. Empty for a non-propagation backend → unchanged static path.
+    let propagated_headers: Vec<(String, String)> = if method == "tools/call" {
+        match state
+            .meta_mcp
+            .resolve_propagation_headers(&name, verified_identity.as_ref())
+            .await
+        {
+            Ok(headers) => headers,
+            Err(e) => {
+                return build_http_error_response(
+                    Some(id.clone()),
+                    -32003,
+                    e.to_string(),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     // SECURITY: apply tool policy, name validation, and input sanitization to
     // tools/call requests unless the backend explicitly opts into pass-through
     // mode (passthrough: true in config — only for fully-trusted internals).
@@ -283,7 +316,14 @@ pub(super) async fn backend_handler(
         ) {
             Some(Ok(Some(sanitized_params))) => {
                 // Forward the sanitized params to the backend
-                return match backend.request(&method, Some(sanitized_params)).await {
+                let forward = if propagated_headers.is_empty() {
+                    backend.request(&method, Some(sanitized_params)).await
+                } else {
+                    backend
+                        .request_with_headers(&method, Some(sanitized_params), &propagated_headers)
+                        .await
+                };
+                return match forward {
                     Ok(mut response) => {
                         record_client_success(&state, client.as_ref());
                         scan_direct_backend_response(
@@ -310,7 +350,14 @@ pub(super) async fn backend_handler(
     }
 
     // Forward to backend
-    match backend.request(&method, params.clone()).await {
+    let forward = if propagated_headers.is_empty() {
+        backend.request(&method, params.clone()).await
+    } else {
+        backend
+            .request_with_headers(&method, params.clone(), &propagated_headers)
+            .await
+    };
+    match forward {
         Ok(mut response) => {
             record_client_success(&state, client.as_ref());
             if method == "tools/list" {

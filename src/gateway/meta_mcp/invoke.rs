@@ -28,6 +28,20 @@ use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
 use crate::{Error, Result};
 
+/// The per-user identity-propagation credential resolved once for a single
+/// dispatch (MIK-6704 / ADR-007). Carries the headers to put on the wire and
+/// the cache binding to isolate cached results by user+audience. The default
+/// (empty headers, `None` binding) means "not identity-scoped" — plain dispatch
+/// and a shared cache key.
+#[derive(Debug, Default)]
+struct CallerCredential {
+    /// Per-request outbound headers (empty = none).
+    headers: Vec<(String, String)>,
+    /// Collision-safe user+audience cache binding. `Some` → mix into cache keys
+    /// so per-user results stay isolated (IDP.8); `None` → shared key is safe.
+    cache_binding: Option<String>,
+}
+
 /// Render-guard non-bypassability (MIK-5854 / MIK-6690).
 ///
 /// `GuardedValue` wraps a tool result that has passed the context-integrity
@@ -374,6 +388,7 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
         caller_identity: Option<GrantSubject>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
@@ -384,6 +399,7 @@ impl MetaMcp {
                 api_key_name,
                 agent_id,
                 caller_identity.as_ref(),
+                verified_identity,
                 &trace_id_clone,
             )
             .await
@@ -398,6 +414,7 @@ impl MetaMcp {
     /// Returns a [`GuardedValue`]: every success path must produce one, so the
     /// render guard cannot be bypassed at the chokepoint (MIK-6690).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
+    #[allow(clippy::too_many_arguments)] // Caller context threaded explicitly (identity, keys, trace)
     async fn invoke_tool_traced(
         &self,
         args: &Value,
@@ -405,6 +422,7 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         trace_id: &str,
     ) -> Result<GuardedValue> {
         let server = extract_required_str(args, "server")?;
@@ -521,6 +539,28 @@ impl MetaMcp {
         // into the other (a non-`_full` caller could hit a cached full payload
         // and receive fields the projection was meant to drop). A `_full` call
         // is therefore always a fresh, uncached dispatch.
+        // Resolve the per-user propagation credential ONCE (MIK-6734 / ADR-007).
+        // Single identity gate: fail-closed here for a required backend, and the
+        // resolved `cache_binding` (user+audience) is mixed into every cache key
+        // so per-user results cache in ISOLATION rather than leaking across users
+        // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
+        let caller_credential = match self
+            .backends
+            .get(server)
+            .and_then(|b| b.identity_propagation_config().cloned())
+        {
+            Some(idp_cfg) => {
+                self.resolve_caller_credential(server, &idp_cfg, verified_identity)
+                    .await?
+            }
+            None => CallerCredential::default(),
+        };
+        let identity_suffix = caller_credential
+            .cache_binding
+            .as_deref()
+            .map(|b| format!("|idp:{b}"))
+            .unwrap_or_default();
+
         let idem_key = if want_full {
             None
         } else {
@@ -531,13 +571,7 @@ impl MetaMcp {
                 &arguments,
                 self.idempotency_cache.as_ref(),
             )
-            .map(|k| {
-                if projection_key_suffix.is_empty() {
-                    k
-                } else {
-                    format!("{k}{projection_key_suffix}")
-                }
-            })
+            .map(|k| format!("{k}{projection_key_suffix}{identity_suffix}"))
         };
 
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
@@ -570,11 +604,7 @@ impl MetaMcp {
         if !want_full && let Some(ref cache) = self.cache {
             let cache_key = {
                 let base = ResponseCache::build_key(server, tool, &arguments);
-                if projection_key_suffix.is_empty() {
-                    base
-                } else {
-                    format!("{base}{projection_key_suffix}")
-                }
+                format!("{base}{projection_key_suffix}{identity_suffix}")
             };
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
@@ -668,6 +698,7 @@ impl MetaMcp {
                 api_key_name,
                 agent_id,
                 caller_identity,
+                &caller_credential.headers,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -996,11 +1027,7 @@ impl MetaMcp {
         if !want_full && let Some(ref cache) = self.cache {
             let cache_key = {
                 let base = ResponseCache::build_key(server, tool, &arguments);
-                if projection_key_suffix.is_empty() {
-                    base
-                } else {
-                    format!("{base}{projection_key_suffix}")
-                }
+                format!("{base}{projection_key_suffix}{identity_suffix}")
             };
             cache.set(&cache_key, result.clone(), self.default_cache_ttl);
             debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
@@ -1286,12 +1313,101 @@ impl MetaMcp {
         }
     }
 
+    /// Resolve the per-user propagation headers for a backend by name, for the
+    /// direct backend route (`/mcp/{name}`) which does not go through
+    /// `dispatch_to_backend` (MIK-6704). Returns the empty vec when the backend
+    /// is not propagation-configured (unchanged static path); fail-closed `Err`
+    /// for a `required` backend with no identity/strategy.
+    pub async fn resolve_propagation_headers(
+        &self,
+        server: &str,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<Vec<(String, String)>> {
+        let Some(idp_cfg) = self
+            .backends
+            .get(server)
+            .and_then(|b| b.identity_propagation_config().cloned())
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .resolve_caller_credential(server, &idp_cfg, verified_identity)
+            .await?
+            .headers)
+    }
+
+    /// Resolve the per-user identity-propagation credential for a backend
+    /// configured with `identity_propagation` (MIK-6704 / ADR-007). This is the
+    /// single identity gate: minting, fail-closed enforcement, and the cache
+    /// binding are decided once here, then reused for the cache key AND dispatch.
+    ///
+    /// Fail-closed for a `required` backend: returns `Err` — never a
+    /// static-credential fallback — when there is no verified identity, no
+    /// propagation strategy wired, the strategy refuses, or a minted header does
+    /// not parse. For a non-required backend, a mint failure degrades to the
+    /// empty credential (no headers, no binding → shared cache key, best-effort).
+    async fn resolve_caller_credential(
+        &self,
+        server: &str,
+        idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<CallerCredential> {
+        use crate::identity_propagation::BackendDescriptor;
+
+        let refuse = |msg: String| -> Result<CallerCredential> {
+            if idp_cfg.required {
+                Err(Error::Config(format!(
+                    "identity propagation required for backend '{server}' but {msg}"
+                )))
+            } else {
+                // Best-effort: non-required backend proceeds with static creds.
+                Ok(CallerCredential::default())
+            }
+        };
+
+        let Some(identity) = verified_identity else {
+            return refuse("the request carries no verified end-user identity".to_string());
+        };
+        let strategy = self.identity_propagation.read().clone();
+        let Some(strategy) = strategy else {
+            return refuse("no identity-propagation strategy is configured".to_string());
+        };
+
+        let descriptor = BackendDescriptor {
+            id: server.to_string(),
+            audience: idp_cfg.audience.clone(),
+        };
+        match strategy.propagate(identity, &descriptor).await {
+            Ok(cred) => {
+                // Validate every header parses BEFORE dispatch, so an invalid
+                // minted credential fails closed rather than silently letting the
+                // static Authorization through (MIK-6734 review carry-forward).
+                for (k, v) in &cred.headers {
+                    if k.parse::<reqwest::header::HeaderName>().is_err()
+                        || v.parse::<reqwest::header::HeaderValue>().is_err()
+                    {
+                        return refuse(format!("minted credential header '{k}' is invalid"));
+                    }
+                }
+                // cache_binding distinguishes user AND audience (collision-safe),
+                // so per-user results cache in isolation instead of being dropped
+                // (IDP.8 — replaces the earlier blanket cache bypass).
+                Ok(CallerCredential {
+                    headers: cred.headers,
+                    cache_binding: Some(cred.cache_binding),
+                })
+            }
+            Err(e) => refuse(format!("credential minting failed: {e}")),
+        }
+    }
+
     /// Dispatch a `tools/call` to the capability backend or an MCP backend.
     ///
     /// Applies secret injection before forwarding. When `prompt_cache_key` is
     /// `Some`, it is injected into the request `_meta` field so that
     /// OpenAI-compatible backends can use it for prompt caching.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)] // Coherent dispatch unit; identity-propagation enforcement inline
     async fn dispatch_to_backend(
         &self,
         server: &str,
@@ -1303,6 +1419,10 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
+        // Pre-resolved per-user propagation headers (empty = none). Resolved
+        // once in `invoke_tool_traced` so the cache key and this dispatch share
+        // one credential (MIK-6734); dispatch never mints.
+        propagated_headers: &[(String, String)],
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -1412,7 +1532,18 @@ impl MetaMcp {
             None => base_params,
         };
 
-        let response = backend.request("tools/call", Some(params)).await?;
+        // End-user identity propagation (MIK-6704 / ADR-007). The per-user
+        // credential was resolved (and fail-closed enforced) once upstream in
+        // `invoke_tool_traced`; here we simply attach the pre-resolved headers
+        // via `request_with_headers` (per-request, never on the shared transport
+        // — tenant isolation, IDP.3). Empty headers → the unchanged static path.
+        let response = if propagated_headers.is_empty() {
+            backend.request("tools/call", Some(params)).await?
+        } else {
+            backend
+                .request_with_headers("tools/call", Some(params), propagated_headers)
+                .await?
+        };
 
         if let Some(error) = response.error {
             // When we have cached names and the tool wasn't in them, enrich
@@ -2402,5 +2533,292 @@ mod response_transform_tests {
             "a projection that keeps a present field stays populated"
         );
         assert_eq!(transformed.get("id"), Some(&json!("abc")));
+    }
+}
+
+#[cfg(test)]
+mod identity_propagation_enforcement_tests {
+    use std::sync::Arc;
+
+    use serde_json::{Value, json};
+
+    use crate::backend::BackendRegistry;
+    use crate::gateway::meta_mcp::MetaMcp;
+    use crate::gateway::oauth::GatewayKeyPair;
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode, SignedAssertionStrategy,
+    };
+    use crate::key_server::oidc::VerifiedIdentity;
+
+    fn meta_with_strategy() -> MetaMcp {
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
+        m
+    }
+
+    fn idp_cfg(required: bool) -> IdentityPropagationConfig {
+        IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "https://memory.internal".to_string(),
+            required,
+            session_mode: SessionMode::Stateless,
+        }
+    }
+
+    fn identity() -> VerifiedIdentity {
+        VerifiedIdentity {
+            subject: "alice".to_string(),
+            email: "alice@corp".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://idp".to_string(),
+        }
+    }
+
+    // Header-capturing transport: records the per-request headers dispatch
+    // attaches, so a test can assert the propagated credential reached the wire.
+    type CapturedHeaders = Arc<parking_lot::Mutex<Vec<(String, String)>>>;
+
+    struct CapturingTransport {
+        captured: CapturedHeaders,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::transport::Transport for CapturingTransport {
+        async fn request(
+            &self,
+            _method: &str,
+            _params: Option<Value>,
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            Ok(crate::protocol::JsonRpcResponse::success(
+                crate::protocol::RequestId::Number(1),
+                json!({"content": [{"type": "text", "text": "ok"}]}),
+            ))
+        }
+        async fn request_with_headers(
+            &self,
+            _method: &str,
+            _params: Option<Value>,
+            extra_headers: &[(String, String)],
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            *self.captured.lock() = extra_headers.to_vec();
+            self.request(_method, _params).await
+        }
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        async fn close(&self) -> crate::Result<()> {
+            Ok(())
+        }
+    }
+
+    // Build a MetaMcp whose registry has one identity-required HTTP backend
+    // ("mem") wired to a header-capturing transport, plus the signed-assertion
+    // strategy. Returns the meta and the shared capture buffer.
+    fn meta_with_capturing_backend() -> (MetaMcp, CapturedHeaders) {
+        use crate::backend::Backend;
+        use crate::config::{BackendConfig, TransportConfig};
+
+        let registry = Arc::new(BackendRegistry::new());
+        let config = BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://mem.internal/mcp".to_string(),
+                streamable_http: true,
+                protocol_version: None,
+            },
+            identity_propagation: Some(idp_cfg(true)),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "mem",
+            config,
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let captured = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        backend.set_transport_for_test(Arc::new(CapturingTransport {
+            captured: Arc::clone(&captured),
+        }));
+        registry.register(backend);
+
+        let m = MetaMcp::new(registry);
+        let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
+        (m, captured)
+    }
+
+    // IDP.1 end-to-end via Code Mode (gateway_execute): an authenticated caller
+    // invoking an identity-required backend through code_mode_execute reaches the
+    // backend WITH the per-user Bearer credential on the wire. Regression guard
+    // for the review finding that Code Mode dropped verified_identity.
+    #[tokio::test]
+    async fn code_mode_execute_propagates_identity_to_backend() {
+        let (m, captured) = meta_with_capturing_backend();
+        let id = identity();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            verified_identity: Some(&id),
+            ..Default::default()
+        };
+        let args = json!({ "tool": "mem:read", "arguments": {} });
+        m.code_mode_execute(&args, Some("s1"), &caller)
+            .await
+            .expect("code-mode execute ok");
+
+        let headers = captured.lock().clone();
+        let auth = headers.iter().find(|(k, _)| k == "Authorization");
+        assert!(
+            auth.is_some_and(|(_, v)| v.starts_with("Bearer ")),
+            "Code Mode must propagate the per-user Bearer credential; got {headers:?}"
+        );
+    }
+
+    // Fail-closed still holds through Code Mode: a required backend with NO
+    // verified identity refuses at resolve, before dispatch.
+    #[tokio::test]
+    async fn code_mode_execute_fails_closed_without_identity() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+        let args = json!({ "tool": "mem:read", "arguments": {} });
+        let err = m
+            .code_mode_execute(&args, Some("s1"), &caller)
+            .await
+            .expect_err("must refuse without identity");
+        assert!(
+            err.to_string().contains("required"),
+            "fail-closed error: {err}"
+        );
+    }
+
+    // IDP.1 — with a verified identity + strategy, resolve mints an
+    // Authorization: Bearer credential scoped to the caller, and a cache binding.
+    #[tokio::test]
+    async fn mints_bearer_credential_for_identity() {
+        let m = meta_with_strategy();
+        let cred = m
+            .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
+            .await
+            .expect("mint ok");
+        assert_eq!(cred.headers.len(), 1);
+        assert_eq!(cred.headers[0].0, "Authorization");
+        assert!(cred.headers[0].1.starts_with("Bearer "));
+        // IDP.8 — a cache binding is produced so per-user results cache isolated.
+        assert!(cred.cache_binding.is_some());
+    }
+
+    // IDP.8 — distinct identities produce distinct cache bindings, so two users
+    // calling the same tool with the same arguments cannot collide in the cache.
+    #[tokio::test]
+    async fn distinct_identities_get_distinct_cache_bindings() {
+        let m = meta_with_strategy();
+        let alice = m
+            .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
+            .await
+            .expect("alice")
+            .cache_binding;
+        let bob_identity = VerifiedIdentity {
+            subject: "bob".to_string(),
+            email: "bob@corp".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://idp".to_string(),
+        };
+        let bob = m
+            .resolve_caller_credential("memory", &idp_cfg(true), Some(&bob_identity))
+            .await
+            .expect("bob")
+            .cache_binding;
+        assert!(alice.is_some() && bob.is_some());
+        assert_ne!(alice, bob, "per-user cache bindings must differ");
+    }
+
+    // IDP.2 — fail-closed: a REQUIRED backend with no verified identity refuses
+    // (never falls back to the static credential).
+    #[tokio::test]
+    async fn required_backend_without_identity_fails_closed() {
+        let m = meta_with_strategy();
+        let err = m
+            .resolve_caller_credential("memory", &idp_cfg(true), None)
+            .await
+            .expect_err("must refuse");
+        assert!(
+            err.to_string().contains("required"),
+            "fail-closed error: {err}"
+        );
+    }
+
+    // IDP.2 — fail-closed: a REQUIRED backend with no strategy wired refuses.
+    #[tokio::test]
+    async fn required_backend_without_strategy_fails_closed() {
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new())); // no strategy set
+        let err = m
+            .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
+            .await
+            .expect_err("must refuse");
+        assert!(
+            err.to_string().contains("required"),
+            "fail-closed error: {err}"
+        );
+    }
+
+    // A NON-required backend without identity degrades to the empty credential
+    // (best-effort; no headers, no binding → shared cache key, IDP.5).
+    #[tokio::test]
+    async fn optional_backend_without_identity_yields_no_headers() {
+        let m = meta_with_strategy();
+        let cred = m
+            .resolve_caller_credential("memory", &idp_cfg(false), None)
+            .await
+            .expect("optional ok");
+        assert!(cred.headers.is_empty());
+        assert!(cred.cache_binding.is_none());
+    }
+
+    // Direct backend route (/mcp/{name}) — resolve_propagation_headers mints the
+    // per-user credential for a propagation-configured backend so the direct
+    // passthrough carries it too (MIK-6734 review finding 4).
+    #[tokio::test]
+    async fn direct_route_resolves_bearer_for_identity() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let headers = m
+            .resolve_propagation_headers("mem", Some(&identity()))
+            .await
+            .expect("resolve ok");
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v.starts_with("Bearer ")),
+            "direct route must resolve the per-user Bearer credential: {headers:?}"
+        );
+    }
+
+    // Direct route fails closed for a required backend with no identity — never
+    // forwards with only the static credential.
+    #[tokio::test]
+    async fn direct_route_fails_closed_without_identity() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let err = m
+            .resolve_propagation_headers("mem", None)
+            .await
+            .expect_err("must refuse");
+        assert!(
+            err.to_string().contains("required"),
+            "fail-closed error: {err}"
+        );
+    }
+
+    // Direct route to a backend with no identity_propagation config is unchanged
+    // (empty headers → static path).
+    #[tokio::test]
+    async fn direct_route_unconfigured_backend_yields_no_headers() {
+        let (m, _captured) = meta_with_capturing_backend();
+        let headers = m
+            .resolve_propagation_headers("no-such-backend", Some(&identity()))
+            .await
+            .expect("resolve ok");
+        assert!(headers.is_empty());
     }
 }

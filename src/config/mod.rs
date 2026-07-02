@@ -320,6 +320,17 @@ impl Config {
             idp.validate().map_err(|e| {
                 Error::ConfigValidation(format!("backend '{name}' identity_propagation: {e}"))
             })?;
+            // Only HTTP transports can carry the per-request credential header;
+            // stdio/websocket would silently drop it (their transport ignores
+            // extra headers), so a propagation-configured non-HTTP backend must
+            // fail closed at load rather than dispatch without the credential
+            // (MIK-6734 review).
+            if !matches!(backend.transport, TransportConfig::Http { .. }) {
+                return Err(Error::ConfigValidation(format!(
+                    "backend '{name}' identity_propagation requires an http transport; \
+                     stdio/websocket cannot carry the credential header (IDP.2)"
+                )));
+            }
             if idp.session_mode == SessionMode::PerUser {
                 return Err(Error::ConfigValidation(format!(
                     "backend '{name}' identity_propagation.session_mode=per_user is not yet \

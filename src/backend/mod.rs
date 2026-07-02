@@ -725,6 +725,33 @@ impl Backend {
         )
     )]
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        self.request_with_headers(method, params, &[]).await
+    }
+
+    /// This backend's end-user identity-propagation config, if configured
+    /// (MIK-6704 / ADR-007). `None` → static-credential behavior unchanged.
+    #[must_use]
+    pub fn identity_propagation_config(
+        &self,
+    ) -> Option<&crate::identity_propagation::IdentityPropagationConfig> {
+        self.config.identity_propagation.as_ref()
+    }
+
+    /// Send a request, adding per-request outbound headers (e.g. a propagated
+    /// end-user identity credential — MIK-6704). The headers are forwarded by
+    /// value to the transport's `request_with_headers`, never stored on the
+    /// backend, so concurrent per-user requests stay isolated (IDP.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend is unavailable, the concurrency limit
+    /// is reached, or the request itself fails after retries.
+    pub async fn request_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+    ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
         // Check failsafe
@@ -770,7 +797,12 @@ impl Backend {
             let transport = Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
-            async move { transport.request(&method, params).await }
+            let extra_headers = extra_headers.to_vec();
+            async move {
+                transport
+                    .request_with_headers(&method, params, &extra_headers)
+                    .await
+            }
         })
         .await;
 

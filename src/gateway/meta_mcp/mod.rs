@@ -136,6 +136,12 @@ pub struct MetaMcp {
     pub(super) profile_registry: Arc<ProfileRegistry>,
     pub(super) session_profiles: Arc<SessionProfileStore>,
     pub(super) reload_context: RwLock<Option<Arc<ReloadContext>>>,
+    /// End-user identity-propagation strategy (MIK-6704 / ADR-007). `Some` when
+    /// at least one backend is configured for propagation; the dispatch path
+    /// uses it to mint a per-user credential for such backends. `None` disables
+    /// propagation entirely (all backends keep static-credential behavior).
+    pub(super) identity_propagation:
+        RwLock<Option<Arc<dyn crate::identity_propagation::IdentityPropagation>>>,
     pub(super) code_mode_enabled: bool,
     /// Canonical response-projection rollout mode (MIK-5877).
     ///
@@ -292,6 +298,7 @@ impl MetaMcp {
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
             reload_context: RwLock::new(None),
+            identity_propagation: RwLock::new(None),
             code_mode_enabled: false,
             projection_mode: crate::projection::ProjectionMode::default(),
             secret_injector: crate::secret_injection::SecretInjector::empty(),
@@ -507,6 +514,16 @@ impl MetaMcp {
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
         *self.reload_context.write() = Some(ctx);
+    }
+
+    /// Attach the end-user identity-propagation strategy (MIK-6704 / ADR-007).
+    /// When set, dispatch mints a per-user credential for backends configured
+    /// with `identity_propagation`.
+    pub fn set_identity_propagation(
+        &self,
+        strategy: Arc<dyn crate::identity_propagation::IdentityPropagation>,
+    ) {
+        *self.identity_propagation.write() = Some(strategy);
     }
 
     /// Attach a `TransitionTracker` for predictive tool prefetch.
@@ -920,6 +937,7 @@ impl MetaMcp {
                     caller.api_key_name,
                     caller.agent_id,
                     caller.grant_subject.clone(),
+                    caller.verified_identity,
                 )
                 .await;
             return match result {
@@ -938,7 +956,10 @@ impl MetaMcp {
 
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id).await,
-            "gateway_execute" => self.code_mode_execute(&arguments, session_id).await,
+            "gateway_execute" => {
+                self.code_mode_execute(&arguments, session_id, &caller)
+                    .await
+            }
             "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
@@ -949,6 +970,7 @@ impl MetaMcp {
                     caller.api_key_name,
                     caller.agent_id,
                     caller.grant_subject,
+                    caller.verified_identity,
                 )
                 .await
             }
