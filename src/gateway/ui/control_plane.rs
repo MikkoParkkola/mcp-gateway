@@ -1344,11 +1344,18 @@ mod role_wiring_tests {
     // format (issuer containing ':') now map to DISTINCT ids.
     #[test]
     fn actor_id_is_collision_safe() {
-        let a = identity("https://idp/a", &[]); // subject "s"
-        let mut b = identity("https://idp/a:1", &[]);
-        b.subject = "s".to_string();
-        // Naive format: both would render "oidc:https://idp/a:1:s" for some
-        // subject split; the length-prefixed form keeps them distinct.
+        // issuer "https://idp/a" + subject "b:c" vs issuer "https://idp/a:b" +
+        // subject "c" both render "oidc:https://idp/a:b:c" under the naive form.
+        let mut a = identity("https://idp/a", &[]);
+        a.subject = "b:c".to_string();
+        let mut b = identity("https://idp/a:b", &[]);
+        b.subject = "c".to_string();
+        // Precondition: the naive format genuinely collides for this pair.
+        assert_eq!(
+            format!("oidc:{}:{}", a.issuer, a.subject),
+            format!("oidc:{}:{}", b.issuer, b.subject),
+            "test is only meaningful if the naive format collides here"
+        );
         let id_a =
             actor_from_client(None, Some(&a), &ControlPlaneRoleMappingConfig::default()).actor_id;
         let id_b =
