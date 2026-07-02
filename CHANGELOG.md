@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.0.0] - 2026-07-02
+## [3.0.0] - UNRELEASED (held)
+
+> **Release held.** 3.0.0 is **not tagged or published**. A shared/multi-user
+> ("team") gateway serves a single stored OAuth token per backend to every
+> caller (see `src/oauth/storage.rs` — tokens are keyed by `(backend, resource)`,
+> not by user), so on a shared gateway one user's request to a personal OAuth
+> backend (Gmail, Superhuman, etc.) can be served with another user's login.
+> The v3.0.0 identity-propagation work is a separate, additive path that classic
+> `oauth:` backends do not use and does not fail-closed on that path. Per-user
+> OAuth isolation (or a fail-closed guard that refuses the unsafe multi-user
+> config) must land before 3.0.0 is cut. Tracking: see the release-blocker ticket.
 
 ### Added
 

@@ -1,6 +1,6 @@
 [package]
 name = "mcp-gateway"
-version = "3.0.0"
+version = "3.0.0-dev"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
