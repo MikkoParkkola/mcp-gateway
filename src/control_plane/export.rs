@@ -515,7 +515,6 @@ impl ExportSink for FileExportSink {
             buf.push('\n');
         }
 
-        let existed = self.path.exists();
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -540,15 +539,20 @@ impl ExportSink for FileExportSink {
         // Ok, so the sink write must be durable first to hold at-least-once
         // across a power loss (flush alone leaves an OS-buffer window).
         f.sync_all()?;
-        // On first creation, the file's directory entry must also be durable, or
-        // a crash could lose the newly-created sink file after the cursor
-        // advanced (MIK-6703 review #2). Unix-only (portable dir fsync); the
-        // parent exists because open() created it.
+        // Also fsync the parent directory so a first-create's directory entry is
+        // durable before the cursor advances (a crash could otherwise lose the
+        // newly-created sink file). Done unconditionally — no `existed` sample —
+        // to avoid a TOCTOU miss, and an empty parent (a bare relative path) is
+        // resolved to "." so the case is not skipped (MIK-6703 review #2). A dir
+        // fsync when nothing changed is a cheap no-op at the 15s poll cadence.
+        // Unix-only (portable directory fsync).
         #[cfg(unix)]
-        if !existed
-            && let Some(parent) = self.path.parent()
-            && !parent.as_os_str().is_empty()
         {
+            let parent = self
+                .path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
             std::fs::File::open(parent)?.sync_all()?;
         }
         Ok(())
