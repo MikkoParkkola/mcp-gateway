@@ -17,7 +17,7 @@
 
 **Give your AI access to every tool it needs, without burning your context window or building MCP servers.**
 
-MCP Gateway is a single Rust binary that sits between your AI client and all your tools. Connect unlimited MCP servers and REST APIs behind it, and your agent sees only a compact 14-16 tool surface, discovering the right tool on demand instead of loading hundreds of definitions into every request. You get around 89% less context overhead, no more choosing which tools fit the budget, and per-user identity, security, and cost controls built in.
+MCP Gateway is a single Rust binary that sits between your AI client and all your tools. Connect unlimited MCP servers and REST APIs behind it, and your agent sees only a compact Meta-MCP surface (14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced), discovering the right tool on demand instead of loading hundreds of definitions into every request. You get around 89% less context overhead, no more choosing which tools fit the budget, and per-user identity, security, and cost controls built in.
 
 ![demo](demo.gif)
 
