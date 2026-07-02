@@ -143,6 +143,16 @@ pub struct MetaMcp {
     pub(super) identity_propagation:
         RwLock<Option<Arc<dyn crate::identity_propagation::IdentityPropagation>>>,
     pub(super) code_mode_enabled: bool,
+    /// Whether this gateway serves more than one principal (ADR-008 INV-2).
+    ///
+    /// Set at startup to `auth.enabled && (api_keys > 1 || oidc configured)`.
+    /// When `true`, dispatch refuses a backend whose gateway-held OAuth token
+    /// is not per-user isolated and not blessed `shared_account`, preventing
+    /// one user's stored token from being served to another. `false` (a
+    /// single-user gateway) never triggers the guard — the sole caller owns
+    /// every token. `AtomicBool` because it is set after the `Arc<MetaMcp>` is
+    /// built, once the auth config is resolved.
+    pub(super) multi_user: std::sync::atomic::AtomicBool,
     /// Canonical response-projection rollout mode (MIK-5877).
     ///
     /// Defaults to [`ProjectionMode::Off`] so projection is dormant — a
@@ -300,6 +310,7 @@ impl MetaMcp {
             reload_context: RwLock::new(None),
             identity_propagation: RwLock::new(None),
             code_mode_enabled: false,
+            multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
             secret_injector: crate::secret_injection::SecretInjector::empty(),
             cost_tracker: Arc::new(CostTracker::new()),
@@ -524,6 +535,15 @@ impl MetaMcp {
         strategy: Arc<dyn crate::identity_propagation::IdentityPropagation>,
     ) {
         *self.identity_propagation.write() = Some(strategy);
+    }
+
+    /// Declare whether this gateway serves more than one principal (ADR-008
+    /// INV-2). Set once at startup from the resolved auth config. When `true`,
+    /// dispatch fails closed for a backend whose gateway-held OAuth token is
+    /// neither per-user isolated nor blessed `shared_account`.
+    pub fn set_multi_user(&self, multi_user: bool) {
+        self.multi_user
+            .store(multi_user, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Attach a `TransitionTracker` for predictive tool prefetch.

@@ -739,6 +739,17 @@ pub struct OAuthConfig {
     /// Seconds before expiry to proactively refresh the token (default: 300).
     #[serde(default = "default_token_refresh_buffer")]
     pub token_refresh_buffer_secs: u64,
+    /// Explicitly bless this gateway-held OAuth token for shared use across
+    /// every caller on a multi-user gateway (ADR-008 INV-2).
+    ///
+    /// Default `false` = fail-closed: a multi-user gateway refuses to serve one
+    /// stored token to different users, because the token is held per-backend
+    /// (not per-user) and would otherwise let user A act as user B. Set `true`
+    /// only for a genuinely shared service account (a team bot, a read-only
+    /// public API login); every such dispatch is logged. A single-user gateway
+    /// ignores this flag — the sole caller always owns the token.
+    #[serde(default)]
+    pub shared_account: bool,
 }
 
 fn default_token_refresh_buffer() -> u64 {

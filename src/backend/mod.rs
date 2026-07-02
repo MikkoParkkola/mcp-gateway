@@ -737,6 +737,22 @@ impl Backend {
         self.config.identity_propagation.as_ref()
     }
 
+    /// Whether this backend relies on a single gateway-held OAuth token that is
+    /// NOT blessed for shared use (ADR-008 INV-2).
+    ///
+    /// `true` means the gateway stores one token for this backend and would
+    /// attach it to any caller's request — unsafe on a multi-user gateway
+    /// unless a per-user credential is supplied instead. The dispatch guard
+    /// uses this to fail closed. `oauth.shared_account = true` opts out (the
+    /// operator has declared the account genuinely shared).
+    #[must_use]
+    pub fn oauth_requires_per_user_isolation(&self) -> bool {
+        self.config
+            .oauth
+            .as_ref()
+            .is_some_and(|o| o.enabled && !o.shared_account)
+    }
+
     /// Send a request, adding per-request outbound headers (e.g. a propagated
     /// end-user identity credential — MIK-6704). The headers are forwarded by
     /// value to the transport's `request_with_headers`, never stored on the
@@ -1590,6 +1606,46 @@ mod tests {
             backend.is_circuit_tripped(),
             "a failed probe must leave the breaker tripped"
         );
+    }
+
+    #[test]
+    fn oauth_requires_per_user_isolation_reflects_config() {
+        let mk = |oauth: Option<crate::config::OAuthConfig>| {
+            Backend::new(
+                "b",
+                BackendConfig {
+                    oauth,
+                    ..BackendConfig::default()
+                },
+                &crate::config::FailsafeConfig::default(),
+                Duration::from_secs(60),
+            )
+        };
+        let oauth = |enabled: bool, shared: bool| crate::config::OAuthConfig {
+            enabled,
+            scopes: vec![],
+            client_id: None,
+            client_secret: None,
+            callback_host: None,
+            callback_port: None,
+            callback_path: None,
+            token_refresh_buffer_secs: 300,
+            shared_account: shared,
+        };
+        // Enabled, gateway-held, not blessed shared → guard MUST fire.
+        assert!(
+            mk(Some(oauth(true, false))).oauth_requires_per_user_isolation(),
+            "enabled non-shared gateway-held OAuth must require per-user isolation"
+        );
+        // Operator blessed the account as shared → no isolation required.
+        assert!(
+            !mk(Some(oauth(true, true))).oauth_requires_per_user_isolation(),
+            "shared_account=true opts out of the isolation guard"
+        );
+        // OAuth disabled → nothing to isolate.
+        assert!(!mk(Some(oauth(false, false))).oauth_requires_per_user_isolation());
+        // No OAuth config → nothing to isolate.
+        assert!(!mk(None).oauth_requires_per_user_isolation());
     }
 
     #[test]

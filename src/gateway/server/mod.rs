@@ -902,6 +902,19 @@ impl Gateway {
             info!("End-user identity propagation enabled (signed-assertion strategy)");
         }
 
+        // ADR-008 INV-2: declare multi-user status so dispatch can fail closed
+        // on gateway-held OAuth tokens that are not per-user isolated. A gateway
+        // is multi-user when auth is on AND it fronts more than one principal —
+        // more than one API key, or any OIDC issuer (many end users).
+        let multi_user = auth_config.enabled
+            && (auth_config.api_keys.len() > 1 || !self.config.key_server.oidc.is_empty());
+        meta_mcp.set_multi_user(multi_user);
+        if multi_user {
+            info!(
+                "Multi-user gateway detected — per-user OAuth isolation guard active (ADR-008 INV-2)"
+            );
+        }
+
         // The transition tracker is only used when anomaly_detection=true; pass
         // a fresh tracker so the firewall has its own dedicated state.
         #[cfg(feature = "firewall")]
