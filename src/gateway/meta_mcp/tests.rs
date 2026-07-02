@@ -542,6 +542,7 @@ providers:
             Some("alice"),
             Some("agent-1"),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -642,6 +643,7 @@ providers:
             Some("shared-api-key"),
             Some("agent-1"),
             Some(subject),
+            None,
         )
         .await
         .unwrap();
@@ -688,6 +690,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
             Some("session-1"),
             Some("alice"),
             Some("agent-1"),
+            None,
             None,
         )
         .await

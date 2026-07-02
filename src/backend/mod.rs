@@ -728,6 +728,15 @@ impl Backend {
         self.request_with_headers(method, params, &[]).await
     }
 
+    /// This backend's end-user identity-propagation config, if configured
+    /// (MIK-6704 / ADR-007). `None` → static-credential behavior unchanged.
+    #[must_use]
+    pub fn identity_propagation_config(
+        &self,
+    ) -> Option<&crate::identity_propagation::IdentityPropagationConfig> {
+        self.config.identity_propagation.as_ref()
+    }
+
     /// Send a request, adding per-request outbound headers (e.g. a propagated
     /// end-user identity credential — MIK-6704). The headers are forwarded by
     /// value to the transport's `request_with_headers`, never stored on the

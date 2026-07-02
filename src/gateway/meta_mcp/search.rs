@@ -458,7 +458,7 @@ impl MetaMcp {
         });
 
         // agent_id is None: code-mode execution is an internal operation.
-        self.invoke_tool(&invoke_args, session_id, None, None, None)
+        self.invoke_tool(&invoke_args, session_id, None, None, None, None)
             .await
     }
 
@@ -498,7 +498,7 @@ impl MetaMcp {
             });
 
             match self
-                .invoke_tool(&invoke_args, session_id, None, None, None)
+                .invoke_tool(&invoke_args, session_id, None, None, None, None)
                 .await
             {
                 Ok(result) => results.push(json!({

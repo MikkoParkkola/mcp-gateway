@@ -880,7 +880,28 @@ impl Gateway {
             }
         });
 
-        // Construct security firewall (RFC-0071).
+        // Wire end-user identity propagation (MIK-6704 / ADR-007): when any
+        // backend opts into it, give MetaMcp a SignedAssertionStrategy signing
+        // with the gateway key pair. Config validation (slice 2a) already
+        // fail-closed-rejected unsupported strategies/session modes, so a
+        // configured backend here is a supported one. When no backend opts in,
+        // the strategy stays unset and every backend keeps static creds.
+        if self
+            .config
+            .backends
+            .values()
+            .any(|b| b.identity_propagation.is_some())
+        {
+            use crate::identity_propagation::SignedAssertionStrategy;
+            // 5-minute assertion lifetime (bounded further by the strategy's clamp).
+            let strategy = Arc::new(SignedAssertionStrategy::new(
+                Arc::clone(&gateway_key_pair),
+                300,
+            ));
+            meta_mcp.set_identity_propagation(strategy);
+            info!("End-user identity propagation enabled (signed-assertion strategy)");
+        }
+
         // The transition tracker is only used when anomaly_detection=true; pass
         // a fresh tracker so the firewall has its own dedicated state.
         #[cfg(feature = "firewall")]
