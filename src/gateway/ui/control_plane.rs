@@ -15,11 +15,11 @@ use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
 use super::errors::auth_required;
 use crate::control_plane::{
-    ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneAuthorization,
-    ControlPlaneDecisionQueue, ControlPlaneDecisionTargetKind, ControlPlaneDomainCoverage,
-    ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlaneHealth,
-    ControlPlaneLicenseTier, ControlPlaneMutation, ControlPlanePolicy, ControlPlaneRbac,
-    ControlPlaneReadOnlyView, ControlPlaneRole, ControlPlaneRoleMappingConfig,
+    AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
+    ControlPlaneAuthorization, ControlPlaneDecisionQueue, ControlPlaneDecisionTargetKind,
+    ControlPlaneDomainCoverage, ControlPlaneFeature, ControlPlaneGrant, ControlPlaneGrantStatus,
+    ControlPlaneHealth, ControlPlaneLicenseTier, ControlPlaneMutation, ControlPlanePolicy,
+    ControlPlaneRbac, ControlPlaneReadOnlyView, ControlPlaneRole, ControlPlaneRoleMappingConfig,
     ControlPlaneRollbackPlan, ControlPlaneRuntimeHealth, ControlPlaneServer,
     ControlPlaneServerStatus, ControlPlaneSnapshot, ControlPlaneStore, ControlPlaneTool,
     ControlPlaneTrustCard, ControlPlaneUser,
@@ -531,7 +531,63 @@ fn local_runtime_snapshot(
             .push(control_plane_grant_from_identity(grant, now));
     }
 
+    // Reflect the durable governance store (MIK-6701): persisted grants/policies
+    // are merged in (store rows win by id over the local projection), and the
+    // audit-events view is populated from the store. Read errors degrade to the
+    // local projection rather than breaking the whole snapshot (fail-soft read).
+    if let Some(store) = state.control_plane_store.as_ref() {
+        merge_store_into_snapshot(store.as_ref(), &mut snapshot);
+    }
+
     snapshot
+}
+
+/// Merge persisted control-plane store rows into a runtime snapshot: grants and
+/// policies upsert by id (store wins), and `audit_events` are taken from the
+/// store's tamper-evident log. A read error is logged and skipped.
+fn merge_store_into_snapshot(store: &dyn ControlPlaneStore, snapshot: &mut ControlPlaneSnapshot) {
+    match store.list_grants() {
+        Ok(grants) => {
+            for g in grants {
+                if let Some(existing) = snapshot
+                    .grants
+                    .iter_mut()
+                    .find(|x| x.grant_id == g.grant_id)
+                {
+                    *existing = g;
+                } else {
+                    snapshot.grants.push(g);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "control-plane store list_grants failed; using local projection");
+        }
+    }
+    match store.list_policies() {
+        Ok(policies) => {
+            for p in policies {
+                if let Some(existing) = snapshot
+                    .policies
+                    .iter_mut()
+                    .find(|x| x.policy_id == p.policy_id)
+                {
+                    *existing = p;
+                } else {
+                    snapshot.policies.push(p);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "control-plane store list_policies failed; using local projection");
+        }
+    }
+    match store.read_audit(&AuditFilter::new(200)) {
+        Ok(events) => snapshot.audit_events = events,
+        Err(e) => {
+            tracing::warn!(error = %e, "control-plane store read_audit failed; audit view left empty");
+        }
+    }
 }
 
 /// Project a local [`IdentityGrant`] into a read-only [`ControlPlaneGrant`].
@@ -1239,5 +1295,103 @@ mod role_wiring_tests {
         assert_eq!(actor.role, ControlPlaneRole::SecurityReviewer);
         assert!(ControlPlaneRbac::authorize(&actor, ControlPlaneAction::ReadEvidence).allowed);
         assert!(!ControlPlaneRbac::authorize(&actor, ControlPlaneAction::MutateGrant).allowed);
+    }
+}
+
+#[cfg(test)]
+mod read_reflect_tests {
+    use super::merge_store_into_snapshot;
+    use crate::control_plane::{
+        AuditFilter, ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneGrant,
+        ControlPlaneGrantStatus, ControlPlanePolicy, ControlPlaneRollbackPlan,
+        ControlPlaneSnapshot, ControlPlaneStore, InMemoryControlPlaneStore,
+    };
+
+    // MIK-6701.CP.READ.1/2 — persisted store rows are reflected in the snapshot:
+    // grants/policies upsert by id (store wins), audit_events come from the store.
+    #[test]
+    fn store_rows_reflected_and_upserted() {
+        let store = InMemoryControlPlaneStore::new();
+        store
+            .put_grant(ControlPlaneGrant {
+                grant_id: "g1".to_string(),
+                subject_id: "store-user".to_string(),
+                server_id: "srv".to_string(),
+                tool_id: None,
+                status: ControlPlaneGrantStatus::Approved,
+            })
+            .unwrap();
+        store
+            .put_policy(ControlPlanePolicy {
+                policy_id: "p1".to_string(),
+                name: "p".to_string(),
+                enforced: true,
+            })
+            .unwrap();
+        store
+            .append_audit(&ControlPlaneAuditEvent {
+                event_id: "e1".to_string(),
+                actor_id: "alice".to_string(),
+                action: ControlPlaneAction::MutateGrant,
+                target_id: "g1".to_string(),
+                reason: "MIK-1".to_string(),
+                rollback: ControlPlaneRollbackPlan {
+                    summary: "revert".to_string(),
+                    step: "restore".to_string(),
+                },
+            })
+            .unwrap();
+
+        // A snapshot that already has a LOCAL projection of g1 (different status).
+        let mut snapshot = ControlPlaneSnapshot::default();
+        snapshot.grants.push(ControlPlaneGrant {
+            grant_id: "g1".to_string(),
+            subject_id: "local-projection".to_string(),
+            server_id: "srv".to_string(),
+            tool_id: None,
+            status: ControlPlaneGrantStatus::Requested,
+        });
+
+        merge_store_into_snapshot(&store, &mut snapshot);
+
+        // Store row wins by id — no duplicate, status reflects the store.
+        assert_eq!(
+            snapshot
+                .grants
+                .iter()
+                .filter(|g| g.grant_id == "g1")
+                .count(),
+            1
+        );
+        let g = snapshot.grants.iter().find(|g| g.grant_id == "g1").unwrap();
+        assert_eq!(g.status, ControlPlaneGrantStatus::Approved);
+        assert_eq!(g.subject_id, "store-user");
+        // Policy + audit reflected.
+        assert!(
+            snapshot
+                .policies
+                .iter()
+                .any(|p| p.policy_id == "p1" && p.enforced)
+        );
+        assert_eq!(snapshot.audit_events.len(), 1);
+        assert_eq!(snapshot.audit_events[0].event_id, "e1");
+        // AuditFilter is exercised via read_audit inside the merge.
+        assert!(store.read_audit(&AuditFilter::new(10)).is_ok());
+    }
+
+    // A grant present only locally (not in the store) is preserved.
+    #[test]
+    fn local_only_grant_is_kept() {
+        let store: &dyn ControlPlaneStore = &InMemoryControlPlaneStore::new();
+        let mut snapshot = ControlPlaneSnapshot::default();
+        snapshot.grants.push(ControlPlaneGrant {
+            grant_id: "local-1".to_string(),
+            subject_id: "u".to_string(),
+            server_id: "s".to_string(),
+            tool_id: None,
+            status: ControlPlaneGrantStatus::Approved,
+        });
+        merge_store_into_snapshot(store, &mut snapshot);
+        assert!(snapshot.grants.iter().any(|g| g.grant_id == "local-1"));
     }
 }
