@@ -387,6 +387,34 @@ pub fn verify_log_signed(path: &Path, config: &TransparencyLogConfig) -> io::Res
     verify_log_inner(path, secret)
 }
 
+/// Return `true` if the log contains at least one signed entry (an entry
+/// carrying a `sig` field).
+///
+/// Used by `audit verify` to refuse a silent hash-only verification of a log
+/// that was written with signing enabled but is being checked without a secret
+/// — otherwise a stale-sig forgery would pass with exit 0 (MIK-6700 review).
+/// Scans until the first signed entry is found (early return); an empty or
+/// wholly-unsigned log returns `false`.
+///
+/// # Errors
+///
+/// Returns `io::Error` if the file cannot be read.
+pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
+    let content = std::fs::read_to_string(path)?;
+    for raw in content.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed)
+            && entry.get("sig").is_some()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Shared chain-verification core. When `secret` is `Some`, each entry's HMAC
 /// `sig` is additionally authenticated.
 fn verify_log_inner(path: &Path, secret: Option<&[u8]>) -> io::Result<VerifyResult> {
@@ -1082,6 +1110,31 @@ mod tests {
         assert!(
             !verify_log_signed(tmp.path(), &cfg).unwrap().ok,
             "stripped key_id must fail signed verify"
+        );
+    }
+
+    // MIK-6700 review #2 (residual): detect a signed log so `audit verify`
+    // refuses to hash-only-verify it without a secret.
+    #[test]
+    fn log_contains_signed_entry_detects_signed_and_unsigned() {
+        // Signed log.
+        let tmp_s = NamedTempFile::new().unwrap();
+        let logger = TransparencyLogger::open(cfg_with_sig(tmp_s.path())).unwrap();
+        write_entry(&logger, "sess", "1");
+        drop(logger);
+        assert!(
+            log_contains_signed_entry(tmp_s.path()).unwrap(),
+            "a signed log must be detected as signed"
+        );
+
+        // Unsigned log.
+        let tmp_u = NamedTempFile::new().unwrap();
+        let logger = TransparencyLogger::open(cfg_no_sig(tmp_u.path())).unwrap();
+        write_entry(&logger, "sess", "1");
+        drop(logger);
+        assert!(
+            !log_contains_signed_entry(tmp_u.path()).unwrap(),
+            "an unsigned log must not be detected as signed"
         );
     }
 

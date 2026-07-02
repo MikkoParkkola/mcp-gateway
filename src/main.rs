@@ -316,15 +316,34 @@ fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -
                     // Fail closed: a config we cannot load must NOT downgrade to
                     // hash-only and report success (MIK-6700 review finding #2).
                     eprintln!(
-                        "Error: could not load gateway config for signed verification: {e}. \
-                         Refusing to verify (a config load failure must not silently \
-                         downgrade to hash-only). Fix the config or pass --path to a log \
-                         you intend to verify hash-only via an explicit empty-secret config."
+                        "Error: could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
                     );
                     return ExitCode::FAILURE;
                 }
             };
             let signed = !log_config.shared_secret.is_empty();
+            // Fail closed on the root danger: a log that WAS signed, verified
+            // without a secret, would silently degrade to hash-only and pass a
+            // stale-sig forgery with exit 0 — regardless of why the secret is
+            // absent (no config discovered, wrong config, unset env).
+            // (MIK-6700 review finding #2, residual no-config path.)
+            if !signed {
+                match mcp_gateway::security::transparency_log::log_contains_signed_entry(&log_path)
+                {
+                    Ok(true) => {
+                        eprintln!(
+                            "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
+                            log_path.display()
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        eprintln!("Error reading log: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
             match verify_log_signed(&log_path, &log_config) {
                 Err(e) => {
                     eprintln!("Error reading log: {e}");
