@@ -465,9 +465,14 @@ impl Default for ExportConfig {
 /// Core NDJSON [`ExportSink`]: appends each forwarded entry as one JSON line to
 /// a local file the SIEM agent tails. Fully synchronous (no async bridging), so
 /// it composes with the sync [`LogExporter::poll`] contract. Delivery is the
-/// ack: the file write must succeed before the cursor advances.
+/// ack: the file write must succeed (and be fsynced) before the cursor advances.
 pub struct FileExportSink {
     path: PathBuf,
+    /// Fail-closed latch (MIK-6703 review). Set `false` if a partial write can
+    /// NOT be rolled back, so the torn-prefix stream integrity can no longer be
+    /// guaranteed; all subsequent deliveries then refuse (export halts, cursor
+    /// never advances) rather than risk appending after a torn prefix.
+    healthy: std::sync::atomic::AtomicBool,
 }
 
 impl FileExportSink {
@@ -481,13 +486,27 @@ impl FileExportSink {
         {
             std::fs::create_dir_all(parent)?;
         }
-        Ok(Self { path })
+        Ok(Self {
+            path,
+            healthy: std::sync::atomic::AtomicBool::new(true),
+        })
     }
 }
 
 impl ExportSink for FileExportSink {
     fn deliver(&self, entries: &[ExportEntry]) -> Result<(), ExportError> {
         use std::io::Write;
+        use std::sync::atomic::Ordering::{Acquire, Release};
+
+        // Fail closed: once integrity can no longer be guaranteed (a partial
+        // write that could not be rolled back), refuse all further deliveries so
+        // the cursor never advances over a torn stream (MIK-6703 review #1).
+        if !self.healthy.load(Acquire) {
+            return Err(ExportError::SinkRejected(
+                "export sink halted after an unrecoverable partial write".to_string(),
+            ));
+        }
+
         let mut buf = String::new();
         for e in entries {
             let line = serde_json::to_string(e)
@@ -495,27 +514,43 @@ impl ExportSink for FileExportSink {
             buf.push_str(&line);
             buf.push('\n');
         }
+
+        let existed = self.path.exists();
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
-        // All-or-nothing append (MIK-6703 review): record the pre-write length so
-        // a PARTIAL write_all (prefix written, then error) can be rolled back.
-        // Otherwise the torn prefix would stay and a later retry would append the
-        // full batch after it, corrupting the NDJSON stream while the retry's
-        // success advances the cursor — silently "delivering" an unparseable line.
+        // All-or-nothing append: record the pre-write length so a PARTIAL
+        // write_all (prefix written, then error) can be rolled back. Otherwise
+        // the torn prefix stays and a later retry appends the full batch after
+        // it, corrupting the stream while the retry's success advances the
+        // cursor — silently "delivering" an unparseable line.
         let start_len = f.metadata()?.len();
         if let Err(e) = f.write_all(buf.as_bytes()) {
-            // Roll the file back to its pre-batch length; the cursor did not
-            // advance, so the whole batch is re-sent cleanly next poll.
-            let _ = f.set_len(start_len);
-            let _ = f.sync_all();
+            // Roll back to pre-batch length. If the rollback itself fails we can
+            // NOT guarantee the stream is clean, so latch unhealthy (fail-closed)
+            // — subsequent deliveries refuse rather than append after a torn
+            // prefix (MIK-6703 review #1).
+            if f.set_len(start_len).and_then(|()| f.sync_all()).is_err() {
+                self.healthy.store(false, Release);
+            }
             return Err(e.into());
         }
         // fsync before the ack: the cursor advances only after deliver returns
         // Ok, so the sink write must be durable first to hold at-least-once
         // across a power loss (flush alone leaves an OS-buffer window).
         f.sync_all()?;
+        // On first creation, the file's directory entry must also be durable, or
+        // a crash could lose the newly-created sink file after the cursor
+        // advanced (MIK-6703 review #2). Unix-only (portable dir fsync); the
+        // parent exists because open() created it.
+        #[cfg(unix)]
+        if !existed
+            && let Some(parent) = self.path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
         Ok(())
     }
 }
@@ -879,6 +914,46 @@ mod tests {
     #[test]
     fn export_config_is_opt_in() {
         assert!(!ExportConfig::default().enabled);
+    }
+
+    // MIK-6703 review #1 — fail-closed latch: once the sink is unhealthy (a
+    // partial write it could not roll back), every subsequent deliver refuses,
+    // so the cursor can never advance over a torn stream.
+    #[test]
+    fn unhealthy_sink_refuses_delivery() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = FileExportSink::open(dir.path().join("siem.ndjson")).unwrap();
+        // Healthy: an empty deliver succeeds.
+        assert!(sink.deliver(&[]).is_ok());
+        // Latch unhealthy (simulating an unrecoverable partial write).
+        sink.healthy
+            .store(false, std::sync::atomic::Ordering::Release);
+        let err = sink.deliver(&[]).unwrap_err();
+        assert!(
+            matches!(err, ExportError::SinkRejected(_)),
+            "an unhealthy sink must refuse (fail-closed), got {err:?}"
+        );
+    }
+
+    // MIK-6703 review #2 — first-create durability: delivering to a fresh path
+    // creates the sink file with the content (the dir-fsync path runs).
+    #[test]
+    fn file_sink_first_create_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink_path = dir.path().join("nested/siem.ndjson");
+        let sink = FileExportSink::open(sink_path.clone()).unwrap();
+        assert!(!sink_path.exists(), "file not created until first deliver");
+        let entry = ExportEntry {
+            source: ExportSource::Invocation,
+            counter: 1,
+            entry_hash: "sha256:aa".to_string(),
+            prev_entry_hash: "genesis".to_string(),
+            checkpoint: "genesis".to_string(),
+            raw: serde_json::json!({ "k": "v" }),
+        };
+        sink.deliver(std::slice::from_ref(&entry)).unwrap();
+        let contents = std::fs::read_to_string(&sink_path).unwrap();
+        assert_eq!(contents.lines().filter(|l| !l.is_empty()).count(), 1);
     }
 
     // MIK-6703 review — deliver is all-or-nothing + durable: repeated batches
