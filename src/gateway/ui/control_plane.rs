@@ -770,7 +770,7 @@ impl ControlPlaneApiResponse {
                 mutation_endpoint: mutation_enabled,
                 mutating_actions_require_audit: true,
             },
-            features: feature_entitlements(),
+            features: feature_entitlements(mutation_enabled),
             authorizations: ControlPlaneAuthorizationSet::for_actor(&actor),
             coverage,
             coverage_complete: coverage.is_complete(),
@@ -869,7 +869,14 @@ struct ControlPlaneFeatureEntitlement {
     available_in_this_route: bool,
 }
 
-fn feature_entitlements() -> Vec<ControlPlaneFeatureEntitlement> {
+/// Report which control-plane features are usable on the current route.
+///
+/// `LocalStatus` is always available (read surface); `GovernanceMutation` is
+/// available when the mutation endpoint is active (CP.READ.3 — the entitlement
+/// must track `route.mutation_endpoint`, not report read-only unconditionally).
+/// `FleetInventory` and `EvidenceExport` are enterprise features not served by
+/// this local route.
+fn feature_entitlements(mutation_enabled: bool) -> Vec<ControlPlaneFeatureEntitlement> {
     [
         ControlPlaneFeature::LocalStatus,
         ControlPlaneFeature::FleetInventory,
@@ -880,7 +887,11 @@ fn feature_entitlements() -> Vec<ControlPlaneFeatureEntitlement> {
     .map(|feature| ControlPlaneFeatureEntitlement {
         feature,
         license_tier: feature.license_tier(),
-        available_in_this_route: feature == ControlPlaneFeature::LocalStatus,
+        available_in_this_route: match feature {
+            ControlPlaneFeature::LocalStatus => true,
+            ControlPlaneFeature::GovernanceMutation => mutation_enabled,
+            ControlPlaneFeature::FleetInventory | ControlPlaneFeature::EvidenceExport => false,
+        },
     })
     .collect()
 }
@@ -1472,11 +1483,11 @@ mod read_reflect_tests {
         assert!(snapshot.grants.iter().any(|g| g.grant_id == "local-1"));
     }
 
-    // MIK-6701.CP.READ.3 — the store's approved grant + enforced policy are
-    // exposed as ROWS in the read-only view (not just as a count). This is the
-    // API contract the direct-helper test above cannot see: before the fix the
-    // view had no grants/policies fields, so a persisted approved grant/enforced
-    // policy was invisible on GET except in derived counts.
+    // MIK-6701.CP.READ.1 (API contract) — the store's approved grant + enforced
+    // policy are exposed as ROWS in the read-only view (not just as a count).
+    // This is the API contract the direct-helper test above cannot see: before
+    // the fix the view had no grants/policies fields, so a persisted approved
+    // grant/enforced policy was invisible on GET except in derived counts.
     #[test]
     fn read_only_view_exposes_store_grants_and_policies_as_rows() {
         let store = InMemoryControlPlaneStore::new();
@@ -1521,12 +1532,49 @@ mod read_reflect_tests {
         assert_eq!(json["policies"][0]["policy_id"], "p-enforced");
     }
 
-    // MIK-6701.CP.READ.4 — a store read failure sets the degraded flag so an
-    // empty/stale view is not mistaken for an authoritative empty result.
+    // MIK-6701.CP.READ.2 (failure mode) — a store read failure sets the degraded
+    // flag so an empty/stale view is not mistaken for an authoritative empty
+    // result.
     #[test]
     fn store_read_failure_marks_degraded() {
         let mut snapshot = ControlPlaneSnapshot::default();
         let degraded = merge_store_into_snapshot(&FailingStore, &mut snapshot);
         assert!(degraded, "a failing store read must report degraded");
+    }
+
+    // MIK-6701.CP.READ.3 — feature entitlements report GovernanceMutation as
+    // available exactly when the mutation endpoint is active, instead of always
+    // reporting only LocalStatus.
+    #[test]
+    fn governance_mutation_entitlement_tracks_mutation_route() {
+        use super::feature_entitlements;
+        use crate::control_plane::ControlPlaneFeature;
+
+        let read_only = feature_entitlements(false);
+        let gov = read_only
+            .iter()
+            .find(|e| e.feature == ControlPlaneFeature::GovernanceMutation)
+            .expect("GovernanceMutation entitlement present");
+        assert!(
+            !gov.available_in_this_route,
+            "GovernanceMutation must be unavailable on a read-only route"
+        );
+
+        let mutating = feature_entitlements(true);
+        let gov = mutating
+            .iter()
+            .find(|e| e.feature == ControlPlaneFeature::GovernanceMutation)
+            .expect("GovernanceMutation entitlement present");
+        assert!(
+            gov.available_in_this_route,
+            "GovernanceMutation must be available when the mutation endpoint is active"
+        );
+        // LocalStatus stays available on both routes.
+        assert!(
+            mutating
+                .iter()
+                .any(|e| e.feature == ControlPlaneFeature::LocalStatus
+                    && e.available_in_this_route)
+        );
     }
 }
