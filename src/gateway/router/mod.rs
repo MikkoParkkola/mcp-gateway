@@ -15,7 +15,7 @@ use super::proxy::ProxyManager;
 use super::streaming::NotificationMultiplexer;
 use crate::backend::BackendRegistry;
 use crate::config::{AgentIdentityConfig, StreamingConfig};
-use crate::control_plane::{ControlPlaneRoleMappingConfig, ControlPlaneStore};
+use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
 use crate::security::ToolPolicy;
@@ -84,9 +84,12 @@ pub struct AppState {
     /// `None` when the control-plane data directory could not be opened, in
     /// which case governance mutation routes return 503 (MIK-6686).
     pub control_plane_store: Option<Arc<dyn ControlPlaneStore>>,
-    /// Identity-to-role mapping for the control-plane governance surface
-    /// (MIK-6688). Empty by default (legacy admin-key projection applies).
-    pub control_plane_role_mapping: Arc<ControlPlaneRoleMappingConfig>,
+    /// Live gateway configuration (hot-reloadable). The control-plane RBAC role
+    /// mapping is read through this so a `/reload` that changes
+    /// `control_plane.role_mapping` takes effect without a restart — e.g. a
+    /// removed admin rule stops granting Admin (MIK-6702 CP.RELOAD.1). The
+    /// config-reload loop swaps the inner `Arc<Config>` on every applied reload.
+    pub live_config: Arc<crate::config_reload::LiveConfig>,
 }
 
 /// Create the router.

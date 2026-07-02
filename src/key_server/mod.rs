@@ -161,7 +161,10 @@ impl KeyServer {
 }
 
 fn oidc_client_identity_key(identity: &VerifiedIdentity) -> String {
-    format!("oidc:{}:{}", identity.issuer, identity.subject)
+    // Collision-safe (length-prefixed) — see VerifiedIdentity::stable_actor_id
+    // (MIK-6702 CP.ID.1). Kept identical to the control-plane actor_id so a user
+    // maps to one stable identity across both surfaces.
+    identity.stable_actor_id()
 }
 
 #[cfg(test)]
@@ -194,7 +197,9 @@ mod tests {
 
         assert_eq!(
             oidc_client_identity_key(&first),
-            "oidc:https://issuer-a.example:same-subject"
+            // Length-prefixed, collision-safe (MIK-6702 CP.ID.1):
+            // issuer "https://issuer-a.example" len 24, subject "same-subject" len 12.
+            "oidc:24:https://issuer-a.example:12:same-subject"
         );
         assert_ne!(
             oidc_client_identity_key(&first),
@@ -202,7 +207,8 @@ mod tests {
         );
         assert_eq!(
             oidc_client_identity_key(&missing_email),
-            "oidc:https://issuer-a.example:subject-without-email"
+            // issuer len 24, subject "subject-without-email" len 21.
+            "oidc:24:https://issuer-a.example:21:subject-without-email"
         );
     }
 }

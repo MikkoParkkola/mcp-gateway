@@ -30,11 +30,11 @@ pub struct ControlPlaneConfig {
 
 /// Ordered, first-match-wins identity-to-role rules.
 ///
-/// NOTE: changes to the mapping are applied at gateway startup; they are not
-/// hot-reloaded today. To revoke a role (e.g. remove a `role: admin` rule),
-/// restart the gateway — a `/reload` does not yet re-apply this section
-/// (tracked as a follow-up). The mapping is still validated fail-closed on
-/// every load/reload, so an invalid change is always rejected.
+/// Hot-reloadable (MIK-6702): a `/reload` that changes this section takes effect
+/// without a restart — the control-plane handlers read the mapping through the
+/// live config per request, so removing a `role: admin` rule revokes Admin on
+/// the next request. The mapping is validated fail-closed on every load/reload,
+/// so an invalid change is always rejected.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlPlaneRoleMappingConfig {

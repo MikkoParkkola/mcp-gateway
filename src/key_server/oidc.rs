@@ -117,6 +117,28 @@ pub struct VerifiedIdentity {
     pub issuer: String,
 }
 
+impl VerifiedIdentity {
+    /// Stable, collision-safe actor identifier derived from `issuer` + `subject`.
+    ///
+    /// A naive `format!("oidc:{issuer}:{subject}")` collides when an issuer
+    /// contains `:` — e.g. issuer `https://idp/a` + subject `b:c` vs issuer
+    /// `https://idp/a:b` + subject `c` both render `oidc:https://idp/a:b:c`
+    /// (MIK-6702 CP.ID.1). Length-prefixing each component makes the boundary
+    /// unambiguous, so distinct (issuer, subject) pairs always map to distinct
+    /// ids. Not a role-escalation path (roles come from the verified identity,
+    /// not the id), but it prevents audit / user-identity row collisions.
+    #[must_use]
+    pub fn stable_actor_id(&self) -> String {
+        format!(
+            "oidc:{}:{}:{}:{}",
+            self.issuer.len(),
+            self.issuer,
+            self.subject.len(),
+            self.subject
+        )
+    }
+}
+
 /// Raw claims extracted from an OIDC ID token.
 #[derive(Debug, Deserialize)]
 struct IdTokenClaims {
@@ -669,5 +691,33 @@ mod tests {
         // THEN: contains expected fields
         assert!(json.contains("alice@company.com"));
         assert!(json.contains("ml-engineers"));
+    }
+
+    // MIK-6702.CP.ID.1 — stable_actor_id is collision-safe when an issuer
+    // contains ':' (the naive "oidc:{issuer}:{subject}" form would collide).
+    #[test]
+    fn stable_actor_id_is_collision_safe() {
+        let a = VerifiedIdentity {
+            subject: "b:c".to_string(),
+            email: "x@y".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://idp/a".to_string(),
+        };
+        let b = VerifiedIdentity {
+            subject: "c".to_string(),
+            email: "x@y".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://idp/a:b".to_string(),
+        };
+        // Naive format collides: "oidc:https://idp/a:b:c" for both.
+        assert_eq!(
+            format!("oidc:{}:{}", a.issuer, a.subject),
+            format!("oidc:{}:{}", b.issuer, b.subject),
+            "precondition: the naive format collides for these inputs"
+        );
+        // Length-prefixed form keeps them distinct.
+        assert_ne!(a.stable_actor_id(), b.stable_actor_id());
     }
 }

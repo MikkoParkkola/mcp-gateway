@@ -65,9 +65,9 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_role_mapping: std::sync::Arc::new(
-            crate::control_plane::ControlPlaneRoleMappingConfig::default(),
-        ),
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     })
 }
 
@@ -111,9 +111,9 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_role_mapping: std::sync::Arc::new(
-            crate::control_plane::ControlPlaneRoleMappingConfig::default(),
-        ),
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     })
 }
 
@@ -153,9 +153,9 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_role_mapping: std::sync::Arc::new(
-            crate::control_plane::ControlPlaneRoleMappingConfig::default(),
-        ),
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     })
 }
 
@@ -204,9 +204,9 @@ fn test_router_app_state_with_ssrf(
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_role_mapping: std::sync::Arc::new(
-            crate::control_plane::ControlPlaneRoleMappingConfig::default(),
-        ),
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     })
 }
 
@@ -263,9 +263,9 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_role_mapping: std::sync::Arc::new(
-            crate::control_plane::ControlPlaneRoleMappingConfig::default(),
-        ),
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
     })
 }
 

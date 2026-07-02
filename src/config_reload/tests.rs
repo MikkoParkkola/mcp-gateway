@@ -712,3 +712,35 @@ fn diff_same_backend_maps_in_different_order_is_not_modified() {
         patch.summary()
     );
 }
+
+// MIK-6702.CP.RELOAD.2 — a control_plane.role_mapping-only change is detected
+// (non-empty patch), so a mapping edit triggers the reload path instead of
+// being silently ignored until restart.
+#[test]
+fn control_plane_role_mapping_change_is_detected() {
+    use crate::control_plane::{
+        ControlPlaneRole, ControlPlaneRoleMappingConfig, ControlPlaneRoleRule,
+    };
+
+    let old = Config::default();
+    let mut new = Config::default();
+    new.control_plane.role_mapping = ControlPlaneRoleMappingConfig {
+        rules: vec![ControlPlaneRoleRule {
+            issuer: "https://idp".to_string(),
+            group: Some("admins".to_string()),
+            email: None,
+            domain: None,
+            role: ControlPlaneRole::Admin,
+        }],
+    };
+
+    let patch = compute_diff(&old, &new);
+    assert!(
+        !patch.is_empty(),
+        "a control_plane.role_mapping change must be detected as a reloadable diff"
+    );
+    assert!(
+        patch.profiles_changed,
+        "control_plane change should set profiles_changed"
+    );
+}

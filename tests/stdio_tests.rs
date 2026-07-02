@@ -110,9 +110,9 @@ async fn test_stdio_initialize_produces_valid_response() {
         firewall: None,
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        control_plane_role_mapping: std::sync::Arc::new(
-            mcp_gateway::control_plane::ControlPlaneRoleMappingConfig::default(),
-        ),
+        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
+            mcp_gateway::config::Config::default(),
+        )),
     });
 
     // Call handle_initialize directly — this is what dispatch_single calls
