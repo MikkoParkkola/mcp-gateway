@@ -13,9 +13,17 @@
 //!   `max_batch` entries, so memory stays bounded regardless of backlog.
 //! - **Hash-verified.** Each entry's chain link (`prev_entry_hash`) and its
 //!   recomputed `entry_hash` are checked before forwarding; a failed check
-//!   halts export and never forwards the entry.
-//! - **Rotation-safe.** A file shorter than the cursor offset is treated as a
-//!   rotation/truncation and re-anchored from the start.
+//!   halts export and never forwards the entry. Note: like `verify_log`, this
+//!   does NOT authenticate the per-entry HMAC, so a full-file replacement with a
+//!   self-consistent forged chain would pass — closing that needs signed
+//!   checkpoints / HMAC verification (tracked in MIK-6700). A re-anchor is
+//!   surfaced (`PollOutcome::reanchored`) so it can be alerted on.
+//! - **Rotation-safe (in-place).** The cursor anchors on the last forwarded
+//!   `entry_hash`; a truncated/rewritten-in-place file whose anchor is gone is
+//!   re-anchored from the start. Rename-style external logrotate that strands an
+//!   unexported tail in an archive file is NOT drained (the gateway owns this
+//!   append-only log and should not be externally rotated); archive draining is
+//!   a follow-up.
 
 use std::path::{Path, PathBuf};
 
@@ -190,55 +198,93 @@ impl LogExporter {
     ///   entries re-sent next poll — at-least-once).
     /// - [`ExportError::Io`] on read/persist failure.
     pub fn poll(&mut self, sink: &dyn ExportSink) -> Result<PollOutcome, ExportError> {
-        let content = match std::fs::read(&self.log_path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e.into()),
-        };
-
-        // ponytail: parse the whole file each poll (O(file) CPU), which matches
-        // what verify_log already costs; add a byte-offset fast-path if the log
-        // grows hot. Memory stays bounded: we forward at most `max_batch`.
-        let mut parsed: Vec<serde_json::Value> = Vec::new();
-        for raw in content.split(|&b| b == b'\n') {
-            if raw.iter().all(u8::is_ascii_whitespace) {
-                continue; // blank / trailing
-            }
-            let entry: serde_json::Value = serde_json::from_slice(raw)
-                .map_err(|e| ExportError::Corrupt(format!("{}: {e}", self.log_path.display())))?;
-            parsed.push(entry);
+        // Scan anchored at the current cursor. If the anchor hash is absent
+        // (rotation/truncation removed it), re-anchor and scan from the start.
+        let mut reanchored = false;
+        let mut scan = self.scan(&self.cursor.last_entry_hash)?;
+        if !scan.anchor_found && self.cursor.last_entry_hash != "genesis" {
+            reanchored = true;
+            scan = self.scan("genesis")?;
         }
 
-        // Resume after the anchor. If the anchor hash is absent (rotation /
-        // truncation removed it), re-anchor from the start of the current file.
-        let mut reanchored = false;
-        let start = if self.cursor.last_entry_hash == "genesis" {
-            0
-        } else if let Some(i) = parsed.iter().position(|e| {
-            e.get("entry_hash").and_then(|v| v.as_str()) == Some(&self.cursor.last_entry_hash)
-        }) {
-            i + 1
-        } else {
-            // Anchor hash gone (rotation / truncation): re-anchor from the start.
-            reanchored = true;
-            0
-        };
+        if scan.batch.is_empty() {
+            return Ok(PollOutcome {
+                forwarded: 0,
+                lag_entries: scan.lag,
+                reanchored,
+            });
+        }
 
-        // Chain anchor to verify the first forwarded entry against.
-        let mut running_prev = if reanchored || start == 0 {
-            "genesis".to_string()
-        } else {
-            self.cursor.last_entry_hash.clone()
+        // Deliver, then persist the NEW cursor, then adopt it in memory. Only an
+        // ack advances the cursor (at-least-once); and durable state is written
+        // before in-memory state so a persist failure re-sends rather than skips.
+        sink.deliver(&scan.batch)
+            .map_err(|e| ExportError::SinkRejected(e.to_string()))?;
+        let next = ExportCursor {
+            last_entry_hash: scan.last_hash,
+            last_counter: scan.last_counter,
         };
-        let checkpoint = running_prev.clone();
+        self.persist_cursor(&next)?;
+        let forwarded = scan.batch.len();
+        self.cursor = next;
 
-        let mut batch: Vec<ExportEntry> = Vec::new();
-        let mut last_counter = self.cursor.last_counter;
-        let new_entries = &parsed[start.min(parsed.len())..];
-        for entry in new_entries {
-            if batch.len() >= self.max_batch {
-                break;
+        Ok(PollOutcome {
+            forwarded,
+            lag_entries: scan.lag,
+            reanchored,
+        })
+    }
+
+    /// Stream the log from the start, skip to `anchor` (or forward from the
+    /// first entry when `anchor == "genesis"`), verify + collect up to
+    /// `max_batch` entries, and count the remaining backlog as `lag`.
+    ///
+    /// Memory is bounded to one line plus the batch: entries beyond `max_batch`
+    /// are counted, not buffered, and a partial trailing line (no newline yet)
+    /// is left for a later poll rather than parsed.
+    fn scan(&self, anchor: &str) -> Result<Scan, ExportError> {
+        use std::io::{BufRead, BufReader};
+
+        let mut scan = Scan {
+            batch: Vec::new(),
+            last_hash: anchor.to_string(),
+            last_counter: self.cursor.last_counter,
+            lag: 0,
+            anchor_found: anchor == "genesis",
+        };
+        let file = match std::fs::File::open(&self.log_path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(scan),
+            Err(e) => return Err(e.into()),
+        };
+        let mut reader = BufReader::new(file);
+        let mut passed = anchor == "genesis";
+        let mut running_prev = "genesis".to_string();
+        let checkpoint = anchor.to_string();
+        let mut buf: Vec<u8> = Vec::new();
+
+        loop {
+            buf.clear();
+            let n = reader.read_until(b'\n', &mut buf)?;
+            if n == 0 {
+                break; // EOF
             }
+            if buf.last() != Some(&b'\n') {
+                break; // partial trailing line (racing a writer) — leave for next poll
+            }
+            let raw = &buf[..buf.len() - 1];
+            if raw.iter().all(u8::is_ascii_whitespace) {
+                continue; // blank line
+            }
+
+            // Backlog past the batch cap: count it, don't parse/buffer (bounded).
+            if passed && scan.batch.len() >= self.max_batch {
+                scan.lag += 1;
+                continue;
+            }
+
+            let entry: serde_json::Value = serde_json::from_slice(raw)
+                .map_err(|e| ExportError::Corrupt(format!("{}: {e}", self.log_path.display())))?;
             let stored_hash = entry
                 .get("entry_hash")
                 .and_then(|v| v.as_str())
@@ -246,6 +292,17 @@ impl LogExporter {
                     ExportError::VerificationFailed("entry missing entry_hash".to_string())
                 })?
                 .to_string();
+
+            if !passed {
+                // Skipping to the anchor entry; forward everything after it.
+                if stored_hash == anchor {
+                    passed = true;
+                    scan.anchor_found = true;
+                    running_prev = anchor.to_string();
+                }
+                continue;
+            }
+
             let prev = entry
                 .get("prev_entry_hash")
                 .and_then(|v| v.as_str())
@@ -256,7 +313,7 @@ impl LogExporter {
                     "chain break: prev_entry_hash {prev} != expected {running_prev}"
                 )));
             }
-            let recomputed = recompute_entry_hash(entry).map_err(ExportError::Io)?;
+            let recomputed = recompute_entry_hash(&entry).map_err(ExportError::Io)?;
             if recomputed != stored_hash {
                 return Err(ExportError::VerificationFailed(format!(
                     "tampered entry: recomputed {recomputed} != stored {stored_hash}"
@@ -266,52 +323,42 @@ impl LogExporter {
                 .get("counter")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
-            batch.push(ExportEntry {
+            scan.batch.push(ExportEntry {
                 source: self.source,
                 counter,
                 entry_hash: stored_hash.clone(),
                 prev_entry_hash: prev,
                 checkpoint: checkpoint.clone(),
-                raw: entry.clone(),
+                raw: entry,
             });
             running_prev = stored_hash;
-            last_counter = counter;
+            scan.last_counter = counter;
         }
 
-        let lag_entries = new_entries.len().saturating_sub(batch.len());
-
-        if batch.is_empty() {
-            return Ok(PollOutcome {
-                forwarded: 0,
-                lag_entries,
-                reanchored,
-            });
-        }
-
-        // Deliver, then advance + persist the cursor ONLY on ack (at-least-once).
-        sink.deliver(&batch)
-            .map_err(|e| ExportError::SinkRejected(e.to_string()))?;
-
-        self.cursor.last_entry_hash = running_prev;
-        self.cursor.last_counter = last_counter;
-        self.persist_cursor()?;
-
-        Ok(PollOutcome {
-            forwarded: batch.len(),
-            lag_entries,
-            reanchored,
-        })
+        scan.last_hash = running_prev;
+        Ok(scan)
     }
 
-    /// Atomically persist the cursor (temp write → rename).
-    fn persist_cursor(&self) -> Result<(), ExportError> {
-        let bytes = serde_json::to_vec_pretty(&self.cursor)
-            .map_err(|e| ExportError::Corrupt(e.to_string()))?;
+    /// Atomically persist a cursor (temp write → rename). Persisting the NEW
+    /// cursor before adopting it in memory keeps durable state at-or-behind
+    /// runtime state, so a persist failure re-sends rather than skips.
+    fn persist_cursor(&self, cursor: &ExportCursor) -> Result<(), ExportError> {
+        let bytes =
+            serde_json::to_vec_pretty(cursor).map_err(|e| ExportError::Corrupt(e.to_string()))?;
         let tmp = self.cursor_path.with_extension("json.tmp");
         std::fs::write(&tmp, &bytes)?;
         std::fs::rename(&tmp, &self.cursor_path)?;
         Ok(())
     }
+}
+
+/// Internal per-poll scan result.
+struct Scan {
+    batch: Vec<ExportEntry>,
+    last_hash: String,
+    last_counter: u64,
+    lag: usize,
+    anchor_found: bool,
 }
 
 /// Best-effort in-memory sink that collects delivered entries (core/testing).
