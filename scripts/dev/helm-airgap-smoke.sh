@@ -43,8 +43,8 @@ syft "registry:$SRC_IMG" -o spdx-json > sbom.spdx.json
 [ -s sbom.spdx.json ] || { echo "FAIL: SBOM empty" >&2; exit 1; }
 
 "$COSIGN" sign "${SIGN[@]}" "$SRC_IMG"
-"$COSIGN" attest --yes --key cosign.key --predicate sbom.spdx.json --type spdxjson \
-  --allow-insecure-registry "$SRC_IMG"
+"$COSIGN" attest --yes --key cosign.key --tlog-upload=false --predicate sbom.spdx.json \
+  --type spdxjson --allow-insecure-registry "$SRC_IMG"
 
 # ── Package + push + sign the chart on the SOURCE registry ─────────────────────
 "$HELM" package "$CHART" -d "$work" >/dev/null
@@ -62,11 +62,12 @@ echo "== cosign save image + chart to an offline bundle =="
 [ -d bundle/image ] && [ -d bundle/chart ] || { echo "FAIL: offline bundle not created" >&2; exit 1; }
 
 # ── IMPORT into the AIR-GAPPED registry (only the bundle crosses the gap) ───────
+# `cosign load` takes the destination image ref as a positional arg (no
+# --registry flag); the manifest digest is preserved, so the saved signature +
+# attestation round-trip to the air-gapped registry.
 echo "== cosign load into the air-gapped registry =="
-"$COSIGN" load --dir bundle/image --registry "$AIR" --allow-insecure-registry >/dev/null 2>&1 \
-  || "$COSIGN" load --dir bundle/image --registry "$AIR" >/dev/null
-"$COSIGN" load --dir bundle/chart --registry "$AIR" --allow-insecure-registry >/dev/null 2>&1 \
-  || "$COSIGN" load --dir bundle/chart --registry "$AIR" >/dev/null
+"$COSIGN" load --dir bundle/image --allow-insecure-registry "$AIR/mcp-gateway-airgap:v1"
+"$COSIGN" load --dir bundle/chart --allow-insecure-registry "$AIR/charts/mcp-gateway:$ver"
 
 AIR_IMG="$AIR/mcp-gateway-airgap@$IMG_DIGEST"
 AIR_CHART="$AIR/charts/mcp-gateway@$CHART_DIGEST"
@@ -92,10 +93,18 @@ mkdir -p pulled
   | tee rendered.yaml | grep -q '^kind: Deployment' \
   || { echo "FAIL: air-gapped chart did not render a Deployment" >&2; exit 1; }
 
-# The rendered manifest must reference ONLY the air-gapped registry, never source.
+# EVERY image ref in the rendered manifest must resolve to the air-gapped
+# registry — not just "source absent" (which a new upstream initContainer would
+# slip past).
+mapfile -t IMAGE_REFS < <(grep -oE 'image: *"?[^"]+' rendered.yaml | sed -E 's/image: *"?//')
+[ "${#IMAGE_REFS[@]}" -ge 1 ] || { echo "FAIL: no image refs in rendered manifest" >&2; exit 1; }
+for ref in "${IMAGE_REFS[@]}"; do
+  case "$ref" in
+    "$AIR"/*) : ;; # air-gapped registry — good
+    *) echo "FAIL: rendered image '$ref' is not from the air-gapped registry ($AIR)" >&2; exit 1 ;;
+  esac
+done
 grep -q "$AIR/mcp-gateway-airgap@$IMG_DIGEST" rendered.yaml \
   || { echo "FAIL: rendered image does not point at the air-gapped digest" >&2; exit 1; }
-! grep -q "$SRC/" rendered.yaml \
-  || { echo "FAIL: rendered manifest still references the SOURCE registry" >&2; exit 1; }
 
 echo "air-gap smoke passed: exported to bundle, imported to isolated registry, verified sigs + SBOM, installed offline"
