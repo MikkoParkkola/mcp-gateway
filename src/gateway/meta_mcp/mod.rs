@@ -107,6 +107,10 @@ pub struct MetaMcpCallerContext<'a> {
     pub agent_id: Option<&'a str>,
     /// Verified caller subject for identity-grant evaluation.
     pub grant_subject: Option<GrantSubject>,
+    /// Full verified end-user identity, when present. Carried (not collapsed to
+    /// `grant_subject`) so the backend-invoke boundary can propagate the real
+    /// user to a backend that requires it (MIK-6704 / ADR-007 R2).
+    pub verified_identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
 }
 
 // ============================================================================

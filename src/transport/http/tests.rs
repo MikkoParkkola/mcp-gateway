@@ -908,3 +908,107 @@ fn session_expired_response_detection_matches_known_signatures() {
         error: None,
     }));
 }
+
+// MIK-6734 slice 2b-i — request_with_headers injects per-request headers on the
+// wire (the spine for identity-credential propagation), and a per-request header
+// overrides a static header of the same name for that call only.
+#[tokio::test]
+async fn request_with_headers_injects_and_overrides_on_the_wire() {
+    use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+    use tokio::sync::{Mutex, oneshot};
+
+    async fn capture(
+        State(sender): State<Arc<Mutex<Option<oneshot::Sender<HeaderMap>>>>>,
+        headers: HeaderMap,
+        _body: axum::body::Bytes,
+    ) -> Json<serde_json::Value> {
+        if let Some(s) = sender.lock().await.take() {
+            let _ = s.send(headers);
+        }
+        Json(serde_json::json!({"jsonrpc":"2.0","id":1,"result":{}}))
+    }
+
+    let (tx, rx) = oneshot::channel();
+    let state = Arc::new(Mutex::new(Some(tx)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/messages", post(capture))
+        .with_state(state);
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    // Static header "Authorization: static" on the transport.
+    let mut custom = HashMap::new();
+    custom.insert("Authorization".to_string(), "static".to_string());
+    let transport = make_transport_with_headers(&format!("http://{addr}/mcp"), custom);
+    *transport.message_url.write() = Some(format!("http://{addr}/messages"));
+
+    // Per-request headers: override Authorization + add a fresh header.
+    let extra = vec![
+        (
+            "Authorization".to_string(),
+            "Bearer per-user-assertion".to_string(),
+        ),
+        ("X-Idp-Audience".to_string(), "https://mem".to_string()),
+    ];
+    let _ = transport
+        .request_with_headers("tools/call", None, &extra)
+        .await;
+
+    let headers = tokio::time::timeout(Duration::from_secs(1), rx)
+        .await
+        .unwrap()
+        .unwrap();
+    // Per-request value wins over the static one.
+    assert_eq!(headers["authorization"], "Bearer per-user-assertion");
+    assert_eq!(headers["x-idp-audience"], "https://mem");
+    server.abort();
+}
+
+// The default trait method ignores extra headers: plain request() behaves the
+// same as request_with_headers(&[]) — no accidental leakage into a call that
+// passes none.
+#[tokio::test]
+async fn request_without_extra_headers_uses_static_only() {
+    use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+    use tokio::sync::{Mutex, oneshot};
+
+    async fn capture(
+        State(sender): State<Arc<Mutex<Option<oneshot::Sender<HeaderMap>>>>>,
+        headers: HeaderMap,
+        _body: axum::body::Bytes,
+    ) -> Json<serde_json::Value> {
+        if let Some(s) = sender.lock().await.take() {
+            let _ = s.send(headers);
+        }
+        Json(serde_json::json!({"jsonrpc":"2.0","id":1,"result":{}}))
+    }
+
+    let (tx, rx) = oneshot::channel();
+    let state = Arc::new(Mutex::new(Some(tx)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/messages", post(capture))
+        .with_state(state);
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let mut custom = HashMap::new();
+    custom.insert("Authorization".to_string(), "static".to_string());
+    let transport = make_transport_with_headers(&format!("http://{addr}/mcp"), custom);
+    *transport.message_url.write() = Some(format!("http://{addr}/messages"));
+
+    let _ = transport.request("tools/call", None).await;
+
+    let headers = tokio::time::timeout(Duration::from_secs(1), rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(headers["authorization"], "static");
+    assert!(!headers.contains_key("x-idp-audience"));
+    server.abort();
+}

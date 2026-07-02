@@ -620,6 +620,7 @@ pub(super) async fn meta_mcp_handler(
                         api_key_name,
                         agent_id,
                         grant_subject,
+                        verified_identity: verified_identity.as_ref(),
                     },
                 )
                 .await;
