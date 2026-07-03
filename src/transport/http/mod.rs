@@ -826,5 +826,21 @@ impl Transport for HttpTransport {
     }
 }
 
+// ADR-008 / F3 (MIK-6746): RAII backstop — a discarded/partial-init transport
+// must not leak a token-refresh loop. `initialize()` stores the refresh
+// `JoinHandle` before `establish_sse_connection().await?`; if that `?` fails, or
+// the transport is otherwise dropped without an awaited `close()`, the handle is
+// dropped, which *detaches* (does not cancel) the tokio task — orphaning a loop
+// that keeps refreshing + persisting a gateway-held OAuth token. Aborting on drop
+// closes that no-close path. Composes with `close()`: after close the slot is
+// `None`, so this abort is a no-op (no double abort).
+impl Drop for HttpTransport {
+    fn drop(&mut self) {
+        if let Some(handle) = self.refresh_task.get_mut().take() {
+            handle.abort();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
