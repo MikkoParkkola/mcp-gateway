@@ -270,11 +270,30 @@ jobs:
         with:
           extra_args: --only-verified
 
+  secret-leak-lint:
+    name: Secret-leak lint (CWE-532)
+    # Semantic check that trufflehog/osv-scanner don't cover: a struct that
+    # derives Debug (or a log/print macro) over a field/variable whose name
+    # is secret-shaped leaks *structure*, not a matched credential string —
+    # trufflehog only flags verified live secret VALUES it can see in the
+    # diff. This is the class of bug fixed in #323 (redact credentials from
+    # Debug output). Pure stdlib Python, no extra deps, so it stays fast.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Run CWE-532 leak lint
+        run: python3 scripts/dev/cwe532-leak-lint.py src crates
+
   docker:
     name: Docker
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, test, fmt, audit, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap]
+    # secrets-scan + secret-leak-lint added so the container image release
+    # path can't ship on a tag whose push already failed a security check —
+    # previously this job's needs: covered clippy/test/fmt/audit but not the
+    # security jobs, so a red secrets-scan or leak-lint would not have
+    # blocked ghcr.io publish.
+    needs: [check, test, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap]
     permissions:
       contents: read
       packages: write

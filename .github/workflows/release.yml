@@ -41,8 +41,33 @@ jobs:
             --recursive
             ./
 
+  # Second release backstop, alongside security-gate: the semantic CWE-532
+  # leak lint (ci.yml's secret-leak-lint job re-implemented as a dependency
+  # here rather than a cross-workflow needs:, since GitHub Actions has no
+  # native "wait for a different workflow on the same ref" primitive short
+  # of workflow_run, which would desync from this workflow's own tag
+  # trigger). Same script, same baseline file — see scripts/dev/
+  # cwe532-leak-lint.py and scripts/dev/cwe532-baseline.txt.
+  #
+  # NOTE (manual release-checklist item, not automated here): before tagging
+  # a release, also check for open P0/P1 security tickets in the tracker —
+  # this gate only catches what static analysis can see, not triaged/known
+  # issues awaiting a fix.
+  #
+  # NOTE: this repo has no CodeQL workflow as of this gate's introduction
+  # (verified: no `.github/workflows/*codeql*` and no
+  # `github/codeql-action/analyze` step anywhere in .github/workflows/).
+  # If CodeQL is added later, wire it into this same needs: chain.
+  secret-leak-lint:
+    name: Secret-leak lint (CWE-532)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Run CWE-532 leak lint
+        run: python3 scripts/dev/cwe532-leak-lint.py src crates
+
   verify:
-    needs: security-gate
+    needs: [security-gate, secret-leak-lint]
     runs-on: ubuntu-latest
 
     steps:

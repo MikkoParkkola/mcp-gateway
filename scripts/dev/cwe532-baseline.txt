@@ -1,0 +1,46 @@
+# cwe532-leak-lint baseline — pre-existing, NOT-YET-FIXED CWE-532 risk.
+#
+# These 21 entries are genuine findings, not false positives. PR #323
+# (fix(security): redact credentials from Debug output) fixed 6 structs
+# across 4 files (gateway/auth.rs, security/message_signing.rs,
+# key_server/handler.rs, key_server/store.rs) with manual `impl Debug`
+# redaction. This gate was introduced afterward and found this list of
+# additional structs with the same shape of risk (secret-named field under
+# `#[derive(Debug)]`) that PR #323 did not touch.
+#
+# This file exists so the gate can go live today without (a) silently
+# `ci-allow`-ing real secrets as if they were false positives — dishonest —
+# or (b) requiring an unscoped src/ remediation pass bundled into an
+# unrelated CI-tooling change. It grandfathers ONLY these exact
+# (file, struct, field) triples. Any NEW secret-shaped Debug-derived field,
+# anywhere, still fails the build immediately — this file does not widen to
+# cover future code.
+#
+# Remediation path per entry (same pattern as PR #323): replace
+# `#[derive(Debug)]` with a manual `impl std::fmt::Debug` that redacts the
+# named field (e.g. via a fingerprint/hash helper, or a fixed
+# "<redacted>" literal), then delete the corresponding line below.
+#
+# Follow-up: file a tracking issue enumerating this list before relying on
+# this baseline long-term — it is a bootstrap aid, not a permanent waiver.
+src/capability/definition/mod.rs|debug|WebhookDefinition.secret
+src/capability/executor/credentials.rs|debug|RefreshTokenResponse.access_token
+src/capability/executor/credentials.rs|debug|RefreshTokenResponse.refresh_token
+src/config/features/auth.rs|debug|AuthConfig.bearer_token
+src/config/features/auth.rs|debug|AuthConfig.api_keys
+src/config/features/auth.rs|debug|AgentDefinitionConfig.hs256_secret
+src/config/features/key_server.rs|debug|KeyServerConfig.admin_token
+src/config/features/security.rs|debug|TransparencyLogConfig.shared_secret
+src/config/features/security.rs|debug|MessageSigningConfig.shared_secret
+src/config/features/security.rs|debug|MessageSigningConfig.previous_secret
+src/config/mod.rs|debug|BackendConfig.secrets
+src/config/mod.rs|debug|OAuthConfig.client_secret
+src/gateway/oauth/agents.rs|debug|AgentDefinition.hs256_secret
+src/oauth/client/mod.rs|debug|TokenResponse.access_token
+src/oauth/client/mod.rs|debug|TokenResponse.refresh_token
+src/oauth/client/mod.rs|debug|ClientRegistrationResponse.client_secret
+src/oauth/client/mod.rs|debug|OAuthClientConfig.client_secret
+src/oauth/storage.rs|debug|TokenInfo.access_token
+src/oauth/storage.rs|debug|TokenInfo.refresh_token
+src/oauth/storage.rs|debug|TokenInfo.client_secret
+src/security/transparency_log.rs|debug|TransparencyLogConfig.shared_secret
