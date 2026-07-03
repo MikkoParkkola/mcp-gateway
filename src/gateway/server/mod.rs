@@ -880,18 +880,26 @@ impl Gateway {
             }
         });
 
-        // Wire end-user identity propagation (MIK-6704 / ADR-007): when any
-        // backend opts into it, give MetaMcp a SignedAssertionStrategy signing
-        // with the gateway key pair. Config validation (slice 2a) already
-        // fail-closed-rejected unsupported strategies/session modes, so a
-        // configured backend here is a supported one. When no backend opts in,
-        // the strategy stays unset and every backend keeps static creds.
-        if self
-            .config
-            .backends
-            .values()
-            .any(|b| b.identity_propagation.is_some())
-        {
+        // Wire end-user identity propagation (MIK-6704 / ADR-007): when a backend
+        // opts into a *minting* strategy, give MetaMcp a SignedAssertionStrategy
+        // signing with the gateway key pair. Config validation (slice 2a) already
+        // fail-closed-rejected unsupported strategies/session modes.
+        //
+        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING — the caller
+        // attaches its own backend credential and the direct route forwards it
+        // verbatim. So a Passthrough-only deployment must NOT install a minting
+        // strategy: doing so would let the meta route (`gateway_invoke`), whose
+        // resolver keys off the globally-installed strategy rather than the
+        // per-backend `strategy` enum, mint a signed assertion for a Passthrough
+        // backend and violate INV-4 (GPT review F1). With the strategy unset the
+        // meta route fails closed (required) or falls back to static creds
+        // (optional) instead of minting. Mixed deployments (≥1 minting backend +
+        // ≥1 passthrough backend) still install the strategy for the minting
+        // backend; honoring passthrough on the meta route for that residual case
+        // needs the per-backend strategy check in the (currently locked)
+        // resolver — tracked on MIK-6746. Interim contract: passthrough is
+        // direct-route-only.
+        if config_installs_minting_strategy(&self.config) {
             use crate::identity_propagation::SignedAssertionStrategy;
             // 5-minute assertion lifetime (bounded further by the strategy's clamp).
             let strategy = Arc::new(SignedAssertionStrategy::new(
@@ -1459,6 +1467,19 @@ impl Gateway {
     }
 }
 
+/// Whether startup should install the gateway's signed-assertion minting
+/// strategy. True iff at least one backend uses a *minting* propagation strategy
+/// (anything other than `Passthrough`). A passthrough-only deployment mints
+/// nothing, so installing the strategy would let the meta route mint for a
+/// passthrough backend and violate INV-4 (ADR-008, GPT review F1, MIK-6746).
+fn config_installs_minting_strategy(config: &crate::config::Config) -> bool {
+    config.backends.values().any(|b| {
+        b.identity_propagation.as_ref().is_some_and(|c| {
+            c.strategy != crate::identity_propagation::PropagationStrategyKind::Passthrough
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1486,6 +1507,66 @@ mod tests {
 
     fn test_tool_policy() -> Arc<ToolPolicy> {
         Arc::new(ToolPolicy::default())
+    }
+
+    // ── GPT review F1 (MIK-6746): a passthrough-only deployment must NOT install
+    // the minting strategy, else the meta route would mint for a passthrough
+    // backend (INV-4 violation). Mixed deployments still install it. ──
+    fn backend_with_strategy(
+        strategy: crate::identity_propagation::PropagationStrategyKind,
+    ) -> BackendConfig {
+        use crate::identity_propagation::{IdentityPropagationConfig, SessionMode};
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://backend.internal/mcp".to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy,
+                audience: "https://backend.internal".to_string(),
+                required: true,
+                session_mode: SessionMode::Stateless,
+            }),
+            ..BackendConfig::default()
+        }
+    }
+
+    #[test]
+    fn passthrough_only_deployment_installs_no_minting_strategy() {
+        use crate::identity_propagation::PropagationStrategyKind;
+        let mut config = Config::default();
+        config.backends.insert(
+            "pass".to_string(),
+            backend_with_strategy(PropagationStrategyKind::Passthrough),
+        );
+        assert!(
+            !super::config_installs_minting_strategy(&config),
+            "passthrough-only must not install the minting strategy (F1)"
+        );
+    }
+
+    #[test]
+    fn minting_and_mixed_deployments_install_the_strategy() {
+        use crate::identity_propagation::PropagationStrategyKind;
+        let mut minting = Config::default();
+        minting.backends.insert(
+            "sign".to_string(),
+            backend_with_strategy(PropagationStrategyKind::SignedAssertion),
+        );
+        assert!(super::config_installs_minting_strategy(&minting));
+        // Mixed: one minting + one passthrough still installs it (residual F1 on
+        // the meta route for the passthrough backend tracked on MIK-6746).
+        minting.backends.insert(
+            "pass".to_string(),
+            backend_with_strategy(PropagationStrategyKind::Passthrough),
+        );
+        assert!(super::config_installs_minting_strategy(&minting));
+    }
+
+    #[test]
+    fn no_propagation_backend_installs_no_strategy() {
+        assert!(!super::config_installs_minting_strategy(&Config::default()));
     }
 
     fn test_mtls_policy() -> Arc<MtlsPolicy> {
