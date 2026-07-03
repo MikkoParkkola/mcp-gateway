@@ -82,7 +82,11 @@ impl MetaMcp {
 
         // MCP backend tools (cached only)
         for backend in self.backends.all() {
-            if !backend.has_cached_tools() || !profile.backend_allowed(&backend.name) {
+            // INV-2 (MIK-6742): skip isolated backends on a multi-user gateway.
+            if !backend.has_cached_tools()
+                || !profile.backend_allowed(&backend.name)
+                || self.meta_route_isolation_refused(&backend)
+            {
                 continue;
             }
             let cache_guard = backend.get_cached_tools_snapshot();

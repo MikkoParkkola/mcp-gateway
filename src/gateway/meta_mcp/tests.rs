@@ -849,6 +849,65 @@ async fn gateway_search_server_qualified_query_fills_empty_backend_cache() {
 }
 
 #[tokio::test]
+async fn code_mode_discovery_omits_oauth_isolated_backend_on_multi_user_gateway() {
+    // MIK-6742: an OAuth-isolated backend's tools must NOT be discoverable on a
+    // multi-user gateway. The server-qualified code-mode query would otherwise
+    // cold-fill the empty cache via the static gateway token (see
+    // gateway_search_server_qualified_query_fills_empty_backend_cache); the
+    // isolation guard must run first, so discovery returns zero matches.
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
+    use crate::protocol::{JsonRpcResponse, ToolsListResult};
+    use crate::transport::Transport;
+
+    let oauth: crate::config::OAuthConfig =
+        serde_json::from_value(json!({})).expect("default oauth config");
+    let config = BackendConfig {
+        transport: TransportConfig::Http {
+            http_url: "https://isomem.internal/mcp".to_string(),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        oauth: Some(oauth),
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "isomem",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let response = JsonRpcResponse::success_serialized(
+        RequestId::Number(1),
+        ToolsListResult {
+            tools: vec![search_test_tool("recall")],
+            next_cursor: None,
+        },
+    );
+    let transport: Arc<dyn Transport> = Arc::new(SearchTestTransport { response });
+    backend.set_transport_for_test(transport);
+
+    let registry = Arc::new(BackendRegistry::new());
+    registry.register(backend);
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+    meta.set_multi_user(true);
+
+    let result = meta
+        .code_mode_search(
+            &json!({ "query": "isomem:*", "include_schema": false }),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result["total"], 0,
+        "isolated backend tools must not be discoverable on a multi-user gateway \
+         (the cold-fetch must be skipped by the isolation guard): {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
     // GIVEN: code mode disabled, calling gateway_execute with no tool/chain
     let meta = make_meta_mcp();
