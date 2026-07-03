@@ -555,6 +555,40 @@ impl MetaMcp {
             }
             None => CallerCredential::default(),
         };
+
+        // ADR-008 INV-2 fail-closed guard. On a multi-user gateway, a backend
+        // whose OAuth token is held once by the gateway (keyed by backend, not
+        // by user — src/oauth/storage.rs) must NOT have that token attached for
+        // an arbitrary caller: doing so serves user A's login to user B. Refuse
+        // UNLESS a per-user credential was resolved above (identity propagation
+        // minted caller-specific headers) or the operator blessed the account
+        // as shared (`oauth.shared_account = true`, logged). A single-user
+        // gateway never enters this branch. This never falls back to the shared
+        // token (INV-1): it refuses.
+        if self.multi_user.load(Ordering::Relaxed)
+            && caller_credential.headers.is_empty()
+            && self
+                .backends
+                .get(server)
+                .is_some_and(|b| b.oauth_requires_per_user_isolation())
+        {
+            tracing::warn!(
+                server = %server,
+                "refused: multi-user gateway would serve a gateway-held OAuth token \
+                 that is not isolated per user (ADR-008 INV-2)"
+            );
+            return Err(Error::json_rpc(
+                -32001,
+                format!(
+                    "Backend '{server}' uses a gateway-held OAuth login that is not \
+                     isolated per user. On a multi-user gateway this call is refused so \
+                     one user's token is never served to another. Fix: supply a per-user \
+                     credential (enable identity propagation for this backend), or set \
+                     `oauth.shared_account = true` if this is a genuinely shared service \
+                     account."
+                ),
+            ));
+        }
         let identity_suffix = caller_credential
             .cache_binding
             .as_deref()

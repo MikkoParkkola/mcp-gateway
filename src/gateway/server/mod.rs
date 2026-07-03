@@ -779,8 +779,12 @@ impl Gateway {
             shutdown_tx.subscribe(),
         );
 
-        // Wire config hot-reload if a config path was provided.
-        let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
+        // Wire the config hot-reload *context* into meta_mcp before it moves
+        // into AppState. The file watcher that can mutate `live_config` is
+        // started later (after `create_router`) so the router's startup
+        // bind-origin snapshot reads `live_config` while it still equals the
+        // config the listener binds — no startup reload race (MIK-6750 r4).
+        if let Some(ref path) = self.config_path {
             let reload_ctx = Arc::new(ReloadContext::new(
                 path.clone(),
                 Arc::clone(&live_config),
@@ -789,26 +793,7 @@ impl Gateway {
                 self.config.meta_mcp.cache_ttl,
             ));
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
-
-            match ConfigWatcher::start(
-                path.clone(),
-                Arc::clone(&live_config),
-                Arc::clone(&self.backends),
-                &self.config,
-                shutdown_tx.subscribe(),
-            ) {
-                Ok(w) => {
-                    info!(path = %path.display(), "Config hot-reload enabled");
-                    Some(w)
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to start config watcher, hot-reload disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        }
 
         // In-flight request tracker: large initial permits, drain waits for
         // all permits to be returned (i.e., all in-flight requests complete).
@@ -880,18 +865,26 @@ impl Gateway {
             }
         });
 
-        // Wire end-user identity propagation (MIK-6704 / ADR-007): when any
-        // backend opts into it, give MetaMcp a SignedAssertionStrategy signing
-        // with the gateway key pair. Config validation (slice 2a) already
-        // fail-closed-rejected unsupported strategies/session modes, so a
-        // configured backend here is a supported one. When no backend opts in,
-        // the strategy stays unset and every backend keeps static creds.
-        if self
-            .config
-            .backends
-            .values()
-            .any(|b| b.identity_propagation.is_some())
-        {
+        // Wire end-user identity propagation (MIK-6704 / ADR-007): when a backend
+        // opts into a *minting* strategy, give MetaMcp a SignedAssertionStrategy
+        // signing with the gateway key pair. Config validation (slice 2a) already
+        // fail-closed-rejected unsupported strategies/session modes.
+        //
+        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING — the caller
+        // attaches its own backend credential and the direct route forwards it
+        // verbatim. So a Passthrough-only deployment must NOT install a minting
+        // strategy: doing so would let the meta route (`gateway_invoke`), whose
+        // resolver keys off the globally-installed strategy rather than the
+        // per-backend `strategy` enum, mint a signed assertion for a Passthrough
+        // backend and violate INV-4 (GPT review F1). With the strategy unset the
+        // meta route fails closed (required) or falls back to static creds
+        // (optional) instead of minting. Mixed deployments (≥1 minting backend +
+        // ≥1 passthrough backend) still install the strategy for the minting
+        // backend; honoring passthrough on the meta route for that residual case
+        // needs the per-backend strategy check in the (currently locked)
+        // resolver — tracked on MIK-6746. Interim contract: passthrough is
+        // direct-route-only.
+        if config_installs_minting_strategy(&self.config) {
             use crate::identity_propagation::SignedAssertionStrategy;
             // 5-minute assertion lifetime (bounded further by the strategy's clamp).
             let strategy = Arc::new(SignedAssertionStrategy::new(
@@ -900,6 +893,24 @@ impl Gateway {
             ));
             meta_mcp.set_identity_propagation(strategy);
             info!("End-user identity propagation enabled (signed-assertion strategy)");
+        }
+
+        // ADR-008 INV-2 (MIK-6752): declare multi-user status so dispatch can
+        // fail closed on gateway-held OAuth tokens that are not per-user
+        // isolated. Detection is fail-closed — any enabled auth is treated as
+        // multi-user (a single shared API key or bearer can be handed to a whole
+        // team; count alone cannot prove otherwise) unless the operator sets
+        // `auth.single_user = true`. More than one API key or any OIDC issuer is
+        // a hard multi-user signal. See `AuthConfig::implies_multi_user`.
+        let multi_user = self
+            .config
+            .auth
+            .implies_multi_user(!self.config.key_server.oidc.is_empty());
+        meta_mcp.set_multi_user(multi_user);
+        if multi_user {
+            info!(
+                "Multi-user gateway detected — per-user OAuth isolation guard active (ADR-008 INV-2)"
+            );
         }
 
         // The transition tracker is only used when anomaly_detection=true; pass
@@ -960,6 +971,33 @@ impl Gateway {
 
         // Create router
         let mut app = create_router(state);
+
+        // Start the config file watcher now that the router has snapshotted its
+        // startup bind-origin from `live_config` (still equal to the config the
+        // listener binds). Held for the server's lifetime so hot-reload stays
+        // active. MIK-6750 r4: starting it earlier would let a startup-time
+        // reload move `live_config` before the snapshot, surfacing a
+        // never-bound host/port in the advertised resource.
+        let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
+            match ConfigWatcher::start(
+                path.clone(),
+                Arc::clone(&live_config),
+                Arc::clone(&self.backends),
+                &self.config,
+                shutdown_tx.subscribe(),
+            ) {
+                Ok(w) => {
+                    info!(path = %path.display(), "Config hot-reload enabled");
+                    Some(w)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to start config watcher, hot-reload disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Add webhook routes if enabled
         if self.config.webhooks.enabled {
@@ -1441,6 +1479,31 @@ impl Gateway {
     }
 }
 
+/// Whether startup should install the gateway's signed-assertion minting
+/// strategy. True iff at least one backend explicitly opts into the
+/// `SignedAssertion` strategy — a strict allow-list, not a `!= Passthrough`
+/// deny-list.
+///
+/// The deny-list form was unsafe: a backend configured for an as-yet
+/// unimplemented minting strategy (`TokenExchange` MIK-6729 / `Vault`
+/// MIK-6730) is `!= Passthrough`, so it would silently install the
+/// signed-assertion strategy and let the meta route mint a *gateway-signed
+/// assertion* for a backend the operator asked to reach via a completely
+/// different trust model — a silent substitution and an INV-4 violation. A
+/// non-`required` such backend passes `IdentityPropagationConfig::validate`
+/// (which only rejects unimplemented strategies when `required`), so this is
+/// reachable from config, not just theory. Allow-listing `SignedAssertion`
+/// means each future minting strategy installs its own machinery when it
+/// lands; `Passthrough` still mints nothing (ADR-008, GPT review F1/R2-3,
+/// MIK-6746).
+fn config_installs_minting_strategy(config: &crate::config::Config) -> bool {
+    config.backends.values().any(|b| {
+        b.identity_propagation.as_ref().is_some_and(|c| {
+            c.strategy == crate::identity_propagation::PropagationStrategyKind::SignedAssertion
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1468,6 +1531,89 @@ mod tests {
 
     fn test_tool_policy() -> Arc<ToolPolicy> {
         Arc::new(ToolPolicy::default())
+    }
+
+    // ── GPT review F1 (MIK-6746): a passthrough-only deployment must NOT install
+    // the minting strategy, else the meta route would mint for a passthrough
+    // backend (INV-4 violation). Mixed deployments still install it. ──
+    fn backend_with_strategy(
+        strategy: crate::identity_propagation::PropagationStrategyKind,
+    ) -> BackendConfig {
+        use crate::identity_propagation::{IdentityPropagationConfig, SessionMode};
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://backend.internal/mcp".to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy,
+                audience: "https://backend.internal".to_string(),
+                required: true,
+                session_mode: SessionMode::Stateless,
+            }),
+            ..BackendConfig::default()
+        }
+    }
+
+    #[test]
+    fn passthrough_only_deployment_installs_no_minting_strategy() {
+        use crate::identity_propagation::PropagationStrategyKind;
+        let mut config = Config::default();
+        config.backends.insert(
+            "pass".to_string(),
+            backend_with_strategy(PropagationStrategyKind::Passthrough),
+        );
+        assert!(
+            !super::config_installs_minting_strategy(&config),
+            "passthrough-only must not install the minting strategy (F1)"
+        );
+    }
+
+    #[test]
+    fn minting_and_mixed_deployments_install_the_strategy() {
+        use crate::identity_propagation::PropagationStrategyKind;
+        let mut minting = Config::default();
+        minting.backends.insert(
+            "sign".to_string(),
+            backend_with_strategy(PropagationStrategyKind::SignedAssertion),
+        );
+        assert!(super::config_installs_minting_strategy(&minting));
+        // Mixed: one minting + one passthrough still installs it (residual F1 on
+        // the meta route for the passthrough backend tracked on MIK-6746).
+        minting.backends.insert(
+            "pass".to_string(),
+            backend_with_strategy(PropagationStrategyKind::Passthrough),
+        );
+        assert!(super::config_installs_minting_strategy(&minting));
+    }
+
+    #[test]
+    fn unimplemented_minting_strategies_install_no_signed_assertion_strategy() {
+        // A backend configured for an as-yet unimplemented minting strategy must
+        // NOT trigger the signed-assertion strategy install: doing so would mint
+        // a gateway-signed assertion for a backend the operator asked to reach
+        // via token-exchange / vault (silent substitution, INV-4). Allow-list
+        // SignedAssertion only (R2-3, MIK-6746).
+        use crate::identity_propagation::PropagationStrategyKind;
+        for strat in [
+            PropagationStrategyKind::TokenExchange,
+            PropagationStrategyKind::Vault,
+        ] {
+            let mut config = Config::default();
+            config
+                .backends
+                .insert("mint".to_string(), backend_with_strategy(strat));
+            assert!(
+                !super::config_installs_minting_strategy(&config),
+                "strategy {strat:?} must not install the signed-assertion minting strategy"
+            );
+        }
+    }
+
+    #[test]
+    fn no_propagation_backend_installs_no_strategy() {
+        assert!(!super::config_installs_minting_strategy(&Config::default()));
     }
 
     fn test_mtls_policy() -> Arc<MtlsPolicy> {

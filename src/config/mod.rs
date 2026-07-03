@@ -339,6 +339,24 @@ impl Config {
                      pool. Refusing to start rather than reuse a shared session (IDP.7)."
                 )));
             }
+            // A backend running the gateway's own OAuth client authorizes and
+            // persists a gateway-held token during initialize(), authenticating
+            // the transport session as the gateway *before* the per-request
+            // credential override is applied. Combined with identity_propagation
+            // that silently defeats per-user propagation: the session is already
+            // gateway-authenticated, so the per-user credential rides on top of a
+            // channel that no longer represents the end user. Refuse the pairing
+            // at load rather than dispatch under a contradictory trust model (F3).
+            if backend.oauth.as_ref().is_some_and(|o| o.enabled) {
+                return Err(Error::ConfigValidation(format!(
+                    "backend '{name}' cannot combine identity_propagation with its own enabled \
+                     oauth client: the backend oauth authorizes and persists a gateway-held token \
+                     during initialize(), authenticating the transport session as the gateway \
+                     before the per-request credential override — silently defeating per-user \
+                     propagation. Set oauth.enabled=false on this backend or remove \
+                     identity_propagation (F3)."
+                )));
+            }
         }
         Ok(())
     }
@@ -530,6 +548,16 @@ pub struct ServerConfig {
     pub shutdown_timeout: Duration,
     /// Maximum request body size (bytes).
     pub max_body_size: usize,
+    /// Externally reachable base URL of this gateway (scheme + host + optional
+    /// port), e.g. `https://mcp.your-domain.tld`. Set this when the gateway
+    /// runs behind a TLS-terminating reverse proxy so RFC 9728
+    /// protected-resource metadata advertises the real public HTTPS origin
+    /// instead of the raw bind address. When unset, metadata falls back to the
+    /// bind `host:port` only for a loopback bind (local / development use); a
+    /// non-loopback bind without this set cannot be named honestly, so the
+    /// metadata endpoint returns `503` until it is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -541,6 +569,7 @@ impl Default for ServerConfig {
             request_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
+            public_url: None,
         }
     }
 }
@@ -739,6 +768,17 @@ pub struct OAuthConfig {
     /// Seconds before expiry to proactively refresh the token (default: 300).
     #[serde(default = "default_token_refresh_buffer")]
     pub token_refresh_buffer_secs: u64,
+    /// Explicitly bless this gateway-held OAuth token for shared use across
+    /// every caller on a multi-user gateway (ADR-008 INV-2).
+    ///
+    /// Default `false` = fail-closed: a multi-user gateway refuses to serve one
+    /// stored token to different users, because the token is held per-backend
+    /// (not per-user) and would otherwise let user A act as user B. Set `true`
+    /// only for a genuinely shared service account (a team bot, a read-only
+    /// public API login); every such dispatch is logged. A single-user gateway
+    /// ignores this flag — the sole caller always owns the token.
+    #[serde(default)]
+    pub shared_account: bool,
 }
 
 fn default_token_refresh_buffer() -> u64 {

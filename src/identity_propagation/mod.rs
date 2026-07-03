@@ -166,6 +166,11 @@ pub enum PropagationStrategyKind {
     /// Gateway-signed identity assertion (first-party / gateway-trusting
     /// backends). Reference strategy shipped in this slice.
     SignedAssertion,
+    /// Client-supplied passthrough (ADR-008 rung 2, MIK-6746). The caller
+    /// attaches its OWN backend credential per request; the gateway forwards it
+    /// verbatim and stores/mints NOTHING (INV-4). The primary path for capable
+    /// MCP clients that run their own OAuth flow.
+    Passthrough,
     /// RFC 8693 OAuth token-exchange (MIK-6729, fast-follow).
     TokenExchange,
     /// Per-user credential vault (MIK-6730, demand-gated).
@@ -209,10 +214,15 @@ impl IdentityPropagationConfig {
                 "identity_propagation.audience must be non-empty (IDP.3)".to_string(),
             ));
         }
-        // Only signed-assertion is implemented in this slice; a required backend
-        // configured for an unimplemented strategy must fail closed, not
+        // Only signed-assertion and passthrough are implemented; a required
+        // backend configured for an unimplemented strategy must fail closed, not
         // silently run without propagation.
-        if self.required && self.strategy != PropagationStrategyKind::SignedAssertion {
+        if self.required
+            && !matches!(
+                self.strategy,
+                PropagationStrategyKind::SignedAssertion | PropagationStrategyKind::Passthrough
+            )
+        {
             return Err(PropagationError::Misconfigured(format!(
                 "strategy {:?} is not implemented yet; a required backend cannot fall back \
                  (IDP.2). Use signed_assertion or track the strategy's ticket.",

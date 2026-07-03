@@ -115,6 +115,16 @@ impl MetaMcp {
 
         // MCP backend path: resolve from the backend's tool cache.
         if let Some(backend) = self.backends.get(&surfaced.server) {
+            // INV-2 (MIK-6742): do not surface an isolated backend's tool on a
+            // multi-user gateway; omit it from tools/list (fail-closed).
+            if self.meta_route_isolation_refused(&backend) {
+                debug!(
+                    server = %surfaced.server,
+                    tool = %surfaced.tool,
+                    "Surfaced tool omitted: backend requires per-user OAuth isolation on multi-user gateway"
+                );
+                return None;
+            }
             let tool = backend.get_cached_tool(&surfaced.tool);
             if tool.is_none() {
                 debug!(

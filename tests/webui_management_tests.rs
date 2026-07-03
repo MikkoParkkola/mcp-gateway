@@ -535,6 +535,7 @@ async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
+        single_user: false,
     };
     let state = make_app_state_with_auth_config(&auth_config);
     register_http_backend(&state, "docs");
