@@ -94,46 +94,87 @@ pub fn bind_fallback_origin(host: &str, port: u16) -> Option<String> {
 
 /// Validate an operator-supplied `public_url` and reduce it to a bare origin.
 ///
-/// Uses a real URL parser (`url` crate). Accepts `https` for any host and
-/// `http` only for a loopback host (the OAuth loopback exception; RFC 9728 §1.2
-/// otherwise requires `https`). Rejects raw inputs the parser would silently
-/// rewrite (whitespace, control characters, backslashes) and anything that does
-/// not belong in an RFC 9728 resource identifier: a non-root path, any query,
-/// fragment, or userinfo. Returns the canonical `scheme://host[:port]` origin
-/// (default ports and trailing slash dropped), or `None` if rejected.
+/// Accepts `https` for any host, and `http` only for a loopback host (the OAuth
+/// loopback exception; RFC 9728 §1.2 otherwise requires `https`). Returns the
+/// canonical `scheme://host[:port]` origin (default ports and trailing slash
+/// dropped), else `None`.
+///
+/// The value is validated *structurally on the raw string* before the URL
+/// parser runs. The WHATWG parser silently rewrites malformed input: it strips
+/// whitespace/controls, turns `\` into `/`, accepts a missing authority slash,
+/// collapses `..` path segments, and re-encodes alternate-IPv4 / IDNA hosts.
+/// Any such rewrite could canonicalize a hostile config value into a *different*
+/// origin than was written. So this rejects up front: whitespace, control
+/// chars, backslashes; a missing / case-wrong `http(s)://` prefix; any path,
+/// query, fragment, userinfo. It then parses a reconstructed `scheme://authority`
+/// only for host classification and port, and finally requires the parsed host
+/// to equal the raw host (ASCII case and IPv6 bracket form aside), so no parser
+/// host rewrite is ever published.
 fn sanitize_public_url(raw: &str) -> Option<String> {
-    // The WHATWG URL parser silently strips leading/trailing C0 controls and
-    // spaces and rewrites `\` to `/`, so a hostile or typo'd config value could
-    // canonicalize into a *different* origin than was written. Reject such raw
-    // inputs outright rather than publish the rewritten origin.
+    // 1. Reject bytes the parser would strip / rewrite (whitespace, C0
+    //    controls, backslash) rather than publish the rewritten origin.
     if raw
         .bytes()
         .any(|b| b.is_ascii_whitespace() || b.is_ascii_control() || b == b'\\')
     {
         return None;
     }
-    let parsed = url::Url::parse(raw).ok()?;
-    if !matches!(parsed.scheme(), "http" | "https") {
+    // 2. Require an explicit `http://` / `https://` prefix (case-insensitive)
+    //    and slice off exactly the authority. A missing authority slash
+    //    (`https:/host`) fails the prefix; an embedded path, dot-segments,
+    //    query, fragment, userinfo all fail the authority check below. None can
+    //    be canonicalized into a different origin because they never reach the
+    //    parser as structure. `get(..N)` keeps the slice on a char boundary.
+    let (scheme, rest) = if raw
+        .get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+    {
+        ("https", &raw[8..])
+    } else if raw
+        .get(..7)
+        .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+    {
+        ("http", &raw[7..])
+    } else {
+        return None;
+    };
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
         return None;
     }
+    // 3. Parse the reconstructed origin for validated host/port handling.
+    let parsed = url::Url::parse(&format!("{scheme}://{authority}")).ok()?;
     let host = parsed.host_str()?;
-    // RFC 9728 §1.2: a protected-resource identifier uses the `https` scheme.
-    // The sole exception is the OAuth loopback case, where `http` on a loopback
-    // host is legitimate and reachable. A non-loopback `http` origin is not a
-    // compliant resource identifier and is rejected.
-    if parsed.scheme() == "http" && !is_loopback_host(host) {
+    // RFC 9728 §1.2: a protected-resource identifier uses `https`. The sole
+    // exception is a loopback host, where `http` is legitimate and reachable.
+    if scheme == "http" && !is_loopback_host(host) {
         return None;
     }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
+    // Belt-and-suspenders: the structural check already forbids these; keep the
+    // origin path/query/fragment/userinfo-free regardless of parser quirks.
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !matches!(parsed.path(), "" | "/")
+    {
         return None;
     }
-    if parsed.query().is_some() || parsed.fragment().is_some() {
+    // 4. Faithful-host guard: reject any value whose host the parser rewrote
+    //    into a different form (alternate/decimal IPv4, IDNA/punycode, percent-
+    //    encoding). ASCII case folding of a domain and the IPv6 bracket form are
+    //    the only canonicalizations allowed through.
+    let raw_host = if let Some(after_bracket) = authority.strip_prefix('[') {
+        // `[v6]` and `[v6]:port` -> keep the bracketed literal for comparison.
+        let end = after_bracket.as_bytes().iter().position(|&b| b == b']')?;
+        &authority[..=end + 1]
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    if !raw_host.eq_ignore_ascii_case(host) {
         return None;
     }
-    if !matches!(parsed.path(), "" | "/") {
-        return None;
-    }
-    let mut origin = format!("{}://{host}", parsed.scheme());
+    let mut origin = format!("{scheme}://{host}");
     if let Some(port) = parsed.port() {
         // `port()` is `None` for the scheme's default port, so this omits
         // `:443`/`:80` and keeps the origin canonical.
@@ -400,5 +441,24 @@ mod tests {
         assert_eq!(sanitize_public_url("https://gw.internal\n"), None);
         assert_eq!(sanitize_public_url("https:\\\\gw.internal"), None);
         assert_eq!(sanitize_public_url("https://gw.internal\u{0000}"), None);
+    }
+
+    #[test]
+    fn sanitize_public_url_rejects_structural_and_host_rewrites() {
+        // Missing authority slash: parser would read `https:/host` as host.
+        assert_eq!(sanitize_public_url("https:/gw.internal"), None);
+        assert_eq!(sanitize_public_url("https:gw.internal"), None);
+        // Dot-segment path that normalizes to root must not sneak through.
+        assert_eq!(sanitize_public_url("https://gw.internal/../evil"), None);
+        assert_eq!(sanitize_public_url("https://gw.internal/./"), None);
+        // Alternate / decimal IPv4 the parser rewrites to 127.0.0.1.
+        assert_eq!(sanitize_public_url("http://0x7f.0.0.1"), None);
+        assert_eq!(sanitize_public_url("https://2130706433"), None);
+        assert_eq!(sanitize_public_url("http://127.1"), None);
+        // Case folding of a domain is faithful and stays accepted.
+        assert_eq!(
+            sanitize_public_url("https://GW.Internal").as_deref(),
+            Some("https://gw.internal")
+        );
     }
 }
