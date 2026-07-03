@@ -357,6 +357,25 @@ impl Backend {
             _ => return Ok(None),
         };
 
+        // F3 sink-side guard. Config::validate() rejects this pairing at load,
+        // but programmatic `Backend::new*()` and hot-reload `apply_patch()` build
+        // backends from a raw BackendConfig without revalidating. Enforce again
+        // here — the last chokepoint before an OAuth client is created — so an
+        // enabled backend OAuth client is never spun up alongside
+        // identity_propagation. The backend OAuth persists a gateway-held token
+        // during initialize(), authenticating the transport session as the
+        // gateway before any per-request per-user override, silently defeating
+        // per-user propagation. Fail closed at the sink.
+        if self.config.identity_propagation.is_some() {
+            return Err(Error::ConfigValidation(format!(
+                "backend '{}' cannot combine identity_propagation with its own enabled oauth \
+                 client: the backend oauth persists a gateway-held token during initialize(), \
+                 authenticating the transport session as the gateway before the per-request \
+                 credential override — silently defeating per-user propagation (F3).",
+                self.name
+            )));
+        }
+
         info!(backend = %self.name, "Initializing OAuth client");
 
         // Create HTTP client for OAuth requests
@@ -1646,6 +1665,103 @@ mod tests {
         assert!(!mk(Some(oauth(false, false))).oauth_requires_per_user_isolation());
         // No OAuth config → nothing to isolate.
         assert!(!mk(None).oauth_requires_per_user_isolation());
+    }
+
+    // F3 sink-side guard (MIK-6746): even when Config::validate() is bypassed
+    // by programmatic construction, create_oauth_client() must refuse to build a
+    // backend OAuth client for a backend that also declares identity_propagation.
+    // The backend OAuth would persist a gateway-held token during initialize(),
+    // authenticating the transport session as the gateway before any per-request
+    // per-user override — silently defeating per-user propagation. Fail closed at
+    // the last chokepoint. Contradiction holds for BOTH implemented strategies.
+    #[test]
+    fn create_oauth_client_refuses_identity_propagation_backends() {
+        let oauth_enabled = crate::config::OAuthConfig {
+            enabled: true,
+            scopes: vec![],
+            client_id: None,
+            client_secret: None,
+            callback_host: None,
+            callback_port: None,
+            callback_path: None,
+            token_refresh_buffer_secs: 300,
+            shared_account: false,
+        };
+        let idp = |strategy: crate::identity_propagation::PropagationStrategyKind| {
+            crate::identity_propagation::IdentityPropagationConfig {
+                strategy,
+                audience: "https://backend.example".to_string(),
+                required: true,
+                session_mode: crate::identity_propagation::SessionMode::Stateless,
+            }
+        };
+        let mk = |strategy| {
+            Backend::new(
+                "b",
+                BackendConfig {
+                    oauth: Some(oauth_enabled.clone()),
+                    identity_propagation: Some(idp(strategy)),
+                    ..BackendConfig::default()
+                },
+                &crate::config::FailsafeConfig::default(),
+                Duration::from_secs(60),
+            )
+        };
+        for strategy in [
+            crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
+            crate::identity_propagation::PropagationStrategyKind::Passthrough,
+        ] {
+            let backend = mk(strategy);
+            match backend.create_oauth_client("https://backend.example") {
+                Err(Error::ConfigValidation(_)) => {}
+                Err(other) => {
+                    panic!("expected ConfigValidation, got {other:?} for {strategy:?}")
+                }
+                Ok(_) => panic!(
+                    "enabled backend oauth + identity_propagation must fail closed for {strategy:?}"
+                ),
+            }
+        }
+
+        // shared_account=true does NOT exempt: sharing one gateway-held token
+        // still contradicts per-user propagation.
+        let shared = Backend::new(
+            "b",
+            BackendConfig {
+                oauth: Some(crate::config::OAuthConfig {
+                    shared_account: true,
+                    ..oauth_enabled.clone()
+                }),
+                identity_propagation: Some(idp(
+                    crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
+                )),
+                ..BackendConfig::default()
+            },
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        assert!(
+            shared
+                .create_oauth_client("https://backend.example")
+                .is_err(),
+            "shared_account=true must not exempt the F3 guard"
+        );
+
+        // No identity_propagation → enabled backend oauth proceeds (returns a
+        // client), proving the guard does not over-reach.
+        let plain = Backend::new(
+            "b",
+            BackendConfig {
+                oauth: Some(oauth_enabled.clone()),
+                ..BackendConfig::default()
+            },
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        assert!(
+            plain.create_oauth_client("https://backend.example").is_ok(),
+            "backend oauth without identity_propagation must still be allowed"
+        );
     }
 
     #[test]
