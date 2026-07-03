@@ -552,8 +552,10 @@ pub struct ServerConfig {
     /// port), e.g. `https://mcp.your-domain.tld`. Set this when the gateway
     /// runs behind a TLS-terminating reverse proxy so RFC 9728
     /// protected-resource metadata advertises the real public HTTPS origin
-    /// instead of the raw bind address. When unset, metadata reflects the bind
-    /// `host:port`, which is correct only for local / development use.
+    /// instead of the raw bind address. When unset, metadata falls back to the
+    /// bind `host:port` only for a loopback bind (local / development use); a
+    /// non-loopback bind without this set cannot be named honestly, so the
+    /// metadata endpoint returns `503` until it is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
 }

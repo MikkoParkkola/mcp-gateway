@@ -779,8 +779,12 @@ impl Gateway {
             shutdown_tx.subscribe(),
         );
 
-        // Wire config hot-reload if a config path was provided.
-        let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
+        // Wire the config hot-reload *context* into meta_mcp before it moves
+        // into AppState. The file watcher that can mutate `live_config` is
+        // started later (after `create_router`) so the router's startup
+        // bind-origin snapshot reads `live_config` while it still equals the
+        // config the listener binds — no startup reload race (MIK-6750 r4).
+        if let Some(ref path) = self.config_path {
             let reload_ctx = Arc::new(ReloadContext::new(
                 path.clone(),
                 Arc::clone(&live_config),
@@ -789,26 +793,7 @@ impl Gateway {
                 self.config.meta_mcp.cache_ttl,
             ));
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
-
-            match ConfigWatcher::start(
-                path.clone(),
-                Arc::clone(&live_config),
-                Arc::clone(&self.backends),
-                &self.config,
-                shutdown_tx.subscribe(),
-            ) {
-                Ok(w) => {
-                    info!(path = %path.display(), "Config hot-reload enabled");
-                    Some(w)
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to start config watcher, hot-reload disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        }
 
         // In-flight request tracker: large initial permits, drain waits for
         // all permits to be returned (i.e., all in-flight requests complete).
@@ -986,6 +971,33 @@ impl Gateway {
 
         // Create router
         let mut app = create_router(state);
+
+        // Start the config file watcher now that the router has snapshotted its
+        // startup bind-origin from `live_config` (still equal to the config the
+        // listener binds). Held for the server's lifetime so hot-reload stays
+        // active. MIK-6750 r4: starting it earlier would let a startup-time
+        // reload move `live_config` before the snapshot, surfacing a
+        // never-bound host/port in the advertised resource.
+        let _config_watcher: Option<ConfigWatcher> = if let Some(ref path) = self.config_path {
+            match ConfigWatcher::start(
+                path.clone(),
+                Arc::clone(&live_config),
+                Arc::clone(&self.backends),
+                &self.config,
+                shutdown_tx.subscribe(),
+            ) {
+                Ok(w) => {
+                    info!(path = %path.display(), "Config hot-reload enabled");
+                    Some(w)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to start config watcher, hot-reload disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Add webhook routes if enabled
         if self.config.webhooks.enabled {

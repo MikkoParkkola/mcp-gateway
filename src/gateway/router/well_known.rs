@@ -12,12 +12,14 @@
 //! security-relevant discovery document would let a caller advertise a rogue
 //! origin. The `resource` identifier is resolved, in order:
 //!
-//! 1. `server.public_url` when set and a valid `http(s)` origin — the only
-//!    value that reliably names the real external origin behind a
-//!    TLS-terminating proxy. It is validated with a real URL parser and
-//!    reduced to a scheme+authority origin (no path/query/fragment/userinfo),
-//!    because the endpoint is mounted at the root and RFC 9728 §3.1 pairs a
-//!    root well-known path with a resource that has no path component.
+//! 1. `server.public_url` when set and a valid origin — the only value that
+//!    reliably names the real external origin behind a TLS-terminating proxy.
+//!    It is validated with a real URL parser and reduced to a scheme+authority
+//!    origin (no path/query/fragment/userinfo), because the endpoint is mounted
+//!    at the root and RFC 9728 §3.1 pairs a root well-known path with a resource
+//!    that has no path component. Per RFC 9728 §1.2 the scheme must be `https`,
+//!    except for a loopback host where `http` is legal (the OAuth loopback
+//!    exception).
 //! 2. Otherwise the *startup* bind address — but only when it is a loopback
 //!    host, for which advertising `http` is RFC-legal (the OAuth loopback
 //!    exception) and the bind address genuinely *is* the reachable origin.
@@ -92,17 +94,36 @@ pub fn bind_fallback_origin(host: &str, port: u16) -> Option<String> {
 
 /// Validate an operator-supplied `public_url` and reduce it to a bare origin.
 ///
-/// Uses a real URL parser (`url` crate). Accepts only `http`/`https` with a
-/// host and rejects anything that does not belong in an RFC 9728 resource
-/// identifier: a non-root path, any query, fragment, or userinfo. Returns the
-/// canonical `scheme://host[:port]` origin (default ports and trailing slash
-/// dropped), or `None` if malformed.
+/// Uses a real URL parser (`url` crate). Accepts `https` for any host and
+/// `http` only for a loopback host (the OAuth loopback exception; RFC 9728 §1.2
+/// otherwise requires `https`). Rejects raw inputs the parser would silently
+/// rewrite (whitespace, control characters, backslashes) and anything that does
+/// not belong in an RFC 9728 resource identifier: a non-root path, any query,
+/// fragment, or userinfo. Returns the canonical `scheme://host[:port]` origin
+/// (default ports and trailing slash dropped), or `None` if rejected.
 fn sanitize_public_url(raw: &str) -> Option<String> {
+    // The WHATWG URL parser silently strips leading/trailing C0 controls and
+    // spaces and rewrites `\` to `/`, so a hostile or typo'd config value could
+    // canonicalize into a *different* origin than was written. Reject such raw
+    // inputs outright rather than publish the rewritten origin.
+    if raw
+        .bytes()
+        .any(|b| b.is_ascii_whitespace() || b.is_ascii_control() || b == b'\\')
+    {
+        return None;
+    }
     let parsed = url::Url::parse(raw).ok()?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
     let host = parsed.host_str()?;
+    // RFC 9728 §1.2: a protected-resource identifier uses the `https` scheme.
+    // The sole exception is the OAuth loopback case, where `http` on a loopback
+    // host is legitimate and reachable. A non-loopback `http` origin is not a
+    // compliant resource identifier and is rejected.
+    if parsed.scheme() == "http" && !is_loopback_host(host) {
+        return None;
+    }
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return None;
     }
@@ -326,10 +347,10 @@ mod tests {
             sanitize_public_url("https://mcp.acme.internal/").as_deref(),
             Some("https://mcp.acme.internal")
         );
-        // Explicit non-default port retained.
+        // Explicit non-default port retained (loopback http is RFC-legal).
         assert_eq!(
-            sanitize_public_url("http://gw.internal:8080").as_deref(),
-            Some("http://gw.internal:8080")
+            sanitize_public_url("http://127.0.0.1:8080").as_deref(),
+            Some("http://127.0.0.1:8080")
         );
         // Default port normalized away.
         assert_eq!(
@@ -345,5 +366,39 @@ mod tests {
         assert_eq!(sanitize_public_url("https://gw.internal#f"), None);
         assert_eq!(sanitize_public_url("https://gw.internal/p"), None);
         assert_eq!(sanitize_public_url("https://gw.internal:abc"), None);
+    }
+
+    #[test]
+    fn sanitize_public_url_requires_https_except_loopback() {
+        // RFC 9728 §1.2: a non-loopback resource identifier must be https.
+        assert_eq!(sanitize_public_url("http://gw.internal"), None);
+        assert_eq!(sanitize_public_url("http://gw.internal:8080"), None);
+        assert_eq!(sanitize_public_url("http://203.0.113.7"), None);
+        // Loopback http is the legitimate OAuth loopback exception.
+        assert_eq!(
+            sanitize_public_url("http://localhost").as_deref(),
+            Some("http://localhost")
+        );
+        assert_eq!(
+            sanitize_public_url("http://[::1]:8080").as_deref(),
+            Some("http://[::1]:8080")
+        );
+        // https is accepted for any host.
+        assert_eq!(
+            sanitize_public_url("https://gw.internal").as_deref(),
+            Some("https://gw.internal")
+        );
+    }
+
+    #[test]
+    fn sanitize_public_url_rejects_parser_rewritten_inputs() {
+        // The URL parser silently strips whitespace/controls and rewrites `\`;
+        // such raw inputs must be rejected, not canonicalized into an origin.
+        assert_eq!(sanitize_public_url(" https://gw.internal"), None);
+        assert_eq!(sanitize_public_url("https://gw.internal "), None);
+        assert_eq!(sanitize_public_url("https://gw.\tinternal"), None);
+        assert_eq!(sanitize_public_url("https://gw.internal\n"), None);
+        assert_eq!(sanitize_public_url("https:\\\\gw.internal"), None);
+        assert_eq!(sanitize_public_url("https://gw.internal\u{0000}"), None);
     }
 }
