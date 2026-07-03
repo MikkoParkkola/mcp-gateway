@@ -24,7 +24,7 @@ use tracing::debug;
 use super::oidc::VerifiedIdentity;
 
 /// A temporary gateway token issued after OIDC verification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TemporaryToken {
     /// Unique token identifier (used for revocation).
     pub jti: String,
@@ -41,6 +41,23 @@ pub struct TemporaryToken {
     /// Client IP at issuance (for audit).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_ip: Option<IpAddr>,
+}
+
+// Manual `Debug` redacts the opaque bearer value (CWE-532, mirrors MIK-6733).
+// A derived `Debug` would print a live, usable session credential into logs;
+// the `jti` is shown instead for correlation/revocation.
+impl std::fmt::Debug for TemporaryToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemporaryToken")
+            .field("jti", &self.jti)
+            .field("token", &"<redacted>")
+            .field("identity", &self.identity)
+            .field("scopes", &self.scopes)
+            .field("iat", &self.iat)
+            .field("exp", &self.exp)
+            .field("client_ip", &self.client_ip)
+            .finish()
+    }
 }
 
 impl TemporaryToken {
@@ -288,6 +305,20 @@ mod tests {
             exp,
             client_ip: None,
         }
+    }
+
+    #[test]
+    fn debug_output_redacts_bearer_value() {
+        // CWE-532 / MIK-6733 sibling: {:?} must never leak the live bearer.
+        let token = make_token("user-1", "u1@test.local", 3600);
+        let raw = token.token.clone();
+        let dbg = format!("{token:?}");
+        assert!(!dbg.contains(&raw), "Debug leaked the bearer value: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "expected redaction marker: {dbg}"
+        );
+        assert!(dbg.contains(&token.jti), "jti stays visible for revocation");
     }
 
     #[tokio::test]

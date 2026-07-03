@@ -67,13 +67,29 @@ pub const EVICTION_INTERVAL: Duration = Duration::from_secs(60);
 /// let signed = signer.sign_response(response, Some("nonce-42"));
 /// assert!(signed.get("_signature").is_some());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MessageSigner {
     secret: Vec<u8>,
     /// Retained for zero-downtime rotation; used in future `verify_response()` API.
     #[allow(dead_code)]
     previous_secret: Option<Vec<u8>>,
     key_id: String,
+}
+
+// Manual `Debug` that redacts the HMAC signing secret (CWE-532, mirrors MIK-6733).
+// A derived `Debug` would print the raw signing material — leaking it lets an
+// attacker forge signed responses. Only the key id is shown.
+impl std::fmt::Debug for MessageSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageSigner")
+            .field("secret", &"<redacted>")
+            .field(
+                "previous_secret",
+                &self.previous_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("key_id", &self.key_id)
+            .finish()
+    }
 }
 
 impl MessageSigner {
@@ -276,6 +292,22 @@ mod tests {
             None,
             "test".to_string(),
         )
+    }
+
+    #[test]
+    fn debug_output_redacts_signing_secret() {
+        // CWE-532 / MIK-6733 sibling: {:?} must never leak the HMAC secret.
+        let signer = make_signer();
+        let dbg = format!("{signer:?}");
+        assert!(
+            !dbg.contains("a-test-secret-that-is-at-least-32-bytes-long"),
+            "Debug leaked the signing secret: {dbg}"
+        );
+        assert!(
+            dbg.contains("<redacted>"),
+            "expected redaction marker: {dbg}"
+        );
+        assert!(dbg.contains("test"), "key_id should remain visible");
     }
 
     // ── sign_response ─────────────────────────────────────────────────────────
