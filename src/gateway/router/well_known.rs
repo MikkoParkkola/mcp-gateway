@@ -64,7 +64,10 @@ fn is_loopback_host(host: &str) -> bool {
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
-    if bare == "localhost" {
+    // Case-insensitive: DNS names are case-insensitive, and the URL parser
+    // lowercases the host on the `public_url` path, so the bind-fallback path
+    // must classify `LOCALHOST` the same way rather than reject it.
+    if bare.eq_ignore_ascii_case("localhost") {
         return true;
     }
     bare.parse::<std::net::IpAddr>()
@@ -286,6 +289,12 @@ mod tests {
         assert_eq!(
             bind_fallback_origin("::1", 39400).as_deref(),
             Some("http://[::1]:39400")
+        );
+        // Uppercase localhost must classify as loopback too, so the bind path
+        // agrees with the `public_url` path (the URL parser lowercases hosts).
+        assert_eq!(
+            bind_fallback_origin("LOCALHOST", 39400).as_deref(),
+            Some("http://LOCALHOST:39400")
         );
     }
 
