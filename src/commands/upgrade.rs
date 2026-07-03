@@ -134,8 +134,7 @@ v3.0.0: auth is disabled on this gateway, so the admin UI and config endpoints a
 who can reach the port (single-user/local posture assumed). Bind to 127.0.0.1 or a trusted network, or \
 enable `auth.enabled: true`.";
 
-const NOTICE_ALREADY_CONFIGURED: &str =
-    "migration: v3.0.0 multi-user posture already configured (auth.single_user or oauth.shared_account set) — no action needed.";
+const NOTICE_ALREADY_CONFIGURED: &str = "migration: v3.0.0 multi-user posture already configured (auth.single_user or oauth.shared_account set) — no action needed.";
 
 /// Look up a dotted boolean path in a parsed YAML document (e.g. `["auth", "enabled"]`).
 fn yaml_bool(yaml: &serde_yaml::Value, path: &[&str]) -> Option<bool> {
@@ -920,8 +919,7 @@ mod tests {
     #[test]
     fn posture_auth_disabled_when_enabled_false() {
         // GIVEN: auth explicitly disabled
-        let yaml: serde_yaml::Value =
-            serde_yaml::from_str("auth:\n  enabled: false\n").unwrap();
+        let yaml: serde_yaml::Value = serde_yaml::from_str("auth:\n  enabled: false\n").unwrap();
         // WHEN/THEN
         assert_eq!(
             detect_multi_user_posture(&yaml),
@@ -1005,10 +1003,7 @@ mod tests {
         // THEN: it succeeds (never fails the upgrade over a notice) and leaves
         // the unparseable file untouched.
         assert!(result.is_ok());
-        assert_eq!(
-            std::fs::read_to_string(&yaml).unwrap(),
-            "not: [valid: yaml"
-        );
+        assert_eq!(std::fs::read_to_string(&yaml).unwrap(), "not: [valid: yaml");
     }
 
     #[test]
@@ -1016,7 +1011,8 @@ mod tests {
         // GIVEN: a config that would trigger the "undeclared" notice branch
         let dir = TempDir::new().unwrap();
         let yaml = dir.path().join("gateway.yaml");
-        let original = "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      enabled: true\n";
+        let original =
+            "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      enabled: true\n";
         std::fs::write(&yaml, original).unwrap();
 
         // WHEN: the migration runs (potentially twice, simulating a re-run)
