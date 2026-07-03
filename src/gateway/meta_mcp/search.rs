@@ -230,6 +230,13 @@ impl MetaMcp {
             if !profile.backend_allowed(&backend.name) {
                 continue;
             }
+            // INV-2 (ADR-008, MIK-6742): never cold-fetch or serve an isolated
+            // backend's tool metadata via the static gateway OAuth token on a
+            // multi-user gateway. Skip BEFORE backend_tools_for_discovery so the
+            // guard precedes any network round-trip (fail-closed = omit).
+            if self.meta_route_isolation_refused(&backend) {
+                continue;
+            }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             if let Some(tools) =
                 Self::backend_tools_for_discovery(&backend, allow_empty_cache_fetch).await
@@ -316,6 +323,11 @@ impl MetaMcp {
     ) {
         for backend in self.backends.all() {
             if !profile.backend_allowed(&backend.name) {
+                continue;
+            }
+            // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
+            // multi-user gateway (fail-closed = omit, not leak).
+            if self.meta_route_isolation_refused(&backend) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);
@@ -549,6 +561,72 @@ impl MetaMcp {
     /// so that the LLM knows the tool exists but cannot be invoked right now.
     ///
     /// Results are filtered by the session's active routing profile.
+    /// Tools for a single named backend (the `server` argument of `gateway_list_tools`).
+    /// Extracted from `list_tools` to keep both functions within the line budget.
+    async fn list_tools_single_server(
+        &self,
+        server: &str,
+        role_filter: Option<Role>,
+        profile: &crate::routing_profile::RoutingProfile,
+        session_id: Option<&str>,
+    ) -> Result<Value> {
+        let killed = self.kill_switch.is_killed(server);
+
+        // Backend-level profile check for single-server queries
+        if !profile.backend_allowed(server) {
+            return Err(Error::Protocol(format!(
+                "Backend '{server}' is not available in the '{}' routing profile",
+                profile.name
+            )));
+        }
+
+        // Check if it's the capability backend
+        if let Some(cap) = self.get_capabilities()
+            && server == cap.name
+        {
+            let current_state = session_id.map_or_else(
+                || crate::gateway::state::DEFAULT_STATE.to_string(),
+                |sid| self.session_state.get_state(sid),
+            );
+            let tools: Vec<_> = cap
+                .get_tools_for_state(&current_state)
+                .into_iter()
+                .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
+                .collect();
+            return Ok(json!({
+                "server": server,
+                "status": if killed { "disabled" } else { "active" },
+                "tools": tools
+            }));
+        }
+
+        // Otherwise, look in MCP backends
+        let backend = self
+            .backends
+            .get(server)
+            .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+
+        // INV-2 (MIK-6742): an isolated backend must be indistinguishable from
+        // absent on a multi-user gateway; refuse rather than fetch its
+        // tools/list with the static gateway OAuth token.
+        if self.meta_route_isolation_refused(&backend) {
+            return Err(Error::BackendNotFound(server.to_string()));
+        }
+
+        let tools: Vec<_> = backend
+            .get_tools()
+            .await?
+            .into_iter()
+            .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
+            .collect();
+
+        Ok(json!({
+            "server": server,
+            "status": if killed { "disabled" } else { "active" },
+            "tools": tools
+        }))
+    }
+
     pub(super) async fn list_tools(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
         let profile = self.active_profile(session_id);
         // Optional role filter (MIK-3532): None = all tools; Some(role) keeps
@@ -557,54 +635,9 @@ impl MetaMcp {
 
         // If server is specified, return tools from that single backend (existing behavior)
         if let Some(server) = extract_optional_str(args, "server") {
-            let killed = self.kill_switch.is_killed(server);
-
-            // Backend-level profile check for single-server queries
-            if !profile.backend_allowed(server) {
-                return Err(Error::Protocol(format!(
-                    "Backend '{server}' is not available in the '{}' routing profile",
-                    profile.name
-                )));
-            }
-
-            // Check if it's the capability backend
-            if let Some(cap) = self.get_capabilities()
-                && server == cap.name
-            {
-                let current_state = session_id.map_or_else(
-                    || crate::gateway::state::DEFAULT_STATE.to_string(),
-                    |sid| self.session_state.get_state(sid),
-                );
-                let tools: Vec<_> = cap
-                    .get_tools_for_state(&current_state)
-                    .into_iter()
-                    .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
-                    .collect();
-                return Ok(json!({
-                    "server": server,
-                    "status": if killed { "disabled" } else { "active" },
-                    "tools": tools
-                }));
-            }
-
-            // Otherwise, look in MCP backends
-            let backend = self
-                .backends
-                .get(server)
-                .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
-
-            let tools: Vec<_> = backend
-                .get_tools()
-                .await?
-                .into_iter()
-                .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
-                .collect();
-
-            return Ok(json!({
-                "server": server,
-                "status": if killed { "disabled" } else { "active" },
-                "tools": tools
-            }));
+            return self
+                .list_tools_single_server(server, role_filter, &profile, session_id)
+                .await;
         }
 
         // No server specified: aggregate ALL tools (fast — tools are prefetched at startup)
@@ -639,6 +672,11 @@ impl MetaMcp {
         // snapshots stay visible while a background refresh updates the cache.
         for backend in self.backends.all() {
             if !profile.backend_allowed(&backend.name) {
+                continue;
+            }
+            // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
+            // multi-user gateway (fail-closed = omit, not leak).
+            if self.meta_route_isolation_refused(&backend) {
                 continue;
             }
             let backend_killed = self.kill_switch.is_killed(&backend.name);

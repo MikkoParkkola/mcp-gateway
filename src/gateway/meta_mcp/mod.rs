@@ -143,6 +143,16 @@ pub struct MetaMcp {
     pub(super) identity_propagation:
         RwLock<Option<Arc<dyn crate::identity_propagation::IdentityPropagation>>>,
     pub(super) code_mode_enabled: bool,
+    /// Whether this gateway serves more than one principal (ADR-008 INV-2).
+    ///
+    /// Set at startup to `auth.enabled && (api_keys > 1 || oidc configured)`.
+    /// When `true`, dispatch refuses a backend whose gateway-held OAuth token
+    /// is not per-user isolated and not blessed `shared_account`, preventing
+    /// one user's stored token from being served to another. `false` (a
+    /// single-user gateway) never triggers the guard — the sole caller owns
+    /// every token. `AtomicBool` because it is set after the `Arc<MetaMcp>` is
+    /// built, once the auth config is resolved.
+    pub(super) multi_user: std::sync::atomic::AtomicBool,
     /// Canonical response-projection rollout mode (MIK-5877).
     ///
     /// Defaults to [`ProjectionMode::Off`] so projection is dormant — a
@@ -300,6 +310,7 @@ impl MetaMcp {
             reload_context: RwLock::new(None),
             identity_propagation: RwLock::new(None),
             code_mode_enabled: false,
+            multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
             secret_injector: crate::secret_injection::SecretInjector::empty(),
             cost_tracker: Arc::new(CostTracker::new()),
@@ -526,6 +537,90 @@ impl MetaMcp {
         *self.identity_propagation.write() = Some(strategy);
     }
 
+    /// Declare whether this gateway serves more than one principal (ADR-008
+    /// INV-2). Set once at startup from the resolved auth config. When `true`,
+    /// dispatch fails closed for a backend whose gateway-held OAuth token is
+    /// neither per-user isolated nor blessed `shared_account`.
+    pub fn set_multi_user(&self, multi_user: bool) {
+        self.multi_user
+            .store(multi_user, std::sync::atomic::Ordering::Relaxed);
+        // Propagate to the capability backend too (MIK-6751, ADR-008 parity):
+        // it enforces its own OAuth-isolation guard and cannot see this field
+        // directly. `set_capabilities` re-syncs the reverse case (capabilities
+        // attached after this call).
+        if let Some(cap) = self.capabilities.read().as_ref() {
+            cap.set_multi_user(multi_user);
+        }
+    }
+
+    /// ADR-008 INV-2 fail-closed guard, shared by the meta-MCP dispatch
+    /// (`invoke_tool_traced`) and the direct backend route (`POST /mcp/{name}`,
+    /// `backend_handlers`). On a multi-user gateway a backend whose OAuth token
+    /// is held once by the gateway (keyed by backend, not by user —
+    /// `src/oauth/storage.rs`) must NOT have that token attached for an
+    /// arbitrary caller: doing so serves user A's login to user B. Refuse UNLESS
+    /// a per-user credential was resolved (`has_per_user_credential`) or the
+    /// operator blessed the account as shared (`oauth.shared_account = true`). A
+    /// single-user gateway never enters this branch, and this never falls back
+    /// to the shared token (INV-1): it refuses.
+    pub(crate) fn enforce_oauth_isolation(
+        &self,
+        server: &str,
+        has_per_user_credential: bool,
+    ) -> Result<()> {
+        match self.backends.get(server) {
+            Some(backend) => {
+                self.enforce_oauth_isolation_for(&backend, server, has_per_user_credential)
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// INV-2 check against a captured `Backend` instance rather than a name.
+    /// Callers holding the `Arc<Backend>` they will forward to MUST use this so
+    /// the check and the later `backend.request` bind to the SAME instance —
+    /// eliminating the hot-reload TOCTOU where a name re-lookup could evaluate a
+    /// different backend than the one used (ADR-008 INV-2, MIK-6742 R2-1).
+    pub(crate) fn enforce_oauth_isolation_for(
+        &self,
+        backend: &crate::backend::Backend,
+        server: &str,
+        has_per_user_credential: bool,
+    ) -> Result<()> {
+        if self.multi_user.load(std::sync::atomic::Ordering::Relaxed)
+            && !has_per_user_credential
+            && backend.oauth_requires_per_user_isolation()
+        {
+            warn!(
+                server = %server,
+                "refused: multi-user gateway would serve a gateway-held OAuth token \
+                 that is not isolated per user (ADR-008 INV-2)"
+            );
+            return Err(Error::json_rpc(
+                -32001,
+                format!(
+                    "Backend '{server}' uses a gateway-held OAuth login that is not \
+                     isolated per user. On a multi-user gateway this call is refused so \
+                     one user's token is never served to another. Fix: supply a per-user \
+                     credential (enable identity propagation for this backend), or set \
+                     `oauth.shared_account = true` if this is a genuinely shared service \
+                     account."
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// True when a meta-route aggregation / ownership scan must SKIP `backend`
+    /// on a multi-user gateway because forwarding the gateway-held OAuth token
+    /// would leak one user's backend view to another. List/find paths call this
+    /// to omit the backend (fail closed) BEFORE any cold-cache metadata fetch,
+    /// not after — closing the metadata-leak + guard-ordering gap (MIK-6742 R2-1).
+    pub(crate) fn meta_route_isolation_refused(&self, backend: &crate::backend::Backend) -> bool {
+        self.enforce_oauth_isolation_for(backend, &backend.name, false)
+            .is_err()
+    }
+
     /// Attach a `TransitionTracker` for predictive tool prefetch.
     pub fn set_transition_tracker(&self, tracker: Arc<TransitionTracker>) {
         *self.transition_tracker.write() = Some(tracker);
@@ -533,6 +628,10 @@ impl MetaMcp {
 
     /// Set the capability backend.
     pub fn set_capabilities(&self, capabilities: Arc<CapabilityBackend>) {
+        // Sync current multi-user state onto the newly attached backend
+        // (MIK-6751): this may run before or after `set_multi_user` at
+        // startup / hot-reload, so both setters push their own state.
+        capabilities.set_multi_user(self.multi_user.load(std::sync::atomic::Ordering::Relaxed));
         *self.capabilities.write() = Some(capabilities);
     }
 
@@ -673,6 +772,11 @@ impl MetaMcp {
             .filter_map(|key| {
                 let (server, tool) = key.split_once(':')?;
                 let backend = self.backends.get(server)?;
+                // INV-2 (MIK-6742): never surface an OAuth-isolated backend's cached
+                // tool to another user on a multi-user gateway. Omit (fail closed).
+                if self.meta_route_isolation_refused(&backend) {
+                    return None;
+                }
                 backend.get_cached_tool(tool)
             })
             .collect()

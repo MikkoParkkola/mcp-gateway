@@ -1012,3 +1012,120 @@ async fn request_without_extra_headers_uses_static_only() {
     assert!(!headers.contains_key("x-idp-audience"));
     server.abort();
 }
+
+// F3 reload sink-completeness (MIK-6746): close() must abort the OAuth
+// token-refresh background task, or a stopped/hot-reloaded backend leaves an
+// orphaned task that keeps the OAuth client Arc alive and can still refresh +
+// persist a gateway-held backend token via TokenStorage::save.
+#[tokio::test]
+async fn close_aborts_oauth_refresh_task() {
+    let t = make_transport("http://127.0.0.1:1/mcp");
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    // A long-lived task standing in for the refresh loop: it only sends if it
+    // is NOT aborted.
+    let handle = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        let _ = tx.send(());
+    });
+    *t.refresh_task.write() = Some(handle);
+
+    // No session_id was ever set, so close() skips the network DELETE.
+    t.close().await.unwrap();
+
+    assert!(
+        t.refresh_task.read().is_none(),
+        "close() must take the refresh task handle"
+    );
+    // Aborted task drops its sender without sending -> receiver resolves to Err.
+    assert!(
+        rx.await.is_err(),
+        "close() must abort the refresh task (sender dropped without sending)"
+    );
+}
+
+// F3 / MIK-6746 reconnect regression: initialize() is re-entered on
+// session-expiry (request() -> initialize()), so storing a new refresh task
+// must abort the prior one. Dropping a JoinHandle does NOT cancel the task, so
+// a plain overwrite would orphan the old refresh loop, keeping the OAuth client
+// Arc alive and still persisting a gateway-held token. store_refresh_task() is
+// the idempotent slot used by initialize().
+#[tokio::test]
+async fn store_refresh_task_aborts_previous() {
+    let t = make_transport("http://127.0.0.1:1/mcp");
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    // First task standing in for the pre-reconnect refresh loop: only sends if
+    // it is NOT aborted.
+    let first = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        let _ = tx.send(());
+    });
+    t.store_refresh_task(first);
+
+    // Simulate reconnect storing a fresh refresh task.
+    let second = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(3600)).await });
+    t.store_refresh_task(second);
+
+    assert!(
+        t.refresh_task.read().is_some(),
+        "the reconnect refresh task must be stored"
+    );
+    // The first task was aborted -> its sender dropped without sending.
+    assert!(
+        rx.await.is_err(),
+        "storing a new refresh task must abort the previous one (no orphan)"
+    );
+}
+
+// =========================================================================
+// Drop impl — RAII backstop for the refresh task (ADR-008 / F3, MIK-6746)
+// =========================================================================
+
+/// A transport dropped without `close()` must abort its stored refresh task.
+///
+/// Regression guard for the partial-init leak: `initialize()` stores the
+/// refresh `JoinHandle` before `establish_sse_connection().await?`, so when
+/// that `?` fails the transport is discarded without ever calling `close()`.
+/// Without the `Drop` impl the detached tokio task would keep running,
+/// refreshing + persisting a gateway-held OAuth token indefinitely.
+#[tokio::test]
+async fn drop_aborts_refresh_task_without_close() {
+    // GIVEN: a transport with a long-lived background task stored as its
+    // refresh handle (simulating a successful OAuth handshake followed by a
+    // failed SSE connection, where close() is never called).
+    let t = make_transport("http://127.0.0.1:1/mcp");
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let refresh = tokio::spawn(async move {
+        // Stands in for the real token-refresh loop: only sends if NOT aborted.
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        let _ = tx.send(());
+    });
+    t.store_refresh_task(refresh);
+
+    // WHEN: the transport is dropped without close() — the Arc count must
+    // reach zero, triggering Drop. Unwrap the Arc to guarantee ownership.
+    let raw: HttpTransport =
+        Arc::try_unwrap(t).unwrap_or_else(|_| panic!("Arc must be uniquely owned for this test"));
+    drop(raw);
+
+    // THEN: the refresh task was aborted by Drop, so the sender is dropped
+    // immediately — rx must resolve to Err within a short deadline.
+    // Without the RAII backstop the task sleeps for 3600 s; wrapping in a
+    // tight timeout converts that hang into a prompt CI failure.
+    match tokio::time::timeout(Duration::from_millis(500), rx).await {
+        Err(elapsed) => {
+            panic!(
+                "Drop did NOT abort the refresh task — timed out after {elapsed} \
+                 waiting for the channel to close (MIK-6746 RAII regression)"
+            );
+        }
+        Ok(Ok(())) => {
+            panic!(
+                "refresh task ran to completion — Drop did not abort it \
+                 (MIK-6746 RAII regression)"
+            );
+        }
+        Ok(Err(_recv_err)) => {
+            // Sender was dropped by task abort — correct RAII behavior.
+        }
+    }
+}

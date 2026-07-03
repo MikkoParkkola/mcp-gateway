@@ -55,22 +55,29 @@ pub struct AuthorizationServerMetadata {
     pub code_challenge_methods_supported: Vec<String>,
 }
 
-/// OAuth Protected Resource Metadata (RFC 8707)
+/// OAuth 2.0 Protected Resource Metadata (RFC 9728)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtectedResourceMetadata {
     /// Protected resource identifier
     pub resource: String,
 
-    /// Authorization servers that can issue tokens for this resource
-    #[serde(default)]
+    /// Authorization servers that can issue tokens for this resource.
+    /// Omitted from serialized metadata when empty (RFC 9728 §3.2: parameters
+    /// with zero values are omitted rather than sent as `[]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authorization_servers: Vec<String>,
 
-    /// Supported bearer token methods
-    #[serde(default)]
+    /// Supported bearer token methods. Omitted when empty (RFC 9728 §3.2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bearer_methods_supported: Vec<String>,
 
-    /// Supported scopes (may be string or array due to implementation bugs)
-    #[serde(default, deserialize_with = "deserialize_scopes")]
+    /// Supported scopes (may be string or array due to implementation bugs).
+    /// Omitted when empty (RFC 9728 §3.2).
+    #[serde(
+        default,
+        deserialize_with = "deserialize_scopes",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub scopes_supported: Vec<String>,
 }
 

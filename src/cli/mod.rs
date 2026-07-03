@@ -224,9 +224,13 @@ pub enum Command {
     /// Fetch live statistics from a running gateway instance
     #[command(about = "Show invocation counts, cache hits, and token savings")]
     Stats {
-        /// Base URL of the running gateway (without /mcp suffix)
-        #[arg(short, long, default_value = "http://127.0.0.1:39400")]
-        url: String,
+        /// Base URL of the running gateway (without /mcp suffix).
+        ///
+        /// Defaults to the `server.host`/`server.port` of `--config` (the same
+        /// file `serve` binds to), falling back to `http://127.0.0.1:39400`
+        /// when no config is found. An explicit `--url` always overrides both.
+        #[arg(short, long)]
+        url: Option<String>,
 
         /// Token price per million (USD) for estimated cost savings
         #[arg(short, long, default_value_t = 15.0)]

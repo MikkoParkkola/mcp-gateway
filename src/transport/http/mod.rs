@@ -179,6 +179,19 @@ impl HttpTransport {
         }))
     }
 
+    /// Store a new OAuth refresh task, aborting any prior one.
+    ///
+    /// `initialize()` is re-entered on reconnect/session-expiry (see
+    /// `request()`), so the refresh-task slot must be idempotent: dropping a
+    /// `JoinHandle` does not cancel the spawned task, so a plain overwrite would
+    /// orphan the previous refresh loop — keeping the OAuth-client `Arc` alive
+    /// and continuing to persist a gateway-held token (F3, MIK-6746).
+    fn store_refresh_task(&self, handle: tokio::task::JoinHandle<()>) {
+        if let Some(old) = self.refresh_task.write().replace(handle) {
+            old.abort();
+        }
+    }
+
     /// Initialize the connection
     ///
     /// For SSE mode: establishes SSE handshake to get message endpoint
@@ -226,9 +239,14 @@ impl HttpTransport {
                 }
             };
 
-            // Spawn background refresh task now that we have a valid token
+            // Spawn background refresh task now that we have a valid token.
+            // Reconnect/session-expiry re-enters initialize() (see request()),
+            // so abort any prior refresh task before replacing it: dropping a
+            // JoinHandle does NOT cancel the spawned task, and an orphaned
+            // refresh loop keeps the OAuth-client Arc alive and keeps persisting
+            // a gateway-held token (F3, MIK-6746).
             let handle = OAuthClient::spawn_refresh_task(Arc::clone(oauth_arc), backend_name);
-            *self.refresh_task.write() = Some(handle);
+            self.store_refresh_task(handle);
         }
 
         if self.streamable_http {
@@ -368,6 +386,14 @@ impl HttpTransport {
         headers.insert("MCP-Protocol-Version", version.parse().unwrap());
 
         // OAuth token — SSE path emits an extra debug line.
+        //
+        // ADR-008 INV-2 (MIK-6752): this is the gateway's own static OAuth login
+        // to the backend (gateway->backend), a single shared credential. Whether
+        // a caller is allowed to ride it is decided UPSTREAM at dispatch by the
+        // per-user isolation guard (`validate_oauth_isolation` /
+        // `MetaMcp::enforce_oauth_isolation`); by the time we build headers the
+        // isolation decision has already been made. `insert` replaces (never
+        // appends) Authorization, so no caller-supplied header is duplicated.
         if let Some(token) = self.get_oauth_token().await? {
             headers.insert(
                 header::AUTHORIZATION,
@@ -765,6 +791,15 @@ impl Transport for HttpTransport {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
+        // Abort the OAuth token-refresh background task, if any. Otherwise a
+        // stopped or hot-reloaded backend leaves an orphaned task that still
+        // owns the OAuth client Arc and can refresh + persist a gateway-held
+        // backend token via TokenStorage::save without ever re-entering
+        // create_oauth_client — the F3 reload sink-completeness hole (MIK-6746).
+        if let Some(handle) = self.refresh_task.write().take() {
+            handle.abort();
+        }
+
         // Send session termination if we have a session ID
         let session_id = self.session_id.read().clone();
         let message_url = self.get_message_url();
@@ -788,6 +823,22 @@ impl Transport for HttpTransport {
         }
 
         Ok(())
+    }
+}
+
+// ADR-008 / F3 (MIK-6746): RAII backstop — a discarded/partial-init transport
+// must not leak a token-refresh loop. `initialize()` stores the refresh
+// `JoinHandle` before `establish_sse_connection().await?`; if that `?` fails, or
+// the transport is otherwise dropped without an awaited `close()`, the handle is
+// dropped, which *detaches* (does not cancel) the tokio task — orphaning a loop
+// that keeps refreshing + persisting a gateway-held OAuth token. Aborting on drop
+// closes that no-close path. Composes with `close()`: after close the slot is
+// `None`, so this abort is a no-op (no double abort).
+impl Drop for HttpTransport {
+    fn drop(&mut self) {
+        if let Some(handle) = self.refresh_task.get_mut().take() {
+            handle.abort();
+        }
     }
 }
 

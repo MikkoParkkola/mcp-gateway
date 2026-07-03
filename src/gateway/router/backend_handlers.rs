@@ -171,6 +171,45 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     }
 }
 
+/// Resolve passthrough headers for the direct backend route (ADR-008 rung 2,
+/// MIK-6746). Reads the caller's own backend credential from a fixed,
+/// gateway-specific inbound header and forwards it to the backend under
+/// `Authorization`. The gateway mints and stores NOTHING (INV-4). A dedicated
+/// header (never the gateway-auth `Authorization`) means a multi-user gateway
+/// can never forward its own inbound credential to a backend. Fail-closed: a
+/// `required` backend with no caller credential returns `Err` (mapped to 403 by
+/// the caller); a non-required backend with none returns an empty vec (static
+/// path, after which the INV-2 guard decides whether a shared token may serve).
+fn resolve_passthrough_headers(
+    cfg: &crate::identity_propagation::IdentityPropagationConfig,
+    inbound: &axum::http::HeaderMap,
+) -> Result<Vec<(String, String)>, String> {
+    // The inbound header a capable client attaches its backend credential in
+    // (advertised via RFC 9728 protected-resource metadata, MIK-6750). Distinct
+    // from `Authorization` so the gateway-auth token is never forwarded.
+    const PASSTHROUGH_HEADER: &str = "x-mcp-passthrough-authorization";
+    let missing = || {
+        if cfg.required {
+            Err(
+                "identity propagation required for this backend but the caller supplied no \
+                 passthrough credential (ADR-008 D.3, fail-closed)"
+                    .to_string(),
+            )
+        } else {
+            Ok(Vec::new())
+        }
+    };
+    match inbound
+        .get(PASSTHROUGH_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        Some(v) => Ok(vec![("Authorization".to_string(), v.to_string())]),
+        None => missing(),
+    }
+}
+
 /// Backend handler (POST /mcp/{name})
 #[allow(clippy::too_many_lines)]
 pub(super) async fn backend_handler(
@@ -192,6 +231,10 @@ pub(super) async fn backend_handler(
         .extensions()
         .get::<crate::key_server::oidc::VerifiedIdentity>()
         .cloned();
+    // Inbound headers, captured before the body is consumed, so the passthrough
+    // path (ADR-008 rung 2, MIK-6746) can read the caller's own backend
+    // credential from the operator-named header.
+    let inbound_headers = request.headers().clone();
 
     // Check backend access if auth is enabled
     if let Some(ref client) = client
@@ -278,18 +321,50 @@ pub(super) async fn backend_handler(
     // request_with_headers; fail closed (403) for a `required` backend with no
     // verified identity rather than silently forwarding with only the static
     // credential. Empty for a non-propagation backend → unchanged static path.
-    let propagated_headers: Vec<(String, String)> = if method == "tools/call" {
-        match state
-            .meta_mcp
-            .resolve_propagation_headers(&name, verified_identity.as_ref())
-            .await
-        {
+    //
+    // Applies to every caller-data method (`tools/call`, `resources/read`,
+    // `prompts/get`, `resources/list`, `prompts/list`, …), not just `tools/call`
+    // — otherwise a required backend could serve those methods without the caller
+    // credential, downgrading to the shared static credential and leaking one
+    // user's backend data/metadata under another's account (GPT review F2,
+    // MIK-6746; merged with ADR-007 IDP.2/IDP.3 fail-closed gate, MIK-6728).
+    // `resolve_propagation_headers` returns an empty set for a non-propagation or
+    // non-`required` backend, so the static path below is unchanged for those
+    // (IDP.5 backward-compat). Pure discovery/plumbing (`initialize`, `tools/list`,
+    // `ping`) carries no per-user data and is exempt so the MCP handshake and tool
+    // schema stay reachable; every other id-bearing request is guarded.
+    let isolation_guarded = !matches!(method.as_str(), "initialize" | "tools/list" | "ping")
+        && !method.starts_with("notifications/");
+    let propagated_headers: Vec<(String, String)> = if isolation_guarded {
+        // Passthrough (ADR-008 rung 2, MIK-6746): a backend whose caller attaches
+        // its OWN credential is handled here — forward it verbatim, mint/store
+        // NOTHING (INV-4). Any other propagation strategy is resolved by the
+        // shared minting chokepoint. Isolation (INV-3) holds by construction:
+        // each request forwards its own header via `request_with_headers`, never
+        // via the shared transport, and the direct route keeps no per-user cache.
+        let passthrough_cfg = state
+            .backends
+            .get(&name)
+            .and_then(|b| b.identity_propagation_config().cloned())
+            .filter(|c| {
+                c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
+            });
+        let resolved = if let Some(cfg) = passthrough_cfg {
+            resolve_passthrough_headers(&cfg, &inbound_headers)
+        } else {
+            state
+                .meta_mcp
+                .resolve_propagation_headers(&name, verified_identity.as_ref())
+                .await
+                .map_err(|e| e.to_string())
+        };
+        match resolved {
             Ok(headers) => headers,
             Err(e) => {
                 return build_http_error_response(
                     Some(id.clone()),
                     -32003,
-                    e.to_string(),
+                    e,
                     StatusCode::FORBIDDEN,
                 );
             }
@@ -297,6 +372,26 @@ pub(super) async fn backend_handler(
     } else {
         Vec::new()
     };
+
+    // ADR-008 INV-2: the direct backend route bypasses `invoke_tool_traced`, so
+    // it must enforce the same fail-closed OAuth-isolation guard. This covers
+    // every caller-data method that forwards with the gateway-held token —
+    // `tools/call`, `resources/read`, `prompts/get`, etc. — not just
+    // `tools/call`. A per-user credential was resolved above iff
+    // `propagated_headers` is non-empty, so a per-user OAuth backend on a
+    // multi-user gateway is refused rather than served the shared token.
+    if isolation_guarded
+        && let Err(e) = state
+            .meta_mcp
+            .enforce_oauth_isolation(&name, !propagated_headers.is_empty())
+    {
+        return build_http_error_response(
+            Some(id.clone()),
+            e.to_rpc_code(),
+            e.to_string(),
+            StatusCode::FORBIDDEN,
+        );
+    }
 
     // SECURITY: apply tool policy, name validation, and input sanitization to
     // tools/call requests unless the backend explicitly opts into pass-through
@@ -498,6 +593,73 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // MIK-6746 D.4 — passthrough resolution (ADR-008 rung 2).
+    mod passthrough {
+        use axum::http::HeaderMap;
+
+        use super::*;
+        use crate::identity_propagation::{
+            IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+        };
+
+        const HEADER: &str = "x-mcp-passthrough-authorization";
+
+        fn cfg(required: bool) -> IdentityPropagationConfig {
+            IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::Passthrough,
+                audience: "https://backend".to_string(),
+                required,
+                session_mode: SessionMode::PerUser,
+            }
+        }
+
+        fn headers_with(cred: &str) -> HeaderMap {
+            let mut h = HeaderMap::new();
+            h.insert(HEADER, cred.parse().unwrap());
+            h
+        }
+
+        // D.1/D.4 — the caller's own credential is forwarded verbatim to the
+        // backend under `Authorization`. Nothing else is emitted; the function
+        // is pure over its inputs, so it cannot persist a token (INV-4).
+        #[test]
+        fn present_credential_is_forwarded_as_authorization() {
+            let out = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer caller-tok"))
+                .expect("present credential resolves");
+            assert_eq!(
+                out,
+                vec![("Authorization".to_string(), "Bearer caller-tok".to_string())]
+            );
+        }
+
+        // D.4 — concurrent callers are isolated: each request forwards only its
+        // own header value; there is no shared/mutable state between calls.
+        #[test]
+        fn concurrent_callers_are_isolated() {
+            let a = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer alice")).unwrap();
+            let b = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer bob")).unwrap();
+            assert_eq!(a[0].1, "Bearer alice");
+            assert_eq!(b[0].1, "Bearer bob");
+            assert_ne!(a[0].1, b[0].1);
+        }
+
+        // D.3 — a required backend with no caller credential fails closed.
+        #[test]
+        fn required_and_absent_refuses() {
+            assert!(resolve_passthrough_headers(&cfg(true), &HeaderMap::new()).is_err());
+            // A blank credential counts as absent.
+            assert!(resolve_passthrough_headers(&cfg(true), &headers_with("   ")).is_err());
+        }
+
+        // A non-required backend with no caller credential yields the static
+        // path (empty), after which the INV-2 shared-token guard decides.
+        #[test]
+        fn optional_and_absent_is_empty() {
+            let out = resolve_passthrough_headers(&cfg(false), &HeaderMap::new()).unwrap();
+            assert!(out.is_empty());
+        }
+    }
 
     #[test]
     fn normalize_tools_list_response_fills_direct_backend_proxy_annotations() {

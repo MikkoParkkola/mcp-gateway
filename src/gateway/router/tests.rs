@@ -289,6 +289,7 @@ fn scoped_auth_config(admin: bool) -> AuthConfig {
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,
+        single_user: false,
     }
 }
 
@@ -825,6 +826,64 @@ async fn backend_handler_missing_backend_returns_jsonrpc_not_found() {
         "Backend not found: missing-backend"
     );
     assert_eq!(json["id"], Value::Null);
+}
+
+#[tokio::test]
+async fn backend_handler_discovery_method_fails_closed_for_required_propagation() {
+    // ADR-007 IDP.2/IDP.3 regression guard: a discovery method (resources/list)
+    // on a propagation-`required` backend must fail closed (403) when the
+    // request carries no verified identity — never downgrade to the shared
+    // static credential. Guards the fix that extends the per-user credential
+    // gate beyond `tools/call` to every backend-reaching method (MIK-6728).
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+
+    let config = BackendConfig {
+        identity_propagation: Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "https://mem.internal/mcp".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+        }),
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "demo",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+
+    let router = create_router(test_router_app_state_with_backend(backend));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "resources/list"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], -32003);
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("required"),
+        "fail-closed error message: {}",
+        json["error"]["message"]
+    );
 }
 
 #[tokio::test]

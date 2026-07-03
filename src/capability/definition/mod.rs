@@ -680,6 +680,16 @@ pub struct AuthConfig {
     /// refresh token is available.
     #[serde(default)]
     pub token_endpoint: Option<String>,
+
+    /// Operator-blessed escape hatch for a gateway-held `oauth:<provider>`
+    /// credential that is intentionally shared across every caller (e.g. a
+    /// team service account), mirroring `OAuthConfig.shared_account` for MCP
+    /// backends (ADR-008 INV-2). Default `false`: on a multi-user gateway, a
+    /// capability whose `key` is `oauth:<provider>` is refused unless this is
+    /// set, or the capability is `exposure: personal` with a matching caller
+    /// identity (MIK-6751).
+    #[serde(default)]
+    pub shared_account: bool,
 }
 
 /// Cache configuration
