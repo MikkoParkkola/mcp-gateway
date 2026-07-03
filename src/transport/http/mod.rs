@@ -179,6 +179,19 @@ impl HttpTransport {
         }))
     }
 
+    /// Store a new OAuth refresh task, aborting any prior one.
+    ///
+    /// `initialize()` is re-entered on reconnect/session-expiry (see
+    /// `request()`), so the refresh-task slot must be idempotent: dropping a
+    /// `JoinHandle` does not cancel the spawned task, so a plain overwrite would
+    /// orphan the previous refresh loop — keeping the OAuth-client `Arc` alive
+    /// and continuing to persist a gateway-held token (F3, MIK-6746).
+    fn store_refresh_task(&self, handle: tokio::task::JoinHandle<()>) {
+        if let Some(old) = self.refresh_task.write().replace(handle) {
+            old.abort();
+        }
+    }
+
     /// Initialize the connection
     ///
     /// For SSE mode: establishes SSE handshake to get message endpoint
@@ -226,9 +239,14 @@ impl HttpTransport {
                 }
             };
 
-            // Spawn background refresh task now that we have a valid token
+            // Spawn background refresh task now that we have a valid token.
+            // Reconnect/session-expiry re-enters initialize() (see request()),
+            // so abort any prior refresh task before replacing it: dropping a
+            // JoinHandle does NOT cancel the spawned task, and an orphaned
+            // refresh loop keeps the OAuth-client Arc alive and keeps persisting
+            // a gateway-held token (F3, MIK-6746).
             let handle = OAuthClient::spawn_refresh_task(Arc::clone(oauth_arc), backend_name);
-            *self.refresh_task.write() = Some(handle);
+            self.store_refresh_task(handle);
         }
 
         if self.streamable_http {

@@ -1042,3 +1042,36 @@ async fn close_aborts_oauth_refresh_task() {
         "close() must abort the refresh task (sender dropped without sending)"
     );
 }
+
+// F3 / MIK-6746 reconnect regression: initialize() is re-entered on
+// session-expiry (request() -> initialize()), so storing a new refresh task
+// must abort the prior one. Dropping a JoinHandle does NOT cancel the task, so
+// a plain overwrite would orphan the old refresh loop, keeping the OAuth client
+// Arc alive and still persisting a gateway-held token. store_refresh_task() is
+// the idempotent slot used by initialize().
+#[tokio::test]
+async fn store_refresh_task_aborts_previous() {
+    let t = make_transport("http://127.0.0.1:1/mcp");
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    // First task standing in for the pre-reconnect refresh loop: only sends if
+    // it is NOT aborted.
+    let first = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        let _ = tx.send(());
+    });
+    t.store_refresh_task(first);
+
+    // Simulate reconnect storing a fresh refresh task.
+    let second = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(3600)).await });
+    t.store_refresh_task(second);
+
+    assert!(
+        t.refresh_task.read().is_some(),
+        "the reconnect refresh task must be stored"
+    );
+    // The first task was aborted -> its sender dropped without sending.
+    assert!(
+        rx.await.is_err(),
+        "storing a new refresh task must abort the previous one (no orphan)"
+    );
+}
