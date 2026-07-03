@@ -578,6 +578,20 @@ fn backend_with_idp(idp: IdentityPropagationConfig) -> BackendConfig {
     }
 }
 
+fn oauth_cfg(enabled: bool) -> OAuthConfig {
+    OAuthConfig {
+        enabled,
+        scopes: vec![],
+        client_id: None,
+        client_secret: None,
+        callback_host: None,
+        callback_port: None,
+        callback_path: None,
+        token_refresh_buffer_secs: 300,
+        shared_account: false,
+    }
+}
+
 #[test]
 fn validate_accepts_stateless_signed_assertion_backend() {
     let mut config = Config::default();
@@ -684,4 +698,47 @@ fn validate_backend_without_idp_is_unchanged() {
     // IDP.5: absent config keeps today's behavior — default config validates.
     let config = Config::default();
     assert!(config.validate().is_ok());
+}
+
+#[test]
+fn validate_rejects_identity_propagation_with_enabled_backend_oauth() {
+    // F3: a backend running its own enabled oauth client persists a gateway-held
+    // token during initialize(), authenticating the transport session as the
+    // gateway before the per-request credential override — silently defeating
+    // per-user propagation. The pairing must fail closed at load.
+    let mut config = Config::default();
+    let mut backend = backend_with_idp(IdentityPropagationConfig {
+        strategy: PropagationStrategyKind::SignedAssertion,
+        audience: "https://mem".to_string(),
+        required: true,
+        session_mode: SessionMode::Stateless,
+    });
+    backend.oauth = Some(oauth_cfg(true));
+    config.backends.insert("mem".to_string(), backend);
+    let err = config.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("oauth"),
+        "error should name the oauth co-config conflict: {err}"
+    );
+    assert!(err.contains("mem"), "error should name the backend: {err}");
+}
+
+#[test]
+fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
+    // A disabled backend oauth client never runs its authorize flow, so it
+    // cannot persist a gateway-held token — the F3 conflict does not apply and
+    // the propagation backend must still validate.
+    let mut config = Config::default();
+    let mut backend = backend_with_idp(IdentityPropagationConfig {
+        strategy: PropagationStrategyKind::SignedAssertion,
+        audience: "https://mem".to_string(),
+        required: true,
+        session_mode: SessionMode::Stateless,
+    });
+    backend.oauth = Some(oauth_cfg(false));
+    config.backends.insert("mem".to_string(), backend);
+    assert!(
+        config.validate().is_ok(),
+        "disabled backend oauth must not trip the F3 gate"
+    );
 }

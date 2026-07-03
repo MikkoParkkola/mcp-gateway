@@ -339,6 +339,24 @@ impl Config {
                      pool. Refusing to start rather than reuse a shared session (IDP.7)."
                 )));
             }
+            // A backend running the gateway's own OAuth client authorizes and
+            // persists a gateway-held token during initialize(), authenticating
+            // the transport session as the gateway *before* the per-request
+            // credential override is applied. Combined with identity_propagation
+            // that silently defeats per-user propagation: the session is already
+            // gateway-authenticated, so the per-user credential rides on top of a
+            // channel that no longer represents the end user. Refuse the pairing
+            // at load rather than dispatch under a contradictory trust model (F3).
+            if backend.oauth.as_ref().is_some_and(|o| o.enabled) {
+                return Err(Error::ConfigValidation(format!(
+                    "backend '{name}' cannot combine identity_propagation with its own enabled \
+                     oauth client: the backend oauth authorizes and persists a gateway-held token \
+                     during initialize(), authenticating the transport session as the gateway \
+                     before the per-request credential override — silently defeating per-user \
+                     propagation. Set oauth.enabled=false on this backend or remove \
+                     identity_propagation (F3)."
+                )));
+            }
         }
         Ok(())
     }
