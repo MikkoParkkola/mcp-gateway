@@ -548,6 +548,14 @@ pub struct ServerConfig {
     pub shutdown_timeout: Duration,
     /// Maximum request body size (bytes).
     pub max_body_size: usize,
+    /// Externally reachable base URL of this gateway (scheme + host + optional
+    /// port), e.g. `https://mcp.your-domain.tld`. Set this when the gateway
+    /// runs behind a TLS-terminating reverse proxy so RFC 9728
+    /// protected-resource metadata advertises the real public HTTPS origin
+    /// instead of the raw bind address. When unset, metadata reflects the bind
+    /// `host:port`, which is correct only for local / development use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -559,6 +567,7 @@ impl Default for ServerConfig {
             request_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
+            public_url: None,
         }
     }
 }
