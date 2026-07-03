@@ -278,24 +278,30 @@ pub(super) async fn backend_handler(
     // request_with_headers; fail closed (403) for a `required` backend with no
     // verified identity rather than silently forwarding with only the static
     // credential. Empty for a non-propagation backend → unchanged static path.
-    let propagated_headers: Vec<(String, String)> = if method == "tools/call" {
-        match state
-            .meta_mcp
-            .resolve_propagation_headers(&name, verified_identity.as_ref())
-            .await
-        {
-            Ok(headers) => headers,
-            Err(e) => {
-                return build_http_error_response(
-                    Some(id.clone()),
-                    -32003,
-                    e.to_string(),
-                    StatusCode::FORBIDDEN,
-                );
-            }
+    //
+    // ADR-007 IDP.2/IDP.3: this gate applies to EVERY request method that
+    // reaches the backend, not only `tools/call`. Discovery methods
+    // (tools/list, resources/list, resources/templates/list, prompts/list) and
+    // any other backend-reaching request must fail closed for a `required`
+    // backend rather than downgrade to the shared static credential — otherwise
+    // a caller with no verified identity could read another user's backend
+    // metadata under the shared account. `resolve_propagation_headers` returns
+    // an empty set for a non-propagation or non-required backend, so the static
+    // path below is unchanged for those (IDP.5 backward-compat).
+    let propagated_headers: Vec<(String, String)> = match state
+        .meta_mcp
+        .resolve_propagation_headers(&name, verified_identity.as_ref())
+        .await
+    {
+        Ok(headers) => headers,
+        Err(e) => {
+            return build_http_error_response(
+                Some(id.clone()),
+                -32003,
+                e.to_string(),
+                StatusCode::FORBIDDEN,
+            );
         }
-    } else {
-        Vec::new()
     };
 
     // SECURITY: apply tool policy, name validation, and input sanitization to
