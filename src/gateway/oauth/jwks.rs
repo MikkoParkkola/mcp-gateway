@@ -69,7 +69,7 @@ pub struct JwkSet {
 }
 
 /// Information for a generated EC key pair.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GatewayKeyInfo {
     /// Unique key identifier (UUID v4).
     pub kid: String,
@@ -79,6 +79,21 @@ pub struct GatewayKeyInfo {
     pub x: String,
     /// Base64url-encoded y-coordinate of the public key.
     pub y: String,
+}
+
+// Manual `Debug` that redacts the ES256 signing private key (MIK-6733).
+// A derived `Debug` would print `private_key_pem` verbatim into any trace,
+// error context, or embedding struct — a full compromise of the gateway's
+// JWKS/assertion trust. Only the kid and public coordinates are shown.
+impl std::fmt::Debug for GatewayKeyInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayKeyInfo")
+            .field("kid", &self.kid)
+            .field("private_key_pem", &"<redacted>")
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .finish()
+    }
 }
 
 /// Thread-safe, rotatable EC key pair for the gateway.
@@ -201,6 +216,30 @@ mod tests {
         assert!(!info.x.is_empty());
         assert!(!info.y.is_empty());
         assert!(info.private_key_pem.contains("PRIVATE KEY"));
+    }
+
+    #[test]
+    fn debug_output_redacts_private_key() {
+        // MIK-6733 KEY.1/KEY.2: `{:?}` must never leak the signing private key.
+        let kp = GatewayKeyPair::generate().expect("key generation should succeed");
+        let info = kp.key_info();
+        // Precondition: the PEM really is present on the value.
+        assert!(info.private_key_pem.contains("PRIVATE KEY"));
+
+        let dbg = format!("{info:?}");
+        // The raw PEM contents must be absent (both the PEM markers and any body line).
+        assert!(
+            !dbg.contains("PRIVATE KEY"),
+            "Debug output leaked the private key PEM: {dbg}"
+        );
+        assert!(
+            !dbg.contains(&info.private_key_pem),
+            "Debug output contained the verbatim private key"
+        );
+        assert!(dbg.contains("<redacted>"), "expected redaction marker");
+        // Public material may (and should) still be visible for diagnostics.
+        assert!(dbg.contains(&info.kid), "kid should remain visible");
+        assert!(dbg.contains(&info.x), "public x should remain visible");
     }
 
     #[test]
