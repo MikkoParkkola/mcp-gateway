@@ -1075,3 +1075,57 @@ async fn store_refresh_task_aborts_previous() {
         "storing a new refresh task must abort the previous one (no orphan)"
     );
 }
+
+// =========================================================================
+// Drop impl — RAII backstop for the refresh task (ADR-008 / F3, MIK-6746)
+// =========================================================================
+
+/// A transport dropped without `close()` must abort its stored refresh task.
+///
+/// Regression guard for the partial-init leak: `initialize()` stores the
+/// refresh `JoinHandle` before `establish_sse_connection().await?`, so when
+/// that `?` fails the transport is discarded without ever calling `close()`.
+/// Without the `Drop` impl the detached tokio task would keep running,
+/// refreshing + persisting a gateway-held OAuth token indefinitely.
+#[tokio::test]
+async fn drop_aborts_refresh_task_without_close() {
+    // GIVEN: a transport with a long-lived background task stored as its
+    // refresh handle (simulating a successful OAuth handshake followed by a
+    // failed SSE connection, where close() is never called).
+    let t = make_transport("http://127.0.0.1:1/mcp");
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let refresh = tokio::spawn(async move {
+        // Stands in for the real token-refresh loop: only sends if NOT aborted.
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        let _ = tx.send(());
+    });
+    t.store_refresh_task(refresh);
+
+    // WHEN: the transport is dropped without close() — the Arc count must
+    // reach zero, triggering Drop. Unwrap the Arc to guarantee ownership.
+    let raw: HttpTransport =
+        Arc::try_unwrap(t).unwrap_or_else(|_| panic!("Arc must be uniquely owned for this test"));
+    drop(raw);
+
+    // THEN: the refresh task was aborted by Drop, so the sender is dropped
+    // immediately — rx must resolve to Err within a short deadline.
+    // Without the RAII backstop the task sleeps for 3600 s; wrapping in a
+    // tight timeout converts that hang into a prompt CI failure.
+    match tokio::time::timeout(Duration::from_millis(500), rx).await {
+        Err(elapsed) => {
+            panic!(
+                "Drop did NOT abort the refresh task — timed out after {elapsed} \
+                 waiting for the channel to close (MIK-6746 RAII regression)"
+            );
+        }
+        Ok(Ok(())) => {
+            panic!(
+                "refresh task ran to completion — Drop did not abort it \
+                 (MIK-6746 RAII regression)"
+            );
+        }
+        Ok(Err(_recv_err)) => {
+            // Sender was dropped by task abort — correct RAII behavior.
+        }
+    }
+}
