@@ -26,6 +26,7 @@ mod authorization;
 mod backend_handlers;
 mod handlers;
 pub(crate) mod helpers;
+mod well_known;
 
 #[cfg(test)]
 mod tests;
@@ -117,6 +118,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/.well-known/jwks.json", get(jwks_handler))
         .with_state(Arc::clone(&state.gateway_key_pair));
 
+    // RFC 9728 protected-resource metadata — unauthenticated (clients fetch it
+    // before holding a token). Populated from config, not the request Host.
+    let protected_resource_route = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(well_known::oauth_protected_resource_handler),
+        )
+        .with_state(Arc::clone(&state));
+
     #[allow(unused_mut)]
     let mut routes = Router::new()
         .route("/health", get(handlers::health_handler))
@@ -164,6 +174,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     // Merge JWKS route (unauthenticated)
     app = app.merge(jwks_route);
+
+    // Merge RFC 9728 protected-resource metadata route (unauthenticated)
+    app = app.merge(protected_resource_route);
 
     // Merge /metrics scrape endpoint (unauthenticated — Prometheus scrapers do not send auth headers)
     #[cfg(feature = "metrics")]
