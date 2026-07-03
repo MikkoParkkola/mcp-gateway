@@ -178,6 +178,12 @@ fn detect_multi_user_posture(yaml: &serde_yaml::Value) -> MultiUserPosture {
 /// `oauth.shared_account`). Idempotent — the migration engine only invokes
 /// this once per data directory because `check_upgrade`/`run_upgrade_command`
 /// skip already-applicable migrations once the version stamp reaches 3.0.0.
+// This migration is deliberately infallible — it never fails the upgrade over
+// an informational notice — but it must match `Migration::apply`'s
+// `fn(&Path) -> std::io::Result<()>` signature, which other (file-mutating)
+// migrations genuinely need. Hence the always-`Ok` wrap is intentional, not
+// an oversight.
+#[allow(clippy::unnecessary_wraps)]
 fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
     let path = data_dir.join("gateway.yaml");
     let Ok(text) = std::fs::read_to_string(&path) else {
