@@ -282,6 +282,12 @@ impl MetaMcp {
             json!({})
         });
         for backend in self.backends.all() {
+            // INV-2 (ADR-008): never drive the gateway-held OAuth token to an
+            // isolated backend on behalf of an arbitrary caller on a multi-user
+            // gateway. Skip isolated backends (MIK-6742 leak class).
+            if self.meta_route_isolation_refused(&backend) {
+                continue;
+            }
             if let Err(e) = backend
                 .request("logging/setLevel", Some(forward_params.clone()))
                 .await
