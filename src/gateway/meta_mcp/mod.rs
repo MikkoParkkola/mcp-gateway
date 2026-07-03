@@ -568,12 +568,28 @@ impl MetaMcp {
         server: &str,
         has_per_user_credential: bool,
     ) -> Result<()> {
+        match self.backends.get(server) {
+            Some(backend) => {
+                self.enforce_oauth_isolation_for(&backend, server, has_per_user_credential)
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// INV-2 check against a captured `Backend` instance rather than a name.
+    /// Callers holding the `Arc<Backend>` they will forward to MUST use this so
+    /// the check and the later `backend.request` bind to the SAME instance —
+    /// eliminating the hot-reload TOCTOU where a name re-lookup could evaluate a
+    /// different backend than the one used (ADR-008 INV-2, MIK-6742 R2-1).
+    pub(crate) fn enforce_oauth_isolation_for(
+        &self,
+        backend: &crate::backend::Backend,
+        server: &str,
+        has_per_user_credential: bool,
+    ) -> Result<()> {
         if self.multi_user.load(std::sync::atomic::Ordering::Relaxed)
             && !has_per_user_credential
-            && self
-                .backends
-                .get(server)
-                .is_some_and(|b| b.oauth_requires_per_user_isolation())
+            && backend.oauth_requires_per_user_isolation()
         {
             warn!(
                 server = %server,
@@ -593,6 +609,16 @@ impl MetaMcp {
             ));
         }
         Ok(())
+    }
+
+    /// True when a meta-route aggregation / ownership scan must SKIP `backend`
+    /// on a multi-user gateway because forwarding the gateway-held OAuth token
+    /// would leak one user's backend view to another. List/find paths call this
+    /// to omit the backend (fail closed) BEFORE any cold-cache metadata fetch,
+    /// not after — closing the metadata-leak + guard-ordering gap (MIK-6742 R2-1).
+    pub(crate) fn meta_route_isolation_refused(&self, backend: &crate::backend::Backend) -> bool {
+        self.enforce_oauth_isolation_for(backend, &backend.name, false)
+            .is_err()
     }
 
     /// Attach a `TransitionTracker` for predictive tool prefetch.

@@ -223,6 +223,9 @@ impl MetaMcp {
         let mut all_resources: Vec<Resource> = guide_resources().into();
 
         for backend in self.backends.all() {
+            if self.meta_route_isolation_refused(&backend) {
+                continue;
+            }
             match backend.get_resources_shared().await {
                 Ok(resources) => {
                     for resource in resources.iter().cloned() {
@@ -280,7 +283,7 @@ impl MetaMcp {
         // per-user credential here (propagation parity is direct-route-only until
         // the invoke resolver is unlocked), so pass `false` — fail closed rather
         // than serve one user's backend OAuth view to another (MIK-6742 leak class).
-        if let Err(e) = self.enforce_oauth_isolation(&backend.name, false) {
+        if let Err(e) = self.enforce_oauth_isolation_for(&backend, &backend.name, false) {
             return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
         }
 
@@ -308,6 +311,9 @@ impl MetaMcp {
         let mut all_templates: Vec<ResourceTemplate> = Vec::new();
 
         for backend in self.backends.all() {
+            if self.meta_route_isolation_refused(&backend) {
+                continue;
+            }
             match backend.get_resource_templates_shared().await {
                 Ok(templates) => {
                     all_templates.extend(templates.iter().cloned());
@@ -348,7 +354,7 @@ impl MetaMcp {
         };
 
         // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
-        if let Err(e) = self.enforce_oauth_isolation(&backend.name, false) {
+        if let Err(e) = self.enforce_oauth_isolation_for(&backend, &backend.name, false) {
             return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
         }
 
@@ -386,7 +392,7 @@ impl MetaMcp {
         };
 
         // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
-        if let Err(e) = self.enforce_oauth_isolation(&backend.name, false) {
+        if let Err(e) = self.enforce_oauth_isolation_for(&backend, &backend.name, false) {
             return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
         }
 
@@ -411,6 +417,9 @@ impl MetaMcp {
         uri: &str,
     ) -> Option<Arc<crate::backend::Backend>> {
         for backend in self.backends.all() {
+            if self.meta_route_isolation_refused(&backend) {
+                continue;
+            }
             if let Ok(resources) = backend.get_resources_shared().await
                 && resources.iter().any(|r| r.uri == uri)
             {
