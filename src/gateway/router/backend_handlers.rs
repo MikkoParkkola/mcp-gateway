@@ -321,7 +321,14 @@ pub(super) async fn backend_handler(
     // request_with_headers; fail closed (403) for a `required` backend with no
     // verified identity rather than silently forwarding with only the static
     // credential. Empty for a non-propagation backend → unchanged static path.
-    let propagated_headers: Vec<(String, String)> = if method == "tools/call" {
+    //
+    // Applies to every caller-data method (`tools/call`, `resources/read`,
+    // `prompts/get`, …), not just `tools/call` — otherwise a required passthrough
+    // backend could serve those methods without the caller credential (GPT review
+    // F2, MIK-6746). Discovery/plumbing carries no user data and is exempt.
+    let isolation_guarded = !matches!(method.as_str(), "initialize" | "tools/list" | "ping")
+        && !method.starts_with("notifications/");
+    let propagated_headers: Vec<(String, String)> = if isolation_guarded {
         // Passthrough (ADR-008 rung 2, MIK-6746): a backend whose caller attaches
         // its OWN credential is handled here — forward it verbatim, mint/store
         // NOTHING (INV-4). Any other propagation strategy is resolved by the
@@ -363,14 +370,9 @@ pub(super) async fn backend_handler(
     // it must enforce the same fail-closed OAuth-isolation guard. This covers
     // every caller-data method that forwards with the gateway-held token —
     // `tools/call`, `resources/read`, `prompts/get`, etc. — not just
-    // `tools/call`. Discovery/plumbing (`initialize`, `tools/list`, `ping`,
-    // `notifications/*`) is exempt: it carries no user data. A per-user
-    // credential was resolved above iff `propagated_headers` is non-empty (only
-    // populated for `tools/call`); any other guarded method has none, so a
-    // per-user OAuth backend on a multi-user gateway is refused rather than
-    // served the shared token.
-    let isolation_guarded = !matches!(method.as_str(), "initialize" | "tools/list" | "ping")
-        && !method.starts_with("notifications/");
+    // `tools/call`. A per-user credential was resolved above iff
+    // `propagated_headers` is non-empty, so a per-user OAuth backend on a
+    // multi-user gateway is refused rather than served the shared token.
     if isolation_guarded
         && let Err(e) = state
             .meta_mcp
