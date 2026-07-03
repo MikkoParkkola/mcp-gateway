@@ -32,8 +32,11 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // Capture config path before consuming `cli` in the match below.
+    // Capture config path (and the port/host overrides `stats` also needs)
+    // before consuming `cli` in the match below.
     let config_path = cli.config.clone();
+    let port_override = cli.port;
+    let host_override = cli.host.clone();
 
     match cli.command {
         Some(Command::Init {
@@ -52,7 +55,15 @@ async fn main() -> ExitCode {
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
         Some(Command::Identity(identity_cmd)) => commands::run_identity_command(identity_cmd).await,
-        Some(Command::Stats { url, price }) => commands::run_stats_command(&url, price).await,
+        Some(Command::Stats { url, price }) => {
+            let effective_url = resolve_stats_url(
+                url,
+                config_path.as_deref(),
+                port_override,
+                host_override.as_deref(),
+            );
+            commands::run_stats_command(&effective_url, price).await
+        }
         Some(Command::Validate {
             paths,
             format,
@@ -444,6 +455,40 @@ async fn run_plugin_command(cmd: PluginCommand, config_path: Option<&Path>) -> E
             commands::run_plugin_list(plugin_dir.as_deref(), &config)
         }
     }
+}
+
+/// Resolve the base URL the `stats` command should query when `--url` was
+/// not given explicitly.
+///
+/// `stats` used to hardcode `http://127.0.0.1:39400` as its `--url` default,
+/// completely independent of `--config`. That meant `mcp-gateway --config X
+/// stats` silently ignored `X` and talked to whatever else happened to be
+/// listening on port 39400 the moment `serve --config X` used a different
+/// port — returning that unrelated service's error and misattributing it to
+/// the gateway (MIK-6742). This derives the default from the same
+/// `server.host`/`server.port` (plus `--port`/`--host` overrides) that
+/// `serve` binds to, so `stats` targets the gateway `--config` describes.
+///
+/// An explicit `url` (the `--url` flag) always wins and is returned as-is.
+fn resolve_stats_url(
+    url: Option<String>,
+    config_path: Option<&Path>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+) -> String {
+    url.unwrap_or_else(|| {
+        let mut config = Config::load(config_path).unwrap_or_else(|e| {
+            eprintln!("Warning: failed to load config ({e}); using defaults for stats URL");
+            Config::default()
+        });
+        if let Some(port) = port_override {
+            config.server.port = port;
+        }
+        if let Some(host) = host_override {
+            config.server.host = host.to_string();
+        }
+        commands::default_stats_url(&config.server.host, config.server.port)
+    })
 }
 
 /// Apply CLI overrides to a loaded configuration.

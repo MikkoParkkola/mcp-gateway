@@ -14,6 +14,13 @@ pub struct CapabilityLoader;
 impl CapabilityLoader {
     /// Load all capabilities from a directory (recursive)
     ///
+    /// Emits one INFO-level summary line (`N loaded, M unpinned`) per
+    /// directory rather than one line per unpinned file — pinning is opt-in
+    /// per file by design, so an unpinned public catalog is expected, not a
+    /// misconfiguration to warn about file-by-file. Per-file detail (path +
+    /// computed hash) is still available at DEBUG via
+    /// [`super::parser::parse_capability_file`].
+    ///
     /// # Errors
     ///
     /// Returns an error if the directory does not exist or is not a valid directory.
@@ -37,10 +44,13 @@ impl CapabilityLoader {
         let mut capabilities = Vec::new();
         Self::load_directory_recursive(path, &mut capabilities).await?;
 
+        let unpinned = count_unpinned(&capabilities);
         info!(
             count = capabilities.len(),
+            unpinned,
             path = %path.display(),
-            "Loaded capabilities"
+            "Loaded capabilities: {} loaded, {unpinned} unpinned",
+            capabilities.len(),
         );
 
         Ok(capabilities)
@@ -167,6 +177,17 @@ impl CapabilityLoader {
     }
 }
 
+/// Count how many `capabilities` have no `sha256:` pin.
+///
+/// Pinning is opt-in per file by design (see
+/// [`super::parser::parse_capability_file`]); this count feeds the
+/// directory-level `N loaded, M unpinned` summary log so an operator can see
+/// catalog pin coverage at a glance instead of scanning one INFO line per
+/// unpinned file (MIK-6742).
+fn count_unpinned(capabilities: &[CapabilityDefinition]) -> usize {
+    capabilities.iter().filter(|c| c.sha256.is_none()).count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +254,105 @@ providers:
 
         assert_eq!(capabilities.len(), 1);
         assert_eq!(capabilities[0].name, "gmail_test");
+    }
+
+    // ── MIK-6742: unpinned-catalog log volume ───────────────────────────────
+    //
+    // A public capability catalog is unpinned by design (pinning is opt-in
+    // per file). Loading it must not emit one INFO log line per unpinned
+    // file — that produced a wall of ~118 INFO lines on every boot. The fix
+    // demotes the per-file line in `parser::parse_capability_file` to DEBUG
+    // and reports the unpinned count once, in `load_directory`'s existing
+    // per-directory summary. `count_unpinned` is the arithmetic behind that
+    // summary; testing tracing's own INFO/DEBUG routing would require
+    // capturing log output, which is unreliable in a shared parallel test
+    // binary (tracing caches an `Interest` decision per callsite the first
+    // time it's hit, process-wide — a test-order-dependent trap, not
+    // something a per-test subscriber can override). `count_unpinned` is
+    // exactly the part of this change that carries regression risk (getting
+    // the `Option::is_none()` polarity backwards silently reports "0
+    // unpinned" against a fully-unpinned catalog), so that is what is
+    // covered here.
+
+    /// Build a minimal, valid [`CapabilityDefinition`] for counting tests,
+    /// optionally embedding a `sha256:` pin.
+    fn make_cap(name: &str, sha256: Option<&str>) -> CapabilityDefinition {
+        let pin_line = sha256.map_or_else(String::new, |h| format!("sha256: {h}\n"));
+        let yaml = format!(
+            r"
+{pin_line}name: {name}
+description: Test capability
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://internal.test
+      path: /test
+"
+        );
+        super::super::parse_capability(&yaml).unwrap()
+    }
+
+    /// GIVEN a mix of pinned and unpinned capability definitions
+    /// WHEN counting unpinned entries
+    /// THEN only the entries with `sha256: None` are counted.
+    #[test]
+    fn count_unpinned_counts_only_definitions_without_a_pin() {
+        let pinned = make_cap("pinned_cap", Some("abc123"));
+        let unpinned_a = make_cap("unpinned_a", None);
+        let unpinned_b = make_cap("unpinned_b", None);
+
+        assert_eq!(
+            count_unpinned(&[pinned.clone(), unpinned_a.clone(), unpinned_b.clone()]),
+            2
+        );
+        assert_eq!(count_unpinned(&[pinned]), 0);
+        assert_eq!(count_unpinned(&[unpinned_a, unpinned_b]), 2);
+    }
+
+    /// GIVEN an empty capability list
+    /// WHEN counting unpinned entries
+    /// THEN the count is zero (no divide-by-zero or panic on an empty
+    /// directory).
+    #[test]
+    fn count_unpinned_returns_zero_for_empty_slice() {
+        assert_eq!(count_unpinned(&[]), 0);
+    }
+
+    /// GIVEN a directory of two unpinned capability files
+    /// WHEN loaded via the public loader entry point
+    /// THEN both files load successfully and carry no `sha256` pin — the
+    /// precondition the INFO-summary unpinned count depends on.
+    #[tokio::test]
+    async fn load_directory_loads_unpinned_files_with_no_sha256_pin() {
+        let temp_dir = TempDir::new().unwrap();
+        for name in ["cap_a", "cap_b"] {
+            let cap_path = temp_dir.path().join(format!("{name}.yaml"));
+            let mut file = std::fs::File::create(&cap_path).unwrap();
+            writeln!(
+                file,
+                r"
+name: {name}
+description: unpinned test capability
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://internal.test
+"
+            )
+            .unwrap();
+        }
+
+        let capabilities = CapabilityLoader::load_directory(temp_dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(capabilities.len(), 2, "both unpinned files load");
+        assert_eq!(
+            count_unpinned(&capabilities),
+            2,
+            "neither file embeds a sha256: pin"
+        );
     }
 }

@@ -3,7 +3,7 @@
 use super::CapabilityDefinition;
 use super::hash::compute_capability_hash;
 use crate::{Error, Result};
-use tracing::info;
+use tracing::debug;
 
 /// Parse a capability definition from YAML content
 ///
@@ -19,8 +19,13 @@ pub fn parse_capability(content: &str) -> Result<CapabilityDefinition> {
 ///
 /// Verifies the optional `sha256:` pin as a rug-pull guard: if the file
 /// embeds a pin, a mismatch returns [`Error::CapabilityHashMismatch`] and the
-/// capability is refused. Files without a pin are loaded, and the computed
-/// hash is logged at INFO so operators can add `sha256:` to pin them.
+/// capability is refused. Pinning is opt-in per file by design (see
+/// `docs/blog/security-aware-mcp-gateway.md`): files without a pin are
+/// loaded, and the computed hash is logged at DEBUG so an operator who wants
+/// to pin a specific file can still recover the hash to paste back in.
+/// [`super::loader::CapabilityLoader::load_directory`] logs one INFO-level
+/// summary per directory (`N capabilities loaded, M unpinned`) instead of a
+/// line per file, so unpinned catalogs do not spam startup logs.
 ///
 /// # Errors
 ///
@@ -53,7 +58,7 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
             // Pin verified — nothing to log at load time. Loader reports.
         }
         None => {
-            info!(
+            debug!(
                 path = %path.display(),
                 sha256 = %actual_hash,
                 "unpinned capability loaded, compute hash: {actual_hash} — add `sha256: {actual_hash}` to pin",
@@ -294,7 +299,7 @@ providers:
         let path = write_capability_file(&dir, "unpinned.yaml", UNPINNED_YAML);
         // WHEN: loading it
         let cap = parse_capability_file(&path).await.unwrap();
-        // THEN: it loads with sha256 == None (INFO log about pinning is emitted)
+        // THEN: it loads with sha256 == None (DEBUG log about pinning is emitted)
         assert_eq!(cap.name, "pinned_cap");
         assert!(cap.sha256.is_none());
     }

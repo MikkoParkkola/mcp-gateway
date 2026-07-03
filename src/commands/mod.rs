@@ -39,7 +39,7 @@ pub use skills::{
     run_skills_generate, run_skills_import, run_skills_list, run_skills_remove, run_skills_search,
     run_skills_show,
 };
-pub use stats::run_stats_command;
+pub use stats::{default_stats_url, run_stats_command};
 pub use trust::run_trust_command;
 pub use upgrade::{check_upgrade, data_dir as upgrade_data_dir, run_upgrade_command};
 

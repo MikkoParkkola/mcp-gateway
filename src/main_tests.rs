@@ -856,3 +856,92 @@ fn audit_config_load_failure_is_fail_closed() {
         "a missing explicit config path must be an Err (fail closed), not a default empty-secret config"
     );
 }
+
+// MIK-6742: `stats` used to default `--url` to a hardcoded
+// `http://127.0.0.1:39400`, completely independent of `--config`. Running
+// `mcp-gateway --config X stats` therefore silently talked to whatever else
+// was listening on 39400 instead of the gateway `X` describes — returning
+// that unrelated server's error (observed as a confusing 406 Not Acceptable
+// against a real deployment where 39400 was already taken by a different
+// process). These tests pin `resolve_stats_url`'s config-derived behavior so
+// that regression can't come back unnoticed.
+
+/// GIVEN an explicit `--url`
+/// WHEN resolving the stats URL
+/// THEN the explicit URL always wins, regardless of any config.
+#[test]
+fn resolve_stats_url_explicit_url_overrides_config() {
+    let resolved = resolve_stats_url(Some("http://10.0.0.5:1234".to_string()), None, None, None);
+    assert_eq!(resolved, "http://10.0.0.5:1234");
+}
+
+/// GIVEN no `--url` and no `--config` (and no config discoverable on disk)
+/// WHEN resolving the stats URL
+/// THEN it falls back to the same default gateway `serve` would use when
+/// unconfigured (127.0.0.1:39400) — unchanged legacy behavior.
+#[test]
+fn resolve_stats_url_no_url_no_config_falls_back_to_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let orig = std::env::current_dir().unwrap();
+    // Run from an empty directory so `Config::load(None)`'s well-known
+    // fallback search does not pick up a stray gateway.yaml from the repo.
+    std::env::set_current_dir(dir.path()).unwrap();
+    let resolved = resolve_stats_url(None, None, None, None);
+    std::env::set_current_dir(&orig).unwrap();
+    assert_eq!(resolved, "http://127.0.0.1:39400");
+}
+
+/// GIVEN a `--config` file whose `server.port` is NOT the hardcoded default
+/// (the exact MIK-6742 repro: `serve --config X` bound to a free, non-39400
+/// port)
+/// WHEN resolving the stats URL with no explicit `--url`
+/// THEN the resolved URL carries the configured port — this is the
+/// regression test that would have caught the original bug, where `stats`
+/// ignored `--config` entirely.
+#[test]
+fn resolve_stats_url_no_url_derives_port_from_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &config_path,
+        "server:\n  host: \"127.0.0.1\"\n  port: 39477\n",
+    )
+    .unwrap();
+
+    let resolved = resolve_stats_url(None, Some(&config_path), None, None);
+
+    assert_eq!(resolved, "http://127.0.0.1:39477");
+}
+
+/// GIVEN a `--config` file bound to a wildcard host (`0.0.0.0`)
+/// WHEN resolving the stats URL
+/// THEN the client-facing URL uses loopback, since a client cannot dial
+/// `0.0.0.0` as a destination address.
+#[test]
+fn resolve_stats_url_no_url_translates_wildcard_bind_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &config_path,
+        "server:\n  host: \"0.0.0.0\"\n  port: 39400\n",
+    )
+    .unwrap();
+
+    let resolved = resolve_stats_url(None, Some(&config_path), None, None);
+
+    assert_eq!(resolved, "http://127.0.0.1:39400");
+}
+
+/// GIVEN no `--url` and a `--port` CLI override (no `--config`)
+/// WHEN resolving the stats URL
+/// THEN the override port is reflected, mirroring the override `serve`
+/// would apply via `apply_cli_overrides`.
+#[test]
+fn resolve_stats_url_no_url_applies_port_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let orig = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+    let resolved = resolve_stats_url(None, None, Some(9999), None);
+    std::env::set_current_dir(&orig).unwrap();
+    assert_eq!(resolved, "http://127.0.0.1:9999");
+}
