@@ -323,9 +323,16 @@ pub(super) async fn backend_handler(
     // credential. Empty for a non-propagation backend → unchanged static path.
     //
     // Applies to every caller-data method (`tools/call`, `resources/read`,
-    // `prompts/get`, …), not just `tools/call` — otherwise a required passthrough
-    // backend could serve those methods without the caller credential (GPT review
-    // F2, MIK-6746). Discovery/plumbing carries no user data and is exempt.
+    // `prompts/get`, `resources/list`, `prompts/list`, …), not just `tools/call`
+    // — otherwise a required backend could serve those methods without the caller
+    // credential, downgrading to the shared static credential and leaking one
+    // user's backend data/metadata under another's account (GPT review F2,
+    // MIK-6746; merged with ADR-007 IDP.2/IDP.3 fail-closed gate, MIK-6728).
+    // `resolve_propagation_headers` returns an empty set for a non-propagation or
+    // non-`required` backend, so the static path below is unchanged for those
+    // (IDP.5 backward-compat). Pure discovery/plumbing (`initialize`, `tools/list`,
+    // `ping`) carries no per-user data and is exempt so the MCP handshake and tool
+    // schema stay reachable; every other id-bearing request is guarded.
     let isolation_guarded = !matches!(method.as_str(), "initialize" | "tools/list" | "ping")
         && !method.starts_with("notifications/");
     let propagated_headers: Vec<(String, String)> = if isolation_guarded {
