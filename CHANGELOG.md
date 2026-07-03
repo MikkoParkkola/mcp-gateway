@@ -7,33 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.0.0] - UNRELEASED (held)
+## [3.0.0] - 2026-07-03
 
-> **Release held.** 3.0.0 is **not tagged or published**. A shared/multi-user
-> ("team") gateway serves a single stored OAuth token per backend to every
-> caller (see `src/oauth/storage.rs` — tokens are keyed by `(backend, resource)`,
-> not by user), so on a shared gateway one user's request to a personal OAuth
-> backend (Gmail, Superhuman, etc.) can be served with another user's login.
-> The v3.0.0 identity-propagation work is a separate, additive path that classic
-> `oauth:` backends do not use and does not fail-closed on that path. Per-user
-> OAuth isolation (or a fail-closed guard that refuses the unsafe multi-user
-> config) must land before 3.0.0 is cut. Tracking: see the release-blocker ticket.
+> **Breaking change.** The default OAuth posture changes: a gateway with
+> `auth.enabled: true` no longer serves one stored backend token to every
+> caller (see `src/oauth/storage.rs`). See "Added" and "Security" below,
+> and `docs/UPGRADING-3.0.md` for the upgrade path.
 
 ### Added
 
-- **End-user identity propagation to backend MCP servers** (MIK-6704 epic; ADR-007 framework-first). The Trust Fabric release: the gateway can now mint a per-user credential for a backend configured with `identity_propagation` and attach it on the wire, instead of forwarding only a shared static credential. A strategy-agnostic async `IdentityPropagation` trait with a first-party `SignedAssertionStrategy` (ES256 assertions signed by the gateway key) is wired across every invocation surface: meta-MCP dispatch (`gateway_invoke`), Code Mode (`gateway_execute`, single + chain), and the direct backend route (`/mcp/{name}`).
-  - **Fail-closed (IDP.2):** a `required` backend refuses the call (never a static-credential fallback) when there is no verified identity, no strategy wired, minting fails, or a minted header does not parse. Non-HTTP transports (stdio/websocket) cannot carry the credential header and are rejected at config load.
+- **Per-user OAuth isolation as the fail-closed default** (ADR-008, MIK-6742; see `docs/adr/ADR-008-multi-user-oauth-isolation.md`). On a multi-user gateway, a backend that requires a per-user OAuth identity now refuses a call that lacks a verified end-user identity instead of falling back to a shared stored token. Two invariants are enforced end to end:
+  - **INV-1**: a per-user backend never falls back to a shared or other-principal token. Required-and-unresolved always refuses.
+  - **INV-2**: a multi-user gateway never serves a gateway-held OAuth token to an arbitrary caller, unless the operator explicitly opts a backend into `oauth.shared_account: true` (logged). Multi-user detection is itself fail-closed: auth enabled implies multi-user unless the operator declares `auth.single_user: true`; more than one API key or any OIDC issuer overrides that declaration.
+  - Coverage spans both call paths that resolve an OAuth token: MCP backends (`MetaMcp::enforce_oauth_isolation`) and capability-backed REST connectors (`validate_oauth_isolation` in `src/capability/execution_context.rs`). (#316, #317)
+- **RFC 9728 protected-resource metadata + refresh-task lifecycle** (MIK-6750; #316). The gateway now advertises per-backend OAuth requirements so a capable MCP client can run its own browser-based login and attach its own token per request instead of relying on a gateway-held credential. OAuth refresh tasks are scoped to transport lifetime and are aborted when a transport is discarded, closing an orphaned-task leak.
+- **Client-supplied OAuth passthrough** (MIK-6746). A caller can attach its own backend credential on the request; the gateway forwards it without storing a copy, covering the direct backend route (`/mcp/{name}`) as well as meta-MCP dispatch.
+- **v3.0.0 upgrade posture-notice migration** (#318, MIK-6742). Read-only: on first startup after upgrading, the gateway backs up the existing `gateway.yaml` to `gateway.yaml.bak.<old_version>`, detects whether the deployment declares a multi-user posture, and prints a one-time notice. No config field is changed automatically. See `docs/UPGRADING-3.0.md`.
+- **End-user identity propagation to backend MCP servers** (MIK-6704 epic; ADR-007 framework-first). The gateway can mint a per-user credential for a backend configured with `identity_propagation` and attach it on the wire, instead of forwarding only a shared static credential. A strategy-agnostic async `IdentityPropagation` trait with a first-party `SignedAssertionStrategy` (ES256 assertions signed by the gateway key) is wired across every invocation surface: meta-MCP dispatch (`gateway_invoke`), Code Mode (`gateway_execute`, single + chain), and the direct backend route (`/mcp/{name}`).
+  - **Fail-closed (IDP.2):** a `required` backend refuses the call (never a static-credential fallback) when there is no verified identity, no strategy wired, minting fails, or a minted header does not parse. Non-HTTP transports (stdio/websocket) cannot carry the credential header and are rejected at config load. #317 extends this fail-closed behavior to every direct-route method.
   - **Tenant isolation (IDP.3):** per-request credential headers are passed by value and never stored on the shared transport.
   - **Identity-aware caching (IDP.8):** a collision-safe `cache_binding` (user + audience) is mixed into the response and idempotency cache keys, so per-user results cache in isolation rather than leaking across users or being dropped.
-  - Hardened through four rounds of adversarial review, which caught and closed four distinct trust-boundary gaps (cross-user cache hit, non-HTTP silent drop, Code Mode identity loss, direct-route bypass) before merge.
   - Deferred as tracked follow-ups (not in this release): additional strategies token-exchange (MIK-6729) and vault (MIK-6730), per-user transport/session pooling (MIK-6735, `session_mode: per_user` stays fail-closed until then), transparency-log audit of propagation events (MIK-6740), and `McpProvider` adapter hardening (MIK-6741).
 
 ### Changed
 
-- **Major version bump to 3.0.0** marking the Trust Fabric milestone: identity propagation, transparency-log per-entry HMAC verification (MIK-6700), control-plane read-reflects-store (MIK-6701), collision-safe role-mapping hot-reload (MIK-6702), and server-run SIEM evidence export (MIK-6703).
+- **Major version bump to 3.0.0** ("Trust Fabric"): per-user OAuth isolation (ADR-008), identity propagation (ADR-007), transparency-log per-entry HMAC verification (MIK-6700), control-plane read-reflects-store (MIK-6701), collision-safe role-mapping hot-reload (MIK-6702), and server-run SIEM evidence export (MIK-6703).
+- **Default OAuth posture on auth-enabled gateways.** Previously, any gateway with `auth.enabled: true` served each backend's stored OAuth token to every authenticated caller. Now a backend requiring per-user identity refuses calls lacking one. Existing `gateway.yaml` files load unchanged; the upgrade migration only backs up the file and prints a notice (see Added, above). To keep the previous shared-credential behavior, add one line: `auth.single_user: true` for a personal gateway, or `oauth.shared_account: true` under a specific backend for an intentionally shared service account.
 
 ### Security
 
+- **Cross-user OAuth token exposure closed** (ADR-008, MIK-6742, MIK-6751, MIK-6752). Before this release, a shared/multi-user gateway stored one OAuth token per `(backend, resource)` and attached it caller-agnostically, so one user's call to a personal-OAuth backend (for example Gmail) could be served with another user's login. This predates 3.0.0 and is closed by the INV-1/INV-2 guards described above.
 - Bump `cmov` 0.5.3 → 0.5.4 (GHSA-3rjw-m598-pq24). Bump `quick-xml` 0.40 → 0.41 (RUSTSEC-2026-0194/0195, MIK-6731).
 
 ## [2.19.0] - 2026-06-08
