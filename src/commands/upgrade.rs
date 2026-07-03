@@ -92,10 +92,116 @@ pub struct Migration {
 ///     apply: |dir| { /* patch gateway.yaml */ Ok(()) },
 /// }
 /// ```
-static MIGRATIONS: &[Migration] = &[
-    // No migrations registered yet — the framework is the deliverable.
-    // Future migrations go here, sorted by applies_below ascending.
-];
+static MIGRATIONS: &[Migration] = &[Migration {
+    applies_below: "3.0.0",
+    description: "v3.0.0: informational per-user OAuth isolation notice (config unchanged)",
+    apply: migrate_3_0_0_multi_user_notice,
+}];
+
+// ── 3.0.0 migration: multi-user-default posture notice ─────────────────────────
+//
+// v3.0.0 makes per-user OAuth isolation the default behavior for any
+// auth-enabled gateway (ADR-008 INV-2, fail-closed). A v2.x `gateway.yaml`
+// loads completely unchanged on 3.0.0 — this migration NEVER edits the file.
+// Its only job is to detect the deployment's posture and emit a one-time,
+// actionable startup notice so the behavior change (backends that require
+// per-user identity now refuse calls lacking it) doesn't surprise operators.
+
+/// Detected multi-user posture of a config, as relevant to the 3.0.0 upgrade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MultiUserPosture {
+    /// `auth.enabled` is false — no per-user boundary exists to protect.
+    AuthDisabled,
+    /// Auth is enabled and the operator has not declared a posture yet.
+    Undeclared,
+    /// Auth is enabled and the operator already declared `single_user` or a
+    /// backend's `oauth.shared_account`.
+    AlreadyDeclared,
+}
+
+const NOTICE_MULTI_USER_DEFAULT: &str = "\
+v3.0.0: per-user OAuth isolation is now the default for auth-enabled gateways (ADR-008 INV-2, fail-closed).\n\
+    What changed: backends whose OAuth token requires a per-user identity now REFUSE calls that lack a \
+verified end-user identity (HTTP 403 / JSON-RPC -32001..-32003) instead of silently sharing one stored \
+token across every caller.\n\
+    This gateway has auth enabled but has not declared a posture. Pick one:\n\
+      - Single-user / personal gateway -> add `auth.single_user: true` to gateway.yaml\n\
+      - Shared service account for one backend -> add `oauth.shared_account: true` under that backend\n\
+    No config was changed automatically — this is an informational notice only.";
+
+const NOTICE_AUTH_DISABLED: &str = "\
+v3.0.0: auth is disabled on this gateway, so the admin UI and config endpoints are reachable by anyone \
+who can reach the port (single-user/local posture assumed). Bind to 127.0.0.1 or a trusted network, or \
+enable `auth.enabled: true`.";
+
+const NOTICE_ALREADY_CONFIGURED: &str =
+    "migration: v3.0.0 multi-user posture already configured (auth.single_user or oauth.shared_account set) — no action needed.";
+
+/// Look up a dotted boolean path in a parsed YAML document (e.g. `["auth", "enabled"]`).
+fn yaml_bool(yaml: &serde_yaml::Value, path: &[&str]) -> Option<bool> {
+    let mut cur = yaml;
+    for key in path {
+        cur = cur.get(key)?;
+    }
+    cur.as_bool()
+}
+
+/// `true` when any `backends.*.oauth.shared_account` is explicitly `true`.
+fn any_backend_shared_account(yaml: &serde_yaml::Value) -> bool {
+    yaml.get("backends")
+        .and_then(serde_yaml::Value::as_mapping)
+        .is_some_and(|backends| {
+            backends.values().any(|backend| {
+                backend
+                    .get("oauth")
+                    .and_then(|oauth| oauth.get("shared_account"))
+                    .and_then(serde_yaml::Value::as_bool)
+                    .unwrap_or(false)
+            })
+        })
+}
+
+/// Classify a parsed config's multi-user posture without mutating it.
+fn detect_multi_user_posture(yaml: &serde_yaml::Value) -> MultiUserPosture {
+    if !yaml_bool(yaml, &["auth", "enabled"]).unwrap_or(false) {
+        return MultiUserPosture::AuthDisabled;
+    }
+    let single_user = yaml_bool(yaml, &["auth", "single_user"]).unwrap_or(false);
+    if single_user || any_backend_shared_account(yaml) {
+        return MultiUserPosture::AlreadyDeclared;
+    }
+    MultiUserPosture::Undeclared
+}
+
+/// 3.0.0 migration entry point. Read-only: emits a tracing notice tailored to
+/// the detected posture and never mutates `gateway.yaml` or any of the
+/// security-relevant fields it inspects (`auth.single_user`,
+/// `oauth.shared_account`). Idempotent — the migration engine only invokes
+/// this once per data directory because `check_upgrade`/`run_upgrade_command`
+/// skip already-applicable migrations once the version stamp reaches 3.0.0.
+fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
+    let path = data_dir.join("gateway.yaml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        // No config file at this location: nothing to detect, nothing to warn about.
+        return Ok(());
+    };
+    let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        // Config::load() will surface the real parse error at startup; the
+        // migration must not fail the upgrade over an informational notice.
+        tracing::warn!(
+            path = %path.display(),
+            "migration v3.0.0: could not parse gateway.yaml for posture detection — skipping notice"
+        );
+        return Ok(());
+    };
+
+    match detect_multi_user_posture(&yaml) {
+        MultiUserPosture::Undeclared => tracing::warn!("{NOTICE_MULTI_USER_DEFAULT}"),
+        MultiUserPosture::AuthDisabled => tracing::warn!("{NOTICE_AUTH_DISABLED}"),
+        MultiUserPosture::AlreadyDeclared => tracing::info!("{NOTICE_ALREADY_CONFIGURED}"),
+    }
+    Ok(())
+}
 
 // ── Version stamp I/O ─────────────────────────────────────────────────────────
 
@@ -165,6 +271,14 @@ static WHATS_NEW: &[WhatsNew] = &[
             "Security hardening: HMAC signing (ASI07), destructive confirmation (ASI09), anomaly blocking (ASI10)",
             "FSM state-gated tool visibility for multi-step workflows",
             "Structured self-healing error responses with recovery hints",
+        ],
+    },
+    WhatsNew {
+        version: "3.0.0",
+        items: &[
+            "Per-user OAuth isolation is now the default for auth-enabled gateways (ADR-008 INV-2, fail-closed)",
+            "Backends requiring per-user identity now refuse calls lacking a verified end-user identity",
+            "Declare `auth.single_user: true` (personal gateway) or `oauth.shared_account: true` (per backend) to opt in to shared-credential behavior",
         ],
     },
 ];
@@ -648,11 +762,19 @@ mod tests {
         assert_eq!(content, "content: preserved\n");
     }
 
-    // ── applicable_migrations (empty registry) ────────────────────────────────
+    // ── applicable_migrations ─────────────────────────────────────────────────
 
     #[test]
-    fn no_migrations_registered_returns_zero() {
-        // GIVEN: the empty MIGRATIONS registry
+    fn migrations_registry_has_exactly_one_3_0_0_entry() {
+        // GIVEN: the MIGRATIONS registry
+        // WHEN/THEN: it carries exactly the 3.0.0 multi-user notice migration
+        assert_eq!(MIGRATIONS.len(), 1);
+        assert_eq!(MIGRATIONS[0].applies_below, "3.0.0");
+    }
+
+    #[test]
+    fn pre_3_0_0_stamp_has_one_applicable_migration() {
+        // GIVEN: an install stamped below 3.0.0
         let dir = TempDir::new().unwrap();
         let ctx = UpgradeContext {
             data_dir: dir.path(),
@@ -662,7 +784,23 @@ mod tests {
             quiet: true,
         };
         // WHEN: applicable migrations are collected
-        // THEN: none (registry is empty)
+        // THEN: the 3.0.0 notice migration applies
+        assert_eq!(ctx.applicable_migrations().len(), 1);
+    }
+
+    #[test]
+    fn stamp_already_at_3_0_0_has_zero_applicable_migrations() {
+        // GIVEN: an install already stamped at 3.0.0 (the migration's own ceiling)
+        let dir = TempDir::new().unwrap();
+        let ctx = UpgradeContext {
+            data_dir: dir.path(),
+            old_ver: SemVer::parse("3.0.0").unwrap(),
+            new_ver: SemVer::parse("3.0.0").unwrap(),
+            dry_run: false,
+            quiet: true,
+        };
+        // WHEN: applicable migrations are collected
+        // THEN: none — `applies_below` is a strict upper bound (idempotency guard)
         assert_eq!(ctx.applicable_migrations().len(), 0);
     }
 
@@ -740,17 +878,18 @@ mod tests {
 
     #[test]
     fn no_backup_when_zero_migrations() {
-        // GIVEN: a data dir with gateway.yaml but no applicable migrations
+        // GIVEN: a data dir with gateway.yaml already stamped at 3.0.0, so the
+        // registered 3.0.0 migration's `applies_below` ceiling no longer matches.
         let dir = TempDir::new().unwrap();
         let yaml = dir.path().join("gateway.yaml");
         std::fs::write(&yaml, "server:\n  port: 39400\n").unwrap();
-        write_stamp(&stamp_path(dir.path()), "0.1.0").unwrap();
+        write_stamp(&stamp_path(dir.path()), "3.0.0").unwrap();
 
-        // WHEN: upgrade runs (no migrations in the registry)
+        // WHEN: upgrade runs (stamp already satisfies every registered migration)
         let ctx = UpgradeContext {
             data_dir: dir.path(),
-            old_ver: SemVer::parse("0.1.0").unwrap(),
-            new_ver: SemVer::parse("2.10.0").unwrap(),
+            old_ver: SemVer::parse("3.0.0").unwrap(),
+            new_ver: SemVer::parse("3.0.1").unwrap(),
             dry_run: false,
             quiet: true,
         };
@@ -758,10 +897,183 @@ mod tests {
 
         // THEN: no migrations applied, no backup file created
         assert_eq!(n, 0);
-        let bak = dir.path().join("gateway.yaml.bak.0.1.0");
+        let bak = dir.path().join("gateway.yaml.bak.3.0.0");
         assert!(
             !bak.exists(),
             "backup should NOT be created when 0 migrations apply"
+        );
+    }
+
+    // ── 3.0.0 multi-user posture notice migration ────────────────────────────
+
+    #[test]
+    fn posture_auth_disabled_when_auth_section_absent() {
+        // GIVEN: a config with no `auth` section at all
+        let yaml: serde_yaml::Value = serde_yaml::from_str("server:\n  port: 39400\n").unwrap();
+        // WHEN/THEN: treated as auth-disabled (default `auth.enabled` is false)
+        assert_eq!(
+            detect_multi_user_posture(&yaml),
+            MultiUserPosture::AuthDisabled
+        );
+    }
+
+    #[test]
+    fn posture_auth_disabled_when_enabled_false() {
+        // GIVEN: auth explicitly disabled
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str("auth:\n  enabled: false\n").unwrap();
+        // WHEN/THEN
+        assert_eq!(
+            detect_multi_user_posture(&yaml),
+            MultiUserPosture::AuthDisabled
+        );
+    }
+
+    #[test]
+    fn posture_undeclared_when_auth_enabled_without_single_user_or_shared_account() {
+        // GIVEN: auth enabled, no single_user flag, no backend shared_account
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      enabled: true\n",
+        )
+        .unwrap();
+        // WHEN/THEN: this is exactly the silent-behavior-change case
+        assert_eq!(
+            detect_multi_user_posture(&yaml),
+            MultiUserPosture::Undeclared
+        );
+    }
+
+    #[test]
+    fn posture_already_declared_when_single_user_true() {
+        // GIVEN: auth enabled and single_user explicitly declared
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str("auth:\n  enabled: true\n  single_user: true\n").unwrap();
+        // WHEN/THEN
+        assert_eq!(
+            detect_multi_user_posture(&yaml),
+            MultiUserPosture::AlreadyDeclared
+        );
+    }
+
+    #[test]
+    fn posture_already_declared_when_backend_shared_account_true() {
+        // GIVEN: auth enabled, single_user unset, but one backend opts in to shared_account
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      enabled: true\n      shared_account: true\n",
+        )
+        .unwrap();
+        // WHEN/THEN
+        assert_eq!(
+            detect_multi_user_posture(&yaml),
+            MultiUserPosture::AlreadyDeclared
+        );
+    }
+
+    #[test]
+    fn posture_undeclared_ignores_shared_account_false() {
+        // GIVEN: a backend that explicitly sets shared_account: false (still fail-closed)
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      shared_account: false\n",
+        )
+        .unwrap();
+        // WHEN/THEN: an explicit `false` must not be mistaken for an opt-in
+        assert_eq!(
+            detect_multi_user_posture(&yaml),
+            MultiUserPosture::Undeclared
+        );
+    }
+
+    #[test]
+    fn migration_apply_is_a_noop_when_config_file_missing() {
+        // GIVEN: a data dir with no gateway.yaml at all
+        let dir = TempDir::new().unwrap();
+        // WHEN: the migration runs
+        let result = migrate_3_0_0_multi_user_notice(dir.path());
+        // THEN: it succeeds without creating any file
+        assert!(result.is_ok());
+        assert!(!dir.path().join("gateway.yaml").exists());
+    }
+
+    #[test]
+    fn migration_apply_is_a_noop_on_unparseable_yaml() {
+        // GIVEN: a gateway.yaml that is not valid YAML
+        let dir = TempDir::new().unwrap();
+        let yaml = dir.path().join("gateway.yaml");
+        std::fs::write(&yaml, "not: [valid: yaml").unwrap();
+        // WHEN: the migration runs
+        let result = migrate_3_0_0_multi_user_notice(dir.path());
+        // THEN: it succeeds (never fails the upgrade over a notice) and leaves
+        // the unparseable file untouched.
+        assert!(result.is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&yaml).unwrap(),
+            "not: [valid: yaml"
+        );
+    }
+
+    #[test]
+    fn migration_apply_never_mutates_the_config_file() {
+        // GIVEN: a config that would trigger the "undeclared" notice branch
+        let dir = TempDir::new().unwrap();
+        let yaml = dir.path().join("gateway.yaml");
+        let original = "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      enabled: true\n";
+        std::fs::write(&yaml, original).unwrap();
+
+        // WHEN: the migration runs (potentially twice, simulating a re-run)
+        migrate_3_0_0_multi_user_notice(dir.path()).unwrap();
+        migrate_3_0_0_multi_user_notice(dir.path()).unwrap();
+
+        // THEN: the file is byte-for-byte unchanged — no `single_user` or
+        // `shared_account` was injected, no security posture was altered.
+        assert_eq!(std::fs::read_to_string(&yaml).unwrap(), original);
+    }
+
+    #[test]
+    fn migration_apply_is_idempotent_via_check_upgrade_version_stamp() {
+        // GIVEN: a v2.x install with an auth-enabled, undeclared-posture config
+        let dir = TempDir::new().unwrap();
+        let yaml = dir.path().join("gateway.yaml");
+        let original = "auth:\n  enabled: true\n";
+        std::fs::write(&yaml, original).unwrap();
+        write_stamp(&stamp_path(dir.path()), "2.10.0").unwrap();
+
+        // WHEN: check_upgrade runs once — the migration applies and the stamp
+        // advances to the current binary version
+        check_upgrade(dir.path()).unwrap();
+        let stamp_after_first = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
+        assert_eq!(stamp_after_first, env!("CARGO_PKG_VERSION"));
+        let content_after_first = std::fs::read_to_string(&yaml).unwrap();
+        assert_eq!(content_after_first, original);
+
+        // AND WHEN: check_upgrade runs again (simulating the next process start)
+        check_upgrade(dir.path()).unwrap();
+
+        // THEN: the stamp and config are unchanged — the migration did not
+        // re-run because `installed == current` short-circuits to the no-op
+        // branch (idempotency guaranteed by the version stamp, not by the
+        // migration's own logic).
+        let stamp_after_second = read_stamp(&stamp_path(dir.path())).unwrap().unwrap();
+        assert_eq!(stamp_after_second, env!("CARGO_PKG_VERSION"));
+        let content_after_second = std::fs::read_to_string(&yaml).unwrap();
+        assert_eq!(content_after_second, original);
+    }
+
+    #[test]
+    fn migration_registered_for_3_0_0_triggers_config_backup() {
+        // GIVEN: a pre-3.0.0 install with a gateway.yaml present
+        let dir = TempDir::new().unwrap();
+        let yaml = dir.path().join("gateway.yaml");
+        std::fs::write(&yaml, "auth:\n  enabled: true\n  single_user: true\n").unwrap();
+        write_stamp(&stamp_path(dir.path()), "2.10.0").unwrap();
+
+        // WHEN: check_upgrade runs, triggering the registered 3.0.0 migration
+        check_upgrade(dir.path()).unwrap();
+
+        // THEN: the existing backup path fired because >=1 migration applied
+        let bak = dir.path().join("gateway.yaml.bak.2.10.0");
+        assert!(
+            bak.exists(),
+            "backup should be created once a real migration is registered and applies"
         );
     }
 }
