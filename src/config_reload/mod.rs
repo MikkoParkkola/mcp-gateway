@@ -324,6 +324,13 @@ struct MetaFields {
     /// edit is detected and triggers a reload — without this, removing an admin
     /// rule would not take effect until restart (MIK-6702 CP.RELOAD.2).
     control_plane: String,
+    /// `server.public_url` only. The advertised RFC 9728 protected-resource
+    /// origin is read from `live_config` at request time, so a `public_url`
+    /// edit takes effect on reload without a restart — unlike `server.host` /
+    /// `server.port`, which change the TCP listener and stay in
+    /// `server_address_changed`. Tracked here so a public-url-only edit is not
+    /// silently ignored until the next restart.
+    server_public_url: String,
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
 }
@@ -349,6 +356,7 @@ impl MetaFields {
             runtime: canonical_json(&c.runtime),
             marketplace: canonical_json(&c.marketplace),
             control_plane: canonical_json(&c.control_plane),
+            server_public_url: c.server.public_url.clone().unwrap_or_default(),
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
         }

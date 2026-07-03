@@ -224,6 +224,28 @@ fn diff_detects_server_port_change() {
 }
 
 #[test]
+fn diff_detects_public_url_only_change() {
+    // GIVEN: only server.public_url differs (host/port unchanged)
+    let old = Config::default();
+    let new = Config {
+        server: ServerConfig {
+            public_url: Some("https://mcp.acme.internal".to_string()),
+            ..ServerConfig::default()
+        },
+        ..Config::default()
+    };
+    // WHEN
+    let patch = compute_diff(&old, &new);
+    // THEN: hot-reloadable (endpoint reads live_config), so it is a profile
+    // change, not a restart-required server-address change. MIK-6750.
+    assert!(patch.profiles_changed, "public_url edit must be detected");
+    assert!(
+        !patch.server_changed,
+        "public_url does not move the listener"
+    );
+}
+
+#[test]
 fn diff_same_server_no_server_change() {
     // GIVEN: identical server configs
     let old = Config::default();
