@@ -1440,14 +1440,25 @@ impl MetaMcp {
 
         let refuse = |msg: String| -> Result<CallerCredential> {
             if idp_cfg.required {
-                crate::identity_propagation::audit_identity_propagation(
+                // The request is already being refused on identity-propagation
+                // grounds; an audit-write failure here does not change that
+                // outcome (unlike the mint path below, which is fail-closed on
+                // the audit write itself) — but it must not be silently
+                // dropped, so it is logged.
+                if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
                     audit_logger,
                     "idp_refuse",
                     &subject_id,
                     server,
                     Some(audience),
                     Some(&msg),
-                );
+                ) {
+                    tracing::warn!(
+                        server,
+                        error = %audit_err,
+                        "identity-propagation refuse audit write failed"
+                    );
+                }
                 Err(Error::Config(format!(
                     "identity propagation required for backend '{server}' but {msg}"
                 )))
@@ -1513,14 +1524,23 @@ impl MetaMcp {
                 // so per-user results cache in isolation instead of being dropped
                 // (IDP.8 — replaces the earlier blanket cache bypass).
                 if !cred.headers.is_empty() {
-                    crate::identity_propagation::audit_identity_propagation(
+                    // Fail-closed hardening: a minted credential must never
+                    // reach the caller without a durable audit record, so an
+                    // audit-write failure here aborts the mint instead of
+                    // proceeding to `Ok(CallerCredential{..})`.
+                    if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
                         audit_logger,
                         "idp_mint",
                         &subject_id,
                         server,
                         Some(audience),
                         None,
-                    );
+                    ) {
+                        return Err(Error::Internal(format!(
+                            "identity-propagation audit write failed for backend '{server}': \
+                             {audit_err}"
+                        )));
+                    }
                 }
                 Ok(CallerCredential {
                     headers: cred.headers,

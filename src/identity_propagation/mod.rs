@@ -126,6 +126,14 @@ pub enum PropagationError {
     Refuse(String),
     /// The propagation configuration is invalid (operator error).
     Misconfigured(String),
+    /// The tamper-evident transparency-log audit write failed.
+    ///
+    /// Fail-closed hardening (operator decision, regulated-buyer posture): a
+    /// minted credential MUST NOT be used when its `idp_mint` audit record
+    /// could not be durably written, so callers on the mint path treat this
+    /// as fatal and abort the request. See
+    /// [`audit_identity_propagation`] for the full contract.
+    AuditFailed(String),
 }
 
 impl std::fmt::Display for PropagationError {
@@ -133,6 +141,10 @@ impl std::fmt::Display for PropagationError {
         match self {
             Self::Refuse(m) => write!(f, "identity propagation refused (fail-closed): {m}"),
             Self::Misconfigured(m) => write!(f, "identity propagation misconfigured: {m}"),
+            Self::AuditFailed(m) => write!(
+                f,
+                "identity-propagation audit write failed (fail-closed): {m}"
+            ),
         }
     }
 }
@@ -506,12 +518,28 @@ pub(crate) fn audit_subject(
 /// [`crate::security::TransparencyLogger::append_event`] — never the resolved
 /// credential header value or a raw assertion.
 ///
-/// ponytail: audit is best-effort, not fail-closed — a write failure is
-/// `warn!`'d and the caller's request proceeds/fails on its own merits,
-/// mirroring how `TransparencyLogger::log_invocation` failures are handled
-/// elsewhere in the gateway. A regulated buyer that needs "no mint without a
-/// durable audit record" would need this gated fail-closed instead; tracked as
-/// a possible future hardening, not required for MIK-6740.
+/// ponytail: audit was previously best-effort for every action — a write
+/// failure was `warn!`'d and the caller's request proceeded/failed on its own
+/// merits, mirroring how `TransparencyLogger::log_invocation` failures are
+/// handled elsewhere in the gateway. Hardened for regulated-buyer posture: a
+/// minted credential MUST NOT go on the wire without a durable audit record,
+/// so a write failure now returns `Err(PropagationError::AuditFailed)` in
+/// addition to the `warn!`.
+///
+/// - **`idp_mint` callers MUST fail-closed**: propagate the `Err` and abort
+///   the mint/request. No mint without a durable audit record.
+/// - **`idp_refuse` callers**: the request is already being refused on other
+///   grounds, so the `Err` does not need to change the outcome, but MUST NOT
+///   be silently dropped (log or propagate as fits the call site).
+///
+/// `logger = None` (transparency log disabled) is `Ok(())` — a no-op, not a
+/// failure.
+///
+/// # Errors
+/// [`PropagationError::AuditFailed`] when
+/// [`crate::security::TransparencyLogger::append_event`] fails (e.g. disk
+/// full, permission revoked, filesystem gone read-only underneath the
+/// gateway).
 pub(crate) fn audit_identity_propagation(
     logger: Option<&crate::security::TransparencyLogger>,
     action: &'static str,
@@ -519,9 +547,9 @@ pub(crate) fn audit_identity_propagation(
     backend: &str,
     audience: Option<&str>,
     reason: Option<&str>,
-) {
+) -> Result<(), PropagationError> {
     let Some(logger) = logger else {
-        return;
+        return Ok(());
     };
 
     let mut fields = serde_json::Map::new();
@@ -536,13 +564,17 @@ pub(crate) fn audit_identity_propagation(
         fields.insert("reason".into(), reason.into());
     }
 
-    if let Err(e) = logger.append_event(fields) {
+    logger.append_event(fields).map(|_| ()).map_err(|e| {
         tracing::warn!(
             backend,
             action, error = %e,
-            "Failed to write identity-propagation audit entry (transparency log)"
+            "Failed to write identity-propagation audit entry (transparency log); \
+             fail-closed on idp_mint"
         );
-    }
+        PropagationError::AuditFailed(format!(
+            "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -780,5 +812,139 @@ mod tests {
     fn non_required_backend_ignores_transport_capability() {
         assert!(ensure_transport_carries_identity_headers(false, false).is_ok());
         assert!(ensure_transport_carries_identity_headers(false, true).is_ok());
+    }
+
+    // Fail-closed audit hardening — `audit_identity_propagation` unit tests.
+    mod audit_fail_closed {
+        use std::sync::Arc;
+
+        use tempfile::NamedTempFile;
+
+        use super::*;
+        use crate::security::TransparencyLogger;
+        use crate::security::transparency_log::TransparencyLogConfig;
+
+        fn open_logger() -> (NamedTempFile, TransparencyLogger) {
+            let file = NamedTempFile::new().expect("tempfile");
+            let cfg = Arc::new(TransparencyLogConfig {
+                enabled: true,
+                path: file.path().to_string_lossy().to_string(),
+                key_id: "test".to_string(),
+                shared_secret: String::new(),
+            });
+            let logger = TransparencyLogger::open(cfg).expect("logger opens");
+            (file, logger)
+        }
+
+        // `logger = None` (transparency log disabled) is a no-op success, not
+        // a failure — the mint path must not be blocked when the operator has
+        // not configured a transparency log at all.
+        #[test]
+        fn logger_disabled_is_ok_noop() {
+            let result = audit_identity_propagation(
+                None,
+                "idp_mint",
+                "alice",
+                "github",
+                Some("https://github.test.invalid/api"),
+                None,
+            );
+            assert_eq!(result, Ok(()));
+        }
+
+        // A durable write succeeds and reports `Ok(())`.
+        #[test]
+        fn mint_write_success_is_ok() {
+            let (_file, logger) = open_logger();
+            let result = audit_identity_propagation(
+                Some(&logger),
+                "idp_mint",
+                "alice",
+                "github",
+                Some("https://github.test.invalid/api"),
+                None,
+            );
+            assert_eq!(result, Ok(()));
+        }
+
+        // Fail-closed contract: a genuine transparency-log write failure MUST
+        // surface as `Err(PropagationError::AuditFailed)`, never be swallowed.
+        //
+        // Failure-injection technique: POSIX only checks file permissions at
+        // `open(2)`, not at each `write(2)` — verified empirically (chmod and
+        // `chflags uchg` on an already-open fd do NOT make subsequent writes
+        // fail on macOS/Linux). A real write failure is therefore forced with
+        // `RLIMIT_FSIZE=0` (every write becomes `EFBIG`), which is
+        // process-wide and would corrupt any other test in this binary that
+        // touches a file concurrently — so the limited write happens in a
+        // *child process* only. A POSIX shell wrapper (`ulimit -f 0; trap ''
+        // XFSZ; exec ...`) sets the limit and ignores `SIGXFSZ` (whose
+        // default disposition is to kill the process) before re-`exec`ing
+        // this exact test binary/test with an env var that makes the child
+        // branch run the actual assertion and report its outcome over
+        // stdout — no `unsafe` code, no new dependency, isolated to the
+        // child only. Unix-only (the technique is POSIX shell + rlimit).
+        #[cfg(unix)]
+        #[test]
+        fn mint_write_failure_is_fail_closed() {
+            const ENV_VAR: &str = "IDP_AUDIT_FSIZE_CHILD_PATH";
+            const MARK_OK: &str = "AUDIT_WRITE_FAILED_AS_EXPECTED";
+            const TEST_PATH: &str =
+                "identity_propagation::tests::audit_fail_closed::mint_write_failure_is_fail_closed";
+
+            if let Ok(path) = std::env::var(ENV_VAR) {
+                // Child process: RLIMIT_FSIZE=0 + SIGXFSZ ignored are already
+                // active (set by the parent's shell wrapper below), so any
+                // write here returns `Err` (`EFBIG`), never panics/aborts.
+                let cfg = Arc::new(TransparencyLogConfig {
+                    enabled: true,
+                    path,
+                    key_id: "test".to_string(),
+                    shared_secret: String::new(),
+                });
+                // `open()` performs no write (only reads an existing tail, if
+                // any), so it must still succeed under the zero file-size
+                // limit — only the append write below is expected to fail.
+                let logger =
+                    TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed");
+                let result = audit_identity_propagation(
+                    Some(&logger),
+                    "idp_mint",
+                    "alice",
+                    "github",
+                    Some("https://github.test.invalid/api"),
+                    None,
+                );
+                match result {
+                    Err(PropagationError::AuditFailed(_)) => println!("{MARK_OK}"),
+                    other => println!("UNEXPECTED_RESULT:{other:?}"),
+                }
+                return;
+            }
+
+            // Parent: re-exec this exact test in an RLIMIT_FSIZE=0 child and
+            // assert on what it observed.
+            let exe = std::env::current_exe().expect("current test binary path");
+            let file = NamedTempFile::new().expect("tempfile");
+            let path = file.path().to_string_lossy().to_string();
+            let script =
+                format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .arg(&exe)
+                .env(ENV_VAR, &path)
+                .output()
+                .expect("spawn fsize-limited child process");
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                stdout.contains(MARK_OK),
+                "child did not observe a fail-closed AuditFailed error \
+                 (status={:?}, stdout={stdout}, stderr={})",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
