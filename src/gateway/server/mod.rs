@@ -304,6 +304,12 @@ struct BuiltMetaMcp {
     transition_path: std::path::PathBuf,
     /// Data directory used by cost-governance persistence.
     data_dir: std::path::PathBuf,
+    /// Transparency log handle, `None` when disabled (issue #133, D3).
+    /// Threaded into `AppState` so the direct backend route
+    /// (`backend_handlers::backend_handler`), which does not go through
+    /// `MetaMcp`, can also write identity-propagation audit events into the
+    /// same tamper-evident chain (MIK-6740).
+    transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
 impl Gateway {
@@ -493,6 +499,11 @@ impl Gateway {
         meta_mcp.set_transition_tracker(Arc::clone(&transition_tracker));
 
         // ── Transparency log (issue #133, D3) ─────────────────────────────────
+        // The opened `Arc` is kept as `transparency_log` (not just handed to
+        // `MetaMcp`) so `AppState` can hold a second clone — the direct
+        // backend route writes identity-propagation audit events straight
+        // into this chain without going through `MetaMcp` (MIK-6740).
+        let mut transparency_log: Option<Arc<crate::security::TransparencyLogger>> = None;
         if self.config.security.transparency_log.enabled {
             use crate::security::transparency_log::TransparencyLogConfig;
             let tl_cfg = Arc::new(TransparencyLogConfig {
@@ -503,9 +514,11 @@ impl Gateway {
             });
             match crate::security::TransparencyLogger::open(tl_cfg) {
                 Ok(logger) => {
+                    let logger = Arc::new(logger);
                     Arc::get_mut(&mut meta_mcp)
                         .expect("no other Arc references at this point")
-                        .enable_transparency_log(logger);
+                        .enable_transparency_log(Arc::clone(&logger));
+                    transparency_log = Some(logger);
                     info!("Transparency log enabled");
                 }
                 Err(e) => {
@@ -563,6 +576,7 @@ impl Gateway {
             transition_tracker,
             transition_path,
             data_dir,
+            transparency_log,
         })
     }
 
@@ -605,6 +619,7 @@ impl Gateway {
             transition_tracker,
             transition_path,
             data_dir,
+            transparency_log,
         } = self.build_meta_mcp().await?;
 
         // Log policy and feature states now that the shared builder has run.
@@ -967,6 +982,7 @@ impl Gateway {
             control_plane_store,
             live_config: Arc::clone(&live_config),
             export_status,
+            transparency_log,
         });
 
         // Create router

@@ -69,6 +69,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
             crate::config::Config::default(),
         )),
         export_status: None,
+        transparency_log: None,
     })
 }
 
@@ -116,6 +117,7 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
             crate::config::Config::default(),
         )),
         export_status: None,
+        transparency_log: None,
     })
 }
 
@@ -159,6 +161,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
             crate::config::Config::default(),
         )),
         export_status: None,
+        transparency_log: None,
     })
 }
 
@@ -211,6 +214,7 @@ fn test_router_app_state_with_ssrf(
             crate::config::Config::default(),
         )),
         export_status: None,
+        transparency_log: None,
     })
 }
 
@@ -271,6 +275,7 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
             crate::config::Config::default(),
         )),
         export_status: None,
+        transparency_log: None,
     })
 }
 

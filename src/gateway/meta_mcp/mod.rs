@@ -497,8 +497,13 @@ impl MetaMcp {
     /// When set, every completed tool invocation is committed to the
     /// hash-chain log.  Failures are non-fatal — a `warn!` is emitted but
     /// the invocation result is not affected.
-    pub fn enable_transparency_log(&mut self, logger: crate::security::TransparencyLogger) {
-        self.transparency_logger = Some(Arc::new(logger));
+    ///
+    /// Takes an `Arc` (rather than an owned logger) so the caller can retain
+    /// a second handle — e.g. `AppState.transparency_log` (MIK-6740) — that
+    /// writes into the same tamper-evident chain from the direct backend
+    /// route, which does not go through `MetaMcp`.
+    pub fn enable_transparency_log(&mut self, logger: Arc<crate::security::TransparencyLogger>) {
+        self.transparency_logger = Some(logger);
     }
 
     /// Attach the webhook registry for `gateway_webhook_status` reporting.

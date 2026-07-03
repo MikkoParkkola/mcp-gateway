@@ -888,7 +888,9 @@ static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn resolve_stats_url_no_url_no_config_falls_back_to_default() {
-    let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _cwd = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let orig = std::env::current_dir().unwrap();
     // Run from an empty directory so `Config::load(None)`'s well-known
@@ -946,7 +948,9 @@ fn resolve_stats_url_no_url_translates_wildcard_bind_host() {
 /// would apply via `apply_cli_overrides`.
 #[test]
 fn resolve_stats_url_no_url_applies_port_override() {
-    let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _cwd = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let orig = std::env::current_dir().unwrap();
     std::env::set_current_dir(dir.path()).unwrap();

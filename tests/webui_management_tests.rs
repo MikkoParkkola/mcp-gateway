@@ -101,6 +101,7 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
             mcp_gateway::config::Config::default(),
         )),
         export_status: None,
+        transparency_log: None,
     })
 }
 
@@ -172,6 +173,7 @@ fn make_app_state_with_reload(
                 mcp_gateway::config::Config::default(),
             )),
             export_status: None,
+            transparency_log: None,
         }),
         live_config,
     )

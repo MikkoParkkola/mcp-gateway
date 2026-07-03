@@ -58,6 +58,26 @@ impl Provider for McpProvider {
     }
 
     async fn invoke(&self, tool: &str, args: Value) -> Result<Value> {
+        // MIK-6741 (PROV.1, IDP.2 fail-closed): the `Provider` trait carries no
+        // per-user identity, so this adapter cannot resolve or attach a per-user
+        // credential. Dispatching a propagation-required backend here would
+        // silently reuse the shared gateway session and bypass enforcement. No
+        // live server route reaches this adapter today (confirmed by source
+        // search, MIK-6734 r4); this guard fails closed so a future wiring
+        // cannot become a silent identity bypass.
+        if self
+            .backend
+            .identity_propagation_config()
+            .is_some_and(|c| c.required)
+        {
+            return Err(crate::Error::Protocol(format!(
+                "backend '{}' requires end-user identity propagation, which the Provider \
+                 adapter path cannot supply; refusing to dispatch over a shared session \
+                 (MIK-6741, IDP.2 fail-closed)",
+                self.backend.name
+            )));
+        }
+
         let params = serde_json::json!({
             "name": tool,
             "arguments": args,
@@ -116,5 +136,70 @@ mod tests {
         // Compile-time check: McpProvider can be stored in Arc<dyn Provider>.
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<McpProvider>();
+    }
+
+    // MIK-6741 (PROV.2): the adapter must fail closed for a propagation-required
+    // backend, since the `Provider` trait cannot carry the per-user identity.
+    // The guard short-circuits before any transport call, so no live backend is
+    // needed. If a future change wires this adapter into a live route, this test
+    // fails unless enforcement is added — the intended tripwire.
+    #[tokio::test]
+    async fn invoke_fails_closed_for_propagation_required_backend() {
+        use crate::backend::Backend;
+        use crate::config::BackendConfig;
+        use crate::identity_propagation::{
+            IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+        };
+
+        let backend = Arc::new(Backend::new(
+            "b",
+            BackendConfig {
+                identity_propagation: Some(IdentityPropagationConfig {
+                    strategy: PropagationStrategyKind::SignedAssertion,
+                    audience: "https://backend.example".to_string(),
+                    required: true,
+                    session_mode: SessionMode::Stateless,
+                }),
+                ..BackendConfig::default()
+            },
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let provider = McpProvider::new(backend);
+        let err = provider
+            .invoke("some_tool", serde_json::json!({}))
+            .await
+            .expect_err("propagation-required backend must fail closed via the adapter");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("MIK-6741"),
+            "expected the fail-closed guard, got: {msg}"
+        );
+    }
+
+    // A backend with no identity_propagation config must NOT be blocked by the
+    // guard (the check is opt-in on `required`). We can't complete a real
+    // dispatch without a transport, so we assert the guard does not short-circuit
+    // by observing a transport-level error rather than the MIK-6741 refusal.
+    #[tokio::test]
+    async fn invoke_not_blocked_for_non_propagation_backend() {
+        use crate::backend::Backend;
+        use crate::config::BackendConfig;
+
+        let backend = Arc::new(Backend::new(
+            "plain",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let provider = McpProvider::new(backend);
+        let err = provider
+            .invoke("some_tool", serde_json::json!({}))
+            .await
+            .expect_err("no transport connected, so dispatch errors");
+        assert!(
+            !err.to_string().contains("MIK-6741"),
+            "guard must not fire for a non-propagation backend: {err}"
+        );
     }
 }
