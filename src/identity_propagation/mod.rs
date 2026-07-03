@@ -351,6 +351,76 @@ impl IdentityPropagation for SignedAssertionStrategy {
     }
 }
 
+/// Stable actor id for an identity-propagation audit entry (MIK-6740). Uses the
+/// same `issuer`+`subject` derivation as the control-plane governance audit
+/// (`stable_actor_id`) so the two audit trails describe the same actor under the
+/// same id. `"unauthenticated"` covers the non-`required` path, where a
+/// mint/refuse decision can be reached with no verified identity.
+pub(crate) fn audit_subject(
+    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+) -> String {
+    verified_identity.map_or_else(
+        || "unauthenticated".to_string(),
+        crate::key_server::oidc::VerifiedIdentity::stable_actor_id,
+    )
+}
+
+/// Record an identity-propagation credential decision (`idp_mint` /
+/// `idp_refuse`) into the tamper-evident transparency log (MIK-6740, IDP4).
+///
+/// Both the direct backend route (`backend_handlers`) and the Meta-MCP
+/// `gateway_invoke` route (`meta_mcp::invoke`) call this so every mint and every
+/// fail-closed refusal is audited identically, regardless of entry path.
+///
+/// Takes the logger directly (rather than `&AppState`) so this function is
+/// independently unit-testable against a real [`crate::security::TransparencyLogger`]
+/// over a tempfile, with no need to construct a full `AppState`. `logger` is
+/// `None` when the transparency log is disabled — the call is then a no-op.
+///
+/// Redaction is the load-bearing property here: only `subject`, `backend`,
+/// `audience`, `action`, `reason`, and `timestamp` are ever passed to
+/// [`crate::security::TransparencyLogger::append_event`] — never the resolved
+/// credential header value or a raw assertion.
+///
+/// ponytail: audit is best-effort, not fail-closed — a write failure is
+/// `warn!`'d and the caller's request proceeds/fails on its own merits,
+/// mirroring how `TransparencyLogger::log_invocation` failures are handled
+/// elsewhere in the gateway. A regulated buyer that needs "no mint without a
+/// durable audit record" would need this gated fail-closed instead; tracked as
+/// a possible future hardening, not required for MIK-6740.
+pub(crate) fn audit_identity_propagation(
+    logger: Option<&crate::security::TransparencyLogger>,
+    action: &'static str,
+    subject: &str,
+    backend: &str,
+    audience: Option<&str>,
+    reason: Option<&str>,
+) {
+    let Some(logger) = logger else {
+        return;
+    };
+
+    let mut fields = serde_json::Map::new();
+    fields.insert("action".into(), action.into());
+    fields.insert("subject".into(), subject.into());
+    fields.insert("backend".into(), backend.into());
+    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+    if let Some(audience) = audience {
+        fields.insert("audience".into(), audience.into());
+    }
+    if let Some(reason) = reason {
+        fields.insert("reason".into(), reason.into());
+    }
+
+    if let Err(e) = logger.append_event(fields) {
+        tracing::warn!(
+            backend,
+            action, error = %e,
+            "Failed to write identity-propagation audit entry (transparency log)"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

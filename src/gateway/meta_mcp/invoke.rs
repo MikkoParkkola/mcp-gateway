@@ -1388,13 +1388,32 @@ impl MetaMcp {
     ) -> Result<CallerCredential> {
         use crate::identity_propagation::BackendDescriptor;
 
+        // Audit context (MIK-6740, IDP4): every mint and every fail-closed
+        // refusal on THIS route is recorded, identically to the direct backend
+        // route. Only subject/backend/audience/reason reach the log — never the
+        // minted credential bytes.
+        let audit_logger = self.transparency_logger.as_deref();
+        let subject_id = crate::identity_propagation::audit_subject(verified_identity);
+        let audience = idp_cfg.audience.as_str();
+
         let refuse = |msg: String| -> Result<CallerCredential> {
             if idp_cfg.required {
+                crate::identity_propagation::audit_identity_propagation(
+                    audit_logger,
+                    "idp_refuse",
+                    &subject_id,
+                    server,
+                    Some(audience),
+                    Some(&msg),
+                );
                 Err(Error::Config(format!(
                     "identity propagation required for backend '{server}' but {msg}"
                 )))
             } else {
                 // Best-effort: non-required backend proceeds with static creds.
+                // This is the static-credential fallback (IDP.5), not a mint or
+                // a fail-closed refusal, so — like the direct route's
+                // `Ok(empty)` branch — it is intentionally not audited.
                 Ok(CallerCredential::default())
             }
         };
@@ -1426,6 +1445,16 @@ impl MetaMcp {
                 // cache_binding distinguishes user AND audience (collision-safe),
                 // so per-user results cache in isolation instead of being dropped
                 // (IDP.8 — replaces the earlier blanket cache bypass).
+                if !cred.headers.is_empty() {
+                    crate::identity_propagation::audit_identity_propagation(
+                        audit_logger,
+                        "idp_mint",
+                        &subject_id,
+                        server,
+                        Some(audience),
+                        None,
+                    );
+                }
                 Ok(CallerCredential {
                     headers: cred.headers,
                     cache_binding: Some(cred.cache_binding),
@@ -2608,6 +2637,61 @@ mod identity_propagation_enforcement_tests {
             groups: vec![],
             issuer: "https://idp".to_string(),
         }
+    }
+
+    // MIK-6740 IDP4.1/4.2 — the Meta-MCP `gateway_invoke` route audits every
+    // mint and every fail-closed refusal into the transparency log, identically
+    // to the direct backend route. Regression guard for the gap where only the
+    // direct route audited: a mint/refuse on the primary invoke path used to
+    // leave no audit entry at all.
+    #[tokio::test]
+    async fn gateway_invoke_route_audits_mint_and_refuse() {
+        use tempfile::NamedTempFile;
+
+        use crate::security::TransparencyLogger;
+        use crate::security::transparency_log::TransparencyLogConfig;
+
+        let file = NamedTempFile::new().expect("tempfile");
+        let cfg = Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: file.path().to_string_lossy().to_string(),
+            key_id: "test".to_string(),
+            shared_secret: String::new(),
+        });
+        let logger = Arc::new(TransparencyLogger::open(cfg).expect("logger opens"));
+
+        let mut m = meta_with_strategy();
+        m.enable_transparency_log(Arc::clone(&logger));
+
+        // Successful mint -> idp_mint entry.
+        let cred = m
+            .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
+            .await
+            .expect("mint ok");
+        let minted_value = cred.headers[0].1.clone();
+
+        // Required + no identity -> fail-closed refuse -> idp_refuse entry.
+        m.resolve_caller_credential("memory", &idp_cfg(true), None)
+            .await
+            .expect_err("must refuse");
+
+        let raw = std::fs::read_to_string(file.path()).expect("read log");
+        assert!(
+            raw.contains("idp_mint"),
+            "mint on the gateway_invoke route must be audited: {raw}"
+        );
+        assert!(
+            raw.contains("idp_refuse"),
+            "fail-closed refusal on the gateway_invoke route must be audited: {raw}"
+        );
+        // Redaction: the minted credential value must never reach the log.
+        let token = minted_value
+            .strip_prefix("Bearer ")
+            .unwrap_or(&minted_value);
+        assert!(
+            !raw.contains(token),
+            "the minted credential must never appear in the transparency log"
+        );
     }
 
     // Header-capturing transport: records the per-request headers dispatch
