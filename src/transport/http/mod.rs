@@ -773,6 +773,15 @@ impl Transport for HttpTransport {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
+        // Abort the OAuth token-refresh background task, if any. Otherwise a
+        // stopped or hot-reloaded backend leaves an orphaned task that still
+        // owns the OAuth client Arc and can refresh + persist a gateway-held
+        // backend token via TokenStorage::save without ever re-entering
+        // create_oauth_client — the F3 reload sink-completeness hole (MIK-6746).
+        if let Some(handle) = self.refresh_task.write().take() {
+            handle.abort();
+        }
+
         // Send session termination if we have a session ID
         let session_id = self.session_id.read().clone();
         let message_url = self.get_message_url();

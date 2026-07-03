@@ -1012,3 +1012,33 @@ async fn request_without_extra_headers_uses_static_only() {
     assert!(!headers.contains_key("x-idp-audience"));
     server.abort();
 }
+
+// F3 reload sink-completeness (MIK-6746): close() must abort the OAuth
+// token-refresh background task, or a stopped/hot-reloaded backend leaves an
+// orphaned task that keeps the OAuth client Arc alive and can still refresh +
+// persist a gateway-held backend token via TokenStorage::save.
+#[tokio::test]
+async fn close_aborts_oauth_refresh_task() {
+    let t = make_transport("http://127.0.0.1:1/mcp");
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    // A long-lived task standing in for the refresh loop: it only sends if it
+    // is NOT aborted.
+    let handle = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        let _ = tx.send(());
+    });
+    *t.refresh_task.write() = Some(handle);
+
+    // No session_id was ever set, so close() skips the network DELETE.
+    t.close().await.unwrap();
+
+    assert!(
+        t.refresh_task.read().is_none(),
+        "close() must take the refresh task handle"
+    );
+    // Aborted task drops its sender without sending -> receiver resolves to Err.
+    assert!(
+        rx.await.is_err(),
+        "close() must abort the refresh task (sender dropped without sending)"
+    );
+}
