@@ -167,6 +167,10 @@ impl MetaMcp {
 
         // Check MCP backends
         for backend in self.backends.all() {
+            // INV-2 (MIK-6742): skip OAuth-isolated backends on a multi-user gateway.
+            if self.meta_route_isolation_refused(&backend) {
+                continue;
+            }
             if let Some(tool) = backend.get_cached_tool(name) {
                 return Some(tool);
             }
@@ -193,6 +197,11 @@ impl MetaMcp {
             names.extend(cap.get_tools().into_iter().map(|t| t.name));
         }
         for backend in self.backends.all() {
+            // INV-2 (MIK-6742): don't leak an isolated backend's tool names via
+            // "did you mean?" suggestions on a multi-user gateway.
+            if self.meta_route_isolation_refused(&backend) {
+                continue;
+            }
             names.extend(backend.get_cached_tool_names());
         }
         names
