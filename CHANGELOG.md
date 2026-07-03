@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.0.0] - 2026-07-03
+## [3.0.1] - 2026-07-03
+
+Security hardening fast-follow for the 3.0.0 end-user identity-propagation
+feature. No API changes; both items close latent gaps on the per-user
+credential path.
+
+### Security
+
+- **Fail-closed provider adapter (MIK-6741).** `McpProvider::invoke` now
+  refuses to dispatch a backend configured with `identity_propagation.required`,
+  because the `Provider` trait carries no per-user identity and would otherwise
+  fall back to the shared gateway session. No live route reaches this adapter
+  today; the guard is a tripwire so a future wiring cannot become a silent
+  identity bypass. (`src/provider/mcp_provider.rs`)
+- **Tamper-evident credential-propagation audit (MIK-6740).** The direct
+  `/mcp/{name}` route now writes redacted `idp_mint` / `idp_refuse` events to
+  the transparency log at the mint and refuse decision points. Entries carry
+  only subject / backend / audience / reason — never token or assertion bytes
+  (enforced structurally and by a canary-secret regression test). Audit writes
+  are best-effort and never fail the user request; the mint/refuse decision
+  itself remains fail-closed. (`src/gateway/router/backend_handlers.rs`)
 
 > **Breaking change.** The default OAuth posture changes: a gateway with
 > `auth.enabled: true` no longer serves one stored backend token to every

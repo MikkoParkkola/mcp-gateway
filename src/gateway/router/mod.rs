@@ -94,6 +94,12 @@ pub struct AppState {
     /// SIEM export status, present when the export background task is running
     /// (MIK-6703). Drives the `EvidenceExport` entitlement + export-status route.
     pub export_status: Option<Arc<crate::control_plane::ExportStatus>>,
+    /// Tamper-evident transparency log (issue #133, D3), shared with `MetaMcp`.
+    /// Lets the direct backend route (`backend_handlers::backend_handler`),
+    /// which bypasses `MetaMcp`, write identity-propagation audit events
+    /// (`idp_mint` / `idp_refuse`) into the same hash chain (MIK-6740). `None`
+    /// when the transparency log is disabled — audit writes are then a no-op.
+    pub transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
 /// Create the router.

@@ -210,6 +210,70 @@ fn resolve_passthrough_headers(
     }
 }
 
+/// Stable actor id for an identity-propagation audit entry (MIK-6740). Uses
+/// the same `issuer`+`subject` derivation as the control-plane governance
+/// audit (`stable_actor_id`) so the two audit trails describe the same actor
+/// under the same id. `"unauthenticated"` covers the non-`required` path,
+/// where a mint/refuse decision can be reached with no verified identity.
+fn audit_subject(verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>) -> String {
+    verified_identity.map_or_else(
+        || "unauthenticated".to_string(),
+        crate::key_server::oidc::VerifiedIdentity::stable_actor_id,
+    )
+}
+
+/// Record an identity-propagation credential decision (`idp_mint` /
+/// `idp_refuse`) into the tamper-evident transparency log (MIK-6740, IDP4).
+///
+/// Takes the logger directly (rather than `&AppState`) so this function is
+/// independently unit-testable against a real [`crate::security::TransparencyLogger`]
+/// over a tempfile, with no need to construct a full `AppState`. `logger` is
+/// `None` when the transparency log is disabled — the call is then a no-op.
+///
+/// Redaction is the load-bearing property here: only `subject`, `backend`,
+/// `audience`, `action`, `reason`, and `timestamp` are ever passed to
+/// [`crate::security::TransparencyLogger::append_event`] — never the resolved
+/// credential header value or a raw assertion.
+///
+/// ponytail: audit is best-effort, not fail-closed — a write failure is
+/// `warn!`'d and the caller's request proceeds/fails on its own merits,
+/// mirroring how `TransparencyLogger::log_invocation` failures are handled
+/// elsewhere in the gateway. A regulated buyer that needs "no mint without a
+/// durable audit record" would need this gated fail-closed instead; tracked
+/// as a possible future hardening, not required for MIK-6740.
+fn audit_identity_propagation(
+    logger: Option<&crate::security::TransparencyLogger>,
+    action: &'static str,
+    subject: &str,
+    backend: &str,
+    audience: Option<&str>,
+    reason: Option<&str>,
+) {
+    let Some(logger) = logger else {
+        return;
+    };
+
+    let mut fields = serde_json::Map::new();
+    fields.insert("action".into(), action.into());
+    fields.insert("subject".into(), subject.into());
+    fields.insert("backend".into(), backend.into());
+    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+    if let Some(audience) = audience {
+        fields.insert("audience".into(), audience.into());
+    }
+    if let Some(reason) = reason {
+        fields.insert("reason".into(), reason.into());
+    }
+
+    if let Err(e) = logger.append_event(fields) {
+        warn!(
+            backend,
+            action, error = %e,
+            "Failed to write identity-propagation audit entry (transparency log)"
+        );
+    }
+}
+
 /// Backend handler (POST /mcp/{name})
 #[allow(clippy::too_many_lines)]
 pub(super) async fn backend_handler(
@@ -336,19 +400,22 @@ pub(super) async fn backend_handler(
     let isolation_guarded = !matches!(method.as_str(), "initialize" | "tools/list" | "ping")
         && !method.starts_with("notifications/");
     let propagated_headers: Vec<(String, String)> = if isolation_guarded {
+        // Fetched once so both the passthrough-vs-minting branch below and the
+        // audit write (MIK-6740) share a single lookup/clone of the backend's
+        // propagation config.
+        let idp_cfg = state
+            .backends
+            .get(&name)
+            .and_then(|b| b.identity_propagation_config().cloned());
         // Passthrough (ADR-008 rung 2, MIK-6746): a backend whose caller attaches
         // its OWN credential is handled here — forward it verbatim, mint/store
         // NOTHING (INV-4). Any other propagation strategy is resolved by the
         // shared minting chokepoint. Isolation (INV-3) holds by construction:
         // each request forwards its own header via `request_with_headers`, never
         // via the shared transport, and the direct route keeps no per-user cache.
-        let passthrough_cfg = state
-            .backends
-            .get(&name)
-            .and_then(|b| b.identity_propagation_config().cloned())
-            .filter(|c| {
-                c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
-            });
+        let passthrough_cfg = idp_cfg.clone().filter(|c| {
+            c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
+        });
         let resolved = if let Some(cfg) = passthrough_cfg {
             resolve_passthrough_headers(&cfg, &inbound_headers)
         } else {
@@ -358,9 +425,34 @@ pub(super) async fn backend_handler(
                 .await
                 .map_err(|e| e.to_string())
         };
+        let subject = audit_subject(verified_identity.as_ref());
+        let audience = idp_cfg.as_ref().map(|c| c.audience.as_str());
         match resolved {
-            Ok(headers) => headers,
+            Ok(headers) => {
+                // A successful resolution that yields no headers is the
+                // unchanged static-credential fallback (IDP.5), not a mint —
+                // only audit when a per-user credential was actually attached.
+                if !headers.is_empty() {
+                    audit_identity_propagation(
+                        state.transparency_log.as_deref(),
+                        "idp_mint",
+                        &subject,
+                        &name,
+                        audience,
+                        None,
+                    );
+                }
+                headers
+            }
             Err(e) => {
+                audit_identity_propagation(
+                    state.transparency_log.as_deref(),
+                    "idp_refuse",
+                    &subject,
+                    &name,
+                    audience,
+                    Some(&e),
+                );
                 return build_http_error_response(
                     Some(id.clone()),
                     -32003,
@@ -589,134 +681,4 @@ pub(super) async fn costs_handler(
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    // MIK-6746 D.4 — passthrough resolution (ADR-008 rung 2).
-    mod passthrough {
-        use axum::http::HeaderMap;
-
-        use super::*;
-        use crate::identity_propagation::{
-            IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
-        };
-
-        const HEADER: &str = "x-mcp-passthrough-authorization";
-
-        fn cfg(required: bool) -> IdentityPropagationConfig {
-            IdentityPropagationConfig {
-                strategy: PropagationStrategyKind::Passthrough,
-                audience: "https://backend".to_string(),
-                required,
-                session_mode: SessionMode::PerUser,
-            }
-        }
-
-        fn headers_with(cred: &str) -> HeaderMap {
-            let mut h = HeaderMap::new();
-            h.insert(HEADER, cred.parse().unwrap());
-            h
-        }
-
-        // D.1/D.4 — the caller's own credential is forwarded verbatim to the
-        // backend under `Authorization`. Nothing else is emitted; the function
-        // is pure over its inputs, so it cannot persist a token (INV-4).
-        #[test]
-        fn present_credential_is_forwarded_as_authorization() {
-            let out = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer caller-tok"))
-                .expect("present credential resolves");
-            assert_eq!(
-                out,
-                vec![("Authorization".to_string(), "Bearer caller-tok".to_string())]
-            );
-        }
-
-        // D.4 — concurrent callers are isolated: each request forwards only its
-        // own header value; there is no shared/mutable state between calls.
-        #[test]
-        fn concurrent_callers_are_isolated() {
-            let a = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer alice")).unwrap();
-            let b = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer bob")).unwrap();
-            assert_eq!(a[0].1, "Bearer alice");
-            assert_eq!(b[0].1, "Bearer bob");
-            assert_ne!(a[0].1, b[0].1);
-        }
-
-        // D.3 — a required backend with no caller credential fails closed.
-        #[test]
-        fn required_and_absent_refuses() {
-            assert!(resolve_passthrough_headers(&cfg(true), &HeaderMap::new()).is_err());
-            // A blank credential counts as absent.
-            assert!(resolve_passthrough_headers(&cfg(true), &headers_with("   ")).is_err());
-        }
-
-        // A non-required backend with no caller credential yields the static
-        // path (empty), after which the INV-2 shared-token guard decides.
-        #[test]
-        fn optional_and_absent_is_empty() {
-            let out = resolve_passthrough_headers(&cfg(false), &HeaderMap::new()).unwrap();
-            assert!(out.is_empty());
-        }
-    }
-
-    #[test]
-    fn normalize_tools_list_response_fills_direct_backend_proxy_annotations() {
-        let mut response = JsonRpcResponse::success(
-            RequestId::Number(1),
-            json!({
-                "tools": [
-                    {
-                        "name": "search",
-                        "description": "Search things",
-                        "inputSchema": {"type": "object"},
-                        "annotations": {"readOnlyHint": true}
-                    },
-                    {
-                        "name": "archive_chat",
-                        "description": "Archive a chat",
-                        "inputSchema": {"type": "object"},
-                        "annotations": {}
-                    }
-                ],
-                "nextCursor": "abc",
-                "extra": "preserved"
-            }),
-        );
-
-        normalize_tools_list_response("beeper", &mut response);
-
-        let result = response.result.expect("success result");
-        assert_eq!(result["nextCursor"], "abc");
-        assert_eq!(result["extra"], "preserved");
-
-        let search = &result["tools"][0]["annotations"];
-        assert_eq!(search["readOnlyHint"], true);
-        assert_eq!(search["destructiveHint"], false);
-        assert_eq!(search["idempotentHint"], true);
-        assert_eq!(search["openWorldHint"], true);
-        assert_eq!(
-            result["tools"][0]["trustCard"]["schemaVersion"],
-            "trust_card.v1"
-        );
-        assert_eq!(
-            result["tools"][0]["trustCard"]["serverId"],
-            "backend:beeper"
-        );
-        assert_eq!(result["tools"][0]["trustCard"]["toolName"], "search");
-        assert_eq!(
-            result["tools"][0]["trustCard"]["trustCardDigestSha256"]
-                .as_str()
-                .unwrap()
-                .len(),
-            64
-        );
-
-        let archive = &result["tools"][1]["annotations"];
-        assert_eq!(archive["readOnlyHint"], false);
-        assert_eq!(archive["destructiveHint"], true);
-        assert_eq!(archive["idempotentHint"], false);
-        assert_eq!(archive["openWorldHint"], true);
-    }
-}
+mod tests;

@@ -114,6 +114,7 @@ async fn test_stdio_initialize_produces_valid_response() {
             mcp_gateway::config::Config::default(),
         )),
         export_status: None,
+        transparency_log: None,
     });
 
     // Call handle_initialize directly — this is what dispatch_single calls
