@@ -5,65 +5,54 @@
 //! RFC 9728 §3.1 the endpoint is unauthenticated — a client fetches it in
 //! response to a `401` carrying `WWW-Authenticate: Bearer resource_metadata="…"`.
 //!
-//! # Population
+//! # Where `resource` comes from
 //!
 //! The document is built from the gateway's own configuration, never from the
 //! request `Host` header — reflecting an attacker-controlled `Host` into a
 //! security-relevant discovery document would let a caller advertise a rogue
-//! origin. `resource` is the gateway's configured public origin
-//! (`server.public_url` when set, otherwise the bind `host:port`).
+//! origin. The `resource` identifier is resolved, in order:
+//!
+//! 1. `server.public_url` when set and a valid `http(s)` origin — the only
+//!    value that reliably names the real external origin behind a
+//!    TLS-terminating proxy. It is validated with a real URL parser and
+//!    reduced to a scheme+authority origin (no path/query/fragment/userinfo),
+//!    because the endpoint is mounted at the root and RFC 9728 §3.1 pairs a
+//!    root well-known path with a resource that has no path component.
+//! 2. Otherwise the *startup* bind address — but only when it is a loopback
+//!    host, for which advertising `http` is RFC-legal (the OAuth loopback
+//!    exception) and the bind address genuinely *is* the reachable origin.
+//! 3. Otherwise nothing: a non-loopback bind without a `public_url` cannot be
+//!    named honestly — the bind address (`0.0.0.0`) is not a resource
+//!    identifier and the external scheme behind a proxy is unknown. The
+//!    endpoint returns `503` rather than publish a guess or leak the bind
+//!    address.
+//!
+//! The bind fallback is captured once at router construction from the startup
+//! config, not read from the hot-reloadable `LiveConfig`: `server.host`/`port`
+//! are restart-required (a `/reload` does not move the TCP listener), so the
+//! advertised origin must not change on a host/port edit that has not taken
+//! effect. `public_url` *is* read live, so a `public_url`-only reload is
+//! reflected immediately.
 //!
 //! `authorization_servers` is deliberately left empty: RFC 9728 defines it as
 //! the OAuth authorization-server issuer identifiers a client resolves via
 //! `/.well-known/oauth-authorization-server` (RFC 8414). This gateway does not
 //! yet publish RFC 8414 metadata, so naming any issuer here would break client
 //! discovery. It is omitted from the serialized document (RFC 9728 §3.2) until
-//! the gateway serves authorization-server metadata. Per-user credentials the
-//! gateway mints for identity-propagation backends are downstream assertions,
-//! not the client-facing authorization server for reaching the gateway.
+//! the gateway serves authorization-server metadata.
 
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+};
 
 use crate::config::Config;
 use crate::oauth::ProtectedResourceMetadata;
 
 use super::AppState;
-
-/// Build the gateway's externally reachable origin URL.
-///
-/// Uses `server.public_url` when configured and well-formed — the only value
-/// that reliably names the real external origin behind a TLS-terminating
-/// proxy. A `public_url` that is not a scheme-qualified `http(s)` origin (or
-/// that carries a fragment, query, or userinfo — none of which belong in an
-/// RFC 9728 resource identifier) is rejected and logged, never published.
-///
-/// When `public_url` is unset the origin falls back to the bind address. `http`
-/// is only RFC-legal for a loopback host (the OAuth loopback exception), so the
-/// fallback advertises `http` for loopback binds (genuine local dev) and
-/// `https` for any non-loopback bind — a gateway reachable off-box is behind
-/// TLS in practice, and advertising `http://0.0.0.0:port` would be both
-/// non-compliant and a bind-address leak.
-// ponytail: config-only origin; validated public_url wins, else loopback-aware bind scheme.
-fn gateway_origin(config: &Config) -> String {
-    if let Some(url) = &config.server.public_url {
-        if let Some(valid) = sanitize_public_url(url) {
-            return valid;
-        }
-        tracing::warn!(
-            public_url = %url,
-            "server.public_url is not a valid http(s) origin (scheme://host[:port], no fragment/query/userinfo); falling back to bind origin"
-        );
-    }
-    let host = &config.server.host;
-    let scheme = if is_loopback_host(host) {
-        "http"
-    } else {
-        "https"
-    };
-    format!("{scheme}://{host}:{}", config.server.port)
-}
 
 /// `true` when `host` names the loopback interface, for which advertising an
 /// `http` origin is RFC-legal (OAuth loopback exception).
@@ -73,59 +62,126 @@ fn is_loopback_host(host: &str) -> bool {
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
-    if matches!(bare, "localhost") {
+    if bare == "localhost" {
         return true;
     }
     bare.parse::<std::net::IpAddr>()
         .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// Validate an operator-supplied `public_url` as an RFC 9728 resource origin.
+/// The startup bind address as an RFC 9728 resource origin, or `None` when it
+/// cannot be named honestly.
 ///
-/// Accepts `http`/`https` with a non-empty authority and an optional path;
-/// rejects any fragment, query, or userinfo (`user@host`). Returns the URL with
-/// a trailing slash trimmed, or `None` if malformed.
-fn sanitize_public_url(url: &str) -> Option<String> {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    if url.contains('#') || url.contains('?') {
+/// Returns `Some(http://host[:port])` only for a loopback bind (the address a
+/// local client actually reaches). A non-loopback bind returns `None`: its
+/// address is not a resource identifier and its external scheme is unknown, so
+/// the operator must set `server.public_url` instead. IPv6 literals are
+/// bracketed so the result is a well-formed URL.
+#[must_use]
+pub fn bind_fallback_origin(host: &str, port: u16) -> Option<String> {
+    if !is_loopback_host(host) {
         return None;
     }
-    let authority = rest.split('/').next().unwrap_or(rest);
-    if authority.is_empty() || authority.contains('@') {
-        return None;
-    }
-    Some(url.trim_end_matches('/').to_string())
+    let bracketed = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    Some(format!("http://{bracketed}:{port}"))
 }
 
-/// Build RFC 9728 protected-resource metadata from the live gateway config.
+/// Validate an operator-supplied `public_url` and reduce it to a bare origin.
+///
+/// Uses a real URL parser (`url` crate). Accepts only `http`/`https` with a
+/// host and rejects anything that does not belong in an RFC 9728 resource
+/// identifier: a non-root path, any query, fragment, or userinfo. Returns the
+/// canonical `scheme://host[:port]` origin (default ports and trailing slash
+/// dropped), or `None` if malformed.
+fn sanitize_public_url(raw: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return None;
+    }
+    if !matches!(parsed.path(), "" | "/") {
+        return None;
+    }
+    let mut origin = format!("{}://{host}", parsed.scheme());
+    if let Some(port) = parsed.port() {
+        // `port()` is `None` for the scheme's default port, so this omits
+        // `:443`/`:80` and keeps the origin canonical.
+        origin = format!("{origin}:{port}");
+    }
+    Some(origin)
+}
+
+/// Resolve the gateway's externally reachable origin: validated `public_url`,
+/// else the startup loopback bind origin, else `None`.
+fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option<String> {
+    if let Some(raw) = config.server.public_url.as_deref() {
+        if let Some(origin) = sanitize_public_url(raw) {
+            return Some(origin);
+        }
+        tracing::warn!(
+            public_url = %raw,
+            "server.public_url is not a valid http(s) origin (scheme://host[:port], no path/query/fragment/userinfo); \
+             not published as the protected-resource identifier"
+        );
+    }
+    bind_origin.map(ToString::to_string)
+}
+
+/// Build RFC 9728 protected-resource metadata, or `None` when no honest
+/// `resource` identifier is available (see module docs).
 #[must_use]
-pub fn build_protected_resource_metadata(config: &Config) -> ProtectedResourceMetadata {
-    ProtectedResourceMetadata {
-        resource: gateway_origin(config),
+pub fn build_protected_resource_metadata(
+    config: &Config,
+    bind_origin: Option<&str>,
+) -> Option<ProtectedResourceMetadata> {
+    let resource = resolve_resource_origin(config, bind_origin)?;
+    Some(ProtectedResourceMetadata {
+        resource,
         // Empty until the gateway serves RFC 8414 authorization-server metadata;
         // see module docs. Omitted from the serialized document when empty.
         authorization_servers: Vec::new(),
         bearer_methods_supported: vec!["header".to_string()],
         scopes_supported: Vec::new(),
-    }
+    })
 }
 
 /// `GET /.well-known/oauth-protected-resource` — unauthenticated (RFC 9728).
+///
+/// `bind_origin` is the startup loopback bind origin captured at router
+/// construction (`None` for a non-loopback bind); `public_url` is read live so
+/// a reload is reflected without a restart.
 pub async fn oauth_protected_resource_handler(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+    state: Arc<AppState>,
+    bind_origin: Option<String>,
+) -> Response {
     let config = state.live_config.get();
-    let metadata = build_protected_resource_metadata(&config);
-    (
-        StatusCode::OK,
-        [(
-            axum::http::header::CONTENT_TYPE,
-            axum::http::header::HeaderValue::from_static("application/json"),
-        )],
-        Json(metadata),
-    )
+    let json_header = (
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    match build_protected_resource_metadata(&config, bind_origin.as_deref()) {
+        Some(metadata) => (StatusCode::OK, [json_header], Json(metadata)).into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [json_header],
+            Json(serde_json::json!({
+                "error": "protected_resource_metadata_unavailable",
+                "error_description":
+                    "server.public_url is not configured with a valid http(s) origin",
+            })),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -144,37 +200,71 @@ mod tests {
     }
 
     #[test]
-    fn resource_is_configured_bind_origin_not_request_host() {
-        let config = config_with_host("gateway.internal", 8080);
-        let meta = build_protected_resource_metadata(&config);
-        // Non-loopback bind without public_url advertises https (off-box = TLS).
-        assert_eq!(meta.resource, "https://gateway.internal:8080");
+    fn resource_is_public_url_not_request_host() {
+        let mut config = config_with_host("0.0.0.0", 8080);
+        config.server.public_url = Some("https://gateway.internal".to_string());
+        // Even with a non-loopback bind, the advertised resource is the
+        // configured public origin — never the request host or bind address.
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        assert_eq!(meta.resource, "https://gateway.internal");
     }
 
     #[test]
-    fn loopback_bind_advertises_http() {
-        // http is RFC-legal only for loopback (OAuth loopback exception).
-        for host in ["127.0.0.1", "localhost", "::1"] {
-            let config = config_with_host(host, 39400);
-            let meta = build_protected_resource_metadata(&config);
-            assert_eq!(meta.resource, format!("http://{host}:39400"));
+    fn loopback_bind_origin_advertises_http_and_brackets_ipv6() {
+        // http is RFC-legal only for loopback (OAuth loopback exception); a
+        // bare IPv6 host must be bracketed to stay a valid URL.
+        assert_eq!(
+            bind_fallback_origin("127.0.0.1", 39400).as_deref(),
+            Some("http://127.0.0.1:39400")
+        );
+        assert_eq!(
+            bind_fallback_origin("localhost", 39400).as_deref(),
+            Some("http://localhost:39400")
+        );
+        assert_eq!(
+            bind_fallback_origin("::1", 39400).as_deref(),
+            Some("http://[::1]:39400")
+        );
+    }
+
+    #[test]
+    fn non_loopback_bind_without_public_url_is_unavailable() {
+        // No public_url + a non-loopback bind cannot be named honestly: no
+        // bind fallback, so metadata is unavailable (handler returns 503)
+        // rather than leaking `0.0.0.0` or guessing a scheme.
+        for host in ["0.0.0.0", "gateway.internal", "203.0.113.7"] {
+            assert_eq!(
+                bind_fallback_origin(host, 8080),
+                None,
+                "{host} is not loopback"
+            );
+            let config = config_with_host(host, 8080);
+            assert!(
+                build_protected_resource_metadata(&config, None).is_none(),
+                "{host} without public_url must not publish a resource"
+            );
         }
     }
 
     #[test]
     fn public_url_overrides_bind_origin() {
-        let mut config = config_with_host("127.0.0.1", 39400);
-        config.server.public_url = Some("https://mcp.acme.internal/".to_string());
-        let meta = build_protected_resource_metadata(&config);
-        // Trailing slash trimmed; the internal bind address is never advertised.
+        let config = {
+            let mut c = config_with_host("127.0.0.1", 39400);
+            c.server.public_url = Some("https://mcp.acme.internal/".to_string());
+            c
+        };
+        // public_url wins over the loopback bind fallback; trailing slash dropped.
+        let meta =
+            build_protected_resource_metadata(&config, Some("http://127.0.0.1:39400")).unwrap();
         assert_eq!(meta.resource, "https://mcp.acme.internal");
         assert!(!meta.resource.contains("127.0.0.1"));
     }
 
     #[test]
     fn authorization_servers_empty_until_rfc8414_metadata_served() {
-        let config = config_with_host("gw.internal", 9000);
-        let meta = build_protected_resource_metadata(&config);
+        let mut config = config_with_host("gw.internal", 9000);
+        config.server.public_url = Some("https://gw.internal:9000".to_string());
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
         assert!(
             meta.authorization_servers.is_empty(),
             "must not name an authorization server the gateway does not publish RFC 8414 metadata for"
@@ -184,52 +274,76 @@ mod tests {
     #[test]
     fn empty_arrays_are_omitted_not_serialized_as_empty() {
         // RFC 9728 §3.2: zero-value parameters are omitted, not sent as `[]`.
-        let config = config_with_host("gw.internal", 9000);
-        let json = serde_json::to_string(&build_protected_resource_metadata(&config)).unwrap();
+        let mut config = config_with_host("gw.internal", 9000);
+        config.server.public_url = Some("https://gw.internal:9000".to_string());
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let json = serde_json::to_string(&meta).unwrap();
         assert!(!json.contains("authorization_servers"));
         assert!(!json.contains("scopes_supported"));
     }
 
     #[test]
     fn serializes_rfc9728_shaped_json() {
-        let config = config_with_host("gw.internal", 9000);
-        let json = serde_json::to_string(&build_protected_resource_metadata(&config)).unwrap();
+        let mut config = config_with_host("gw.internal", 9000);
+        config.server.public_url = Some("https://gw.internal:9000".to_string());
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let json = serde_json::to_string(&meta).unwrap();
         assert!(json.contains("\"resource\":\"https://gw.internal:9000\""));
         assert!(json.contains("\"bearer_methods_supported\":[\"header\"]"));
     }
 
     #[test]
-    fn malformed_public_url_falls_back_to_bind_origin() {
-        // A public_url that is not a valid http(s) origin must never be
-        // published; the endpoint falls back to the bind origin instead.
+    fn invalid_public_url_falls_back_to_loopback_bind_but_never_publishes_garbage() {
+        // A malformed public_url is never published; with a loopback bind
+        // available the resource falls back to it, otherwise it is unavailable.
         for bad in [
             "gateway.example",              // no scheme
             "ftp://gw.internal",            // wrong scheme
             "https://user@gw.internal",     // userinfo
+            "https://user:pw@gw.internal",  // userinfo w/ password
+            "https://gw.internal/base",     // non-root path
             "https://gw.internal/path?x=1", // query
             "https://gw.internal#frag",     // fragment
-            "https://",                     // empty authority
+            "https://",                     // no host
+            "https://gw.internal:abc",      // bad port
+            "https://[::1",                 // malformed IPv6
         ] {
-            let mut config = config_with_host("gw.internal", 9000);
+            let mut config = config_with_host("127.0.0.1", 39400);
             config.server.public_url = Some(bad.to_string());
-            let meta = build_protected_resource_metadata(&config);
+            let meta =
+                build_protected_resource_metadata(&config, Some("http://127.0.0.1:39400")).unwrap();
             assert_eq!(
-                meta.resource, "https://gw.internal:9000",
-                "malformed public_url {bad:?} must fall back, not be published"
+                meta.resource, "http://127.0.0.1:39400",
+                "malformed public_url {bad:?} must fall back to the bind origin, never be published"
             );
         }
     }
 
     #[test]
-    fn sanitize_public_url_accepts_wellformed_and_trims_slash() {
+    fn sanitize_public_url_accepts_wellformed_and_canonicalizes() {
+        // Trailing slash dropped.
         assert_eq!(
-            sanitize_public_url("https://mcp.acme.internal/"),
-            Some("https://mcp.acme.internal".to_string())
+            sanitize_public_url("https://mcp.acme.internal/").as_deref(),
+            Some("https://mcp.acme.internal")
         );
+        // Explicit non-default port retained.
         assert_eq!(
-            sanitize_public_url("http://gw.internal:8080/base"),
-            Some("http://gw.internal:8080/base".to_string())
+            sanitize_public_url("http://gw.internal:8080").as_deref(),
+            Some("http://gw.internal:8080")
         );
+        // Default port normalized away.
+        assert_eq!(
+            sanitize_public_url("https://gw.internal:443").as_deref(),
+            Some("https://gw.internal")
+        );
+        // IPv6 literal stays bracketed.
+        assert_eq!(
+            sanitize_public_url("https://[2001:db8::1]:8443").as_deref(),
+            Some("https://[2001:db8::1]:8443")
+        );
+        // Rejections.
         assert_eq!(sanitize_public_url("https://gw.internal#f"), None);
+        assert_eq!(sanitize_public_url("https://gw.internal/p"), None);
+        assert_eq!(sanitize_public_url("https://gw.internal:abc"), None);
     }
 }

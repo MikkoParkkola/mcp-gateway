@@ -120,12 +120,28 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     // RFC 9728 protected-resource metadata — unauthenticated (clients fetch it
     // before holding a token). Populated from config, not the request Host.
-    let protected_resource_route = Router::new()
-        .route(
-            "/.well-known/oauth-protected-resource",
-            get(well_known::oauth_protected_resource_handler),
-        )
-        .with_state(Arc::clone(&state));
+    // The bind fallback origin is snapshotted from the *startup* config here:
+    // `server.host`/`port` are restart-required, so the advertised origin must
+    // not follow a hot host/port edit that has not moved the listener.
+    // `public_url` is still read live inside the handler.
+    let startup_config = state.live_config.get();
+    let bind_origin =
+        well_known::bind_fallback_origin(&startup_config.server.host, startup_config.server.port);
+    let protected_resource_route =
+        Router::new()
+            .route(
+                "/.well-known/oauth-protected-resource",
+                get({
+                    let bind_origin = bind_origin.clone();
+                    move |axum::extract::State(state): axum::extract::State<Arc<AppState>>| {
+                        let bind_origin = bind_origin.clone();
+                        async move {
+                            well_known::oauth_protected_resource_handler(state, bind_origin).await
+                        }
+                    }
+                }),
+            )
+            .with_state(Arc::clone(&state));
 
     #[allow(unused_mut)]
     let mut routes = Router::new()
