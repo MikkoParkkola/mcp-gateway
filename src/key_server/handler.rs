@@ -56,7 +56,7 @@ use crate::config::KeyServerOidcConfig;
 // ── Request / Response types ───────────────────────────────────────────────
 
 /// RFC 8693 token exchange request body.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct TokenExchangeRequest {
     /// Must be `urn:ietf:params:oauth:grant-type:token-exchange`.
     pub grant_type: String,
@@ -70,8 +70,21 @@ pub struct TokenExchangeRequest {
     pub scope: String,
 }
 
+// Manual `Debug` redacts the OIDC subject token / issued bearer (CWE-532,
+// mirrors MIK-6733) so these credentials never reach a trace or error log.
+impl std::fmt::Debug for TokenExchangeRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenExchangeRequest")
+            .field("grant_type", &self.grant_type)
+            .field("subject_token", &"<redacted>")
+            .field("subject_token_type", &self.subject_token_type)
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
 /// RFC 8693 token exchange response.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct TokenExchangeResponse {
     /// The issued opaque bearer token.
     pub access_token: String,
@@ -83,6 +96,18 @@ pub struct TokenExchangeResponse {
     pub scope: String,
     /// JTI for revocation.
     pub jti: String,
+}
+
+impl std::fmt::Debug for TokenExchangeResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenExchangeResponse")
+            .field("access_token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .field("jti", &self.jti)
+            .finish()
+    }
 }
 
 /// Query params for bulk revocation.
@@ -395,6 +420,37 @@ fn error_response(status: StatusCode, error: &str, message: &str) -> axum::respo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_output_redacts_exchange_tokens() {
+        // CWE-532 / MIK-6733 sibling: {:?} must never leak the OIDC subject
+        // token or the issued bearer.
+        let req = TokenExchangeRequest {
+            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange".to_string(),
+            subject_token: "eyJ-SUBJECT-JWT-SECRET".to_string(),
+            subject_token_type: "urn:ietf:params:oauth:token-type:id_token".to_string(),
+            scope: "gmail".to_string(),
+        };
+        let resp = TokenExchangeResponse {
+            access_token: "mcpgw_ISSUED-BEARER-SECRET".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            scope: "gmail".to_string(),
+            jti: "jti-123".to_string(),
+        };
+        let rdbg = format!("{req:?}");
+        let sdbg = format!("{resp:?}");
+        assert!(
+            !rdbg.contains("eyJ-SUBJECT-JWT-SECRET"),
+            "leaked subject token: {rdbg}"
+        );
+        assert!(
+            !sdbg.contains("mcpgw_ISSUED-BEARER-SECRET"),
+            "leaked access token: {sdbg}"
+        );
+        assert!(rdbg.contains("<redacted>") && sdbg.contains("<redacted>"));
+        assert!(sdbg.contains("jti-123"), "jti stays visible for revocation");
+    }
 
     #[test]
     fn parse_scope_string_empty() {

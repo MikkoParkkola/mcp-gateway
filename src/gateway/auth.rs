@@ -29,8 +29,15 @@ use crate::key_server::KeyServer;
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
+/// Short, non-reversible fingerprint of a secret for log correlation (CWE-532).
+///
+/// Returns the first 12 hex chars of the SHA-256 digest — enough to correlate
+/// which credential is active across logs, useless as a credential itself.
+fn bearer_token_fingerprint(token: &str) -> String {
+    crate::hashing::sha256_hex(token.as_bytes())[..12].to_string()
+}
+
 /// Resolved authentication configuration (tokens expanded)
-#[derive(Debug)]
 pub struct ResolvedAuthConfig {
     /// Whether auth is enabled
     pub enabled: bool,
@@ -49,7 +56,7 @@ pub struct ResolvedAuthConfig {
 }
 
 /// Resolved API key with expanded values
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ResolvedApiKey {
     /// The actual key value
     pub key: String,
@@ -67,6 +74,43 @@ pub struct ResolvedApiKey {
     pub admin: bool,
 }
 
+// Manual `Debug` that redacts resolved secrets (CWE-532, mirrors MIK-6733).
+// A derived `Debug` would print the bearer token / API key verbatim into any
+// trace or error context. Only a non-reversible fingerprint is shown.
+impl std::fmt::Debug for ResolvedAuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedAuthConfig")
+            .field("enabled", &self.enabled)
+            .field(
+                "bearer_token",
+                &self
+                    .bearer_token
+                    .as_deref()
+                    .map(|t| format!("<redacted:{}>", bearer_token_fingerprint(t))),
+            )
+            .field("api_keys", &self.api_keys)
+            .field("public_paths", &self.public_paths)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for ResolvedApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedApiKey")
+            .field(
+                "key",
+                &format!("<redacted:{}>", bearer_token_fingerprint(&self.key)),
+            )
+            .field("name", &self.name)
+            .field("rate_limit", &self.rate_limit)
+            .field("backends", &self.backends)
+            .field("allowed_tools", &self.allowed_tools)
+            .field("denied_tools", &self.denied_tools)
+            .field("admin", &self.admin)
+            .finish()
+    }
+}
+
 impl ResolvedAuthConfig {
     /// Create resolved config from `AuthConfig`.
     ///
@@ -76,11 +120,18 @@ impl ResolvedAuthConfig {
     pub fn try_from_config(config: &AuthConfig) -> Result<Self> {
         let bearer_token = config.resolve_bearer_token()?;
 
-        // Log if auto-generated token
+        // Signal auto-generation WITHOUT logging the secret (CWE-532). The
+        // plaintext bearer is a master gateway credential; INFO logs ship to
+        // files, journald, and aggregators where log-read access would become
+        // full auth bypass. Emit only a short non-reversible fingerprint so
+        // operators can correlate the active token without it being usable.
         if config.bearer_token.as_deref() == Some("auto")
             && let Some(ref token) = bearer_token
         {
-            tracing::info!("Auto-generated bearer token: {}", token);
+            tracing::info!(
+                "Auto-generated bearer token (fingerprint {})",
+                bearer_token_fingerprint(token)
+            );
         }
 
         let api_keys: Vec<ResolvedApiKey> = config
@@ -537,6 +588,54 @@ mod tests {
         assert!(config.is_public_path("/metrics"));
         assert!(!config.is_public_path("/mcp"));
         assert!(!config.is_public_path("/"));
+    }
+
+    #[test]
+    fn debug_output_redacts_bearer_and_api_keys() {
+        // CWE-532 / MIK-6733 sibling: {:?} must never leak resolved secrets.
+        let config = ResolvedAuthConfig {
+            enabled: true,
+            bearer_token: Some("super-secret-bearer-VALUE".to_string()),
+            api_keys: vec![ResolvedApiKey {
+                key: "api-key-SECRET-VALUE".to_string(),
+                name: "client-a".to_string(),
+                rate_limit: 60,
+                backends: vec![],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+            }],
+            public_paths: vec![],
+            rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
+        };
+        let dbg = format!("{config:?}");
+        assert!(
+            !dbg.contains("super-secret-bearer-VALUE"),
+            "Debug leaked the bearer token: {dbg}"
+        );
+        assert!(
+            !dbg.contains("api-key-SECRET-VALUE"),
+            "Debug leaked the API key: {dbg}"
+        );
+        assert!(
+            dbg.contains("<redacted"),
+            "expected redaction marker: {dbg}"
+        );
+        // Non-secret fields stay visible for diagnostics.
+        assert!(
+            dbg.contains("client-a"),
+            "api key name should remain visible"
+        );
+    }
+
+    #[test]
+    fn fingerprint_is_not_the_secret() {
+        let fp = bearer_token_fingerprint("super-secret-bearer-VALUE");
+        assert_eq!(fp.len(), 12);
+        assert!(!fp.contains("secret"));
+        assert_ne!(fp, "super-secret-bearer-VALUE");
     }
 
     #[test]
