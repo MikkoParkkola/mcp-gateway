@@ -222,6 +222,14 @@ impl MetaMcp {
             forward_params["arguments"] = arguments.clone();
         }
 
+        // INV-2 (ADR-008): on a multi-user gateway, never forward a gateway-held
+        // OAuth token that is not isolated per user. The meta route resolves no
+        // per-user credential here, so pass `false` — fail closed rather than serve
+        // one user's backend OAuth view to another (MIK-6742 leak class).
+        if let Err(e) = self.enforce_oauth_isolation(backend_name, false) {
+            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        }
+
         match backend.request("prompts/get", Some(forward_params)).await {
             Ok(resp) => {
                 if let Some(error) = resp.error {
@@ -425,5 +433,57 @@ mod tests {
         // THEN: response is still Some (uses fallback task text)
         let resp = try_serve_gateway_prompt(id, "gateway/gateway-discover", None);
         assert!(resp.is_some());
+    }
+
+    // MIK-6746 R2-1 / MIK-6742 leak class: the meta route's `prompts/get` handler
+    // must enforce the INV-2 OAuth isolation guard (ADR-008). On a multi-user
+    // gateway, forwarding to a backend whose gateway-held OAuth login is not
+    // per-user isolated would serve one user's credential view to another; the
+    // handler must fail closed instead of forwarding with the static token.
+    #[tokio::test]
+    async fn prompts_get_refuses_oauth_isolated_backend_on_multi_user_gateway() {
+        use crate::backend::{Backend, BackendRegistry};
+        use crate::config::{BackendConfig, TransportConfig};
+        use std::sync::Arc;
+
+        // A backend with OAuth enabled and NOT blessed shared_account ->
+        // oauth_requires_per_user_isolation() == true.
+        let oauth: crate::config::OAuthConfig =
+            serde_json::from_value(serde_json::json!({})).expect("default oauth config");
+        assert!(oauth.enabled && !oauth.shared_account);
+        let config = BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://mem.internal/mcp".to_string(),
+                streamable_http: true,
+                protocol_version: None,
+            },
+            oauth: Some(oauth),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "mem",
+            config,
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let registry = Arc::new(BackendRegistry::new());
+        registry.register(backend);
+
+        let m = MetaMcp::new(registry);
+        m.set_multi_user(true);
+
+        let params = serde_json::json!({ "name": "mem/echo" });
+        let resp = m
+            .handle_prompts_get(RequestId::Number(1), Some(&params))
+            .await;
+
+        let err = resp
+            .error
+            .expect("multi-user gateway must refuse prompts/get for an OAuth-isolated backend");
+        assert!(
+            err.message.contains("isolated per user"),
+            "expected INV-2 isolation refusal, got: {}",
+            err.message
+        );
     }
 }

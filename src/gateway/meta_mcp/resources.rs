@@ -275,6 +275,15 @@ impl MetaMcp {
             );
         };
 
+        // INV-2 (ADR-008): on a multi-user gateway, never forward a gateway-held
+        // OAuth token that is not isolated per user. The meta route resolves no
+        // per-user credential here (propagation parity is direct-route-only until
+        // the invoke resolver is unlocked), so pass `false` — fail closed rather
+        // than serve one user's backend OAuth view to another (MIK-6742 leak class).
+        if let Err(e) = self.enforce_oauth_isolation(&backend.name, false) {
+            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        }
+
         match backend
             .request("resources/read", Some(json!({ "uri": uri })))
             .await
@@ -338,6 +347,11 @@ impl MetaMcp {
             );
         };
 
+        // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
+        if let Err(e) = self.enforce_oauth_isolation(&backend.name, false) {
+            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        }
+
         match backend
             .request("resources/subscribe", Some(json!({ "uri": uri })))
             .await
@@ -370,6 +384,11 @@ impl MetaMcp {
                 format!("No backend found for resource URI: {uri}"),
             );
         };
+
+        // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
+        if let Err(e) = self.enforce_oauth_isolation(&backend.name, false) {
+            return JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+        }
 
         match backend
             .request("resources/unsubscribe", Some(json!({ "uri": uri })))
