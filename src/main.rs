@@ -512,12 +512,43 @@ fn apply_cli_overrides_and_validate(config: &mut Config, cli: &Cli) -> mcp_gatew
 }
 
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).
+/// Resolve the effective `--config` path for the **stdio** serve command only.
+///
+/// An explicitly-supplied path that does not exist is downgraded to `None`
+/// (fall through to `Config::load`'s fallback-location search, then env vars,
+/// then built-in defaults) instead of a hard failure, so the published
+/// container image boots over stdio when no config has been mounted yet. Glama's
+/// build smoke-test starts the container with `serve --stdio --config
+/// /config.yaml` even though the generated Dockerfile never writes that file;
+/// fail-loud there reports a spurious "build failed".
+///
+/// Scoped to stdio deliberately: stdio is a local pipe with no network listener,
+/// so starting on defaults cannot expose an unauthenticated network surface. The
+/// HTTP `run_server` path stays fail-loud (`Config::load(cli.config)` directly)
+/// because its defaults (`auth.enabled=false`, `meta_mcp.enabled=true`) would be
+/// a fail-open regression if an intended `--config` went missing. `audit`/
+/// `validate`/`doctor` likewise keep `Config::load`'s fail-loud behavior.
+fn serve_config_path(cli: &Cli) -> Option<std::path::PathBuf> {
+    match cli.config.as_deref() {
+        Some(p) if !p.exists() => {
+            eprintln!(
+                "Warning: config file {} not found; continuing over stdio without it \
+                 (fallback locations, env vars, then defaults)",
+                p.display()
+            );
+            None
+        }
+        other => other.map(std::path::Path::to_path_buf),
+    }
+}
+
 async fn run_stdio_server(cli: Cli) -> ExitCode {
     if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
         eprintln!("Warning: upgrade check failed: {e}");
     }
 
-    let config = match Config::load(cli.config.as_deref()) {
+    let config_path = serve_config_path(&cli);
+    let config = match Config::load(config_path.as_deref()) {
         Ok(mut config) => {
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
                 eprintln!("Failed to apply configuration overrides: {e}");
@@ -531,7 +562,6 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
         }
     };
 
-    let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
     let gateway = match Gateway::new_with_path(config, config_path).await {
         Ok(g) => g,
         Err(e) => {
@@ -559,6 +589,11 @@ async fn run_server(cli: Cli) -> ExitCode {
         eprintln!("Warning: upgrade check failed: {e}");
     }
 
+    // HTTP serve stays fail-loud: an explicit --config that cannot be loaded
+    // must NOT silently start on defaults (auth.enabled=false,
+    // meta_mcp.enabled=true would be a network-facing fail-open). Only the
+    // stdio path (a local pipe, no network auth surface) degrades — see
+    // serve_config_path / run_stdio_server.
     let config = match Config::load(cli.config.as_deref()) {
         Ok(mut config) => {
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {

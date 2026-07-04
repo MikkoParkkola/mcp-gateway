@@ -958,3 +958,40 @@ fn resolve_stats_url_no_url_applies_port_override() {
     std::env::set_current_dir(&orig).unwrap();
     assert_eq!(resolved, "http://127.0.0.1:9999");
 }
+
+fn make_cli_with_config(config: Option<std::path::PathBuf>) -> Cli {
+    Cli {
+        config,
+        port: None,
+        host: None,
+        log_level: "info".to_string(),
+        log_format: None,
+        no_meta_mcp: false,
+        command: None,
+    }
+}
+
+#[test]
+fn serve_config_path_none_stays_none() {
+    let cli = make_cli_with_config(None);
+    assert_eq!(serve_config_path(&cli), None);
+}
+
+#[test]
+fn serve_config_path_missing_downgrades_to_none() {
+    // Glama passes --config /config.yaml with no such file; serve must not
+    // fail-loud on it (that reported a spurious "build failed").
+    let cli = make_cli_with_config(Some(std::path::PathBuf::from(
+        "/nonexistent/does-not-exist-config.yaml",
+    )));
+    assert_eq!(serve_config_path(&cli), None);
+}
+
+#[test]
+fn serve_config_path_existing_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yaml");
+    std::fs::write(&path, "server:\n  port: 8080\n").unwrap();
+    let cli = make_cli_with_config(Some(path.clone()));
+    assert_eq!(serve_config_path(&cli), Some(path));
+}
