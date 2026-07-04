@@ -611,21 +611,47 @@ impl HttpTransport {
         ))
     }
 
-    /// Resolve a potentially relative message URL against the SSE URL
+    /// Resolve a potentially relative message URL against the SSE URL.
+    ///
+    /// The `endpoint` value is backend-controlled (it arrives on the SSE
+    /// stream). Per the MCP SSE spec the message endpoint MUST be same-origin
+    /// as the SSE stream. Every endpoint — absolute, relative, network-path
+    /// (`//host/x`), backslash (`\\host`, `/\host`), or scheme-relative
+    /// (`https:/\/\host`) — is **resolved against the base URL first**, then the
+    /// *resolved* origin is checked. Classifying by string prefix instead
+    /// (`starts_with("http://")`) is unsafe: WHATWG URL resolution normalizes
+    /// backslashes to slashes and treats `//host` as an authority-relative
+    /// reference, so `base.join("//169.254.169.254/x")` REPLACES the authority
+    /// and yields a cross-origin URL despite not starting with a scheme. Without
+    /// checking the resolved origin, a malicious backend could return
+    /// `data: //169.254.169.254/latest/meta-data/...` and the gateway would POST
+    /// the JSON-RPC request together with the per-user identity credential
+    /// headers (`Authorization: Bearer <assertion>`, MIK-6704) to an
+    /// attacker-chosen internal / metadata host — an SSRF + credential-exfil
+    /// vector. Same-origin equality (rather than the outbound SSRF guard) is
+    /// used deliberately: legitimate MCP backends commonly bind to loopback,
+    /// which a private/loopback SSRF reject would break — the real defect is a
+    /// *cross-origin* redirect of credentials, which same-origin equality stops.
     fn resolve_message_url(&self, endpoint: &str) -> Result<String> {
-        // If endpoint is already absolute, use it directly
-        if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-            return Ok(endpoint.to_string());
-        }
-
-        // Parse the base SSE URL
         let base_url = Url::parse(&self.base_url)
             .map_err(|e| Error::Transport(format!("Invalid SSE URL: {e}")))?;
 
-        // Resolve relative URL
+        // Resolve every endpoint shape against the base, then validate the
+        // *resolved* origin. `Url::join` handles absolute and relative inputs
+        // alike, so absolute and relative branches collapse into one path — and
+        // authority-replacing shapes (`//host`, `\\host`, `https:/\/\host`) can
+        // no longer slip past a prefix-based classifier.
         let resolved = base_url
             .join(endpoint)
             .map_err(|e| Error::Transport(format!("Failed to resolve endpoint URL: {e}")))?;
+
+        if !same_origin(&base_url, &resolved) {
+            return Err(Error::Transport(
+                "SSE message endpoint is cross-origin to the SSE stream; \
+                 refusing to send credentials to a different host"
+                    .to_string(),
+            ));
+        }
 
         Ok(resolved.to_string())
     }

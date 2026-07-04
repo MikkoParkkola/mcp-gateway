@@ -152,6 +152,42 @@ fn resolve_message_url_relative_sibling() {
     assert_eq!(result, "http://localhost:8080/api/messages");
 }
 
+// Authority-replacing endpoints that do NOT start with `http://`/`https://`
+// but resolve cross-origin via WHATWG URL rules (network-path, backslash,
+// scheme-relative). A prefix classifier routes these to the relative branch and
+// misses them; resolve-then-check catches them. All four MUST be rejected.
+fn assert_cross_origin_rejected(base: &str, endpoint: &str) {
+    let t = make_transport(base);
+    let err = t.resolve_message_url(endpoint).unwrap_err();
+    assert!(
+        matches!(&err, crate::Error::Transport(m) if m.contains("cross-origin")),
+        "expected cross-origin rejection for endpoint {endpoint:?}, got: {err:?}"
+    );
+}
+
+#[test]
+fn resolve_message_url_network_path_metadata_host_rejected() {
+    assert_cross_origin_rejected(
+        "http://localhost:8080/sse",
+        "//169.254.169.254/latest/meta-data/",
+    );
+}
+
+#[test]
+fn resolve_message_url_backslash_authority_rejected() {
+    assert_cross_origin_rejected("http://localhost:8080/sse", "\\\\169.254.169.254/x");
+}
+
+#[test]
+fn resolve_message_url_slash_backslash_authority_rejected() {
+    assert_cross_origin_rejected("http://localhost:8080/sse", "/\\attacker-host/x");
+}
+
+#[test]
+fn resolve_message_url_scheme_relative_authority_rejected() {
+    assert_cross_origin_rejected("http://localhost:8080/sse", "https:/\\/\\attacker-host/x");
+}
+
 // =========================================================================
 // get_message_url
 // =========================================================================
