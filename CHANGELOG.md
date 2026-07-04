@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **stdio serve boots without a mounted config (Glama build).** An explicit
+  `--config <path>` that does not exist was a hard error, so
+  `mcp-gateway serve --stdio --config /config.yaml` exited non-zero when the
+  file was absent — the exact shape of Glama's container build smoke-test,
+  which passes that placeholder while the generated Dockerfile never writes the
+  file. The stdio serve path now downgrades a missing explicit `--config` to
+  the normal no-config resolution (fallback locations, env vars, then defaults)
+  with a stderr warning. Scoped to stdio only: the HTTP server path stays
+  fail-loud so a missing intended config can never silently start with
+  authentication disabled.
+
 ## [3.0.1] - 2026-07-03
 
 Security hardening fast-follow for the 3.0.0 end-user identity-propagation
