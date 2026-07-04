@@ -558,11 +558,24 @@ impl HttpTransport {
         let mut buffer = String::new();
         let mut event_type: Option<String> = None;
 
+        // Bound the unparsed handshake buffer at 64 KiB. The endpoint event is
+        // a single short SSE line; complete lines are drained below, so a
+        // well-behaved backend never approaches this. A compromised/misbehaving
+        // backend streaming bytes without a newline is capped here rather than
+        // growing `buffer` without limit (trusted-backend DoS defence in depth).
+        let max_sse_handshake_buffer: usize = 64 * 1024;
+
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result
                 .map_err(|e| Error::Transport(format!("Failed to read SSE chunk: {e}")))?;
 
             buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            if buffer.len() > max_sse_handshake_buffer {
+                return Err(Error::Transport(format!(
+                    "SSE handshake exceeded {max_sse_handshake_buffer}-byte buffer without an endpoint event"
+                )));
+            }
 
             // Process complete lines in the buffer
             while let Some(newline_pos) = buffer.find('\n') {
