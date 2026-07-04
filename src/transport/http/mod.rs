@@ -749,6 +749,14 @@ impl Transport for HttpTransport {
         result
     }
 
+    // MIK-6710: HTTP is the only transport whose `request_with_headers`
+    // actually applies `extra_headers` to the wire (see
+    // `send_request_with_headers` above) — the identity-propagation dispatch
+    // gate relies on this override to allow a `required` backend to proceed.
+    fn carries_identity_headers(&self) -> bool {
+        true
+    }
+
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         let message_url = self.get_message_url();
 

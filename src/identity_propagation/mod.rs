@@ -351,6 +351,53 @@ impl IdentityPropagation for SignedAssertionStrategy {
     }
 }
 
+/// Fail-closed reason shared between the two dispatch chokepoints that guard
+/// against a `required` backend running unauthenticated over a
+/// header-incapable transport (MIK-6710):
+/// `MetaMcp::resolve_caller_credential` (minting path — meta-tool dispatch
+/// and the direct route's non-passthrough branch) and the direct backend
+/// route's passthrough branch (`backend_handlers::ensure_transport_carries_identity_headers`
+/// caller). Only HTTP transports apply `extra_headers` on the wire
+/// (`Transport::carries_identity_headers`); stdio and websocket transports
+/// inherit the trait default and silently drop them, which would otherwise
+/// let a `required` backend run unauthenticated while the audit log records
+/// a successful mint or passthrough resolution.
+pub(crate) const TRANSPORT_CANNOT_CARRY_HEADERS: &str = "its transport cannot carry identity-propagation headers (only HTTP transports forward \
+     per-request headers; stdio and websocket transports silently drop them)";
+
+/// Fail-closed gate for [`TRANSPORT_CANNOT_CARRY_HEADERS`]: refuse dispatch
+/// for a `required` backend whose transport cannot carry the resolved
+/// credential, BEFORE that credential is minted (or, for passthrough,
+/// before the caller's own credential is even read) — never mint/resolve
+/// successfully and let the header be dropped on the wire afterwards.
+///
+/// `Ok(())` when dispatch may proceed: either the transport is capable, or
+/// propagation is not `required` for this backend (best-effort, matching the
+/// existing non-required fallback elsewhere in this module).
+///
+/// Returns the bare [`TRANSPORT_CANNOT_CARRY_HEADERS`] fact plus a ticket
+/// reference — deliberately WITHOUT an "identity propagation required for
+/// backend X but ..." prefix — so each of the two call sites can fold it
+/// into their own existing refusal-message framing without duplicating that
+/// phrase.
+///
+/// # Errors
+///
+/// Returns an error containing [`TRANSPORT_CANNOT_CARRY_HEADERS`] and the
+/// `MIK-6710` ticket reference when `required` is `true` and
+/// `transport_carries_headers` is `false`.
+pub(crate) fn ensure_transport_carries_identity_headers(
+    required: bool,
+    transport_carries_headers: bool,
+) -> Result<(), String> {
+    if required && !transport_carries_headers {
+        return Err(format!(
+            "{TRANSPORT_CANNOT_CARRY_HEADERS} (MIK-6710, fail-closed)"
+        ));
+    }
+    Ok(())
+}
+
 /// Stable actor id for an identity-propagation audit entry (MIK-6740). Uses the
 /// same `issuer`+`subject` derivation as the control-plane governance audit
 /// (`stable_actor_id`) so the two audit trails describe the same actor under the
@@ -598,5 +645,31 @@ mod tests {
             session_mode: SessionMode::Stateless,
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    // MIK-6710 — a `required` backend on a transport that cannot carry
+    // per-request headers (stdio, websocket) must be refused, not silently
+    // downgraded to an unauthenticated dispatch.
+    #[test]
+    fn required_backend_on_incapable_transport_is_refused() {
+        let err = ensure_transport_carries_identity_headers(true, false)
+            .expect_err("required + incapable transport must refuse");
+        assert!(err.contains("cannot carry"), "error: {err}");
+        assert!(err.contains("MIK-6710"), "error: {err}");
+    }
+
+    // A `required` backend on a header-capable (HTTP) transport is unaffected.
+    #[test]
+    fn required_backend_on_capable_transport_proceeds() {
+        assert!(ensure_transport_carries_identity_headers(true, true).is_ok());
+    }
+
+    // A non-required backend proceeds regardless of transport capability —
+    // best-effort, matching the static-credential fallback used elsewhere in
+    // this module for a non-required backend with no identity/strategy.
+    #[test]
+    fn non_required_backend_ignores_transport_capability() {
+        assert!(ensure_transport_carries_identity_headers(false, false).is_ok());
+        assert!(ensure_transport_carries_identity_headers(false, true).is_ok());
     }
 }

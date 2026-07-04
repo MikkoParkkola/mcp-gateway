@@ -1418,6 +1418,29 @@ impl MetaMcp {
             }
         };
 
+        // MIK-6710: refuse BEFORE minting when this backend's transport cannot
+        // carry `extra_headers` on the wire (stdio, websocket) — otherwise a
+        // `required` backend would mint successfully here and then silently
+        // run unauthenticated once `request_with_headers` drops the credential.
+        //
+        // A missing registry entry defaults to "capable" (does not itself
+        // trigger this gate): every real caller resolves `idp_cfg` FROM the
+        // registered backend (`backend.identity_propagation_config()`), so a
+        // `Some(idp_cfg)` here guarantees the backend exists in production —
+        // "not found" only happens in unit tests that exercise this method
+        // directly against a fabricated config, and a genuinely absent
+        // backend fails downstream at dispatch regardless of this check.
+        let transport_capable = self
+            .backends
+            .get(server)
+            .is_none_or(|b| b.transport_carries_identity_headers());
+        if let Err(msg) = crate::identity_propagation::ensure_transport_carries_identity_headers(
+            idp_cfg.required,
+            transport_capable,
+        ) {
+            return refuse(msg);
+        }
+
         let Some(identity) = verified_identity else {
             return refuse("the request carries no verified end-user identity".to_string());
         };
@@ -2880,6 +2903,86 @@ mod identity_propagation_enforcement_tests {
             err.to_string().contains("required"),
             "fail-closed error: {err}"
         );
+    }
+
+    // MIK-6710 — fail-closed: a REQUIRED backend registered on a stdio
+    // transport (which cannot carry `extra_headers` on the wire) refuses
+    // BEFORE minting, even with a verified identity and a working strategy —
+    // never mints a credential that `request_with_headers` would silently
+    // drop, leaving the backend to run unauthenticated.
+    #[tokio::test]
+    async fn required_backend_on_stdio_transport_fails_closed_before_mint() {
+        use crate::backend::Backend;
+        use crate::config::{BackendConfig, TransportConfig};
+
+        let registry = Arc::new(BackendRegistry::new());
+        let config = BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "true".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            identity_propagation: Some(idp_cfg(true)),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "stdio-mem",
+            config,
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        registry.register(backend);
+
+        let m = MetaMcp::new(registry);
+        let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
+
+        let err = m
+            .resolve_caller_credential("stdio-mem", &idp_cfg(true), Some(&identity()))
+            .await
+            .expect_err("stdio transport cannot carry identity headers; must refuse");
+        assert!(err.to_string().contains("MIK-6710"), "error: {err}");
+    }
+
+    // A non-required backend on a stdio transport is unaffected by MIK-6710 —
+    // best-effort, matching the existing non-required fallback. (A
+    // non-required backend WITH a verified identity and a working strategy
+    // still mints normally regardless of transport capability — the
+    // transport gate only ever refuses a `required` backend; this test
+    // exercises the identity-absent fallback, which is the case where a
+    // non-required backend legitimately produces no headers.)
+    #[tokio::test]
+    async fn optional_backend_on_stdio_transport_yields_no_headers() {
+        use crate::backend::Backend;
+        use crate::config::{BackendConfig, TransportConfig};
+
+        let registry = Arc::new(BackendRegistry::new());
+        let config = BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "true".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            identity_propagation: Some(idp_cfg(false)),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "stdio-mem-optional",
+            config,
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        registry.register(backend);
+
+        let m = MetaMcp::new(registry);
+        let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
+
+        let cred = m
+            .resolve_caller_credential("stdio-mem-optional", &idp_cfg(false), None)
+            .await
+            .expect("optional backend proceeds despite incapable transport");
+        assert!(cred.headers.is_empty());
     }
 
     // A NON-required backend without identity degrades to the empty credential

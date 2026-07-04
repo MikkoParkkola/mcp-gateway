@@ -180,14 +180,25 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
 /// `required` backend with no caller credential returns `Err` (mapped to 403 by
 /// the caller); a non-required backend with none returns an empty vec (static
 /// path, after which the INV-2 guard decides whether a shared token may serve).
+///
+/// Also fails closed (MIK-6710) BEFORE reading the inbound header when
+/// `transport_carries_headers` is `false` for a `required` backend — a stdio
+/// or websocket backend would otherwise accept the caller's credential here
+/// and then silently drop it in `request_with_headers`, running
+/// unauthenticated while the audit trail records a resolved passthrough.
 fn resolve_passthrough_headers(
     cfg: &crate::identity_propagation::IdentityPropagationConfig,
     inbound: &axum::http::HeaderMap,
+    transport_carries_headers: bool,
 ) -> Result<Vec<(String, String)>, String> {
     // The inbound header a capable client attaches its backend credential in
     // (advertised via RFC 9728 protected-resource metadata, MIK-6750). Distinct
     // from `Authorization` so the gateway-auth token is never forwarded.
     const PASSTHROUGH_HEADER: &str = "x-mcp-passthrough-authorization";
+    crate::identity_propagation::ensure_transport_carries_identity_headers(
+        cfg.required,
+        transport_carries_headers,
+    )?;
     let missing = || {
         if cfg.required {
             Err(
@@ -417,7 +428,11 @@ pub(super) async fn backend_handler(
             c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
         });
         let resolved = if let Some(cfg) = passthrough_cfg {
-            resolve_passthrough_headers(&cfg, &inbound_headers)
+            resolve_passthrough_headers(
+                &cfg,
+                &inbound_headers,
+                backend.transport_carries_identity_headers(),
+            )
         } else {
             state
                 .meta_mcp
