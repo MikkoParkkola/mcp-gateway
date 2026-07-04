@@ -874,6 +874,27 @@ impl TransportConfig {
             Self::A2a { .. } => "a2a",
         }
     }
+
+    /// Whether the transport this config selects can carry per-request
+    /// outbound headers, e.g. a propagated end-user identity credential
+    /// (MIK-6710).
+    ///
+    /// This mirrors [`crate::transport::Transport::carries_identity_headers`]
+    /// but is evaluated statically from config alone, so the
+    /// identity-propagation dispatch gate can refuse a `required` backend
+    /// BEFORE its transport is started (and before any credential is
+    /// minted) rather than after. Keep the two in sync: only the transport
+    /// backing [`Self::Http`] (`HttpTransport`) applies `extra_headers` to
+    /// the wire today.
+    #[must_use]
+    pub fn carries_identity_headers(&self) -> bool {
+        match self {
+            Self::Http { .. } => true,
+            Self::Stdio { .. } => false,
+            #[cfg(feature = "a2a")]
+            Self::A2a { .. } => false,
+        }
+    }
 }
 
 // ── humantime_serde ───────────────────────────────────────────────────────────

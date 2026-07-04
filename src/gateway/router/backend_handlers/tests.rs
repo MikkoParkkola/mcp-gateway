@@ -33,7 +33,7 @@ mod passthrough {
     // is pure over its inputs, so it cannot persist a token (INV-4).
     #[test]
     fn present_credential_is_forwarded_as_authorization() {
-        let out = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer caller-tok"))
+        let out = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer caller-tok"), true)
             .expect("present credential resolves");
         assert_eq!(
             out,
@@ -45,8 +45,9 @@ mod passthrough {
     // own header value; there is no shared/mutable state between calls.
     #[test]
     fn concurrent_callers_are_isolated() {
-        let a = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer alice")).unwrap();
-        let b = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer bob")).unwrap();
+        let a =
+            resolve_passthrough_headers(&cfg(true), &headers_with("Bearer alice"), true).unwrap();
+        let b = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer bob"), true).unwrap();
         assert_eq!(a[0].1, "Bearer alice");
         assert_eq!(b[0].1, "Bearer bob");
         assert_ne!(a[0].1, b[0].1);
@@ -55,16 +56,36 @@ mod passthrough {
     // D.3 — a required backend with no caller credential fails closed.
     #[test]
     fn required_and_absent_refuses() {
-        assert!(resolve_passthrough_headers(&cfg(true), &HeaderMap::new()).is_err());
+        assert!(resolve_passthrough_headers(&cfg(true), &HeaderMap::new(), true).is_err());
         // A blank credential counts as absent.
-        assert!(resolve_passthrough_headers(&cfg(true), &headers_with("   ")).is_err());
+        assert!(resolve_passthrough_headers(&cfg(true), &headers_with("   "), true).is_err());
     }
 
     // A non-required backend with no caller credential yields the static
     // path (empty), after which the INV-2 shared-token guard decides.
     #[test]
     fn optional_and_absent_is_empty() {
-        let out = resolve_passthrough_headers(&cfg(false), &HeaderMap::new()).unwrap();
+        let out = resolve_passthrough_headers(&cfg(false), &HeaderMap::new(), true).unwrap();
+        assert!(out.is_empty());
+    }
+
+    // MIK-6710 — a `required` backend on a transport that cannot carry
+    // per-request headers (stdio, websocket) must be refused BEFORE the
+    // inbound passthrough header is even read, even when the caller
+    // supplied a well-formed credential.
+    #[test]
+    fn required_and_transport_incapable_refuses_even_with_credential() {
+        let err =
+            resolve_passthrough_headers(&cfg(true), &headers_with("Bearer caller-tok"), false)
+                .expect_err("incapable transport must refuse regardless of credential");
+        assert!(err.contains("MIK-6710"), "error: {err}");
+    }
+
+    // A non-required backend on a transport-incapable backend still
+    // proceeds with the static path — best-effort, unaffected by MIK-6710.
+    #[test]
+    fn optional_and_transport_incapable_is_unaffected() {
+        let out = resolve_passthrough_headers(&cfg(false), &HeaderMap::new(), false).unwrap();
         assert!(out.is_empty());
     }
 }
@@ -249,7 +270,7 @@ mod identity_propagation_audit {
             "x-mcp-passthrough-authorization",
             CANARY_SECRET.parse().unwrap(),
         );
-        let headers = resolve_passthrough_headers(&cfg, &inbound)
+        let headers = resolve_passthrough_headers(&cfg, &inbound, true)
             .expect("canary credential resolves into forwarded headers");
         assert!(
             headers.iter().any(|(_, v)| v.contains(CANARY_SECRET)),

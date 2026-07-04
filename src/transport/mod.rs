@@ -37,6 +37,27 @@ pub trait Transport: Send + Sync {
         self.request(method, params).await
     }
 
+    /// Whether this transport instance actually applies `extra_headers`
+    /// passed to [`Transport::request_with_headers`] to the wire (MIK-6710).
+    ///
+    /// The default `request_with_headers` impl above ignores `extra_headers`
+    /// entirely and falls back to [`Transport::request`], so a caller that
+    /// resolves a per-user identity-propagation credential (MIK-6704) and
+    /// forwards it via `request_with_headers` to a transport that does not
+    /// override this method would have that credential silently dropped —
+    /// the backend then runs unauthenticated while the caller's audit trail
+    /// records a mint, not a refusal. Identity-propagation dispatch gates
+    /// (`resolve_caller_credential`, the direct backend route) call this
+    /// BEFORE minting or forwarding a credential, and fail closed for a
+    /// `required` backend when it returns `false`.
+    ///
+    /// Defaults to `false` (fail closed): only [`crate::transport::HttpTransport`]
+    /// overrides this to `true`. stdio and websocket transports carry no
+    /// per-request HTTP header channel and must not claim otherwise.
+    fn carries_identity_headers(&self) -> bool {
+        false
+    }
+
     /// Send a notification (no response expected)
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()>;
 

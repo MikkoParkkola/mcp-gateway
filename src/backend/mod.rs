@@ -756,6 +756,23 @@ impl Backend {
         self.config.identity_propagation.as_ref()
     }
 
+    /// Whether this backend's configured transport can carry per-request
+    /// outbound headers, e.g. a propagated end-user identity credential
+    /// (MIK-6710).
+    ///
+    /// Delegates to [`TransportConfig::carries_identity_headers`], which is
+    /// evaluated from config alone — valid before [`Backend::start`] has ever
+    /// run. The identity-propagation dispatch gate
+    /// (`MetaMcp::resolve_caller_credential`, the direct backend route's
+    /// passthrough branch) checks this BEFORE minting or forwarding a
+    /// credential, so a `required` backend bound to a transport that would
+    /// silently drop `extra_headers` (stdio, websocket) is refused instead of
+    /// running unauthenticated.
+    #[must_use]
+    pub fn transport_carries_identity_headers(&self) -> bool {
+        self.config.transport.carries_identity_headers()
+    }
+
     /// Whether this backend relies on a single gateway-held OAuth token that is
     /// NOT blessed for shared use (ADR-008 INV-2).
     ///
