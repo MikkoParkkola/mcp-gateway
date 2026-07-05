@@ -85,8 +85,20 @@ pub struct HttpTransport {
     message_url: RwLock<Option<String>>,
     /// Custom headers
     headers: HashMap<String, String>,
-    /// Session ID (extracted from `message_url` or headers)
-    session_id: RwLock<Option<String>>,
+    /// Per-caller-identity MCP session ids (MIK-6784).
+    ///
+    /// A single `HttpTransport` is Arc-shared across every gateway user for a
+    /// given backend, so a single `Option<String>` session slot (the prior
+    /// design) let the first caller's `MCP-Session-Id` be stamped onto every
+    /// other caller's outbound request — a stateful upstream could then serve
+    /// one user's session-bound data to another. Partitioning by the caller's
+    /// stable identity binding
+    /// ([`crate::identity_propagation::PropagatedCredential::cache_binding`])
+    /// closes that hole: each identity negotiates and reuses its own upstream
+    /// session. The empty-string key is the shared default bucket used by the
+    /// no-identity static path (plain [`Transport::request`]), so single-tenant
+    /// behavior is byte-for-byte unchanged.
+    sessions: RwLock<HashMap<String, String>>,
     /// Request ID counter
     request_id: AtomicU64,
     /// Connected flag
@@ -168,7 +180,7 @@ impl HttpTransport {
             base_url: url.to_string(),
             message_url: RwLock::new(None),
             headers,
-            session_id: RwLock::new(None),
+            sessions: RwLock::new(HashMap::new()),
             request_id: AtomicU64::new(1),
             connected: AtomicBool::new(false),
             timeout,
@@ -361,7 +373,11 @@ impl HttpTransport {
     /// This is the single source of truth for all outgoing request headers in
     /// this transport. The four behavioral variants are captured in
     /// [`HeaderMode`] so the asymmetries stay explicit.
-    async fn build_mcp_headers(&self, mode: HeaderMode<'_>) -> Result<header::HeaderMap> {
+    async fn build_mcp_headers(
+        &self,
+        mode: HeaderMode<'_>,
+        identity_key: Option<&str>,
+    ) -> Result<header::HeaderMap> {
         let version = self
             .protocol_version
             .read()
@@ -404,9 +420,17 @@ impl HttpTransport {
             }
         }
 
-        // Session ID — send_request logs whether session is present or absent;
-        // notify includes the header silently; SSE skips it entirely.
-        if let Some(ref session_id) = *self.session_id.read() {
+        // Session ID — selected from the caller's identity bucket (MIK-6784)
+        // so one caller's upstream session is never stamped onto another's
+        // request. `None` selects the shared default bucket (`""`). send_request
+        // logs whether session is present or absent; notify includes the header
+        // silently; SSE skips it entirely.
+        let session = self
+            .sessions
+            .read()
+            .get(Self::bucket_key(identity_key))
+            .cloned();
+        if let Some(session_id) = session {
             match mode {
                 HeaderMode::Request { method } => {
                     debug!(session_id = %session_id, method = %method, "Sending request with session ID");
@@ -485,7 +509,7 @@ impl HttpTransport {
     async fn establish_sse_connection(&self) -> Result<String> {
         use futures::StreamExt;
 
-        let headers = self.build_mcp_headers(HeaderMode::Sse).await?;
+        let headers = self.build_mcp_headers(HeaderMode::Sse, None).await?;
 
         debug!(url = %self.base_url, "Establishing SSE connection");
 
@@ -532,13 +556,18 @@ impl HttpTransport {
                     if event_type.as_deref() == Some("endpoint") {
                         debug!(endpoint = %data, "Received message endpoint from SSE");
 
-                        // Extract session_id from the endpoint URL if present
+                        // Extract session_id from the endpoint URL if present.
+                        // The SSE handshake is connection-level (not per-caller),
+                        // so an endpoint-embedded session lands in the shared
+                        // default bucket (MIK-6784).
                         if let Ok(url) = Url::parse(data)
                             .or_else(|_| Url::parse(&format!("http://localhost{data}")))
                         {
                             for (key, value) in url.query_pairs() {
                                 if key == "session_id" {
-                                    *self.session_id.write() = Some(value.to_string());
+                                    self.sessions
+                                        .write()
+                                        .insert(String::new(), value.to_string());
                                     debug!(session_id = %value, "Extracted session ID");
                                 }
                             }
@@ -585,24 +614,34 @@ impl HttpTransport {
 
     /// Send a raw request to the message endpoint
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        self.send_request_with_headers(request, &[]).await
+        self.send_request_with_headers(request, &[], None).await
     }
 
     /// Send a raw request, merging `extra_headers` into the outbound header set
     /// after the standard headers are built. Used for per-request identity
     /// credentials (MIK-6704): the credential is applied here, on the value
     /// passed down the call stack, never on shared `&self` state.
+    ///
+    /// `identity_key` selects the caller's `MCP-Session-Id` bucket (MIK-6784):
+    /// the request is stamped with — and the response's session id is stored
+    /// under — that caller's key, so a stateful upstream cannot serve one
+    /// user's session-bound data to another. `None` uses the shared default
+    /// bucket, preserving single-tenant behavior.
     async fn send_request_with_headers(
         &self,
         request: &JsonRpcRequest,
         extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
 
         let mut headers = self
-            .build_mcp_headers(HeaderMode::Request {
-                method: &request.method,
-            })
+            .build_mcp_headers(
+                HeaderMode::Request {
+                    method: &request.method,
+                },
+                identity_key,
+            )
             .await?;
         // Per-request identity credential headers (e.g. Authorization: Bearer
         // <assertion>) override any static header of the same name for this call.
@@ -624,23 +663,27 @@ impl HttpTransport {
             .await
             .map_err(|e| Error::Transport(format!("Request failed: {e}")))?;
 
-        // Extract session ID from response headers if not already set
-        if self.session_id.read().is_none() {
-            if let Some(session_id) = response.headers().get("mcp-session-id") {
-                if let Ok(id) = session_id.to_str() {
-                    info!(session_id = %id, url = %message_url, "Stored session ID from response");
-                    *self.session_id.write() = Some(id.to_string());
-                }
-            } else {
-                // Debug: log all headers to find session ID
-                debug!(url = %message_url, "No session ID in response. Headers: {:?}",
-                    response.headers().iter()
-                        .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("?")))
-                        .collect::<Vec<_>>()
-                );
+        // Extract session ID from response headers if this caller's bucket is
+        // empty (MIK-6784: store under the caller's identity key, never a shared
+        // slot). The first request for a new identity has no session; the
+        // upstream mints one and we bind it to that identity for reuse.
+        let bucket = Self::bucket_key(identity_key);
+        if self.sessions.read().contains_key(bucket) {
+            debug!("Using existing session ID for caller bucket");
+        } else if let Some(session_id) = response.headers().get("mcp-session-id") {
+            if let Ok(id) = session_id.to_str() {
+                info!(session_id = %id, url = %message_url, "Stored session ID from response");
+                self.sessions
+                    .write()
+                    .insert(bucket.to_string(), id.to_string());
             }
         } else {
-            debug!(session_id = %self.session_id.read().as_ref().unwrap(), "Using existing session ID");
+            // Debug: log all headers to find session ID
+            debug!(url = %message_url, "No session ID in response. Headers: {:?}",
+                response.headers().iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("?")))
+                    .collect::<Vec<_>>()
+            );
         }
 
         let status = response.status();
@@ -686,12 +729,21 @@ impl HttpTransport {
     fn next_id(&self) -> RequestId {
         RequestId::Number(self.request_id.fetch_add(1, Ordering::Relaxed) as i64)
     }
+
+    /// Map an optional caller identity key to its session-bucket key (MIK-6784).
+    ///
+    /// `None` (the no-identity static path) maps to the shared default bucket
+    /// (`""`), so single-tenant behavior is byte-for-byte unchanged; a present
+    /// key selects that caller's private bucket.
+    fn bucket_key(identity_key: Option<&str>) -> &str {
+        identity_key.unwrap_or("")
+    }
 }
 
 #[async_trait]
 impl Transport for HttpTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.request_with_headers(method, params, &[]).await
+        self.request_with_headers(method, params, &[], None).await
     }
 
     async fn request_with_headers(
@@ -699,6 +751,7 @@ impl Transport for HttpTransport {
         method: &str,
         params: Option<Value>,
         extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -708,7 +761,7 @@ impl Transport for HttpTransport {
         };
 
         let result = self
-            .send_request_with_headers(&request, extra_headers)
+            .send_request_with_headers(&request, extra_headers, identity_key)
             .await;
 
         // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
@@ -726,9 +779,12 @@ impl Transport for HttpTransport {
         //      found"), classified by `is_session_expired_response` (MIK-6040, #247).
         //
         // On either signature: drop the session, re-run the initialize handshake,
-        // and retry the original request exactly once. `initialize()` calls
-        // `send_request` directly (not `request`), so this cannot recurse.
-        let had_session = self.session_id.read().is_some();
+        // and retry the original request exactly once. Only this caller's session
+        // bucket is dropped (MIK-6784) — one identity's expiry must not evict
+        // another's live session. `initialize()` calls `send_request` directly
+        // (not `request`), so this cannot recurse.
+        let bucket = Self::bucket_key(identity_key);
+        let had_session = self.sessions.read().contains_key(bucket);
         let session_expired = match &result {
             Err(err) => is_session_expired_error(err),
             Ok(resp) => is_session_expired_response(resp),
@@ -739,10 +795,10 @@ impl Transport for HttpTransport {
                 method = %method,
                 "Backend session expired; re-initializing and retrying once"
             );
-            *self.session_id.write() = None;
+            self.sessions.write().remove(bucket);
             self.initialize().await?;
             return self
-                .send_request_with_headers(&request, extra_headers)
+                .send_request_with_headers(&request, extra_headers, identity_key)
                 .await;
         }
 
@@ -766,7 +822,7 @@ impl Transport for HttpTransport {
             params,
         };
 
-        let headers = self.build_mcp_headers(HeaderMode::Notify).await?;
+        let headers = self.build_mcp_headers(HeaderMode::Notify, None).await?;
 
         let response = self
             .client
@@ -808,12 +864,22 @@ impl Transport for HttpTransport {
             handle.abort();
         }
 
-        // Send session termination if we have a session ID
-        let session_id = self.session_id.read().clone();
+        // Send session termination for every per-identity session (MIK-6784).
+        // Each caller negotiated its own upstream session, so closing the
+        // transport must terminate all of them, not just one shared slot.
+        let sessions: Vec<(String, String)> = self
+            .sessions
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         let message_url = self.get_message_url();
 
-        if let Some(ref id) = session_id {
-            let request = match self.build_mcp_headers(HeaderMode::Close).await {
+        for (bucket, id) in sessions {
+            let request = match self
+                .build_mcp_headers(HeaderMode::Close, Some(&bucket))
+                .await
+            {
                 Ok(headers) => self.client.delete(&message_url).headers(headers),
                 Err(error) => {
                     warn!(
@@ -823,7 +889,7 @@ impl Transport for HttpTransport {
                     );
                     self.client
                         .delete(&message_url)
-                        .header("MCP-Session-Id", id)
+                        .header("MCP-Session-Id", &id)
                 }
             };
 

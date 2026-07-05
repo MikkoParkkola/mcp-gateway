@@ -947,6 +947,30 @@ impl Gateway {
             );
         }
 
+        // MIK-6784 (GW.3): warn when the operator has asserted `single_user =
+        // true` (the sole switch that can suppress the per-user isolation guard)
+        // while a backend still relies on a gateway-held OAuth token that is NOT
+        // blessed for shared use (`oauth.enabled && !shared_account`). In that
+        // configuration the single-user assertion is the ONLY thing preventing
+        // one user's token — and its upstream MCP session — from being served to
+        // another; if the gateway is ever reached by more than one identity the
+        // isolation the guard would have provided is silently gone. We warn
+        // rather than refuse because a genuinely single-user deployment is valid.
+        if self.config.auth.single_user {
+            let leaky_backends = leaky_single_user_backends(&self.config);
+            if !leaky_backends.is_empty() {
+                warn!(
+                    backends = ?leaky_backends,
+                    "auth.single_user=true suppresses the per-user OAuth isolation guard, but \
+                     these backends hold a non-shared gateway OAuth token. If more than one user \
+                     reaches this gateway their tokens and upstream MCP sessions will be shared \
+                     (MIK-6784). Fix: remove single_user, set oauth.shared_account=true only \
+                     for genuinely shared service accounts, or enable per-user identity \
+                     propagation."
+                );
+            }
+        }
+
         // The transition tracker is only used when anomaly_detection=true; pass
         // a fresh tracker so the firewall has its own dedicated state.
         #[cfg(feature = "firewall")]
@@ -1557,6 +1581,31 @@ fn config_installs_minting_strategy(config: &crate::config::Config) -> bool {
     configured_minting_strategy_kind(config).is_some()
 }
 
+/// Backends whose gateway-held OAuth token is not blessed for shared use
+/// (`oauth.enabled && !oauth.shared_account`) — the set the GW.3 startup
+/// warning names (MIK-6784).
+///
+/// Returns empty unless `auth.single_user` is asserted: the warning only
+/// matters when that single switch is the sole thing suppressing the per-user
+/// OAuth isolation guard. Under `single_user = true`, any such backend leaks
+/// its token — and its upstream MCP session — across users the moment a second
+/// identity reaches the gateway.
+fn leaky_single_user_backends(config: &Config) -> Vec<&str> {
+    if !config.auth.single_user {
+        return Vec::new();
+    }
+    config
+        .backends
+        .iter()
+        .filter(|(_, b)| {
+            b.oauth
+                .as_ref()
+                .is_some_and(|o| o.enabled && !o.shared_account)
+        })
+        .map(|(name, _)| name.as_str())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1641,6 +1690,78 @@ mod tests {
             backend_with_strategy(PropagationStrategyKind::Passthrough),
         );
         assert!(super::config_installs_minting_strategy(&minting));
+    }
+
+    // ── GW.3 (MIK-6784): the single_user startup warning must name exactly the
+    // backends that hold a non-shared gateway OAuth token, and stay silent
+    // otherwise. `leaky_single_user_backends` is the pure predicate the warning
+    // branch consumes. ──
+    fn backend_with_oauth(enabled: bool, shared: bool) -> BackendConfig {
+        BackendConfig {
+            oauth: Some(crate::config::OAuthConfig {
+                enabled,
+                scopes: vec![],
+                client_id: None,
+                client_secret: None,
+                callback_host: None,
+                callback_port: None,
+                callback_path: None,
+                token_refresh_buffer_secs: 300,
+                shared_account: shared,
+            }),
+            ..BackendConfig::default()
+        }
+    }
+
+    #[test]
+    fn leaky_backends_empty_when_not_single_user() {
+        let mut config = Config::default();
+        config.auth.single_user = false;
+        config
+            .backends
+            .insert("leaky".to_string(), backend_with_oauth(true, false));
+        assert!(
+            super::leaky_single_user_backends(&config).is_empty(),
+            "no warning target unless single_user is asserted"
+        );
+    }
+
+    #[test]
+    fn leaky_backends_names_only_non_shared_oauth_under_single_user() {
+        let mut config = Config::default();
+        config.auth.single_user = true;
+        config
+            .backends
+            .insert("leaky".to_string(), backend_with_oauth(true, false));
+        config
+            .backends
+            .insert("shared".to_string(), backend_with_oauth(true, true));
+        config
+            .backends
+            .insert("disabled".to_string(), backend_with_oauth(false, false));
+        config
+            .backends
+            .insert("no_oauth".to_string(), BackendConfig::default());
+
+        let leaky = super::leaky_single_user_backends(&config);
+        assert_eq!(
+            leaky,
+            vec!["leaky"],
+            "only the enabled, non-shared gateway-OAuth backend leaks under single_user"
+        );
+    }
+
+    #[test]
+    fn leaky_backends_silent_when_all_oauth_is_shared() {
+        let mut config = Config::default();
+        config.auth.single_user = true;
+        config
+            .backends
+            .insert("shared".to_string(), backend_with_oauth(true, true));
+        assert!(
+            super::leaky_single_user_backends(&config).is_empty(),
+            "shared_account=true opts out of the leak warning"
+        );
     }
 
     #[test]

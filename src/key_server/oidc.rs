@@ -425,7 +425,10 @@ impl OidcVerifier {
             jsonwebtoken::decode(token, &decoding_key, &validation)?;
         let claims = token_data.claims;
 
-        // Manual audience check
+        // Manual audience check. For an enabled key server, `audiences` is
+        // guaranteed non-empty by `KeyServerConfig::validate` (MIK-6784, GW.4),
+        // so this branch always runs in production; the emptiness guard remains
+        // only for directly-constructed providers in unit tests.
         if !provider.audiences.is_empty() {
             check_audience(&claims.aud, &provider.audiences)?;
         }
