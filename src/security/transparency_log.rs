@@ -37,7 +37,7 @@
 //! computed on write is exactly reproducible on read.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -49,6 +49,28 @@ use tracing::warn;
 // ── Type aliases ──────────────────────────────────────────────────────────────
 
 type HmacSha256 = Hmac<Sha256>;
+
+// ── Read bounds (MIK-6710 memory-DoS mitigation) ───────────────────────────────
+
+/// Maximum bytes a full-log reader (`verify_log`, `verify_log_signed`,
+/// `log_contains_signed_entry`, `show_session_entries`) will load into memory.
+///
+/// An attacker (or a runaway caller) who grows the audit log without bound
+/// must not be able to force the gateway to materialise an arbitrarily large
+/// `String` on every `audit verify` / `audit show` call. 256 MiB comfortably
+/// covers any transparency log an operator hasn't already rotated; beyond
+/// that we fail closed rather than allocate unbounded memory (MIK-6710).
+const MAX_AUDIT_READ_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Maximum bytes scanned backward from EOF when recovering the last
+/// (possibly still-being-written) line for chain-state recovery.
+///
+/// Crash recovery on [`TransparencyLogger::open`] and the resync path in
+/// [`TransparencyLogger::append_core`] must find the tail entry without ever
+/// reading the whole audit log — only the last few KB matter. 4 MiB is far
+/// larger than any legitimate single NDJSON entry, so the true last line is
+/// always fully contained in the scanned window (MIK-6710).
+const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -400,7 +422,7 @@ pub fn verify_log_signed(path: &Path, config: &TransparencyLogConfig) -> io::Res
 ///
 /// Returns `io::Error` if the file cannot be read.
 pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
-    let content = std::fs::read_to_string(path)?;
+    let content = bounded_read_to_string(path, MAX_AUDIT_READ_BYTES)?;
     for raw in content.lines() {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -418,7 +440,7 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
 /// Shared chain-verification core. When `secret` is `Some`, each entry's HMAC
 /// `sig` is additionally authenticated.
 fn verify_log_inner(path: &Path, secret: Option<&[u8]>) -> io::Result<VerifyResult> {
-    let content = std::fs::read_to_string(path)?;
+    let content = bounded_read_to_string(path, MAX_AUDIT_READ_BYTES)?;
     let mut prev_hash = "genesis".to_string();
     let mut prev_counter: Option<u64> = None;
     let mut entries_checked = 0usize;
@@ -537,7 +559,7 @@ fn verify_log_inner(path: &Path, secret: Option<&[u8]>) -> io::Result<VerifyResu
 ///
 /// Returns `io::Error` if the file cannot be read.
 pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<serde_json::Value>> {
-    let content = std::fs::read_to_string(path)?;
+    let content = bounded_read_to_string(path, MAX_AUDIT_READ_BYTES)?;
     let mut results = Vec::new();
 
     for raw in content.lines() {
@@ -573,16 +595,17 @@ fn expand_tilde(s: &str) -> PathBuf {
 }
 
 /// Read the last non-empty line of `path` to recover `(counter, last_entry_hash)`.
+///
+/// Reads only the tail of the file (bounded by [`MAX_TAIL_SCAN_BYTES`]), not
+/// the whole log — crash recovery on every gateway restart must not scale
+/// with the total size of the audit trail (MIK-6710).
 fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
-    let content = std::fs::read_to_string(path)?;
-    let last_line = content.lines().rfind(|l| !l.trim().is_empty());
-
-    let Some(line) = last_line else {
+    let Some(line) = read_last_nonempty_line(path)? else {
         return Ok((0, "genesis".to_string()));
     };
 
     let entry: serde_json::Value =
-        serde_json::from_str(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        serde_json::from_str(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     let counter = entry
         .get("counter")
@@ -595,6 +618,68 @@ fn recover_chain_state(path: &Path) -> io::Result<(u64, String)> {
         .to_string();
 
     Ok((counter, entry_hash))
+}
+
+/// Read `path` into a `String`, failing closed rather than allocating an
+/// unbounded buffer when the file exceeds `max_bytes`.
+///
+/// The size check is a single `metadata()` call — an oversized file is never
+/// opened for a full read, so the memory-DoS surface is closed at the check
+/// itself, not after a partial read (MIK-6710).
+///
+/// # Errors
+///
+/// Returns `io::ErrorKind::InvalidData` when `path` exceeds `max_bytes`, or
+/// any `io::Error` the underlying `metadata`/`read_to_string` calls produce.
+fn bounded_read_to_string(path: &Path, max_bytes: u64) -> io::Result<String> {
+    let len = std::fs::metadata(path)?.len();
+    if len > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "transparency log at {} is {len} bytes, exceeding the {max_bytes}-byte read \
+                 bound (MIK-6710); rotate the log before retrying this operation",
+                path.display()
+            ),
+        ));
+    }
+    std::fs::read_to_string(path)
+}
+
+/// Read the last non-empty line of `path` without loading the whole file.
+///
+/// Seeks to the last `MAX_TAIL_SCAN_BYTES` bytes of the file (or the whole
+/// file when it is smaller) and scans backward from there for a complete
+/// line. Any single NDJSON entry is expected to be a small fraction of that
+/// window, so the true last line is always fully contained in it; a
+/// pathologically oversized final line simply fails downstream JSON parsing
+/// rather than being silently truncated (safe failure, not a memory blowout).
+///
+/// # Errors
+///
+/// Returns `io::Error` if the file cannot be opened, seeked, or read.
+fn read_last_nonempty_line(path: &Path) -> io::Result<Option<String>> {
+    let mut file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(None);
+    }
+
+    let scan_len = file_len.min(MAX_TAIL_SCAN_BYTES);
+    let offset =
+        i64::try_from(scan_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    file.seek(SeekFrom::End(-offset))?;
+
+    let buf_len =
+        usize::try_from(scan_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut buf = vec![0u8; buf_len];
+    file.read_exact(&mut buf)?;
+
+    let text = String::from_utf8_lossy(&buf);
+    Ok(text
+        .lines()
+        .rfind(|l| !l.trim().is_empty())
+        .map(str::to_string))
 }
 
 /// Recompute the `entry_hash` for an existing entry read from the log file.
@@ -1153,5 +1238,59 @@ mod tests {
         let signed = verify_log_signed(tmp.path(), &cfg).unwrap();
         assert!(plain.ok && signed.ok);
         assert_eq!(plain.entries_checked, signed.entries_checked);
+    }
+
+    // ── MIK-6710: bounded reads against a memory-DoS audit log ────────────────
+
+    #[test]
+    fn recover_chain_state_finds_last_entry_without_reading_oversized_log() {
+        // GIVEN: a log whose leading content alone exceeds the tail-scan
+        // window (MAX_TAIL_SCAN_BYTES), followed by one well-formed entry as
+        // the final line.
+        let tmp = NamedTempFile::new().unwrap();
+        let padding_line = "x".repeat(1024);
+        let mut content = String::new();
+        for _ in 0..(5 * 1024) {
+            content.push_str(&padding_line);
+            content.push('\n');
+        }
+        let last_entry = serde_json::json!({
+            "counter": 42u64,
+            "entry_hash": "sha256:deadbeef",
+        });
+        content.push_str(&last_entry.to_string());
+        content.push('\n');
+        assert!(
+            content.len() as u64 > MAX_TAIL_SCAN_BYTES,
+            "test setup must exceed the tail-scan window to exercise the bounded path"
+        );
+        std::fs::write(tmp.path(), &content).unwrap();
+
+        // WHEN: chain state is recovered
+        let (counter, entry_hash) = recover_chain_state(tmp.path()).unwrap();
+
+        // THEN: the correct last entry is found via the bounded tail scan
+        // alone — a whole-file read would also pass this assertion, but the
+        // bounded scan (proven by MAX_TAIL_SCAN_BYTES-sized reads in
+        // `read_last_nonempty_line`) never touches the multi-megabyte prefix.
+        assert_eq!(counter, 42);
+        assert_eq!(entry_hash, "sha256:deadbeef");
+    }
+
+    #[test]
+    fn bounded_read_to_string_rejects_oversized_file_without_loading_it() {
+        // GIVEN: a file larger than an artificially small read bound
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "x".repeat(100)).unwrap();
+
+        // WHEN: the bound is smaller than the file
+        let err = bounded_read_to_string(tmp.path(), 50).unwrap_err();
+
+        // THEN: the read is refused (fail-closed) before any content is
+        // loaded — the size check is a single `metadata()` call, and the
+        // same file under a sufficient bound still reads correctly.
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let ok = bounded_read_to_string(tmp.path(), 200).unwrap();
+        assert_eq!(ok.len(), 100);
     }
 }
