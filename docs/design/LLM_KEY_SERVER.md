@@ -530,13 +530,10 @@ jobs:
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=mcp-gateway" | jq -r '.value')
 
           GATEWAY_TOKEN=$(curl -sS -X POST https://gateway.company.com/auth/token \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\",
-              \"subject_token\": \"$OIDC_TOKEN\",
-              \"subject_token_type\": \"urn:ietf:params:oauth:token-type:id_token\",
-              \"scope\": \"backends:tavily tools:tavily-search\"
-            }" | jq -r '.access_token')
+            --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+            --data-urlencode "subject_token=$OIDC_TOKEN" \
+            --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+            --data-urlencode "scope=backends:tavily tools:tavily-search" | jq -r '.access_token')
 
           echo "token=$GATEWAY_TOKEN" >> "$GITHUB_OUTPUT"
 
@@ -546,6 +543,13 @@ jobs:
             -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
             -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tavily-search","arguments":{"query":"test"}}}'
 ```
+
+> Request encoding: `/auth/token` follows RFC 8693 and requires
+> `application/x-www-form-urlencoded` form fields (the `--data-urlencode` flags
+> above set that content type). It no longer accepts a JSON body. A request
+> sent with `Content-Type: application/json` is rejected with HTTP 415. If you
+> previously posted a JSON object here, switch each JSON field to a form field
+> as shown.
 
 ### CLI (Local Development)
 

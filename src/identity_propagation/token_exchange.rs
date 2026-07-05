@@ -69,6 +69,14 @@ const CLIENT_ASSERTION_TTL_SECS: i64 = 60;
 /// not required; a short, conservative default keeps a cache entry from
 /// living indefinitely if an endpoint leaves it out.
 const DEFAULT_EXCHANGED_TOKEN_TTL_SECS: i64 = 300;
+// ponytail: MAX_CACHE_ENTRIES caps resident exchanged-token entries at 10_000.
+// The cache is keyed by (subject, audience), so a process serving many distinct
+// users against many audiences would otherwise grow the map without bound:
+// `cached()` treats expired entries as absent but never removes them, so every
+// distinct subject leaves a permanently resident entry. On reaching the cap we
+// drop expired entries first (cheap `DashMap::retain`, no LRU crate); the ceiling
+// is a coarse safety valve, not a precise working-set limit.
+const MAX_CACHE_ENTRIES: usize = 10_000;
 
 /// A cached exchanged downstream token, keyed by [`cache_binding`].
 struct CachedExchange {
@@ -101,13 +109,26 @@ struct ClientAssertionClaims {
 
 /// The fields this strategy needs from an RFC 8693 token-exchange response.
 /// Other spec-defined fields (`issued_token_type`, ...) are ignored.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenExchangeResponseBody {
     access_token: String,
     #[serde(default)]
     expires_in: Option<i64>,
     #[serde(default)]
     scope: Option<String>,
+}
+
+// Manual `Debug` redacts the exchanged downstream bearer (CWE-532, mirrors the
+// key-server `TokenExchangeResponse` redaction) so a future debug or error log
+// of this body can never leak `access_token`.
+impl std::fmt::Debug for TokenExchangeResponseBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenExchangeResponseBody")
+            .field("access_token", &"<redacted>")
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .finish()
+    }
 }
 
 /// RFC 8693 OAuth 2.0 Token Exchange strategy (MIK-6729).
@@ -197,6 +218,24 @@ impl TokenExchangeStrategy {
         })
     }
 
+    /// Drop every cache entry whose token has already expired. Called by
+    /// [`Self::store`] when the map reaches [`MAX_CACHE_ENTRIES`], so an
+    /// endless stream of one-shot subjects cannot grow the cache without bound.
+    fn reap_expired(&self) {
+        let now = SignedAssertionStrategy::now_secs();
+        self.cache.retain(|_, e| e.expires_at > now);
+    }
+
+    /// Insert an exchanged token, reaping expired entries first if the cache
+    /// has reached its bound. Keeps the cache from growing without limit while
+    /// preserving still-valid entries (IDP.6, MIK-6729 review S3).
+    fn store(&self, binding: String, entry: CachedExchange) {
+        if self.cache.len() >= MAX_CACHE_ENTRIES {
+            self.reap_expired();
+        }
+        self.cache.insert(binding, entry);
+    }
+
     /// Perform the RFC 8693 token-exchange HTTP round-trip and parse the
     /// response. Isolated from [`Self::propagate`] to keep that method under
     /// the function-length budget and to give the request-building /
@@ -255,12 +294,21 @@ impl TokenExchangeStrategy {
 /// The production HTTP client: HTTPS-only, matching every other outbound
 /// identity-provider client in this codebase
 /// (e.g. [`crate::key_server::oidc::JwksCache::new`]).
+///
+/// Fails closed: a builder failure (only reachable if the TLS backend cannot
+/// initialize, a catastrophic startup-only condition) panics rather than
+/// falling back to a default client, because a default client carries neither
+/// `https_only` nor a timeout. Silently returning that degraded client would
+/// let the token-exchange POST run over plaintext http with no timeout, the
+/// exact security-relevant downgrade this strategy exists to prevent. Panicking
+/// at construction is a hard fail-closed at startup and matches the last-resort
+/// `expect` on gateway key generation in `gateway::server`.
 fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .https_only(true)
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .unwrap_or_default()
+        .expect("failed to build HTTPS-only token-exchange HTTP client (TLS backend init)")
 }
 
 #[async_trait::async_trait]
@@ -310,7 +358,7 @@ impl IdentityPropagation for TokenExchangeStrategy {
             .map(str::to_string)
             .collect();
 
-        self.cache.insert(
+        self.store(
             binding.clone(),
             CachedExchange {
                 access_token: body.access_token.clone(),
@@ -415,5 +463,41 @@ mod tests {
         assert_eq!(claims["sub"], CLIENT_ID);
         assert_eq!(claims["aud"], "https://sts.internal/token");
         assert!(claims["jti"].as_str().is_some_and(|j| !j.is_empty()));
+    }
+
+    // S3 (MIK-6729 review): an expired cache entry must not survive a reap,
+    // and reaping preserves still-valid entries. `store` runs this reap when the
+    // cache reaches MAX_CACHE_ENTRIES, bounding growth from one-shot subjects.
+    #[test]
+    fn reap_drops_expired_entries_only() {
+        let s = strategy();
+        let now = SignedAssertionStrategy::now_secs();
+        s.cache.insert(
+            "live".to_string(),
+            CachedExchange {
+                access_token: "a".to_string(),
+                expires_at: now + 100,
+                scopes: vec![],
+            },
+        );
+        s.cache.insert(
+            "dead".to_string(),
+            CachedExchange {
+                access_token: "b".to_string(),
+                expires_at: now - 1,
+                scopes: vec![],
+            },
+        );
+
+        s.reap_expired();
+
+        assert!(
+            s.cache.contains_key("live"),
+            "valid entry must survive reap"
+        );
+        assert!(
+            !s.cache.contains_key("dead"),
+            "expired entry must not survive reap"
+        );
     }
 }

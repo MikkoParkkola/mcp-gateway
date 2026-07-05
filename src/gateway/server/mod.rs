@@ -880,34 +880,53 @@ impl Gateway {
             }
         });
 
-        // Wire end-user identity propagation (MIK-6704 / ADR-007): when a backend
-        // opts into a *minting* strategy, give MetaMcp a SignedAssertionStrategy
-        // signing with the gateway key pair. Config validation (slice 2a) already
-        // fail-closed-rejected unsupported strategies/session modes.
+        // Wire end-user identity propagation (MIK-6704 / ADR-007, MIK-6729):
+        // when a backend opts into a *minting* strategy, give MetaMcp the single
+        // process-wide strategy that matches the configured kind. Config
+        // validation (`validate_single_minting_strategy_kind`) already guarantees
+        // at most one minting kind across all backends, and one strategy instance
+        // serves every backend of that kind. Each backend's per-request details
+        // (audience, token-exchange endpoint/scope) arrive via the
+        // `BackendDescriptor` at `propagate()` time, not from this instance.
         //
-        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING — the caller
+        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING: the caller
         // attaches its own backend credential and the direct route forwards it
         // verbatim. So a Passthrough-only deployment must NOT install a minting
-        // strategy: doing so would let the meta route (`gateway_invoke`), whose
+        // strategy. Doing so would let the meta route (`gateway_invoke`), whose
         // resolver keys off the globally-installed strategy rather than the
-        // per-backend `strategy` enum, mint a signed assertion for a Passthrough
+        // per-backend `strategy` enum, mint a credential for a Passthrough
         // backend and violate INV-4 (GPT review F1). With the strategy unset the
         // meta route fails closed (required) or falls back to static creds
-        // (optional) instead of minting. Mixed deployments (≥1 minting backend +
-        // ≥1 passthrough backend) still install the strategy for the minting
-        // backend; honoring passthrough on the meta route for that residual case
-        // needs the per-backend strategy check in the (currently locked)
-        // resolver — tracked on MIK-6746. Interim contract: passthrough is
+        // (optional) instead of minting. Mixed deployments (>=1 minting backend
+        // plus >=1 passthrough backend) still install the strategy for the
+        // minting backend; honoring passthrough on the meta route for that
+        // residual case needs the per-backend strategy check in the (currently
+        // locked) resolver, tracked on MIK-6746. Interim contract: passthrough is
         // direct-route-only.
-        if config_installs_minting_strategy(&self.config) {
-            use crate::identity_propagation::SignedAssertionStrategy;
-            // 5-minute assertion lifetime (bounded further by the strategy's clamp).
-            let strategy = Arc::new(SignedAssertionStrategy::new(
-                Arc::clone(&gateway_key_pair),
-                300,
-            ));
-            meta_mcp.set_identity_propagation(strategy);
-            info!("End-user identity propagation enabled (signed-assertion strategy)");
+        match configured_minting_strategy_kind(&self.config) {
+            Some(crate::identity_propagation::PropagationStrategyKind::SignedAssertion) => {
+                use crate::identity_propagation::SignedAssertionStrategy;
+                // 5-minute assertion lifetime (bounded further by the clamp).
+                let strategy = Arc::new(SignedAssertionStrategy::new(
+                    Arc::clone(&gateway_key_pair),
+                    300,
+                ));
+                meta_mcp.set_identity_propagation(strategy);
+                info!("End-user identity propagation enabled (signed-assertion strategy)");
+            }
+            Some(crate::identity_propagation::PropagationStrategyKind::TokenExchange) => {
+                use crate::identity_propagation::TokenExchangeStrategy;
+                // 5-minute subject-token lifetime; the exchanged downstream token
+                // lives for whatever TTL the endpoint returns (or a safe default).
+                let strategy = Arc::new(TokenExchangeStrategy::new(
+                    Arc::clone(&gateway_key_pair),
+                    300,
+                ));
+                meta_mcp.set_identity_propagation(strategy);
+                info!("End-user identity propagation enabled (RFC 8693 token-exchange strategy)");
+            }
+            // Passthrough / Vault / no identity_propagation: install nothing.
+            _ => {}
         }
 
         // ADR-008 INV-2 (MIK-6752): declare multi-user status so dispatch can
@@ -1495,29 +1514,47 @@ impl Gateway {
     }
 }
 
-/// Whether startup should install the gateway's signed-assertion minting
-/// strategy. True iff at least one backend explicitly opts into the
-/// `SignedAssertion` strategy — a strict allow-list, not a `!= Passthrough`
-/// deny-list.
+/// Which single minting strategy kind, if any, this config installs
+/// process-wide. Returns the minting kind present among backends
+/// (`SignedAssertion` or `TokenExchange`), or `None` when only `Passthrough`
+/// or no `identity_propagation` is configured.
 ///
-/// The deny-list form was unsafe: a backend configured for an as-yet
-/// unimplemented minting strategy (`TokenExchange` MIK-6729 / `Vault`
-/// MIK-6730) is `!= Passthrough`, so it would silently install the
-/// signed-assertion strategy and let the meta route mint a *gateway-signed
-/// assertion* for a backend the operator asked to reach via a completely
-/// different trust model — a silent substitution and an INV-4 violation. A
-/// non-`required` such backend passes `IdentityPropagationConfig::validate`
-/// (which only rejects unimplemented strategies when `required`), so this is
-/// reachable from config, not just theory. Allow-listing `SignedAssertion`
-/// means each future minting strategy installs its own machinery when it
-/// lands; `Passthrough` still mints nothing (ADR-008, GPT review F1/R2-3,
-/// MIK-6746).
-fn config_installs_minting_strategy(config: &crate::config::Config) -> bool {
-    config.backends.values().any(|b| {
-        b.identity_propagation.as_ref().is_some_and(|c| {
-            c.strategy == crate::identity_propagation::PropagationStrategyKind::SignedAssertion
+/// This is a strict allow-list of *implemented* minting strategies, not a
+/// `!= Passthrough` deny-list. The deny-list form was unsafe: a backend
+/// configured for an as-yet-unimplemented minting strategy (`Vault`,
+/// MIK-6730) is `!= Passthrough`, so it would silently install some other
+/// strategy and let the meta route mint the wrong credential shape for a
+/// backend the operator asked to reach via a different trust model, a silent
+/// substitution and an INV-4 violation. Allow-listing means each minting
+/// strategy installs its own machinery only once it is actually wired here:
+/// `SignedAssertion` (MIK-6704) and `TokenExchange` (RFC 8693, MIK-6729) are
+/// both wired; `Vault` is not yet and so returns `None`. `Passthrough` mints
+/// nothing (ADR-008, GPT review F1/R2-3, MIK-6746).
+///
+/// `validate_single_minting_strategy_kind` guarantees at most one minting kind
+/// across all backends, so returning the first match is unambiguous.
+fn configured_minting_strategy_kind(
+    config: &crate::config::Config,
+) -> Option<crate::identity_propagation::PropagationStrategyKind> {
+    use crate::identity_propagation::PropagationStrategyKind as Kind;
+    config.backends.values().find_map(|b| {
+        b.identity_propagation.as_ref().and_then(|c| {
+            matches!(c.strategy, Kind::SignedAssertion | Kind::TokenExchange).then_some(c.strategy)
         })
     })
+}
+
+/// Whether startup should install a minting strategy at all. True iff at least
+/// one backend opts into an implemented minting strategy (`SignedAssertion` or
+/// `TokenExchange`); see [`configured_minting_strategy_kind`] for the full
+/// allow-list rationale and the `Passthrough`-only "install nothing" contract.
+///
+/// Test-only: production keys off [`configured_minting_strategy_kind`] directly
+/// so it can pick the concrete strategy. This stays as a readable predicate for
+/// the install-decision tests.
+#[cfg(test)]
+fn config_installs_minting_strategy(config: &crate::config::Config) -> bool {
+    configured_minting_strategy_kind(config).is_some()
 }
 
 #[cfg(test)]
@@ -1607,26 +1644,79 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_minting_strategies_install_no_signed_assertion_strategy() {
-        // A backend configured for an as-yet unimplemented minting strategy must
-        // NOT trigger the signed-assertion strategy install: doing so would mint
-        // a gateway-signed assertion for a backend the operator asked to reach
-        // via token-exchange / vault (silent substitution, INV-4). Allow-list
-        // SignedAssertion only (R2-3, MIK-6746).
+    fn unimplemented_minting_strategies_install_no_strategy() {
+        // A backend configured for an as-yet-unimplemented minting strategy must
+        // NOT trigger any install: doing so would mint the wrong credential shape
+        // for a backend the operator asked to reach via a different trust model
+        // (silent substitution, INV-4). Only wired minting kinds install (R2-3,
+        // MIK-6746). `Vault` (MIK-6730) is not wired yet.
         use crate::identity_propagation::PropagationStrategyKind;
-        for strat in [
-            PropagationStrategyKind::TokenExchange,
-            PropagationStrategyKind::Vault,
-        ] {
-            let mut config = Config::default();
-            config
-                .backends
-                .insert("mint".to_string(), backend_with_strategy(strat));
-            assert!(
-                !super::config_installs_minting_strategy(&config),
-                "strategy {strat:?} must not install the signed-assertion minting strategy"
-            );
-        }
+        let mut config = Config::default();
+        config.backends.insert(
+            "mint".to_string(),
+            backend_with_strategy(PropagationStrategyKind::Vault),
+        );
+        assert!(
+            !super::config_installs_minting_strategy(&config),
+            "Vault must not install a minting strategy until it is wired"
+        );
+        assert_eq!(super::configured_minting_strategy_kind(&config), None);
+    }
+
+    // S1 (MIK-6729): the install path selects the strategy by configured kind.
+    // These assert the kind-selection helper that the install-site `match` keys
+    // off, closing the gap that let token-exchange ship unwired: the earlier
+    // helper allow-listed SignedAssertion only, so a token_exchange backend
+    // installed nothing and fell through to a static credential.
+    #[test]
+    fn configured_kind_is_token_exchange_for_a_token_exchange_backend() {
+        use crate::identity_propagation::PropagationStrategyKind;
+        let mut config = Config::default();
+        config.backends.insert(
+            "mail".to_string(),
+            backend_with_strategy(PropagationStrategyKind::TokenExchange),
+        );
+        assert_eq!(
+            super::configured_minting_strategy_kind(&config),
+            Some(PropagationStrategyKind::TokenExchange)
+        );
+        assert!(super::config_installs_minting_strategy(&config));
+    }
+
+    #[test]
+    fn configured_kind_is_signed_assertion_for_a_signed_assertion_backend() {
+        use crate::identity_propagation::PropagationStrategyKind;
+        let mut config = Config::default();
+        config.backends.insert(
+            "sign".to_string(),
+            backend_with_strategy(PropagationStrategyKind::SignedAssertion),
+        );
+        assert_eq!(
+            super::configured_minting_strategy_kind(&config),
+            Some(PropagationStrategyKind::SignedAssertion)
+        );
+    }
+
+    #[test]
+    fn configured_kind_is_none_for_passthrough_only_and_no_idp() {
+        use crate::identity_propagation::PropagationStrategyKind;
+        // Passthrough-only: mints nothing, installs nothing.
+        let mut passthrough = Config::default();
+        passthrough.backends.insert(
+            "pass".to_string(),
+            backend_with_strategy(PropagationStrategyKind::Passthrough),
+        );
+        assert_eq!(
+            super::configured_minting_strategy_kind(&passthrough),
+            None,
+            "passthrough-only must not select a minting kind"
+        );
+        // No identity_propagation configured at all.
+        assert_eq!(
+            super::configured_minting_strategy_kind(&Config::default()),
+            None,
+            "a no-idp config must not select a minting kind"
+        );
     }
 
     #[test]
