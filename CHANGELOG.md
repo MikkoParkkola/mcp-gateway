@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-07-06
+
+### Security
+
+- **Upstream MCP session id is now partitioned per caller identity (MIK-6784).**
+  One `HttpTransport` instance is shared across all gateway users for a given
+  backend, and the upstream `MCP-Session-Id` was held in a single shared slot.
+  It was written from the first caller's response and then attached to every
+  other caller's outbound request. Against a stateful upstream that binds data
+  to the session id rather than the bearer token, one user's session-bound data
+  could be served to another. Session state is now keyed by the caller's stable
+  identity binding and never stored on shared transport state; the empty-key
+  default bucket keeps single-tenant behavior unchanged. Session expiry evicts
+  only the affected caller, and transport close terminates every per-identity
+  session. Also folded in: a startup warning when single-user mode coexists with
+  an OAuth-enabled backend, and config-load rejection of an enabled OIDC
+  provider that has an empty audience list. Passthrough mode still uses the
+  shared default bucket (the trusted-internal path the audit scoped out) and is
+  tracked as a follow-up.
+
 ### Fixed
 
 - **stdio serve boots without a mounted config (Glama build).** An explicit
