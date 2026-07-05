@@ -14,9 +14,12 @@
 //!    leaves the gateway process).
 //! 3. Parse the endpoint's `access_token` + `expires_in` and inject the
 //!    downstream token as the outbound `Authorization` header.
-//! 4. Cache the exchanged token in-memory, keyed by the same
-//!    `(subject, audience)` cache binding every other strategy uses, so a
-//!    second call inside the TTL window costs zero HTTP round-trips.
+//! 4. Cache the exchanged token in-memory, keyed by `(subject, audience,
+//!    token_exchange_endpoint, scope)` — a superset of the
+//!    `(subject, audience)` binding every other strategy uses — so a second
+//!    call inside the TTL window costs zero HTTP round-trips, and two
+//!    backends that happen to share an `audience` but differ in endpoint or
+//!    scope can never collide on the same cache entry (MIK-6729 review M1).
 //!
 //! Nothing durable is written: the cache is an in-process `DashMap` that
 //! disappears with the process, matching the "stores nothing durably"
@@ -28,8 +31,12 @@
 //!   token returns [`PropagationError::Refuse`] — never a silent fallback to
 //!   a static/shared credential.
 //! - IDP.3 tenant-isolation: the cache is keyed on
-//!   [`PropagatedCredential::cache_binding`], identical in shape to
-//!   [`SignedAssertionStrategy`]'s binding.
+//!   [`PropagatedCredential::cache_binding`], widened (relative to
+//!   [`SignedAssertionStrategy`]'s `(subject, audience)`-only binding) to also
+//!   fold in `token_exchange_endpoint` and `scope` — the exchanged token IS
+//!   endpoint- and scope-specific, unlike a `SignedAssertionStrategy`
+//!   assertion, which is audience-scoped regardless of which endpoint would
+//!   consume it (MIK-6729 review M1).
 //! - IDP.6 credential hygiene: the cached token is discarded once
 //!   `expires_in` elapses; the `client_assertion` used to authenticate to
 //!   the STS is itself short-lived (60s) and single-use in spirit (a fresh
@@ -70,19 +77,48 @@ const CLIENT_ASSERTION_TTL_SECS: i64 = 60;
 /// living indefinitely if an endpoint leaves it out.
 const DEFAULT_EXCHANGED_TOKEN_TTL_SECS: i64 = 300;
 // ponytail: MAX_CACHE_ENTRIES caps resident exchanged-token entries at 10_000.
-// The cache is keyed by (subject, audience), so a process serving many distinct
-// users against many audiences would otherwise grow the map without bound:
+// The cache is keyed by (subject, audience, endpoint, scope) (MIK-6729 review
+// M1), so a process serving many distinct users against many audiences/
+// endpoints/scopes would otherwise grow the map without bound:
 // `cached()` treats expired entries as absent but never removes them, so every
 // distinct subject leaves a permanently resident entry. On reaching the cap we
 // drop expired entries first (cheap `DashMap::retain`, no LRU crate); the ceiling
 // is a coarse safety valve, not a precise working-set limit.
 const MAX_CACHE_ENTRIES: usize = 10_000;
 
-/// A cached exchanged downstream token, keyed by [`cache_binding`].
+/// A cached exchanged downstream token, keyed by [`exchange_cache_key`].
 struct CachedExchange {
     access_token: String,
     expires_at: i64,
     scopes: Vec<String>,
+}
+
+/// Cache key for an exchanged downstream token (MIK-6729 review M1).
+///
+/// Widens the shared [`cache_binding`] (`subject`, `audience`) with
+/// `token_exchange_endpoint` and `scope`: two backends that share an
+/// `audience` but differ in endpoint or scope must never collide on the same
+/// cached token, because — unlike [`SignedAssertionStrategy`]'s
+/// audience-scoped assertion, which is equally valid to present at any
+/// endpoint — the exchanged token here IS the specific endpoint's response
+/// for that specific scope request. Serving backend B a token minted for
+/// backend A's (different) endpoint/scope would be a credential-confusion
+/// bug: over- or under-privileged access depending on which side is wider.
+///
+/// Built by appending length-prefixed segments on top of [`cache_binding`]'s
+/// own length-prefixed `(subject, audience)` encoding, so the composite
+/// string stays collision-safe even if `endpoint` or `scope` embeds the `:`
+/// separator.
+#[must_use]
+fn exchange_cache_key(subject_key: &str, audience: &str, endpoint: &str, scope: &str) -> String {
+    format!(
+        "{}:{}:{}:{}:{}",
+        cache_binding(subject_key, audience),
+        endpoint.len(),
+        endpoint,
+        scope.len(),
+        scope,
+    )
 }
 
 /// RFC 7523 `private_key_jwt` client-assertion claims. This authenticates the
@@ -147,8 +183,9 @@ pub struct TokenExchangeStrategy {
     assertion: SignedAssertionStrategy,
     http: reqwest::Client,
     /// In-memory only (never persisted) cache of exchanged downstream tokens,
-    /// keyed by [`cache_binding`]. IDP.6: entries past `expires_at` are
-    /// treated as absent and re-exchanged, never served stale.
+    /// keyed by [`exchange_cache_key`] (subject, audience, endpoint, scope —
+    /// MIK-6729 review M1). IDP.6: entries past `expires_at` are treated as
+    /// absent and re-exchanged, never served stale.
     cache: DashMap<String, CachedExchange>,
 }
 
@@ -334,7 +371,8 @@ impl IdentityPropagation for TokenExchangeStrategy {
             })?;
 
         let subject_key = identity.stable_actor_id();
-        let binding = cache_binding(&subject_key, &backend.audience);
+        let scope = backend.token_exchange_scope.as_deref().unwrap_or("");
+        let binding = exchange_cache_key(&subject_key, &backend.audience, endpoint, scope);
 
         if let Some(mut cred) = self.cached(&binding) {
             cred.subject_key = subject_key;
@@ -350,7 +388,13 @@ impl IdentityPropagation for TokenExchangeStrategy {
             .expires_in
             .unwrap_or(DEFAULT_EXCHANGED_TOKEN_TTL_SECS)
             .max(1);
-        let expires_at = now + ttl;
+        // saturating_add: a hostile/compromised STS returning `expires_in` near
+        // `i64::MAX` must not overflow (debug panic; release wraps to
+        // instantly-expired) — MIK-6729 review L2. Saturating to `i64::MAX`
+        // is safe: it only ever makes the cache entry live *longer* under
+        // attack, which `reap_expired`/IDP.6 already bound via
+        // `MAX_CACHE_ENTRIES`, never a security downgrade.
+        let expires_at = now.saturating_add(ttl);
         let scopes: Vec<String> = body
             .scope
             .unwrap_or_default()
@@ -409,6 +453,55 @@ mod tests {
     fn strategy() -> TokenExchangeStrategy {
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
         TokenExchangeStrategy::new(key, 300)
+    }
+
+    // L2 (MIK-6729 review): a hostile/compromised STS returning `expires_in`
+    // at `i64::MAX` must not panic (debug builds overflow-check `now + ttl`)
+    // or silently wrap to an instantly-expired credential (release builds).
+    // `now.saturating_add(ttl)` clamps to `i64::MAX` instead — a real HTTP
+    // round trip against a minimal in-process server standing in for the
+    // hostile STS, not a unit test of `i64::saturating_add` in isolation.
+    #[tokio::test]
+    async fn hostile_expires_in_i64_max_does_not_overflow() {
+        use axum::{Json, Router, routing::post};
+        use tokio::net::TcpListener;
+
+        async fn hostile_token_handler() -> Json<serde_json::Value> {
+            Json(serde_json::json!({
+                "access_token": "hostile-token",
+                "expires_in": i64::MAX,
+            }))
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("local_addr");
+        let app = Router::new().route("/token", post(hostile_token_handler));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("in-process hostile-STS test server");
+        });
+
+        let s = TokenExchangeStrategy::with_http_client(
+            Arc::new(GatewayKeyPair::generate().expect("keygen")),
+            300,
+            reqwest::Client::new(),
+        );
+        let endpoint = format!("http://{addr}/token");
+
+        let cred = s
+            .propagate(&identity("alice"), &backend(Some(&endpoint)))
+            .await
+            .expect("a hostile but well-formed expires_in must not panic or refuse");
+        assert_eq!(
+            cred.expires_at,
+            i64::MAX,
+            "must saturate to i64::MAX, never overflow/panic/wrap"
+        );
+
+        server.abort();
     }
 
     // IDP.2 — no endpoint configured must refuse, never fall through to a
@@ -498,6 +591,100 @@ mod tests {
         assert!(
             !s.cache.contains_key("dead"),
             "expired entry must not survive reap"
+        );
+    }
+
+    // M1 (MIK-6729 review): the exchanged-token cache key must fold in
+    // `token_exchange_endpoint` and `scope`, not just `(subject, audience)` —
+    // two backends sharing an audience but differing in endpoint or scope
+    // must never collide on the same cached token (credential confusion:
+    // one backend could be served a token minted for another's endpoint/
+    // scope, over- or under-privileging it).
+    #[test]
+    fn exchange_cache_key_isolates_endpoint_and_scope() {
+        let base = exchange_cache_key(
+            "alice",
+            "https://mail.internal",
+            "https://sts-a/token",
+            "read",
+        );
+        let diff_endpoint = exchange_cache_key(
+            "alice",
+            "https://mail.internal",
+            "https://sts-b/token",
+            "read",
+        );
+        let diff_scope = exchange_cache_key(
+            "alice",
+            "https://mail.internal",
+            "https://sts-a/token",
+            "write",
+        );
+        let same_again = exchange_cache_key(
+            "alice",
+            "https://mail.internal",
+            "https://sts-a/token",
+            "read",
+        );
+
+        assert_ne!(
+            base, diff_endpoint,
+            "same subject+audience but different endpoint must not collide"
+        );
+        assert_ne!(
+            base, diff_scope,
+            "same subject+audience but different scope must not collide"
+        );
+        assert_eq!(
+            base, same_again,
+            "identical (subject, audience, endpoint, scope) must key identically"
+        );
+    }
+
+    // M1 (MIK-6729 review) at the `cached()` lookup seam: a token cached under
+    // one (endpoint, scope) tuple must not be returned as a hit for a
+    // different (endpoint, scope) tuple sharing the same subject+audience.
+    #[test]
+    fn cached_lookup_misses_across_distinct_endpoint_or_scope() {
+        let s = strategy();
+        let now = SignedAssertionStrategy::now_secs();
+        let key_a = exchange_cache_key(
+            "alice",
+            "https://mail.internal",
+            "https://sts-a/token",
+            "read",
+        );
+        s.cache.insert(
+            key_a.clone(),
+            CachedExchange {
+                access_token: "a-token".to_string(),
+                expires_at: now + 300,
+                scopes: vec!["read".to_string()],
+            },
+        );
+
+        assert!(s.cached(&key_a).is_some(), "exact key must hit");
+
+        let key_b = exchange_cache_key(
+            "alice",
+            "https://mail.internal",
+            "https://sts-b/token",
+            "read",
+        );
+        assert!(
+            s.cached(&key_b).is_none(),
+            "a different endpoint must never reuse another endpoint's cached token"
+        );
+
+        let key_c = exchange_cache_key(
+            "alice",
+            "https://mail.internal",
+            "https://sts-a/token",
+            "write",
+        );
+        assert!(
+            s.cached(&key_c).is_none(),
+            "a different scope must never reuse another scope's cached token"
         );
     }
 }
