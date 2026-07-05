@@ -850,6 +850,8 @@ async fn backend_handler_discovery_method_fails_closed_for_required_propagation(
             audience: "https://mem.internal/mcp".to_string(),
             required: true,
             session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         }),
         ..BackendConfig::default()
     };

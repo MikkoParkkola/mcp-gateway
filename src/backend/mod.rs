@@ -1710,6 +1710,8 @@ mod tests {
                 audience: "https://backend.example".to_string(),
                 required: true,
                 session_mode: crate::identity_propagation::SessionMode::Stateless,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
             }
         };
         let mk = |strategy| {

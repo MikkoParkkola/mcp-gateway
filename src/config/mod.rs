@@ -358,6 +358,48 @@ impl Config {
                 )));
             }
         }
+        self.validate_single_minting_strategy_kind()?;
+        Ok(())
+    }
+
+    /// Refuse a config that asks for more than one *minting* strategy kind
+    /// across backends (MIK-6729).
+    ///
+    /// The runtime installs exactly one `Arc<dyn IdentityPropagation>` for the
+    /// whole gateway (`Gateway::config_installs_minting_strategy` +
+    /// `set_identity_propagation`); it is not yet a per-backend resolver
+    /// (tracked on MIK-6746). `SignedAssertion` and `TokenExchange` are both
+    /// minting strategies — a config that mixes them would only ever get the
+    /// first-installed strategy applied to every backend's `propagate()` call,
+    /// silently minting the WRONG credential shape for the other backend's
+    /// declared strategy. Fail closed at load instead (IDP.2): `Passthrough`
+    /// mints nothing and is excluded from this check (see the `Gateway`
+    /// install-site comment for the documented Passthrough + minting mix).
+    fn validate_single_minting_strategy_kind(&self) -> Result<()> {
+        use crate::identity_propagation::PropagationStrategyKind as Kind;
+
+        let mut kinds: Vec<Kind> = Vec::new();
+        for c in self
+            .backends
+            .values()
+            .filter_map(|b| b.identity_propagation.as_ref())
+        {
+            if matches!(c.strategy, Kind::SignedAssertion | Kind::TokenExchange)
+                && !kinds.contains(&c.strategy)
+            {
+                kinds.push(c.strategy);
+            }
+        }
+
+        if kinds.len() > 1 {
+            return Err(Error::ConfigValidation(format!(
+                "identity_propagation: backends request {} distinct minting strategies \
+                 ({kinds:?}) but the gateway installs only one minting strategy process-wide; \
+                 use a single minting strategy across all backends, or route the others through \
+                 passthrough (MIK-6746 tracks a per-backend resolver)",
+                kinds.len()
+            )));
+        }
         Ok(())
     }
 

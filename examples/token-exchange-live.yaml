@@ -1,0 +1,74 @@
+# Live-exercise config for RFC 8693 token exchange (MIK-6729).
+#
+# Shows a backend using `identity_propagation.strategy: token_exchange`
+# pointed at the gateway's OWN `/auth/token` endpoint. The gateway acts as
+# both the relying party (verifies the end user's real OIDC login) and the
+# token-exchange security token service (mints a backend-scoped token from
+# its own signed identity assertion).
+#
+# Walkthrough: docs/token-exchange-live-walkthrough.md
+# Usage: mcp-gateway --config examples/token-exchange-live.yaml
+
+server:
+  host: "127.0.0.1"
+  port: 39400
+
+auth:
+  enabled: true                     # /auth/token is exempt (mounted outside auth_middleware);
+  public_paths:                     # every other route requires a bearer.
+    - /health
+
+# --- Key server: OIDC login -> temporary gateway bearer -----------------
+#
+# Two OIDC provider entries, for two different callers of /auth/token:
+#
+#   1. The real IdP the human user logs in with. Swap in your own tenant.
+#   2. issuer "mcp-gateway": lets the gateway trust ITS OWN signed identity
+#      assertions (SignedAssertionStrategy::ISSUER) when TokenExchangeStrategy
+#      calls back into this same /auth/token to mint a backend-scoped token.
+#      jwks_uri points at the gateway's own always-mounted, unauthenticated
+#      /.well-known/jwks.json (src/gateway/router/mod.rs).
+key_server:
+  enabled: true
+  token_ttl_secs: 300               # short-lived for the demo
+  oidc:
+    - issuer: "https://accounts.google.com"
+      audiences: ["${GATEWAY_OIDC_CLIENT_ID}"]
+      allowed_domains: ["example.com"]
+    - issuer: "mcp-gateway"
+      jwks_uri: "http://127.0.0.1:39400/.well-known/jwks.json"
+      auto_discover: false
+      audiences: []
+      allowed_domains: []
+  policies:
+    # Matches both the human user's real identity AND the gateway's
+    # self-minted assertion for that same user (the assertion carries the
+    # user's original email/subject through unchanged), so one rule covers
+    # both hops of the exchange.
+    - match: { domain: "example.com" }
+      scopes:
+        backends: ["mail-svc"]
+        tools: ["*"]
+        rate_limit: 60
+
+# --- Transparency log: where idp_mint / idp_refuse land ------------------
+security:
+  transparency_log:
+    enabled: true
+    path: "./token-exchange-demo.jsonl"
+    key_id: "demo"
+
+# --- Backend: identity propagated via token exchange ----------------------
+backends:
+  mail-svc:
+    # Replace with your real backend transport; the propagation wiring below
+    # is independent of stdio vs http.
+    http_url: "http://127.0.0.1:8081/mcp"
+    description: "Example backend requiring a per-user, policy-scoped token"
+    identity_propagation:
+      strategy: token_exchange
+      audience: "https://mail-svc.internal"
+      required: true               # fail closed: no identity -> refuse, never a static fallback
+      session_mode: stateless
+      token_exchange_endpoint: "http://127.0.0.1:39400/auth/token"
+      token_exchange_scope: "backends:mail-svc tools:mail_read"

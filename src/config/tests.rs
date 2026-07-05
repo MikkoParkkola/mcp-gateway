@@ -602,6 +602,8 @@ fn validate_accepts_stateless_signed_assertion_backend() {
             audience: "https://memory.internal".to_string(),
             required: true,
             session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         }),
     );
     assert!(
@@ -622,6 +624,8 @@ fn validate_rejects_per_user_session_mode_until_pool_ships() {
             audience: "https://mem".to_string(),
             required: true,
             session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         }),
     );
     let err = config.validate().unwrap_err().to_string();
@@ -643,6 +647,8 @@ fn validate_rejects_identity_propagation_on_non_http_transport() {
         audience: "https://mem".to_string(),
         required: true,
         session_mode: SessionMode::Stateless,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
     });
     backend.transport = TransportConfig::Stdio {
         command: "echo".to_string(),
@@ -668,6 +674,8 @@ fn validate_rejects_empty_audience_backend() {
             audience: String::new(),
             required: true,
             session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         }),
     );
     assert!(matches!(
@@ -678,19 +686,67 @@ fn validate_rejects_empty_audience_backend() {
 
 #[test]
 fn validate_rejects_required_unimplemented_strategy() {
-    // IDP.2: a required backend on an unimplemented strategy must not silently
-    // run without propagation.
+    // IDP.2: a required backend on an unimplemented strategy (vault, MIK-6730
+    // is not yet built) must not silently run without propagation.
     let mut config = Config::default();
     config.backends.insert(
         "b".to_string(),
+        backend_with_idp(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::Vault,
+            audience: "https://mail".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        }),
+    );
+    assert!(config.validate().is_err());
+}
+
+// MIK-6729 — token_exchange required with no endpoint is rejected at the full
+// Config::validate() level (not just IdentityPropagationConfig::validate()
+// in isolation), the same fail-closed path a real config-load would hit.
+#[test]
+fn validate_rejects_token_exchange_without_endpoint() {
+    let mut config = Config::default();
+    config.backends.insert(
+        "mail".to_string(),
         backend_with_idp(IdentityPropagationConfig {
             strategy: PropagationStrategyKind::TokenExchange,
             audience: "https://mail".to_string(),
             required: true,
             session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         }),
     );
-    assert!(config.validate().is_err());
+    let err = config.validate().unwrap_err().to_string();
+    assert!(
+        err.contains("token_exchange_endpoint"),
+        "error should name the missing field: {err}"
+    );
+}
+
+// MIK-6729 — a properly-configured token_exchange backend validates cleanly
+// end-to-end (audience, endpoint, http transport, stateless session).
+#[test]
+fn validate_accepts_properly_configured_token_exchange_backend() {
+    let mut config = Config::default();
+    config.backends.insert(
+        "mail".to_string(),
+        backend_with_idp(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::TokenExchange,
+            audience: "https://mail".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: Some("https://idp.internal/token".to_string()),
+            token_exchange_scope: Some("mail.read".to_string()),
+        }),
+    );
+    assert!(
+        config.validate().is_ok(),
+        "properly-configured token_exchange backend must validate"
+    );
 }
 
 #[test]
@@ -712,6 +768,8 @@ fn validate_rejects_identity_propagation_with_enabled_backend_oauth() {
         audience: "https://mem".to_string(),
         required: true,
         session_mode: SessionMode::Stateless,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
     });
     backend.oauth = Some(oauth_cfg(true));
     config.backends.insert("mem".to_string(), backend);
@@ -734,6 +792,8 @@ fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
         audience: "https://mem".to_string(),
         required: true,
         session_mode: SessionMode::Stateless,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
     });
     backend.oauth = Some(oauth_cfg(false));
     config.backends.insert("mem".to_string(), backend);
