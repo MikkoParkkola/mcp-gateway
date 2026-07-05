@@ -135,7 +135,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 
 The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The README benchmark scenario also surfaces stats, cost report, playbooks, profile controls, disabled-capability visibility, and reload for a 15-tool surface. Surfacing webhook status adds the 16th tool.
 
-### How it compares
+### Public MCP Gateway Comparison
 
 This table compares public, user-facing behavior, not internal roadmap scoring. MCP Gateway entries are grounded in this repo's public docs: [quickstart](QUICKSTART.md), [deployment](docs/DEPLOYMENT.md), [OWASP controls](docs/OWASP_AGENTIC_AI_COMPLIANCE.md), [TrustCard/CBOM](docs/trustcard.md), [CatalogTrustLab](docs/catalog_trust_lab.md), [adaptive ranking](docs/adaptive_ranking.md), and the [Trust Fabric roadmap](docs/roadmap/mik-6550-trust-fabric-roadmap.md). Competitor entries are grounded in public project docs: [Docker MCP Catalog and Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/), [MCPJungle README](https://github.com/mcpjungle/MCPJungle), [mcpo README](https://github.com/open-webui/mcpo), and [Supergateway README](https://github.com/supercorp-ai/supergateway).
 
