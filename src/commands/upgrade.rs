@@ -286,6 +286,13 @@ static WHATS_NEW: &[WhatsNew] = &[
             "Declare `auth.single_user: true` (personal gateway) or `oauth.shared_account: true` (per backend) to opt in to shared-credential behavior",
         ],
     },
+    WhatsNew {
+        version: "3.1.0",
+        items: &[
+            "New opt-in `strategy: token_exchange` for `identity_propagation`: RFC 8693 token exchange with a backend's token endpoint, stores no credential",
+            "Standards fix: the key server's dormant, opt-in `POST /auth/token` endpoint now uses standard OAuth 2.0 / RFC 8693 form-encoding instead of JSON",
+        ],
+    },
 ];
 
 /// Print "What's new" items for all versions strictly after `from` and up to `current`.
