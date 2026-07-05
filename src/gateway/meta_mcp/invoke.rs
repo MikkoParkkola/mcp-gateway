@@ -33,13 +33,32 @@ use crate::{Error, Result};
 /// the cache binding to isolate cached results by user+audience. The default
 /// (empty headers, `None` binding) means "not identity-scoped" — plain dispatch
 /// and a shared cache key.
-#[derive(Debug, Default)]
+///
+/// `Debug` is implemented manually to REDACT header values: `headers` may
+/// carry a live bearer token/assertion resolved via identity propagation, and
+/// a derived `Debug` would leak it through any `tracing!(?cred)`, error
+/// context, or test-failure dump (CWE-532). Mirrors the sibling
+/// [`crate::identity_propagation::PropagatedCredential`]'s redacting `Debug`
+/// impl — header names are shown, values are replaced with `<redacted>`.
+#[derive(Default)]
 struct CallerCredential {
-    /// Per-request outbound headers (empty = none).
+    /// Per-request outbound headers (empty = none). Never logged verbatim —
+    /// see the redacting `Debug` impl below.
     headers: Vec<(String, String)>,
     /// Collision-safe user+audience cache binding. `Some` → mix into cache keys
     /// so per-user results stay isolated (IDP.8); `None` → shared key is safe.
     cache_binding: Option<String>,
+}
+
+impl std::fmt::Debug for CallerCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redact header VALUES (they may carry a live token); show names only.
+        let header_names: Vec<&str> = self.headers.iter().map(|(k, _)| k.as_str()).collect();
+        f.debug_struct("CallerCredential")
+            .field("headers", &format_args!("{header_names:?} = <redacted>"))
+            .field("cache_binding", &self.cache_binding)
+            .finish()
+    }
 }
 
 /// Render-guard non-bypassability (MIK-5854 / MIK-6690).
@@ -2635,6 +2654,7 @@ mod identity_propagation_enforcement_tests {
     use crate::gateway::oauth::GatewayKeyPair;
     use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode, SignedAssertionStrategy,
+        TokenExchangeStrategy,
     };
     use crate::key_server::oidc::VerifiedIdentity;
 
@@ -3045,5 +3065,76 @@ mod identity_propagation_enforcement_tests {
             .await
             .expect("resolve ok");
         assert!(headers.is_empty());
+    }
+
+    // MIK-6729 review M2 — the wired path: `resolve_caller_credential` MUST
+    // copy `idp_cfg.token_exchange_endpoint`/`token_exchange_scope` into the
+    // `BackendDescriptor` it hands to the installed strategy. Installs the
+    // TokenExchangeStrategy the exact same way the production Gateway startup
+    // match arm does (`gateway::server::mod` — `TokenExchangeStrategy::new` +
+    // `meta_mcp.set_identity_propagation`), so this test exercises the real
+    // wired path, not a hand-rolled stand-in.
+    //
+    // No live STS is available in-test, so this asserts the FAILURE MODE
+    // instead of a minted token: an unreachable endpoint must fail with a
+    // network/exchange error ("token-exchange request failed"), never with
+    // `Misconfigured("... no token_exchange_endpoint configured ...")`. The
+    // `Misconfigured` message is `TokenExchangeStrategy::propagate`'s first
+    // check, reached ONLY when the descriptor's `token_exchange_endpoint` is
+    // `None` — i.e. exactly what happens if invoke.rs's two wiring lines
+    // (`token_exchange_endpoint`/`token_exchange_scope` copy into
+    // `BackendDescriptor`) are deleted. Verified live (MIK-6729 review): with
+    // those two lines removed, this test fails because the error message
+    // becomes "... no token_exchange_endpoint configured (MIK-6729)" instead
+    // of "token-exchange request failed"; every OLD test in this module still
+    // passes, because none of them exercise a `TokenExchange` strategy.
+    fn meta_with_token_exchange_strategy() -> MetaMcp {
+        // Mirrors gateway::server::mod's
+        // `Some(PropagationStrategyKind::TokenExchange) => { ... }` install
+        // arm verbatim (same constructor, same `set_identity_propagation`
+        // call) without needing a full `Config`/`Gateway::start`.
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        m.set_identity_propagation(Arc::new(TokenExchangeStrategy::new(key, 300)));
+        m
+    }
+
+    fn token_exchange_idp_cfg() -> IdentityPropagationConfig {
+        IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::TokenExchange,
+            audience: "https://mail.internal".to_string(),
+            required: true,
+            session_mode: SessionMode::PerUser,
+            // Port 0 is never reachable / instantly refused by the OS —
+            // deterministic network failure, same technique as
+            // `token_exchange::tests::unreachable_endpoint_is_refused`.
+            token_exchange_endpoint: Some("https://127.0.0.1:0/token".to_string()),
+            token_exchange_scope: Some("mail.read".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_caller_credential_wires_token_exchange_endpoint_and_scope() {
+        let m = meta_with_token_exchange_strategy();
+        let err = m
+            .resolve_caller_credential("mail", &token_exchange_idp_cfg(), Some(&identity()))
+            .await
+            .expect_err("unreachable token-exchange endpoint must fail closed");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("no identity-propagation strategy"),
+            "strategy must be installed: {msg}"
+        );
+        assert!(
+            !msg.contains("token_exchange_endpoint configured"),
+            "if this fires, invoke.rs stopped wiring \
+             token_exchange_endpoint/token_exchange_scope into BackendDescriptor \
+             (MIK-6729 review M2): {msg}"
+        );
+        assert!(
+            msg.contains("token-exchange request failed"),
+            "must fail as a network/exchange error (proving the endpoint WAS \
+             wired into the descriptor), not a Misconfigured short-circuit: {msg}"
+        );
     }
 }
