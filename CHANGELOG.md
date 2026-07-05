@@ -20,6 +20,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fail-loud so a missing intended config can never silently start with
   authentication disabled.
 
+## [3.0.2] - 2026-07-05
+
+### Fixed
+
+- **Fail closed when identity propagation is required but the transport cannot
+  carry it.** A backend configured with `identity_propagation.required` on a
+  non-HTTP transport (stdio/websocket) previously minted and audited an
+  identity token that the transport then silently dropped, letting the call
+  proceed unauthenticated under the shared gateway static credential. Added
+  `Transport::carries_identity_headers` (default false, HTTP overrides true)
+  and the dispatch path now refuses before minting when propagation is
+  required and the transport cannot carry it.
+- **Bounded transparency-log reads to prevent memory exhaustion (MIK-6710).**
+  `log_contains_signed_entry`, `verify_log_inner`, and `show_session_entries`
+  loaded the entire audit log into memory with no size bound, so an
+  unbounded or attacker-grown transparency log could exhaust gateway memory
+  on every audit verify or show call. Reads are now capped at 256 MiB and
+  fail closed instead of allocating an oversized buffer. Crash recovery
+  (`recover_chain_state`, run on every logger open) no longer reads the whole
+  file either; it now scans backward from the last 4 MiB to find the final
+  complete line, so recovery time no longer scales with total log size.
+  Hash-chain verification logic is unchanged.
+
 ## [3.0.1] - 2026-07-03
 
 Security hardening fast-follow for the 3.0.0 end-user identity-propagation
