@@ -752,6 +752,7 @@ impl MetaMcp {
                 agent_id,
                 caller_identity,
                 &caller_credential.headers,
+                caller_credential.cache_binding.as_deref(),
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -1376,17 +1377,37 @@ impl MetaMcp {
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .resolve_propagation_credential(server, verified_identity)
+            .await?
+            .0)
+    }
+
+    /// Like [`Self::resolve_propagation_headers`] but also returns the caller's
+    /// stable identity binding (MIK-6784), so the direct backend route can
+    /// partition upstream `MCP-Session-Id` state per identity. The binding is
+    /// `None` for a non-propagation backend (unchanged static path).
+    ///
+    /// # Errors
+    ///
+    /// Fail-closed `Err` for a `required` backend with no identity/strategy —
+    /// same contract as [`Self::resolve_propagation_headers`].
+    pub async fn resolve_propagation_credential(
+        &self,
+        server: &str,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<(Vec<(String, String)>, Option<String>)> {
         let Some(idp_cfg) = self
             .backends
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         };
-        Ok(self
+        let cred = self
             .resolve_caller_credential(server, &idp_cfg, verified_identity)
-            .await?
-            .headers)
+            .await?;
+        Ok((cred.headers, cred.cache_binding))
     }
 
     /// Resolve the per-user identity-propagation credential for a backend
@@ -1530,6 +1551,10 @@ impl MetaMcp {
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
         propagated_headers: &[(String, String)],
+        // Caller's stable identity binding (MIK-6784), used by the transport to
+        // partition upstream `MCP-Session-Id` state per identity. `None` → the
+        // shared default bucket (single-tenant behavior unchanged).
+        identity_key: Option<&str>,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -1639,16 +1664,19 @@ impl MetaMcp {
             None => base_params,
         };
 
-        // End-user identity propagation (MIK-6704 / ADR-007). The per-user
-        // credential was resolved (and fail-closed enforced) once upstream in
+        // End-user identity propagation (MIK-6704 / ADR-007) and per-identity
+        // upstream session partitioning (MIK-6784). The per-user credential was
+        // resolved (and fail-closed enforced) once upstream in
         // `invoke_tool_traced`; here we simply attach the pre-resolved headers
-        // via `request_with_headers` (per-request, never on the shared transport
-        // — tenant isolation, IDP.3). Empty headers → the unchanged static path.
-        let response = if propagated_headers.is_empty() {
+        // plus the caller's identity key via `request_with_headers` (per-request,
+        // never on the shared transport — tenant isolation, IDP.3). Only when
+        // there are neither headers nor an identity key do we take the unchanged
+        // static path (shared default session bucket).
+        let response = if propagated_headers.is_empty() && identity_key.is_none() {
             backend.request("tools/call", Some(params)).await?
         } else {
             backend
-                .request_with_headers("tools/call", Some(params), propagated_headers)
+                .request_with_headers("tools/call", Some(params), propagated_headers, identity_key)
                 .await?
         };
 
@@ -2744,9 +2772,14 @@ mod identity_propagation_enforcement_tests {
     // Header-capturing transport: records the per-request headers dispatch
     // attaches, so a test can assert the propagated credential reached the wire.
     type CapturedHeaders = Arc<parking_lot::Mutex<Vec<(String, String)>>>;
+    // Records the identity key dispatch threads for upstream session
+    // partitioning (MIK-6784), so a test can assert distinct identities produce
+    // distinct keys.
+    type CapturedIdentityKeys = Arc<parking_lot::Mutex<Vec<Option<String>>>>;
 
     struct CapturingTransport {
         captured: CapturedHeaders,
+        captured_identity: CapturedIdentityKeys,
     }
 
     #[async_trait::async_trait]
@@ -2766,8 +2799,12 @@ mod identity_propagation_enforcement_tests {
             _method: &str,
             _params: Option<Value>,
             extra_headers: &[(String, String)],
+            identity_key: Option<&str>,
         ) -> crate::Result<crate::protocol::JsonRpcResponse> {
             *self.captured.lock() = extra_headers.to_vec();
+            self.captured_identity
+                .lock()
+                .push(identity_key.map(str::to_string));
             self.request(_method, _params).await
         }
         async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
@@ -2785,6 +2822,13 @@ mod identity_propagation_enforcement_tests {
     // ("mem") wired to a header-capturing transport, plus the signed-assertion
     // strategy. Returns the meta and the shared capture buffer.
     fn meta_with_capturing_backend() -> (MetaMcp, CapturedHeaders) {
+        let (m, captured, _identity) = meta_with_capturing_backend_full();
+        (m, captured)
+    }
+
+    /// Like [`meta_with_capturing_backend`] but also exposes the buffer of
+    /// identity keys the transport received (MIK-6784).
+    fn meta_with_capturing_backend_full() -> (MetaMcp, CapturedHeaders, CapturedIdentityKeys) {
         use crate::backend::Backend;
         use crate::config::{BackendConfig, TransportConfig};
 
@@ -2805,15 +2849,17 @@ mod identity_propagation_enforcement_tests {
             std::time::Duration::from_secs(60),
         ));
         let captured = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured_identity = Arc::new(parking_lot::Mutex::new(Vec::new()));
         backend.set_transport_for_test(Arc::new(CapturingTransport {
             captured: Arc::clone(&captured),
+            captured_identity: Arc::clone(&captured_identity),
         }));
         registry.register(backend);
 
         let m = MetaMcp::new(registry);
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
         m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
-        (m, captured)
+        (m, captured, captured_identity)
     }
 
     // IDP.1 end-to-end via Code Mode (gateway_execute): an authenticated caller

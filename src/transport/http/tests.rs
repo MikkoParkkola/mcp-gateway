@@ -15,6 +15,17 @@ fn make_transport_with_headers(url: &str, hdrs: HashMap<String, String>) -> Arc<
     HttpTransport::new(url, hdrs, Duration::from_secs(30), true).unwrap()
 }
 
+/// Set the shared default-bucket (no-identity) session id, mirroring the
+/// pre-MIK-6784 single-session behavior these tests were written against.
+fn set_default_session(t: &HttpTransport, id: &str) {
+    t.sessions.write().insert(String::new(), id.to_string());
+}
+
+/// Read the shared default-bucket session id, if any.
+fn default_session(t: &HttpTransport) -> Option<String> {
+    t.sessions.read().get("").cloned()
+}
+
 // =========================================================================
 // Construction
 // =========================================================================
@@ -26,7 +37,7 @@ fn new_creates_transport_with_defaults() {
     assert!(t.streamable_http);
     assert!(!t.is_connected());
     assert!(t.message_url.read().is_none());
-    assert!(t.session_id.read().is_none());
+    assert!(default_session(&t).is_none());
     assert!(t.oauth_client.is_none());
 }
 
@@ -207,9 +218,9 @@ async fn build_headers_sse_mode_baseline() {
     custom.insert("X-Auth-Token".to_string(), "secret".to_string());
     let t = make_transport_with_headers("http://localhost", custom);
     // Pretend a session was established — SSE must NOT forward it.
-    *t.session_id.write() = Some("should-not-appear".to_string());
+    set_default_session(&t, "should-not-appear");
 
-    let map = t.build_mcp_headers(HeaderMode::Sse).await.unwrap();
+    let map = t.build_mcp_headers(HeaderMode::Sse, None).await.unwrap();
 
     assert!(
         !map.contains_key(header::CONTENT_TYPE),
@@ -247,12 +258,15 @@ async fn build_headers_send_request_with_session_and_trace() {
     let mut custom = HashMap::new();
     custom.insert("X-Custom".to_string(), "val".to_string());
     let t = make_transport_with_headers("http://localhost", custom);
-    *t.session_id.write() = Some("sess-abc".to_string());
+    set_default_session(&t, "sess-abc");
 
     let map = trace::with_trace_id("gw-trace-123".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Request {
-            method: "tools/list",
-        })
+        t.build_mcp_headers(
+            HeaderMode::Request {
+                method: "tools/list",
+            },
+            None,
+        )
         .await
         .unwrap()
     })
@@ -280,9 +294,12 @@ async fn build_headers_send_request_no_session() {
     let t = make_transport("http://localhost");
 
     let map = t
-        .build_mcp_headers(HeaderMode::Request {
-            method: "tools/list",
-        })
+        .build_mcp_headers(
+            HeaderMode::Request {
+                method: "tools/list",
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -305,10 +322,10 @@ async fn build_headers_notify_includes_custom_but_excludes_trace() {
     let mut custom = HashMap::new();
     custom.insert("X-Notify-Auth".to_string(), "notify-token".to_string());
     let t = make_transport_with_headers("http://localhost", custom);
-    *t.session_id.write() = Some("notify-sess".to_string());
+    set_default_session(&t, "notify-sess");
 
     let map = trace::with_trace_id("gw-trace-xyz".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Notify).await.unwrap()
+        t.build_mcp_headers(HeaderMode::Notify, None).await.unwrap()
     })
     .await;
 
@@ -333,7 +350,7 @@ async fn build_headers_notify_includes_custom_but_excludes_trace() {
 async fn build_headers_notify_no_session_when_unset() {
     let t = make_transport("http://localhost");
 
-    let map = t.build_mcp_headers(HeaderMode::Notify).await.unwrap();
+    let map = t.build_mcp_headers(HeaderMode::Notify, None).await.unwrap();
 
     assert!(!map.contains_key("mcp-session-id"));
 }
@@ -347,10 +364,10 @@ async fn build_headers_close_includes_session_and_custom_headers() {
     let mut custom = HashMap::new();
     custom.insert("X-Close-Auth".to_string(), "close-token".to_string());
     let t = make_transport_with_headers("http://localhost", custom);
-    *t.session_id.write() = Some("close-sess".to_string());
+    set_default_session(&t, "close-sess");
 
     let map = trace::with_trace_id("gw-close-trace".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Close).await.unwrap()
+        t.build_mcp_headers(HeaderMode::Close, None).await.unwrap()
     })
     .await;
 
@@ -404,7 +421,7 @@ async fn close_sends_shared_close_headers() {
     custom.insert("X-Close-Auth".to_string(), "close-token".to_string());
     let transport = make_transport_with_headers(&format!("http://{addr}/mcp"), custom);
     *transport.message_url.write() = Some(format!("http://{addr}/messages"));
-    *transport.session_id.write() = Some("close-session".to_string());
+    set_default_session(&transport, "close-session");
 
     transport.close().await.unwrap();
 
@@ -442,7 +459,7 @@ async fn build_headers_uses_overridden_protocol_version() {
     )
     .unwrap();
 
-    let map = t.build_mcp_headers(HeaderMode::Sse).await.unwrap();
+    let map = t.build_mcp_headers(HeaderMode::Sse, None).await.unwrap();
 
     assert_eq!(map["mcp-protocol-version"], "2024-11-05");
 }
@@ -456,7 +473,7 @@ async fn build_headers_trace_flag_gates_trace_header() {
 
     // Notify mode must suppress trace propagation even when ambient trace exists.
     let map_no_trace = trace::with_trace_id("gw-abc".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Notify).await.unwrap()
+        t.build_mcp_headers(HeaderMode::Notify, None).await.unwrap()
     })
     .await;
 
@@ -467,7 +484,7 @@ async fn build_headers_trace_flag_gates_trace_header() {
 
     // Request mode must include trace propagation when ambient trace exists.
     let map_with_trace = trace::with_trace_id("gw-abc".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Request { method: "m" })
+        t.build_mcp_headers(HeaderMode::Request { method: "m" }, None)
             .await
             .unwrap()
     })
@@ -576,7 +593,7 @@ async fn request_reinitializes_session_and_retries_on_session_not_found() {
 
     let transport = make_transport(&format!("http://{addr}/mcp"));
     *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
-    *transport.session_id.write() = Some("stale-session-from-before-restart".to_string());
+    set_default_session(&transport, "stale-session-from-before-restart");
 
     // WHEN: a request rides the dead session
     let response = transport.request("tools/list", None).await.unwrap();
@@ -584,7 +601,7 @@ async fn request_reinitializes_session_and_retries_on_session_not_found() {
     // THEN: the transport re-initialized and the retry succeeded
     assert!(response.error.is_none(), "retried request must succeed");
     assert_eq!(
-        transport.session_id.read().as_deref(),
+        default_session(&transport).as_deref(),
         Some(FRESH_SESSION),
         "fresh session ID must replace the stale one"
     );
@@ -682,7 +699,7 @@ async fn request_reinitializes_session_and_retries_on_http_404() {
 
     let transport = make_transport(&format!("http://{addr}/mcp"));
     *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
-    *transport.session_id.write() = Some("stale-session-pre-refresh".to_string());
+    set_default_session(&transport, "stale-session-pre-refresh");
 
     // WHEN: a request rides the session the remote just invalidated
     let response = transport.request("tools/list", None).await.unwrap();
@@ -693,7 +710,7 @@ async fn request_reinitializes_session_and_retries_on_http_404() {
         "retried request must succeed after the 404 triggers a re-initialize"
     );
     assert_eq!(
-        transport.session_id.read().as_deref(),
+        default_session(&transport).as_deref(),
         Some(FRESH_SESSION),
         "fresh session ID must replace the one invalidated on token refresh"
     );
@@ -794,7 +811,7 @@ async fn request_reinitializes_on_jsonrpc_session_error_response() {
 
     let transport = make_transport(&format!("http://{addr}/mcp"));
     *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
-    *transport.session_id.write() = Some("stale-session-before-refresh".to_string());
+    set_default_session(&transport, "stale-session-before-refresh");
 
     // WHEN: a request rides the dead session and the remote answers 200 + error
     let response = transport.request("tools/list", None).await.unwrap();
@@ -805,7 +822,7 @@ async fn request_reinitializes_on_jsonrpc_session_error_response() {
         "retried request after jsonrpc session error must succeed"
     );
     assert_eq!(
-        transport.session_id.read().as_deref(),
+        default_session(&transport).as_deref(),
         Some(FRESH_SESSION),
         "fresh session ID must replace the stale one"
     );
@@ -954,7 +971,7 @@ async fn request_with_headers_injects_and_overrides_on_the_wire() {
         ("X-Idp-Audience".to_string(), "https://mem".to_string()),
     ];
     let _ = transport
-        .request_with_headers("tools/call", None, &extra)
+        .request_with_headers("tools/call", None, &extra, None)
         .await;
 
     let headers = tokio::time::timeout(Duration::from_secs(1), rx)
@@ -1128,4 +1145,175 @@ async fn drop_aborts_refresh_task_without_close() {
             // Sender was dropped by task abort — correct RAII behavior.
         }
     }
+}
+
+// =========================================================================
+// MIK-6784 (GW.1): per-identity MCP-Session-Id partitioning
+// =========================================================================
+
+/// GW.1 unit: `build_mcp_headers` selects the session bound to the caller's
+/// identity bucket, so two identities never share a session and a caller with
+/// no negotiated session gets no session header at all.
+#[tokio::test]
+async fn build_headers_selects_session_per_identity_bucket() {
+    let t = make_transport("http://localhost");
+    t.sessions
+        .write()
+        .insert("alice".to_string(), "sess-alice".to_string());
+    t.sessions
+        .write()
+        .insert("bob".to_string(), "sess-bob".to_string());
+    t.sessions
+        .write()
+        .insert(String::new(), "sess-default".to_string());
+
+    let alice = t
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("alice"))
+        .await
+        .unwrap();
+    let bob = t
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("bob"))
+        .await
+        .unwrap();
+    let anon = t
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, None)
+        .await
+        .unwrap();
+    let absent = t
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("carol"))
+        .await
+        .unwrap();
+
+    assert_eq!(alice["mcp-session-id"], "sess-alice");
+    assert_eq!(bob["mcp-session-id"], "sess-bob");
+    assert_ne!(
+        alice["mcp-session-id"], bob["mcp-session-id"],
+        "two identities must never share a session id"
+    );
+    assert_eq!(
+        anon["mcp-session-id"], "sess-default",
+        "no-identity path uses the shared default bucket"
+    );
+    assert!(
+        !absent.contains_key("mcp-session-id"),
+        "an identity with no negotiated session sends no session header"
+    );
+}
+
+/// Stateful mock backend for the session-partition test: a caller with no
+/// session is minted a fresh unique one (and told which); a caller presenting a
+/// session has it echoed back verbatim. Extracted from the test body to keep
+/// the test under the line cap.
+async fn partition_mock_handler(
+    axum::extract::State(counter): axum::extract::State<Arc<std::sync::atomic::AtomicU32>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use serde_json::json;
+
+    if body.get("id").is_none() {
+        return StatusCode::ACCEPTED.into_response();
+    }
+    let incoming = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if incoming.is_empty() {
+        let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let minted = format!("sess-{n}");
+        let mut resp_headers = axum::http::HeaderMap::new();
+        resp_headers.insert("mcp-session-id", minted.parse().unwrap());
+        (
+            StatusCode::OK,
+            resp_headers,
+            axum::Json(json!({"jsonrpc": "2.0", "id": body["id"], "result": {"session": minted}})),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::OK,
+            axum::Json(
+                json!({"jsonrpc": "2.0", "id": body["id"], "result": {"session": incoming}}),
+            ),
+        )
+            .into_response()
+    }
+}
+
+/// GW.1 integration: against a stateful backend that mints a distinct session
+/// per handshake, each caller identity negotiates and reuses its OWN session;
+/// one identity's session is never stamped onto another's request. Regression
+/// test for the Arc-shared single-session slot (MIK-6784).
+#[tokio::test]
+async fn stateful_backend_partitions_sessions_across_identities() {
+    use axum::{Router, routing::post};
+
+    let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/mcp", post(partition_mock_handler))
+        .with_state(Arc::clone(&counter));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+
+    let session_of = |resp: &JsonRpcResponse| -> String {
+        resp.result.as_ref().unwrap()["session"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // Each identity's first request negotiates its own session.
+    let a1 = transport
+        .request_with_headers("tools/call", None, &[], Some("alice"))
+        .await
+        .unwrap();
+    let b1 = transport
+        .request_with_headers("tools/call", None, &[], Some("bob"))
+        .await
+        .unwrap();
+    let alice_session = session_of(&a1);
+    let bob_session = session_of(&b1);
+    assert_ne!(
+        alice_session, bob_session,
+        "distinct identities must negotiate distinct sessions"
+    );
+
+    // Second round: each identity reuses ITS OWN session — never the other's.
+    let a2 = transport
+        .request_with_headers("tools/call", None, &[], Some("alice"))
+        .await
+        .unwrap();
+    let b2 = transport
+        .request_with_headers("tools/call", None, &[], Some("bob"))
+        .await
+        .unwrap();
+    assert_eq!(
+        session_of(&a2),
+        alice_session,
+        "alice must reuse alice's session, not bob's"
+    );
+    assert_eq!(
+        session_of(&b2),
+        bob_session,
+        "bob must reuse bob's session, not alice's"
+    );
+
+    // The transport's own bucket map reflects the partition.
+    assert_eq!(
+        transport.sessions.read().get("alice").cloned(),
+        Some(alice_session)
+    );
+    assert_eq!(
+        transport.sessions.read().get("bob").cloned(),
+        Some(bob_session)
+    );
+
+    server.abort();
 }

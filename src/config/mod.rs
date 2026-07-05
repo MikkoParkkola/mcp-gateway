@@ -303,6 +303,7 @@ impl Config {
         self.validate_backend_runtime_profiles()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
+        self.key_server.validate()?;
         Ok(())
     }
 

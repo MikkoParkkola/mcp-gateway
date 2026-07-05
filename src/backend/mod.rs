@@ -744,7 +744,7 @@ impl Backend {
         )
     )]
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.request_with_headers(method, params, &[]).await
+        self.request_with_headers(method, params, &[], None).await
     }
 
     /// This backend's end-user identity-propagation config, if configured
@@ -794,6 +794,11 @@ impl Backend {
     /// value to the transport's `request_with_headers`, never stored on the
     /// backend, so concurrent per-user requests stay isolated (IDP.3).
     ///
+    /// `identity_key` is the caller's stable identity binding (MIK-6784); the
+    /// transport uses it to partition upstream `MCP-Session-Id` state so one
+    /// user's session is never reused for another. `None` selects the shared
+    /// default bucket (single-tenant behavior unchanged).
+    ///
     /// # Errors
     ///
     /// Returns an error if the backend is unavailable, the concurrency limit
@@ -803,6 +808,7 @@ impl Backend {
         method: &str,
         params: Option<Value>,
         extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
@@ -845,14 +851,19 @@ impl Backend {
 
         // Execute with retry
         let name = self.name.clone();
+        // Own the identity key so the retry closure (Fn, invoked once per
+        // attempt) can hand a borrow to each attempt's future without tying the
+        // closure to the caller's borrow lifetime (MIK-6784).
+        let identity_key = identity_key.map(str::to_string);
         let result = with_retry(&self.failsafe.retry_policy, &name, || {
             let transport = Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
             let extra_headers = extra_headers.to_vec();
+            let identity_key = identity_key.clone();
             async move {
                 transport
-                    .request_with_headers(&method, params, &extra_headers)
+                    .request_with_headers(&method, params, &extra_headers, identity_key.as_deref())
                     .await
             }
         })

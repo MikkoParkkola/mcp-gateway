@@ -410,6 +410,12 @@ pub(super) async fn backend_handler(
     // schema stay reachable; every other id-bearing request is guarded.
     let isolation_guarded = !matches!(method.as_str(), "initialize" | "tools/list" | "ping")
         && !method.starts_with("notifications/");
+    // Caller's stable identity binding (MIK-6784) for per-identity upstream
+    // session partitioning on this direct route. Set only when a minting
+    // strategy resolves a binding; passthrough / no-identity keep `None` (shared
+    // default session bucket — passthrough forwards the caller's own credential
+    // inline and is gated to trusted internals).
+    let mut identity_key: Option<String> = None;
     let propagated_headers: Vec<(String, String)> = if isolation_guarded {
         // Fetched once so both the passthrough-vs-minting branch below and the
         // audit write (MIK-6740) share a single lookup/clone of the backend's
@@ -434,11 +440,18 @@ pub(super) async fn backend_handler(
                 backend.transport_carries_identity_headers(),
             )
         } else {
-            state
+            match state
                 .meta_mcp
-                .resolve_propagation_headers(&name, verified_identity.as_ref())
+                .resolve_propagation_credential(&name, verified_identity.as_ref())
                 .await
-                .map_err(|e| e.to_string())
+            {
+                Ok((headers, binding)) => {
+                    // Bind the upstream session bucket to this caller (MIK-6784).
+                    identity_key = binding;
+                    Ok(headers)
+                }
+                Err(e) => Err(e.to_string()),
+            }
         };
         let subject = audit_subject(verified_identity.as_ref());
         let audience = idp_cfg.as_ref().map(|c| c.audience.as_str());
@@ -518,11 +531,16 @@ pub(super) async fn backend_handler(
         ) {
             Some(Ok(Some(sanitized_params))) => {
                 // Forward the sanitized params to the backend
-                let forward = if propagated_headers.is_empty() {
+                let forward = if propagated_headers.is_empty() && identity_key.is_none() {
                     backend.request(&method, Some(sanitized_params)).await
                 } else {
                     backend
-                        .request_with_headers(&method, Some(sanitized_params), &propagated_headers)
+                        .request_with_headers(
+                            &method,
+                            Some(sanitized_params),
+                            &propagated_headers,
+                            identity_key.as_deref(),
+                        )
                         .await
                 };
                 return match forward {
@@ -552,11 +570,16 @@ pub(super) async fn backend_handler(
     }
 
     // Forward to backend
-    let forward = if propagated_headers.is_empty() {
+    let forward = if propagated_headers.is_empty() && identity_key.is_none() {
         backend.request(&method, params.clone()).await
     } else {
         backend
-            .request_with_headers(&method, params.clone(), &propagated_headers)
+            .request_with_headers(
+                &method,
+                params.clone(),
+                &propagated_headers,
+                identity_key.as_deref(),
+            )
             .await
     };
     match forward {

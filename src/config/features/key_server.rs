@@ -124,6 +124,39 @@ impl KeyServerConfig {
             }
         })
     }
+
+    /// Validate the key-server config at load time (MIK-6784, GW.4).
+    ///
+    /// A disabled key server is not validated (its providers are inert). When
+    /// enabled, every OIDC provider MUST declare a non-empty `audiences` list:
+    /// an empty list would accept a token minted for *any* client
+    /// (audience-confusion). The runtime verifier historically skipped the
+    /// `aud` check when `audiences` was empty, so the guard must live here — at
+    /// config load — to fail closed before any token is accepted. This mirrors
+    /// the non-empty-audience enforcement in
+    /// [`crate::identity_propagation::IdentityPropagationConfig::validate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigValidation`] for the first provider with an empty
+    /// (or whitespace-only) audience list.
+    pub fn validate(&self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        for (idx, provider) in self.oidc.iter().enumerate() {
+            let has_audience = provider.audiences.iter().any(|a| !a.trim().is_empty());
+            if !has_audience {
+                return Err(Error::ConfigValidation(format!(
+                    "key_server.oidc[{idx}] (issuer '{}') must declare at least one non-empty \
+                     audience; an empty `audiences` list accepts a token minted for any client \
+                     (audience-confusion, MIK-6784)",
+                    provider.issuer
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Configuration for a single OIDC identity provider.
@@ -145,7 +178,10 @@ pub struct KeyServerProviderConfig {
     /// legacy `{issuer}/.well-known/jwks.json` guess.
     #[serde(default = "default_auto_discover")]
     pub auto_discover: bool,
-    /// Expected audience values (`aud` claim). Empty = any audience accepted.
+    /// Expected audience values (`aud` claim). When the key server is enabled
+    /// this MUST be non-empty (enforced by [`KeyServerConfig::validate`],
+    /// MIK-6784): an empty list would accept a token minted for any client
+    /// (audience-confusion).
     #[serde(default)]
     pub audiences: Vec<String>,
     /// Restrict to these email domains. Empty = any domain accepted.
@@ -199,4 +235,87 @@ pub struct PolicyScopesConfig {
 pub struct KeyServerOidcConfig {
     /// Maximum age of an incoming OIDC token (seconds).
     pub max_token_age_secs: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(issuer: &str, audiences: Vec<&str>) -> KeyServerProviderConfig {
+        KeyServerProviderConfig {
+            issuer: issuer.to_string(),
+            jwks_uri: None,
+            discovery_url: None,
+            auto_discover: true,
+            audiences: audiences.into_iter().map(String::from).collect(),
+            allowed_domains: Vec::new(),
+        }
+    }
+
+    fn enabled_with(providers: Vec<KeyServerProviderConfig>) -> KeyServerConfig {
+        KeyServerConfig {
+            enabled: true,
+            oidc: providers,
+            ..KeyServerConfig::default()
+        }
+    }
+
+    /// GW.4: an enabled provider with a non-empty audience passes validation.
+    #[test]
+    fn validate_accepts_non_empty_audience() {
+        let cfg = enabled_with(vec![provider(
+            "https://accounts.google.com",
+            vec!["client-id"],
+        )]);
+        assert!(cfg.validate().is_ok());
+    }
+
+    /// GW.4: an enabled provider with an empty audience list is rejected at load
+    /// (audience-confusion fail-closed).
+    #[test]
+    fn validate_rejects_empty_audience_list() {
+        let cfg = enabled_with(vec![provider("https://issuer.example", vec![])]);
+        let err = cfg
+            .validate()
+            .expect_err("empty audiences must fail closed");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("audience"),
+            "message names the audience gap: {msg}"
+        );
+        assert!(
+            msg.contains("issuer.example"),
+            "message names the offending issuer: {msg}"
+        );
+    }
+
+    /// GW.4: a whitespace-only audience is not a real audience — still rejected.
+    #[test]
+    fn validate_rejects_whitespace_only_audience() {
+        let cfg = enabled_with(vec![provider("https://issuer.example", vec!["   "])]);
+        assert!(cfg.validate().is_err());
+    }
+
+    /// GW.4: the second provider's empty audience is caught even when the first
+    /// is valid.
+    #[test]
+    fn validate_rejects_when_any_provider_lacks_audience() {
+        let cfg = enabled_with(vec![
+            provider("https://good.example", vec!["aud"]),
+            provider("https://bad.example", vec![]),
+        ]);
+        let err = cfg.validate().expect_err("any bad provider must fail");
+        assert!(err.to_string().contains("bad.example"));
+    }
+
+    /// A disabled key server is inert: its providers are never validated.
+    #[test]
+    fn validate_skips_disabled_key_server() {
+        let cfg = KeyServerConfig {
+            enabled: false,
+            oidc: vec![provider("https://issuer.example", vec![])],
+            ..KeyServerConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
 }
