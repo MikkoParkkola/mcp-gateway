@@ -70,5 +70,11 @@ backends:
       audience: "https://mail-svc.internal"
       required: true               # fail closed: no identity -> refuse, never a static fallback
       session_mode: stateless
+      # NOTE: the production token-exchange HTTP client is HTTPS-only, so a real
+      # deployment MUST point this at an https:// endpoint, for example:
+      #   token_exchange_endpoint: "https://sts.company.com/auth/token"
+      # The http://127.0.0.1 URL below is refused by a normally started gateway.
+      # It only works against the in-process integration-test harness, which
+      # injects a plain-HTTP client via TokenExchangeStrategy::with_http_client.
       token_exchange_endpoint: "http://127.0.0.1:39400/auth/token"
       token_exchange_scope: "backends:mail-svc tools:mail_read"
