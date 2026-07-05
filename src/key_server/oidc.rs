@@ -225,6 +225,24 @@ impl JwksCache {
         }
     }
 
+    /// Test-only constructor injecting a custom HTTP client.
+    ///
+    /// Lets an in-process integration test point the JWKS fetch at a
+    /// self-signed-certificate test server (e.g. the gateway's own
+    /// `/auth/token` handler under test, MIK-6729) without weakening the
+    /// production `https_only(true)` default client built by [`Self::new`].
+    /// Compiled out of non-test builds entirely — there is no way to reach
+    /// this constructor from production code.
+    #[cfg(test)]
+    pub(crate) fn with_http_client(http: reqwest::Client) -> Self {
+        Self {
+            inner: DashMap::new(),
+            discovery: DashMap::new(),
+            http,
+            ttl: Duration::from_secs(3600),
+        }
+    }
+
     /// Resolve the `jwks_uri` for `issuer` from its OIDC discovery document
     /// (`discovery_url`, conventionally `{issuer}/.well-known/openid-configuration`).
     ///
@@ -313,6 +331,19 @@ impl OidcVerifier {
         Self {
             providers,
             jwks_cache: Arc::new(JwksCache::new()),
+        }
+    }
+
+    /// Test-only constructor injecting a custom HTTP client into the JWKS
+    /// cache. See [`JwksCache::with_http_client`] — same MIK-6729 rationale.
+    #[cfg(test)]
+    pub(crate) fn with_http_client(
+        providers: Vec<KeyServerProviderConfig>,
+        http: reqwest::Client,
+    ) -> Self {
+        Self {
+            providers,
+            jwks_cache: Arc::new(JwksCache::with_http_client(http)),
         }
     }
 

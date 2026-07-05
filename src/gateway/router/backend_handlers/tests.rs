@@ -19,6 +19,8 @@ mod passthrough {
             audience: "https://backend".to_string(),
             required,
             session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         }
     }
 
@@ -264,6 +266,8 @@ mod identity_propagation_audit {
             audience: audience.to_string(),
             required: true,
             session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         };
         let mut inbound = HeaderMap::new();
         inbound.insert(

@@ -12,14 +12,15 @@
 //!
 //! ## Token Exchange
 //!
-//! Request body follows [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693) Token Exchange:
+//! Request body follows [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693) Token
+//! Exchange, which inherits the OAuth 2.0 token endpoint's
+//! `application/x-www-form-urlencoded` encoding
+//! ([RFC 6749 §4.1.3](https://www.rfc-editor.org/rfc/rfc6749#section-4.1.3)), not JSON:
 //!
-//! ```json
-//! {
-//!   "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-//!   "subject_token": "<OIDC ID Token JWT>",
-//!   "subject_token_type": "urn:ietf:params:oauth:token-type:id_token"
-//! }
+//! ```text
+//! grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange
+//! &subject_token=<OIDC ID Token JWT>
+//! &subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aid_token
 //! ```
 //!
 //! ## Admin Authentication
@@ -35,7 +36,7 @@ use std::{
 };
 
 use axum::{
-    Json, Router,
+    Form, Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -128,7 +129,7 @@ pub struct RevokeBySubjectQuery {
 pub fn key_server_routes(key_server: Arc<KeyServer>) -> Router {
     Router::new()
         .route("/auth/token", post(exchange_token))
-        .route("/auth/token/:jti", delete(revoke_token))
+        .route("/auth/token/{jti}", delete(revoke_token))
         .route("/auth/tokens", delete(revoke_tokens_by_subject))
         .with_state(key_server)
 }
@@ -151,10 +152,14 @@ fn extract_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
 }
 
 /// `POST /auth/token` — Exchange an OIDC identity token for a temporary gateway token.
+///
+/// Accepts `application/x-www-form-urlencoded` per RFC 8693 / RFC 6749 §4.1.3 —
+/// see the module docs. `axum::extract::Form` rejects any other content type
+/// with `415 Unsupported Media Type` before this handler body runs.
 async fn exchange_token(
     State(ks): State<Arc<KeyServer>>,
     headers: HeaderMap,
-    Json(body): Json<TokenExchangeRequest>,
+    Form(body): Form<TokenExchangeRequest>,
 ) -> impl IntoResponse {
     // Items must be outside statement blocks to satisfy clippy::items_after_statements
     let client_ip: Option<IpAddr> = extract_client_ip(&headers);

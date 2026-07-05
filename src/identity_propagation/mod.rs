@@ -44,14 +44,28 @@ use serde::{Deserialize, Serialize};
 use crate::gateway::oauth::GatewayKeyPair;
 use crate::key_server::oidc::VerifiedIdentity;
 
+mod token_exchange;
+pub use token_exchange::TokenExchangeStrategy;
+
+#[cfg(test)]
+mod token_exchange_live_tests;
+
 /// A backend an identity credential is being minted for.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BackendDescriptor {
     /// Stable backend id (matches the gateway backend registry key).
     pub id: String,
     /// The audience the credential must be scoped to (the backend's expected
-    /// `aud`). Distinct backends MUST have distinct audiences for IDP.3.
+    /// `aud`). Distinct backends MUST have distinct audiences for IDP.3. Also
+    /// used as the RFC 8693 `resource` for [`TokenExchangeStrategy`]
+    /// (MIK-6729): one field serves both roles since a token-exchange
+    /// downstream token is scoped to the same backend the assertion would be.
     pub audience: String,
+    /// RFC 8693 token-exchange endpoint (MIK-6729). `None` unless the backend
+    /// is configured for [`PropagationStrategyKind::TokenExchange`].
+    pub token_exchange_endpoint: Option<String>,
+    /// Optional RFC 8693 `scope` to request from the token-exchange endpoint.
+    pub token_exchange_scope: Option<String>,
 }
 
 /// A per-user credential to present to a backend, plus the metadata caches and
@@ -193,6 +207,13 @@ pub struct IdentityPropagationConfig {
     pub required: bool,
     /// The backend's MCP-session isolation contract (IDP.7).
     pub session_mode: SessionMode,
+    /// RFC 8693 token-exchange endpoint URL. Required when `strategy` is
+    /// [`PropagationStrategyKind::TokenExchange`] (MIK-6729); ignored otherwise.
+    #[serde(default)]
+    pub token_exchange_endpoint: Option<String>,
+    /// Optional RFC 8693 `scope` requested from the token-exchange endpoint.
+    #[serde(default)]
+    pub token_exchange_scope: Option<String>,
 }
 
 impl IdentityPropagationConfig {
@@ -203,7 +224,11 @@ impl IdentityPropagationConfig {
     /// Returns [`PropagationError::Misconfigured`] when:
     /// - the audience is empty (a credential with no audience defeats IDP.3);
     /// - the strategy is one not yet implemented in this build (fail-closed,
-    ///   never silently skip propagation for a required backend).
+    ///   never silently skip propagation for a required backend);
+    /// - the strategy is `token_exchange` and `token_exchange_endpoint` is
+    ///   absent or empty (MIK-6729) — this is checked unconditionally, not
+    ///   only when `required`, since a `token_exchange` entry with no
+    ///   endpoint can never mint anything and is never a valid config.
     ///
     /// Note IDP.7: a `required` backend is only accepted with an explicit
     /// [`SessionMode`]; there is no implicit shared-session default, so a
@@ -214,13 +239,28 @@ impl IdentityPropagationConfig {
                 "identity_propagation.audience must be non-empty (IDP.3)".to_string(),
             ));
         }
-        // Only signed-assertion and passthrough are implemented; a required
-        // backend configured for an unimplemented strategy must fail closed, not
-        // silently run without propagation.
+        if self.strategy == PropagationStrategyKind::TokenExchange
+            && self
+                .token_exchange_endpoint
+                .as_deref()
+                .is_none_or(|e| e.trim().is_empty())
+        {
+            return Err(PropagationError::Misconfigured(
+                "strategy token_exchange requires a non-empty token_exchange_endpoint \
+                 (MIK-6729)"
+                    .to_string(),
+            ));
+        }
+        // Only signed-assertion, passthrough, and token-exchange are
+        // implemented; a required backend configured for an unimplemented
+        // strategy (vault) must fail closed, not silently run without
+        // propagation.
         if self.required
             && !matches!(
                 self.strategy,
-                PropagationStrategyKind::SignedAssertion | PropagationStrategyKind::Passthrough
+                PropagationStrategyKind::SignedAssertion
+                    | PropagationStrategyKind::Passthrough
+                    | PropagationStrategyKind::TokenExchange
             )
         {
             return Err(PropagationError::Misconfigured(format!(
@@ -299,6 +339,65 @@ impl SignedAssertionStrategy {
     fn now_secs() -> i64 {
         chrono::Utc::now().timestamp()
     }
+
+    /// Mint a short-lived gateway-signed identity assertion for `identity`,
+    /// scoped to `audience`. Returns `(token, exp)`.
+    ///
+    /// Shared by [`Self::propagate`] (the assertion IS the backend credential)
+    /// and by [`TokenExchangeStrategy`] (MIK-6729), which presents this same
+    /// assertion as the RFC 8693 `subject_token` at a token-exchange
+    /// endpoint — one minting implementation, two consumers, no crypto
+    /// duplication.
+    ///
+    /// # Errors
+    /// [`PropagationError::Refuse`] if the gateway signing key cannot be used
+    /// or JWT encoding fails.
+    fn mint(
+        &self,
+        identity: &VerifiedIdentity,
+        audience: &str,
+    ) -> Result<(String, i64), PropagationError> {
+        let now = Self::now_secs();
+        let exp = now + self.ttl_secs;
+        let claims = AssertionClaims {
+            sub: identity.subject.clone(),
+            email: identity.email.clone(),
+            iss: Self::ISSUER.to_string(),
+            aud: audience.to_string(),
+            tenant: identity.issuer.clone(),
+            groups: identity.groups.clone(),
+            iat: now,
+            nbf: now,
+            exp,
+            jti: uuid::Uuid::new_v4().to_string(),
+        };
+        let token = sign_es256_jwt(&self.key, &claims)?;
+        Ok((token, exp))
+    }
+}
+
+/// Sign `claims` as an ES256 JWT using the gateway's own signing key.
+///
+/// Shared by [`SignedAssertionStrategy`] (end-user identity assertions) and
+/// [`TokenExchangeStrategy`] (RFC 7523 `private_key_jwt` client assertions,
+/// MIK-6729) — one signing code path, never duplicated.
+///
+/// # Errors
+/// [`PropagationError::Refuse`] if the gateway signing key is unusable or
+/// encoding fails.
+fn sign_es256_jwt<T: Serialize>(
+    key: &GatewayKeyPair,
+    claims: &T,
+) -> Result<String, PropagationError> {
+    use jsonwebtoken::{Algorithm, EncodingKey, Header};
+
+    let key_info = key.key_info();
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some(key_info.kid.clone());
+    let encoding = EncodingKey::from_ec_pem(key_info.private_key_pem.as_bytes())
+        .map_err(|e| PropagationError::Refuse(format!("gateway signing key unusable: {e}")))?;
+    jsonwebtoken::encode(&header, claims, &encoding)
+        .map_err(|e| PropagationError::Refuse(format!("JWT signing failed: {e}")))
 }
 
 #[async_trait::async_trait]
@@ -308,8 +407,6 @@ impl IdentityPropagation for SignedAssertionStrategy {
         identity: &VerifiedIdentity,
         backend: &BackendDescriptor,
     ) -> Result<PropagatedCredential, PropagationError> {
-        use jsonwebtoken::{Algorithm, EncodingKey, Header};
-
         if backend.audience.trim().is_empty() {
             return Err(PropagationError::Misconfigured(
                 "backend audience is empty (IDP.3)".to_string(),
@@ -317,28 +414,7 @@ impl IdentityPropagation for SignedAssertionStrategy {
         }
 
         let subject_key = identity.stable_actor_id();
-        let now = Self::now_secs();
-        let exp = now + self.ttl_secs;
-        let claims = AssertionClaims {
-            sub: identity.subject.clone(),
-            email: identity.email.clone(),
-            iss: Self::ISSUER.to_string(),
-            aud: backend.audience.clone(),
-            tenant: identity.issuer.clone(),
-            groups: identity.groups.clone(),
-            iat: now,
-            nbf: now,
-            exp,
-            jti: uuid::Uuid::new_v4().to_string(),
-        };
-
-        let key_info = self.key.key_info();
-        let mut header = Header::new(Algorithm::ES256);
-        header.kid = Some(key_info.kid.clone());
-        let encoding = EncodingKey::from_ec_pem(key_info.private_key_pem.as_bytes())
-            .map_err(|e| PropagationError::Refuse(format!("gateway signing key unusable: {e}")))?;
-        let token = jsonwebtoken::encode(&header, &claims, &encoding)
-            .map_err(|e| PropagationError::Refuse(format!("assertion signing failed: {e}")))?;
+        let (token, exp) = self.mint(identity, &backend.audience)?;
 
         Ok(PropagatedCredential {
             headers: vec![("Authorization".to_string(), format!("Bearer {token}"))],
@@ -529,6 +605,7 @@ mod tests {
         BackendDescriptor {
             id: "memory".to_string(),
             audience: "https://memory.internal".to_string(),
+            ..Default::default()
         }
     }
 
@@ -608,6 +685,7 @@ mod tests {
         let bad = BackendDescriptor {
             id: "x".to_string(),
             audience: "  ".to_string(),
+            ..Default::default()
         };
         assert!(matches!(
             s.propagate(&identity("a", "https://idp"), &bad).await,
@@ -624,18 +702,46 @@ mod tests {
             audience: String::new(),
             required: true,
             session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         };
         assert!(cfg.validate().is_err());
 
-        // A required backend on an unimplemented strategy is rejected (no silent
-        // downgrade).
+        // A required backend on an unimplemented strategy (vault) is rejected
+        // (no silent downgrade).
+        let cfg = IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::Vault,
+            audience: "https://mail".to_string(),
+            required: true,
+            session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        };
+        assert!(cfg.validate().is_err());
+
+        // A required backend on strategy token_exchange with no
+        // token_exchange_endpoint is rejected — the endpoint check runs
+        // unconditionally, not only for `required` backends (MIK-6729).
         let cfg = IdentityPropagationConfig {
             strategy: PropagationStrategyKind::TokenExchange,
             audience: "https://mail".to_string(),
             required: true,
             session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         };
         assert!(cfg.validate().is_err());
+
+        // A properly-configured token_exchange backend passes (MIK-6729).
+        let cfg = IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::TokenExchange,
+            audience: "https://mail".to_string(),
+            required: true,
+            session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: Some("https://idp.internal/token".to_string()),
+            token_exchange_scope: Some("mail.read".to_string()),
+        };
+        assert!(cfg.validate().is_ok());
 
         // A valid signed-assertion config passes.
         let cfg = IdentityPropagationConfig {
@@ -643,6 +749,8 @@ mod tests {
             audience: "https://mem".to_string(),
             required: true,
             session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         };
         assert!(cfg.validate().is_ok());
     }

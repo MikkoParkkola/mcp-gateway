@@ -1452,6 +1452,8 @@ impl MetaMcp {
         let descriptor = BackendDescriptor {
             id: server.to_string(),
             audience: idp_cfg.audience.clone(),
+            token_exchange_endpoint: idp_cfg.token_exchange_endpoint.clone(),
+            token_exchange_scope: idp_cfg.token_exchange_scope.clone(),
         };
         match strategy.propagate(identity, &descriptor).await {
             Ok(cred) => {
@@ -2649,6 +2651,8 @@ mod identity_propagation_enforcement_tests {
             audience: "https://memory.internal".to_string(),
             required,
             session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
         }
     }
 
