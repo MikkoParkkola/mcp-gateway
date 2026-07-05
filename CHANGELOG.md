@@ -20,6 +20,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fail-loud so a missing intended config can never silently start with
   authentication disabled.
 
+## [3.1.0] - 2026-07-05
+
+### Added
+
+- **RFC 8693 token-exchange identity propagation** (MIK-6729). A backend can
+  opt in per backend with `strategy: token_exchange`. The gateway exchanges a
+  gateway-signed subject assertion for a scoped downstream token at the
+  backend's token-exchange endpoint, then injects that token on the call. The
+  gateway stores no credential. Exchanged tokens live in process memory keyed
+  by subject and audience with per-entry expiry, and the client assertion is
+  minted fresh for each call. The strategy stays dormant until a backend opts
+  in.
+
+### Fixed
+
+- **`/auth/token` now uses standard OAuth form-encoding.** The key server's
+  `POST /auth/token` endpoint accepted a JSON request body. The key server is
+  disabled by default, and this endpoint is opt-in; even so, the JSON body
+  did not match RFC 8693 / RFC 6749 §4.1.3, which specify
+  `application/x-www-form-urlencoded`. Off-the-shelf OAuth clients already
+  send form-encoded requests, so this aligns a dormant, opt-in endpoint with
+  the standard. A JSON body now gets HTTP 415 Unsupported Media Type.
+
 ## [3.0.2] - 2026-07-05
 
 ### Fixed
@@ -47,29 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compromised CDN could serve altered JavaScript. The script tag now carries a
   SHA-384 SRI hash and `crossorigin=anonymous`. The web UI is opt-in and
   normally localhost-bound, so severity is low.
-
-## [3.1.0] - 2026-07-05
-
-### Added
-
-- **RFC 8693 token-exchange identity propagation** (MIK-6729). A backend can
-  opt in per backend with `strategy: token_exchange`. The gateway exchanges a
-  gateway-signed subject assertion for a scoped downstream token at the
-  backend's token-exchange endpoint, then injects that token on the call. The
-  gateway stores no credential. Exchanged tokens live in process memory keyed
-  by subject and audience with per-entry expiry, and the client assertion is
-  minted fresh for each call. The strategy stays dormant until a backend opts
-  in.
-
-### Fixed
-
-- **`/auth/token` now uses standard OAuth form-encoding.** The key server's
-  `POST /auth/token` endpoint accepted a JSON request body. The key server is
-  disabled by default, and this endpoint is opt-in; even so, the JSON body
-  did not match RFC 8693 / RFC 6749 §4.1.3, which specify
-  `application/x-www-form-urlencoded`. Off-the-shelf OAuth clients already
-  send form-encoded requests, so this aligns a dormant, opt-in endpoint with
-  the standard. A JSON body now gets HTTP 415 Unsupported Media Type.
 
 ## [3.0.1] - 2026-07-03
 
