@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file either; it now scans backward from the last 4 MiB to find the final
   complete line, so recovery time no longer scales with total log size.
   Hash-chain verification logic is unchanged.
+- **Pinned the admin-UI htmx CDN script with Subresource Integrity.** The
+  bundled web UI loaded htmx from unpkg with no integrity attribute, so a
+  compromised CDN could serve altered JavaScript. The script tag now carries a
+  SHA-384 SRI hash and `crossorigin=anonymous`. The web UI is opt-in and
+  normally localhost-bound, so severity is low.
 
 ## [3.0.1] - 2026-07-03
 
