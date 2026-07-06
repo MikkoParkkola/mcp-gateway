@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-Hardening from a pre-release security audit. Three independent findings, no
+Hardening from a pre-release security audit. Four independent findings, no
 externally observed exploitation.
 
 - **Bearer token and API key comparison is now constant-time (CWE-208).** The
@@ -37,6 +37,14 @@ externally observed exploitation.
   `TokenInfo` exposed live credentials. `Debug` is now a manual impl that
   redacts the three secret fields while preserving the non-sensitive fields for
   diagnostics.
+
+- **`OpenApiConverter::convert_url` now validates its target against the SSRF
+  deny list before fetching.** Converting an OpenAPI spec from a URL fetched
+  the address with no private/reserved/loopback check, while every other
+  capability fetch path (jsonrpc, graphql, executor, discovery, transport)
+  already gated on `validate_url_not_ssrf`. A spec URL supplied on the CLI is
+  untrusted input, so the converter now runs the same guard unconditionally,
+  rejecting link-local, private, and loopback targets before any request.
 
 
 ## [3.1.2] - 2026-07-06
