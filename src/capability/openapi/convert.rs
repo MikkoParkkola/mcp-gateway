@@ -10,7 +10,7 @@ use std::fs;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use crate::security::ssrf::{PinningResolver, SystemResolver};
+use crate::security::ssrf::{PinningResolver, RedirectDecision, SystemResolver, redirect_decision};
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
@@ -22,36 +22,6 @@ use super::model::{
 };
 use super::refs::{resolve_parameter, resolve_request_body, resolve_schema_refs};
 use super::sanitize::{sanitize_description, yaml_scalar};
-
-/// Maximum number of redirect hops followed before the fetch is abandoned.
-const MAX_REDIRECT_HOPS: usize = 5;
-
-/// Decision for a single redirect hop, extracted from the `convert_url`
-/// redirect policy so its fail-closed behavior is directly unit-testable
-/// without standing up a live server (the initial-URL SSRF guard rejects any
-/// loopback test target before a redirect could ever fire).
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RedirectDecision {
-    /// Too many hops — stop following (treated as a non-redirect response).
-    Stop,
-    /// Next hop targets an SSRF-blocked address — abort with this message.
-    Block(String),
-    /// Next hop is safe — follow it.
-    Follow,
-}
-
-/// Decide whether a redirect hop to `next_url` may be followed. Re-validates
-/// every hop against the SSRF deny list so a public URL cannot redirect into
-/// an internal address (DNS-rebinding / open-redirect SSRF).
-pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> RedirectDecision {
-    if previous_hops >= MAX_REDIRECT_HOPS {
-        return RedirectDecision::Stop;
-    }
-    match validate_url_not_ssrf(next_url) {
-        Err(e) => RedirectDecision::Block(e.to_string()),
-        Ok(()) => RedirectDecision::Follow,
-    }
-}
 
 /// `OpenAPI` to Capability converter
 pub struct OpenApiConverter {
