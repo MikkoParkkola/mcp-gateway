@@ -45,6 +45,13 @@ externally observed exploitation.
   already gated on `validate_url_not_ssrf`. A spec URL supplied on the CLI is
   untrusted input, so the converter now runs the same guard unconditionally,
   rejecting link-local, private, and loopback targets before any request.
+  Beyond the literal pre-check, both `convert_url` and the OpenAPI import HTTP
+  endpoint (`POST /ui/api/import/openapi`, admin-only, `fetch_spec`) now build
+  their reqwest client with `PinningResolver` (validates every resolved IP,
+  closing the DNS-rebinding TOCTOU window) and a redirect policy that
+  re-validates each hop and stops at >=5 redirects, so a hostname that resolves
+  to — or 3xx-redirects into — an internal address is rejected. On the UI
+  endpoint these guards stay gated on the operator's `ssrf_protection` flag.
 
 
 ## [3.1.2] - 2026-07-06
