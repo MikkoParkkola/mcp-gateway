@@ -23,6 +23,8 @@ use super::super::router::AppState;
 use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
+use crate::security::ssrf::{PinningResolver, SystemResolver};
+use crate::security::validate_url_not_ssrf;
 
 // ── Request / response types ────────────────────────────────────────
 
@@ -241,7 +243,7 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
 
     // SSRF protection when enabled.
     if ssrf_protection {
-        crate::security::ssrf::validate_url_not_ssrf(url).map_err(|e| {
+        validate_url_not_ssrf(url).map_err(|e| {
             (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("SSRF protection blocked URL: {e}"),
@@ -249,17 +251,38 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
         })?;
     }
 
-    // Fetch the spec content.
-    let client = reqwest::Client::builder()
+    // Fetch the spec content. The literal pre-check above fails fast on obvious
+    // IP targets, but it is NOT sufficient on its own: a hostname can resolve to
+    // a private address (DNS rebinding) or a public URL can 3xx-redirect into an
+    // internal one. When SSRF protection is enabled we therefore also pin DNS
+    // resolution (PinningResolver validates every resolved IP, closing the
+    // rebinding TOCTOU window — MIK-4019) and re-validate every redirect hop,
+    // stopping at >=5 hops. This mirrors the canonical fetch path in
+    // `capability::executor::build_http_client` and `openapi::convert_url`. The
+    // guards stay gated on `ssrf_protection` so an operator may deliberately
+    // disable them for trusted internal specs.
+    let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent("mcp-gateway/openapi-importer")
-        .build()
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to build HTTP client: {e}"),
-            )
-        })?;
+        .user_agent("mcp-gateway/openapi-importer");
+    if ssrf_protection {
+        builder = builder
+            .dns_resolver(PinningResolver::new(SystemResolver))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 {
+                    return attempt.stop();
+                }
+                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
+                    return attempt.error(e.to_string());
+                }
+                attempt.follow()
+            }));
+    }
+    let client = builder.build().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to build HTTP client: {e}"),
+        )
+    })?;
 
     let resp = client.get(url).send().await.map_err(|e| {
         (
@@ -520,5 +543,46 @@ paths:
 
         assert_eq!(imported, vec!["listpets"]);
         assert_eq!(skipped, vec!["getpet"]);
+    }
+
+    // ── fetch_spec SSRF gating (reviewer finding #4) ────────────────
+    //
+    // These cover the *literal pre-check* branch of `fetch_spec` network-free.
+    // The DNS-rebinding (PinningResolver) and redirect-hop guards cannot be
+    // exercised without a live resolver/HTTP server, so they are validated by
+    // the `ssrf.rs` unit tests `pinning_loopback_rebinding_blocked` and
+    // `pinning_public_domain_passes` (src/security/ssrf.rs) rather than
+    // duplicated here — adding a networked variant would be flaky.
+    // ponytail: rebinding/redirect coverage lives in ssrf.rs, not re-tested here.
+
+    #[tokio::test]
+    async fn fetch_spec_blocks_ip_literal_metadata_target_when_protected() {
+        // GIVEN the AWS/GCP link-local metadata endpoint by IP literal
+        // WHEN fetch_spec runs with ssrf_protection enabled
+        // THEN it is rejected by the literal pre-check before any outbound I/O
+        let (status, msg) = fetch_spec("http://169.254.169.254/latest/meta-data/", true)
+            .await
+            .expect_err("metadata IP literal must be blocked");
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            msg.contains("SSRF"),
+            "error should attribute the block to SSRF protection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn ssrf_pre_check_predicate_is_the_config_gated_guard() {
+        // Documents config-gate semantics network-free. `fetch_spec` invokes
+        // exactly this predicate, and ONLY inside `if ssrf_protection`. When the
+        // operator disables protection they opt out of this rejection for
+        // trusted internal specs, so a fetch(url, false) is deliberately NOT
+        // pre-check-rejected. Asserting the predicate directly avoids a flaky
+        // network round-trip that a `fetch_spec(_, false)` call would incur
+        // (fetch_spec has no early return past the pre-check).
+        assert!(
+            validate_url_not_ssrf("http://169.254.169.254/latest/meta-data/").is_err(),
+            "the metadata IP literal must fail the SSRF predicate the gate toggles"
+        );
     }
 }

@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
+use crate::security::ssrf::{PinningResolver, SystemResolver};
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
@@ -413,10 +414,13 @@ impl OpenApiConverter {
 
         // SSRF guard: reject private/reserved/loopback targets before any
         // outbound fetch, matching every other capability fetch path
-        // (jsonrpc, graphql, executor, discovery, transport). Validated
-        // unconditionally because convert_url carries no AppState/config —
-        // a spec URL supplied on the CLI is untrusted input regardless of the
-        // proxy-time toggle.
+        // (jsonrpc, graphql, executor, discovery, transport). The literal-URL
+        // pre-check fails fast on obvious IP targets; the client below then
+        // uses PinningResolver (validates every resolved IP, closing the
+        // DNS-rebinding window, MIK-4019) and a redirect policy that re-checks
+        // each hop, so a public URL cannot redirect into an internal address.
+        // Validated unconditionally because convert_url carries no
+        // AppState/config — a CLI-supplied spec URL is untrusted input.
         validate_url_not_ssrf(url)?;
 
         // Capture the host:port so relative `servers` blocks produce a
@@ -432,6 +436,16 @@ impl OpenApiConverter {
 
         let response = reqwest::Client::builder()
             .user_agent(format!("mcp-gateway/{}", env!("CARGO_PKG_VERSION")))
+            .dns_resolver(PinningResolver::new(SystemResolver))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 {
+                    return attempt.stop();
+                }
+                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
+                    return attempt.error(e.to_string());
+                }
+                attempt.follow()
+            }))
             .build()
             .map_err(|e| Error::Config(format!("Failed to build HTTP client: {e}")))?
             .get(url)
