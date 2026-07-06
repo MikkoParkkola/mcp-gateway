@@ -276,6 +276,17 @@ pub struct MetaMcp {
     /// suspicious results receive `_context_integrity` audit metadata before
     /// response caching, idempotency completion, signing, and delivery.
     pub(super) context_integrity_kernel: RwLock<ContextIntegrityKernel>,
+
+    /// Security firewall used to scan aggregated tool-list / search responses
+    /// (OWASP ASI01 tool-poisoning defense, MIK security-audit v3.1.3).
+    ///
+    /// `Some` mirrors the same `Arc<Firewall>` held by `AppState`, so the
+    /// Meta-MCP discovery surface (`gateway_list_tools` / `gateway_search_tools`)
+    /// scans and redacts backend-supplied tool descriptions with the exact
+    /// config as the direct `tools/call` path. `None` (the default, and the
+    /// stdio path) disables scanning — a zero-cost no-op on the hot path.
+    #[cfg(feature = "firewall")]
+    pub(super) firewall: Option<Arc<crate::security::firewall::Firewall>>,
 }
 
 // ============================================================================
@@ -335,6 +346,8 @@ impl MetaMcp {
             identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
             caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
+            #[cfg(feature = "firewall")]
+            firewall: None,
         }
     }
 
@@ -526,6 +539,48 @@ impl MetaMcp {
     pub fn set_response_contract(&mut self, config: crate::config::ResponseContractConfig) {
         self.response_contract = Some(Arc::new(config));
     }
+
+    /// Attach the security firewall used to scan aggregated tool-list / search
+    /// responses (OWASP ASI01 tool-poisoning defense).
+    ///
+    /// Wired at startup from the same `Arc<Firewall>` held by `AppState`, so
+    /// the discovery surface and the direct `tools/call` path share one config.
+    #[cfg(feature = "firewall")]
+    pub fn set_firewall(&mut self, firewall: Option<Arc<crate::security::firewall::Firewall>>) {
+        self.firewall = firewall;
+    }
+
+    /// Firewall-scan an aggregated tool-list / search response value in place
+    /// (OWASP ASI01 tool-poisoning). Backend-supplied `description` strings are
+    /// scanned for prompt injection and have embedded credentials redacted
+    /// before the discovery response reaches the client.
+    ///
+    /// No-op when the firewall is absent or response scanning is disabled — the
+    /// same gate the `tools/call` path uses ([`Firewall::check_response`]
+    /// short-circuits), so behavior is unchanged when the feature/config is off.
+    #[cfg(feature = "firewall")]
+    pub(super) fn scan_tool_list_value(&self, value: &mut serde_json::Value) {
+        let Some(ref fw) = self.firewall else {
+            return;
+        };
+        let verdict = fw.check_response(
+            "meta:tools/list",
+            "meta-mcp",
+            "tools/list",
+            value,
+            "meta-mcp",
+        );
+        if verdict.action == crate::security::firewall::FirewallAction::Warn {
+            tracing::warn!(
+                findings = verdict.findings.len(),
+                "Firewall: meta tools/list response warning"
+            );
+        }
+    }
+
+    /// No-op tool-list scan when the `firewall` feature is disabled.
+    #[cfg(not(feature = "firewall"))]
+    pub(super) fn scan_tool_list_value(&self, _value: &mut serde_json::Value) {}
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {

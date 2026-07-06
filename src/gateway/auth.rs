@@ -190,9 +190,13 @@ impl ResolvedAuthConfig {
     /// Validate a token and return the client info if valid
     #[must_use]
     pub fn validate_token(&self, token: &str) -> Option<AuthenticatedClient> {
-        // Check bearer token first
+        use subtle::ConstantTimeEq;
+
+        // Check bearer token first. Constant-time comparison prevents a timing
+        // side-channel (CWE-208) on the primary auth path — every request,
+        // including the admin bearer token, is validated here.
         if let Some(ref bearer) = self.bearer_token
-            && token == bearer
+            && token.as_bytes().ct_eq(bearer.as_bytes()).into()
         {
             return Some(AuthenticatedClient {
                 name: "bearer".to_string(),
@@ -204,9 +208,9 @@ impl ResolvedAuthConfig {
             });
         }
 
-        // Check API keys
+        // Check API keys (constant-time to avoid a per-key timing oracle).
         for key in &self.api_keys {
-            if token == key.key {
+            if token.as_bytes().ct_eq(key.key.as_bytes()).into() {
                 return Some(AuthenticatedClient {
                     name: key.name.clone(),
                     rate_limit: key.rate_limit,
@@ -654,6 +658,59 @@ mod tests {
         assert!(client.is_some());
         assert_eq!(client.unwrap().name, "bearer");
         assert!(config.validate_token("wrong").is_none());
+    }
+
+    #[test]
+    fn constant_time_token_comparison_accepts_correct_rejects_wrong() {
+        // CWE-208: `validate_token` compares bearer + API keys with
+        // `subtle::ConstantTimeEq`. Timing cannot be asserted in a unit test,
+        // so this pins the *functional* contract the constant-time path must
+        // preserve: exact match authenticates; any mismatch (wrong value,
+        // length mismatch, empty) is rejected.
+        let config = ResolvedAuthConfig {
+            enabled: true,
+            bearer_token: Some("bearer-EXACT".to_string()),
+            api_keys: vec![ResolvedApiKey {
+                key: "apikey-EXACT".to_string(),
+                name: "client-ct".to_string(),
+                rate_limit: 10,
+                backends: vec![],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+            }],
+            public_paths: vec![],
+            rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
+        };
+
+        // Correct bearer authenticates as the admin "bearer" client.
+        let bearer = config.validate_token("bearer-EXACT").expect("bearer valid");
+        assert_eq!(bearer.name, "bearer");
+        assert!(bearer.admin);
+
+        // Correct API key authenticates as the named client.
+        let keyed = config
+            .validate_token("apikey-EXACT")
+            .expect("api key valid");
+        assert_eq!(keyed.name, "client-ct");
+        assert!(!keyed.admin);
+
+        // Mismatches are rejected: wrong value, length mismatch, empty, and a
+        // prefix of a valid secret (guards against non-constant-time shortcuts).
+        for wrong in [
+            "bearer-WRONG",
+            "apikey-WRONG",
+            "bearer-EXAC",
+            "",
+            "bearer-EXACTx",
+        ] {
+            assert!(
+                config.validate_token(wrong).is_none(),
+                "token {wrong:?} must not authenticate"
+            );
+        }
     }
 
     #[test]

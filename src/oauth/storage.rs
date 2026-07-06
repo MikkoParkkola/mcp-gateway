@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use crate::{Error, Result};
 
 /// OAuth token information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TokenInfo {
     /// Access token
     pub access_token: String,
@@ -49,6 +49,27 @@ pub struct TokenInfo {
 
 fn default_token_type() -> String {
     "Bearer".to_string()
+}
+
+// Manual `Debug` that redacts the bearer/refresh secrets and the client
+// secret. A derived `Debug` would print `access_token`, `refresh_token`, and
+// `client_secret` verbatim into any trace or error context — a full compromise
+// of the stored OAuth credential. Only non-secret metadata is shown; secret
+// presence is surfaced as a redaction marker so diagnostics stay useful.
+impl std::fmt::Debug for TokenInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("TokenInfo")
+            .field("access_token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .field("refresh_token", &redact_opt(&self.refresh_token))
+            .field("expires_at", &self.expires_at)
+            .field("scope", &self.scope)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &redact_opt(&self.client_secret))
+            .finish()
+    }
 }
 
 impl TokenInfo {
@@ -262,6 +283,41 @@ mod tests {
         let mut expired = token.clone();
         expired.expires_at = Some(0);
         assert!(expired.is_expired());
+    }
+
+    #[test]
+    fn debug_redacts_secret_fields() {
+        // The manual `Debug` impl must never leak the access token, refresh
+        // token, or client secret into logs / traces / error context.
+        let token = TokenInfo {
+            access_token: "ACCESS-SECRET-VALUE".to_string(),
+            token_type: "Bearer".to_string(),
+            refresh_token: Some("REFRESH-SECRET-VALUE".to_string()),
+            expires_at: Some(4_102_444_800),
+            scope: Some("read write".to_string()),
+            token_endpoint: Some("https://idp.example/token".to_string()),
+            client_id: Some("public-client-id".to_string()),
+            client_secret: Some("CLIENT-SECRET-VALUE".to_string()),
+        };
+
+        let dbg = format!("{token:?}");
+        for secret in [
+            "ACCESS-SECRET-VALUE",
+            "REFRESH-SECRET-VALUE",
+            "CLIENT-SECRET-VALUE",
+        ] {
+            assert!(!dbg.contains(secret), "Debug leaked secret {secret}: {dbg}");
+        }
+        assert!(
+            dbg.contains("<redacted>"),
+            "expected redaction marker: {dbg}"
+        );
+        // Non-secret metadata remains visible for diagnostics.
+        assert!(dbg.contains("Bearer"), "token_type should stay visible");
+        assert!(
+            dbg.contains("public-client-id"),
+            "client_id is not a secret"
+        );
     }
 
     #[test]
