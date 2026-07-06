@@ -350,8 +350,49 @@ fn purge_keeps_configured_static_client_on_invalid_client() {
 }
 
 #[test]
-fn purge_clears_dynamic_client_on_invalid_client() {
-    // GIVEN: a dynamically-registered client (no configured secret).
+fn purge_keeps_public_configured_client_without_secret_on_invalid_client() {
+    // GIVEN: an operator-configured PUBLIC client -- client_id set via
+    // config, no client_secret (e.g. a native/PKCE-only app registration).
+    // Defect 2 (MIK-6750 r7): the old `client_secret.is_some()` guard did
+    // NOT protect this case -- an invalid_client rejection erased the
+    // operator's configured id and the next auth attempt used a
+    // generated/DCR id instead of the one the operator configured.
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let client = OAuthClient::new(
+        Client::new(),
+        "public-app".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        Arc::clone(&storage),
+        OAuthClientConfig {
+            client_id: Some("configured-public-id".to_string()),
+            client_secret: None,
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    );
+
+    // WHEN: the server rejects the token request with invalid_client.
+    client.purge_client_id_if_invalid(r#"{"error":"invalid_client"}"#);
+
+    // THEN: the configured id survives -- it is operator config, not a
+    // dynamic registration, regardless of client_secret presence.
+    assert_eq!(
+        client.client_id.read().clone(),
+        Some("configured-public-id".to_string()),
+        "configured public (no-secret) client_id must NOT be purged"
+    );
+}
+
+#[test]
+fn purge_clears_dynamically_registered_client_on_invalid_client() {
+    // GIVEN: a client_id obtained via Dynamic Client Registration -- set the
+    // way `ensure_client_id_with_redirect`/`restore_persisted_client_id`
+    // would (client_id + `ClientIdSource::Registered` together), NOT via
+    // `OAuthClientConfig`. Driving this through config (as the pre-fix test
+    // did) is indistinguishable from the Defect 2 scenario above and no
+    // longer represents "dynamic" after the provenance fix.
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
     let client = OAuthClient::new(
@@ -361,7 +402,6 @@ fn purge_clears_dynamic_client_on_invalid_client() {
         vec![],
         Arc::clone(&storage),
         OAuthClientConfig {
-            client_id: Some("dynamic-id".to_string()),
             client_secret: None,
             token_refresh_buffer_secs: 300,
             ..Default::default()
@@ -370,6 +410,8 @@ fn purge_clears_dynamic_client_on_invalid_client() {
     storage
         .save_client_id("dyn", "http://localhost", "dynamic-id")
         .unwrap();
+    *client.client_id.write() = Some("dynamic-id".to_string());
+    *client.client_id_source.write() = Some(ClientIdSource::Registered);
 
     // WHEN: the server rejects the token request with invalid_client.
     client.purge_client_id_if_invalid("error=invalid_client&error_description=rejected");
@@ -384,6 +426,89 @@ fn purge_clears_dynamic_client_on_invalid_client() {
         storage.load_client_id("dyn", "http://localhost"),
         None,
         "dynamic client_id file must be deleted"
+    );
+}
+
+#[test]
+fn restore_persisted_client_id_tags_loaded_id_as_registered_and_purgeable() {
+    // GIVEN: no operator-configured client_id, but a prior Dynamic Client
+    // Registration persisted to disk (as `ensure_client_id_with_redirect`
+    // would have done on an earlier run).
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    storage
+        .save_client_id("dyn", "http://localhost", "persisted-dyn-id")
+        .unwrap();
+    let client = OAuthClient::new(
+        Client::new(),
+        "dyn".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        Arc::clone(&storage),
+        OAuthClientConfig {
+            client_secret: None,
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    );
+    assert!(
+        client.client_id.read().is_none(),
+        "precondition: no operator-configured client_id"
+    );
+
+    // WHEN: `initialize()`'s restore step loads the persisted id.
+    client.restore_persisted_client_id();
+
+    // THEN: the loaded id is tagged Registered, not Configured, so a later
+    // invalid_client rejection can purge and re-register it.
+    assert_eq!(
+        client.client_id.read().clone(),
+        Some("persisted-dyn-id".to_string())
+    );
+    client.purge_client_id_if_invalid(r#"{"error":"invalid_client"}"#);
+    assert!(
+        client.client_id.read().is_none(),
+        "an id restored from a prior DCR must be purgeable"
+    );
+}
+
+#[test]
+fn restore_persisted_client_id_never_overwrites_configured_id() {
+    // GIVEN: an operator-configured client_id, AND (pathologically) a
+    // different id sitting in the client_id storage file.
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    storage
+        .save_client_id("cfg", "http://localhost", "stale-on-disk-id")
+        .unwrap();
+    let client = OAuthClient::new(
+        Client::new(),
+        "cfg".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        Arc::clone(&storage),
+        OAuthClientConfig {
+            client_id: Some("configured-id".to_string()),
+            client_secret: None,
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    );
+
+    // WHEN: `initialize()`'s restore step runs.
+    client.restore_persisted_client_id();
+
+    // THEN: the configured id is untouched -- restore is a no-op when a
+    // client_id is already set -- and it remains non-purgeable.
+    assert_eq!(
+        client.client_id.read().clone(),
+        Some("configured-id".to_string())
+    );
+    client.purge_client_id_if_invalid(r#"{"error":"invalid_client"}"#);
+    assert_eq!(
+        client.client_id.read().clone(),
+        Some("configured-id".to_string()),
+        "configured client_id must survive purge even with a stale disk record"
     );
 }
 

@@ -21,6 +21,24 @@ use super::metadata::{self, AuthorizationServerMetadata, ProtectedResourceMetada
 use super::storage::{TokenInfo, TokenStorage};
 use crate::{Error, Result};
 
+/// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
+///
+/// `purge_client_id_if_invalid` must never clear a [`Configured`](Self::Configured)
+/// id: it is operator-supplied config (Slack, Figma, …) and erasing it on an
+/// `invalid_client` rejection would delete valid configuration and guarantee
+/// every subsequent attempt also fails, using a generated/DCR id the operator
+/// never intended. Only a [`Registered`](Self::Registered) id — obtained via
+/// Dynamic Client Registration, generated as a DCR fallback, or loaded from a
+/// prior registration's persisted record — is safe to purge and re-register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientIdSource {
+    /// Came from `OAuthClientConfig.client_id`. Never purgeable.
+    Configured,
+    /// Obtained via Dynamic Client Registration, a generated fallback, or a
+    /// load of a previously dynamically-registered id from storage.
+    Registered,
+}
+
 /// OAuth client for a specific backend
 pub struct OAuthClient {
     /// HTTP client for token requests
@@ -52,6 +70,11 @@ pub struct OAuthClient {
 
     /// Client ID (registered or generated)
     client_id: RwLock<Option<String>>,
+
+    /// Provenance of `client_id`. Invariant: `Some` exactly when `client_id`
+    /// is `Some` — every write site that sets `client_id` sets this alongside
+    /// it. See [`ClientIdSource`] for why this exists.
+    client_id_source: RwLock<Option<ClientIdSource>>,
 
     /// Pre-configured client secret (for providers like Slack / Figma).
     client_secret: Option<String>,
@@ -120,6 +143,13 @@ impl OAuthClient {
         storage: Arc<TokenStorage>,
         cfg: OAuthClientConfig,
     ) -> Self {
+        // A pre-configured client_id is operator config, not a dynamic
+        // registration — record its provenance up front so a later
+        // `invalid_client` rejection never purges it (Defect 2, MIK-6750 r7).
+        let client_id_source = cfg
+            .client_id
+            .is_some()
+            .then_some(ClientIdSource::Configured);
         Self {
             http_client,
             backend_name,
@@ -131,6 +161,7 @@ impl OAuthClient {
             current_token: RwLock::new(None),
             scopes,
             client_id: RwLock::new(cfg.client_id),
+            client_id_source: RwLock::new(client_id_source),
             client_secret: cfg.client_secret,
             callback_host: cfg.callback_host,
             callback_port: cfg.callback_port,
@@ -191,16 +222,33 @@ impl OAuthClient {
         // Restore a previously-registered dynamic client id so we do NOT
         // re-register (and pop a fresh browser authorize tab) every time the
         // process restarts or a connection is re-established.
-        if self.client_id.read().is_none()
-            && let Some(cid) = self
-                .storage
-                .load_client_id(&self.backend_name, &self.resource_url)
-        {
-            *self.client_id.write() = Some(cid);
-        }
+        self.restore_persisted_client_id();
 
         info!(backend = %self.backend_name, "OAuth client initialized");
         Ok(())
+    }
+
+    /// Load a previously-registered dynamic `client_id` from storage into
+    /// memory, tagging its provenance as [`ClientIdSource::Registered`].
+    ///
+    /// A no-op when a `client_id` is already set: that only happens when
+    /// `OAuthClientConfig.client_id` was supplied, i.e. operator config that
+    /// must never be overwritten by (or conflated with) a stale disk record.
+    /// Because of that guard, any id loaded here is necessarily a prior
+    /// Dynamic Client Registration, never operator config (Defect 2,
+    /// MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client`
+    /// rejection may purge it.
+    fn restore_persisted_client_id(&self) {
+        if self.client_id.read().is_some() {
+            return;
+        }
+        if let Some(cid) = self
+            .storage
+            .load_client_id(&self.backend_name, &self.resource_url)
+        {
+            *self.client_id.write() = Some(cid);
+            *self.client_id_source.write() = Some(ClientIdSource::Registered);
+        }
     }
 
     /// Get a valid access token, refreshing or re-authorizing as needed
@@ -678,6 +726,7 @@ impl OAuthClient {
                             // registered concurrently; adopt the authoritative
                             // on-disk id so both instances converge on one.
                             *self.client_id.write() = Some(persisted.clone());
+                            *self.client_id_source.write() = Some(ClientIdSource::Registered);
                             return Ok(persisted);
                         }
                         Err(e) => {
@@ -697,6 +746,7 @@ impl OAuthClient {
                                  on next restart (auth churn until the write path is fixed)"
                             );
                             *self.client_id.write() = Some(client_id.clone());
+                            *self.client_id_source.write() = Some(ClientIdSource::Registered);
                             return Ok(client_id);
                         }
                     }
@@ -710,6 +760,7 @@ impl OAuthClient {
         // Generate a client ID
         let generated = generate_client_id();
         *self.client_id.write() = Some(generated.clone());
+        *self.client_id_source.write() = Some(ClientIdSource::Registered);
         Ok(generated)
     }
 
@@ -724,16 +775,18 @@ impl OAuthClient {
         if !response_body.contains("invalid_client") {
             return;
         }
-        // A configured client (client_secret present) is a pre-registered
-        // static client (Slack, Figma, …), NOT a dynamically-registered one.
-        // Its client_id is operator-supplied config, not something we can or
-        // should re-register. Purging it would delete valid configuration and
-        // guarantee the next attempt also fails. Only dynamically-registered
-        // (no-secret) clients are safe to purge and re-register.
-        if self.client_secret.is_some() {
+        // Guard on provenance, not `client_secret` presence: a PUBLIC
+        // operator-configured client (client_id set, no secret — e.g. a
+        // native/PKCE-only app registration) is just as much operator config
+        // as a confidential one, and the old `client_secret.is_some()` guard
+        // did not protect it (Defect 2, MIK-6750 r7). Only a client_id whose
+        // provenance is positively known to be `Registered` — Dynamic Client
+        // Registration, a generated DCR fallback, or a loaded prior
+        // registration — is safe to purge and re-register.
+        if *self.client_id_source.read() != Some(ClientIdSource::Registered) {
             warn!(
                 backend = %self.backend_name,
-                "Configured client rejected with invalid_client; not purging (client_id is static config, not a dynamic registration)"
+                "Client rejected with invalid_client; not purging (client_id provenance is not a dynamic registration)"
             );
             return;
         }
@@ -742,6 +795,7 @@ impl OAuthClient {
             "Server rejected client_id (invalid_client); purging stored registration so the next attempt re-registers"
         );
         *self.client_id.write() = None;
+        *self.client_id_source.write() = None;
         if let Err(e) = self
             .storage
             .delete_client_id(&self.backend_name, &self.resource_url)

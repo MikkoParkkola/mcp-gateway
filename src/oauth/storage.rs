@@ -270,6 +270,15 @@ impl TokenStorage {
         self.base_dir.join(format!("{key}_client.json"))
     }
 
+    /// Path to the advisory-lock sidecar guarding a backend's `client_id`
+    /// corrupt-final repair (see [`repair_corrupt_final`](Self::repair_corrupt_final)).
+    /// Never renamed or linked itself, so the held fd's lock survives the
+    /// final file's remove/relink underneath it.
+    fn client_lock_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
+        let key = Self::storage_key(backend_name, resource_url);
+        self.base_dir.join(format!(".{key}_client.lock"))
+    }
+
     /// Load a previously-registered dynamic client id for a backend.
     ///
     /// Returns `None` if no client has been registered yet or the record is
@@ -304,21 +313,25 @@ impl TokenStorage {
     ///
     /// The write is atomic and never exposes a world-readable window: content
     /// goes to a per-process temp file created with `O_EXCL` and mode `0600`
-    /// (on unix) *before* it is linked into place. Creating with `O_EXCL` also
+    /// (on unix) before it is linked into place. Creating with `O_EXCL` also
     /// guarantees a leftover temp from a crashed run is never truncated/reused.
     /// `hard_link` fails with `AlreadyExists` when the final path is already
     /// present, so a concurrent second instance adopts the existing id instead
-    /// of clobbering it (last-write-wins would churn the id across instances —
-    /// the very bug this persistence exists to prevent). If the existing final
-    /// file is corrupt/unreadable, it is removed and the link retried once so a
-    /// validated id becomes authoritative rather than silently diverging.
+    /// of clobbering it (last-write-wins would churn the id across instances,
+    /// the very bug this persistence exists to prevent). A corrupt/unreadable
+    /// final file is repaired under an exclusive advisory lock (see
+    /// [`repair_corrupt_final`](Self::repair_corrupt_final)) so two processes
+    /// that both observe the corruption can never race to remove each other's
+    /// freshly-written valid file.
     ///
     /// # Errors
     ///
-    /// Returns an error when the id cannot be serialized, a unique temp file
-    /// cannot be created or written, the existing final file is unreadable and
-    /// cannot be self-healed, or the atomic link fails for any reason other than
-    /// the final path already existing.
+    /// Returns an error when the id cannot be serialized, when a unique temp
+    /// file cannot be created, when the temp file cannot be written (in which
+    /// case the temp file is removed before the error is returned -- see
+    /// [`write_client_tmp`](Self::write_client_tmp)), when the existing final
+    /// file is unreadable and cannot be self-healed, or when the atomic link
+    /// fails for a reason other than the final path already existing.
     pub fn save_client_id(
         &self,
         backend_name: &str,
@@ -340,58 +353,140 @@ impl TokenStorage {
         // On unix the 0600 mode is applied atomically at creation, closing the
         // world-readable window that a post-write chmod would otherwise leave.
         let tmp = self.create_client_tmp(file_name)?;
-
-        #[cfg(unix)]
-        let write_result = {
-            use std::io::Write as _;
-            let (mut file, tmp) = tmp;
-            file.write_all(content.as_bytes())
-                .and_then(|()| file.sync_all())
-                .map(|()| tmp)
-        };
-        #[cfg(not(unix))]
-        let write_result = { fs::write(&tmp, &content).map(|()| tmp) };
-
-        let tmp = write_result
-            .map_err(|e| Error::OAuth(format!("Failed to write client_id temp file: {e}")))?;
+        let tmp = Self::write_client_tmp(tmp, &content)?;
 
         // First-writer-wins: `hard_link` fails with `AlreadyExists` when the
         // final path already exists, so a concurrent instance adopts the
         // existing id instead of clobbering it. A corrupt/unreadable existing
-        // file, however, is unusable — self-heal by removing it and retrying
-        // the link once so our validated temp becomes authoritative.
-        let mut heal_attempts = 0u8;
-        let result = loop {
-            match fs::hard_link(&tmp, &path) {
-                Ok(()) => {
-                    info!(backend = %backend_name, "Saved registered OAuth client_id");
-                    break Ok(client_id.to_string());
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    match self.load_client_id(backend_name, resource_url) {
-                        Some(existing) => {
-                            info!(backend = %backend_name, "client_id already persisted by another instance; adopting it");
-                            break Ok(existing);
-                        }
-                        None if heal_attempts < 1 => {
-                            // On-disk file is corrupt/unreadable; remove it and
-                            // retry the link so our validated temp wins.
-                            heal_attempts += 1;
-                            warn!(backend = %backend_name, "Existing client_id file is unreadable; removing and re-persisting from validated temp");
-                            let _ = fs::remove_file(&path);
-                        }
-                        None => {
-                            break Err(Error::OAuth(
-                                "client_id file exists but is unreadable and could not be self-healed".to_string(),
-                            ));
-                        }
-                    }
-                }
-                Err(e) => break Err(Error::OAuth(format!("Failed to persist client_id: {e}"))),
+        // file is unusable and gets repaired under a cross-process lock (see
+        // `repair_corrupt_final` for why the repair must be serialized).
+        let result = match fs::hard_link(&tmp, &path) {
+            Ok(()) => {
+                info!(backend = %backend_name, "Saved registered OAuth client_id");
+                Ok(client_id.to_string())
             }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                match self.load_client_id(backend_name, resource_url) {
+                    Some(existing) => {
+                        info!(backend = %backend_name, "client_id already persisted by another instance; adopting it");
+                        Ok(existing)
+                    }
+                    None => self.repair_corrupt_final(
+                        backend_name,
+                        resource_url,
+                        &path,
+                        &tmp,
+                        client_id,
+                    ),
+                }
+            }
+            Err(e) => Err(Error::OAuth(format!("Failed to persist client_id: {e}"))),
         };
         let _ = fs::remove_file(&tmp);
         result
+    }
+
+    /// Repair a corrupt/unreadable final `client_id` file under an exclusive
+    /// advisory lock (MIK-6750 r7).
+    ///
+    /// Without serialization, two processes that both observe
+    /// `load_client_id` return `None` for the same corrupt final can race:
+    /// process A reads `None`, process B repairs the file with a valid id and
+    /// returns, then process A — still acting on its stale `None` read —
+    /// removes B's freshly-written file and links its own, so the disk ends
+    /// up authoritative for A's id while B has already adopted its own. This
+    /// takes an exclusive `flock` on a `.lock` sidecar (never renamed, so the
+    /// held fd's lock survives the final file's remove/relink) across
+    /// re-read → remove → `hard_link`, so only one process repairs at a time
+    /// and a final that has become valid while we waited is never removed.
+    fn repair_corrupt_final(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        path: &std::path::Path,
+        tmp: &std::path::Path,
+        client_id: &str,
+    ) -> Result<String> {
+        let lock_path = self.client_lock_path(backend_name, resource_url);
+        let _lock = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
+            .map_err(|e| Error::OAuth(format!("Failed to acquire client_id repair lock: {e}")))?;
+
+        // Re-read under the lock: another process may have healed the file
+        // between our caller's unlocked read (which found it corrupt) and
+        // this call acquiring the lock. Never remove a final that now parses.
+        if let Some(existing) = self.load_client_id(backend_name, resource_url) {
+            info!(backend = %backend_name, "client_id healed by another instance while waiting for the repair lock; adopting it");
+            return Ok(existing);
+        }
+
+        warn!(backend = %backend_name, "Existing client_id file is unreadable; removing and re-persisting from validated temp");
+        let _ = fs::remove_file(path);
+
+        match fs::hard_link(tmp, path) {
+            Ok(()) => {
+                info!(backend = %backend_name, "Saved registered OAuth client_id (self-healed corrupt final)");
+                Ok(client_id.to_string())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // An unlocked fast-path writer (a fresh, non-repair save)
+                // won the link in the gap between our remove and this retry.
+                // Adopt whatever it left if valid; this is the same
+                // first-writer-wins contract as the normal case above.
+                self.load_client_id(backend_name, resource_url)
+                    .ok_or_else(|| {
+                        Error::OAuth(
+                            "client_id file exists but is unreadable and could not be self-healed"
+                                .to_string(),
+                        )
+                    })
+            }
+            Err(e) => Err(Error::OAuth(format!(
+                "Failed to persist client_id during self-heal: {e}"
+            ))),
+        }
+    }
+
+    /// Write `content` into the just-created temp file and return its path on
+    /// success.
+    ///
+    /// On any write or `fsync` failure (e.g. `ENOSPC`, `EIO`) the temp file is
+    /// removed (best-effort) before the error propagates, so a transient
+    /// write failure never leaks a private `0600` temp file under `base_dir`
+    /// (MIK-6750 r8, minor -- the previous code returned early via `?`
+    /// without cleanup, orphaning the temp on every such error).
+    #[cfg(unix)]
+    fn write_client_tmp(tmp: (fs::File, PathBuf), content: &str) -> Result<PathBuf> {
+        use std::io::Write as _;
+        let (mut file, tmp_path) = tmp;
+        match file
+            .write_all(content.as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            Ok(()) => Ok(tmp_path),
+            Err(e) => {
+                let _ = fs::remove_file(&tmp_path);
+                Err(Error::OAuth(format!(
+                    "Failed to write client_id temp file: {e}"
+                )))
+            }
+        }
+    }
+
+    /// Non-unix counterpart of [`write_client_tmp`](Self::write_client_tmp)
+    /// (see its docs for the cleanup-on-failure contract). `fs::write` opens,
+    /// writes, and closes the file in one call, so there is no separate
+    /// [`File`] handle to thread through.
+    #[cfg(not(unix))]
+    fn write_client_tmp(tmp: PathBuf, content: &str) -> Result<PathBuf> {
+        match fs::write(&tmp, content) {
+            Ok(()) => Ok(tmp),
+            Err(e) => {
+                let _ = fs::remove_file(&tmp);
+                Err(Error::OAuth(format!(
+                    "Failed to write client_id temp file: {e}"
+                )))
+            }
+        }
     }
 
     /// Atomically create a private (`0600` on unix) temp file for a `client_id`
@@ -648,6 +743,114 @@ mod tests {
         assert_eq!(
             store.load_client_id(backend, resource),
             Some("cid".to_string())
+        );
+    }
+
+    #[test]
+    fn repair_corrupt_final_adopts_valid_final_without_removing_it() {
+        // GIVEN: the final file was corrupt when the *caller* first checked
+        // it, but has since become valid — as if another process repaired it
+        // between the caller's unlocked read and this call acquiring the
+        // repair lock. This is exactly the MIK-6750 r7 Defect 1 race: without
+        // a re-read-under-lock guard, this call would remove the other
+        // repairer's freshly-written valid file and overwrite it with our
+        // own, so a caller that already adopted "winner-id" would diverge
+        // from what ends up on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        let path = store.client_path(backend, resource);
+
+        // The final is now VALID (as if another process just healed it).
+        fs::write(&path, serde_json::to_string("winner-id").unwrap()).unwrap();
+
+        // Our own (in this scenario, redundant) validated temp.
+        let tmp = dir.path().join("our.tmp");
+        fs::write(&tmp, serde_json::to_string("our-id").unwrap()).unwrap();
+
+        // WHEN: we attempt to repair what we believed (from a stale read)
+        // was corrupt.
+        let result = store.repair_corrupt_final(backend, resource, &path, &tmp, "our-id");
+
+        // THEN: we adopt the winner instead of overwriting it...
+        assert_eq!(result.unwrap(), "winner-id");
+        // ...and the final file was never removed/replaced.
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("winner-id".to_string()),
+            "a final that became valid under the lock must never be removed"
+        );
+    }
+
+    #[test]
+    fn save_client_id_self_heal_converges_under_thread_contention() {
+        // GIVEN: a corrupt final, and many threads racing to self-heal it
+        // with DIFFERENT ids at once (MIK-6750 r7, Defect 1).
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+        let (backend, resource) = ("b", "http://localhost");
+        fs::write(store.client_path(backend, resource), b"\x00corrupt").unwrap();
+
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .save_client_id(backend, resource, &format!("heal-{i}"))
+                        .expect("self-heal save")
+                })
+            })
+            .collect();
+        let returned: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // THEN: every caller converged on the SAME id, and it matches disk —
+        // the advisory lock serializes repair so no two threads can diverge.
+        let on_disk = store
+            .load_client_id(backend, resource)
+            .expect("healed and persisted");
+        assert!(
+            returned.iter().all(|r| *r == on_disk),
+            "callers disagreed with disk after self-heal race: returned={returned:?} disk={on_disk}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_client_tmp_removes_leaked_temp_on_write_failure() {
+        // GIVEN: a temp file opened read-only, so writing through it fails
+        // with EBADF -- simulating a real write/fsync failure (ENOSPC, EIO)
+        // deterministically, without exhausting real disk space (MIK-6750
+        // r8, minor -- Defect 3: the write path used to return early via `?`
+        // on failure without removing the temp, leaking a private 0600 file
+        // under `base_dir` on every such error).
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_path = dir.path().join("client.tmp.leak-check");
+        // Create the file first (needs write access to create), then close
+        // and reopen it read-only so the fd we hand to `write_client_tmp`
+        // has no write access at all.
+        fs::File::create(&tmp_path).unwrap();
+        let file = fs::OpenOptions::new().read(true).open(&tmp_path).unwrap();
+        assert!(
+            tmp_path.exists(),
+            "precondition: temp file exists before the write attempt"
+        );
+
+        // WHEN: the write fails (the fd has no write permission).
+        let result = TokenStorage::write_client_tmp((file, tmp_path.clone()), "some-content");
+
+        // THEN: the error propagates AND the temp file is gone -- nothing is
+        // left behind on disk for an operator to notice weeks later.
+        assert!(
+            result.is_err(),
+            "expected the write to fail on a read-only fd"
+        );
+        assert!(
+            !tmp_path.exists(),
+            "temp file must be removed when the write/fsync fails, not leaked"
         );
     }
 
