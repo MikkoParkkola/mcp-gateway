@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
+use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
 /// `OpenAPI` to Capability converter
@@ -409,6 +410,14 @@ impl OpenApiConverter {
         info!(url = %url, "Fetching OpenAPI spec");
         let parsed = url::Url::parse(url)
             .map_err(|e| Error::Config(format!("Invalid OpenAPI spec URL '{url}': {e}")))?;
+
+        // SSRF guard: reject private/reserved/loopback targets before any
+        // outbound fetch, matching every other capability fetch path
+        // (jsonrpc, graphql, executor, discovery, transport). Validated
+        // unconditionally because convert_url carries no AppState/config —
+        // a spec URL supplied on the CLI is untrusted input regardless of the
+        // proxy-time toggle.
+        validate_url_not_ssrf(url)?;
 
         // Capture the host:port so relative `servers` blocks produce a
         // valid absolute base_url in the generated capability YAML.
@@ -1181,6 +1190,23 @@ mod tests {
     use super::*;
     use crate::capability::validator::{IssueSeverity, validate_capability_definition};
     use crate::capability::{CapabilityDefinition, parse_capability};
+
+    /// `convert_url` must reject SSRF targets (private / reserved / loopback)
+    /// before any outbound request — mirrors the SSRF gate on every other
+    /// capability fetch path (jsonrpc, graphql, executor, discovery).
+    #[tokio::test]
+    async fn convert_url_blocks_ssrf_target() {
+        let mut converter = OpenApiConverter::new();
+        // Cloud-metadata endpoint: link-local, must be rejected by the guard.
+        let err = converter
+            .convert_url("http://169.254.169.254/openapi.json")
+            .await
+            .expect_err("SSRF target must be rejected before fetch");
+        assert!(
+            err.to_string().contains("blocked"),
+            "expected SSRF-blocked error, got: {err}"
+        );
+    }
 
     const SAMPLE_OPENAPI: &str = r#"
 openapi: "3.0.0"
