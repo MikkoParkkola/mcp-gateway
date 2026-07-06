@@ -301,6 +301,114 @@ fn needs_proactive_refresh_false_when_outside_buffer() {
     let token = TokenInfo::from_response("tok".to_string(), None, None, Some(3600), None);
     *client.current_token.write() = Some(token);
 
-    // WHEN / THEN: 3600s remaining >> 300s buffer → no refresh yet
+    // WHEN / THEN: 3600s remaining >> 300s buffer -> no refresh yet
     assert!(!client.needs_proactive_refresh());
+}
+
+// =========================================================================
+// purge_client_id_if_invalid -- static vs dynamic clients
+// =========================================================================
+
+#[test]
+fn purge_keeps_configured_static_client_on_invalid_client() {
+    // GIVEN: a client with a configured client_secret. Its client_id is
+    // operator-supplied static config (Slack/Figma style), NOT a dynamic
+    // registration -- purging it would delete valid config.
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let client = OAuthClient::new(
+        Client::new(),
+        "slack".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        Arc::clone(&storage),
+        OAuthClientConfig {
+            client_id: Some("configured-static-id".to_string()),
+            client_secret: Some("configured-secret".to_string()),
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    );
+    storage
+        .save_client_id("slack", "http://localhost", "configured-static-id")
+        .unwrap();
+
+    // WHEN: the server rejects the token request with invalid_client.
+    client.purge_client_id_if_invalid(r#"{"error":"invalid_client"}"#);
+
+    // THEN: the configured id survives in memory AND on disk.
+    assert_eq!(
+        client.client_id.read().clone(),
+        Some("configured-static-id".to_string()),
+        "configured static client_id must NOT be purged from memory"
+    );
+    assert_eq!(
+        storage.load_client_id("slack", "http://localhost"),
+        Some("configured-static-id".to_string()),
+        "configured static client_id file must NOT be deleted"
+    );
+}
+
+#[test]
+fn purge_clears_dynamic_client_on_invalid_client() {
+    // GIVEN: a dynamically-registered client (no configured secret).
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let client = OAuthClient::new(
+        Client::new(),
+        "dyn".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        Arc::clone(&storage),
+        OAuthClientConfig {
+            client_id: Some("dynamic-id".to_string()),
+            client_secret: None,
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    );
+    storage
+        .save_client_id("dyn", "http://localhost", "dynamic-id")
+        .unwrap();
+
+    // WHEN: the server rejects the token request with invalid_client.
+    client.purge_client_id_if_invalid("error=invalid_client&error_description=rejected");
+
+    // THEN: the stale dynamic registration is purged from memory AND disk so
+    // the next attempt re-registers.
+    assert!(
+        client.client_id.read().is_none(),
+        "dynamic client_id must be purged from memory"
+    );
+    assert_eq!(
+        storage.load_client_id("dyn", "http://localhost"),
+        None,
+        "dynamic client_id file must be deleted"
+    );
+}
+
+#[test]
+fn purge_is_noop_without_invalid_client_marker() {
+    // GIVEN: any client with a persisted id.
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let client = OAuthClient::new(
+        Client::new(),
+        "dyn".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        Arc::clone(&storage),
+        OAuthClientConfig {
+            client_id: Some("keep-me".to_string()),
+            client_secret: None,
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    );
+
+    // WHEN: the error body is unrelated (e.g. invalid_grant).
+    client.purge_client_id_if_invalid(r#"{"error":"invalid_grant"}"#);
+
+    // THEN: nothing is purged.
+    assert_eq!(client.client_id.read().clone(), Some("keep-me".to_string()));
 }

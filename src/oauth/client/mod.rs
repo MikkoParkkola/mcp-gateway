@@ -322,6 +322,11 @@ impl OAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            // Mirror the exchange_code/refresh_token paths: a rejected
+            // dynamic registration must be purged so the next attempt
+            // re-registers. Fix 1's guard makes this a no-op for
+            // configured-secret (static) clients.
+            self.purge_client_id_if_invalid(&body);
             return Err(Error::OAuth(format!(
                 "Client credentials failed: HTTP {status} - {body}"
             )));
@@ -717,6 +722,19 @@ impl OAuthClient {
     /// on `invalid_client` forever with no recovery inside the product.
     fn purge_client_id_if_invalid(&self, response_body: &str) {
         if !response_body.contains("invalid_client") {
+            return;
+        }
+        // A configured client (client_secret present) is a pre-registered
+        // static client (Slack, Figma, …), NOT a dynamically-registered one.
+        // Its client_id is operator-supplied config, not something we can or
+        // should re-register. Purging it would delete valid configuration and
+        // guarantee the next attempt also fails. Only dynamically-registered
+        // (no-secret) clients are safe to purge and re-register.
+        if self.client_secret.is_some() {
+            warn!(
+                backend = %self.backend_name,
+                "Configured client rejected with invalid_client; not purging (client_id is static config, not a dynamic registration)"
+            );
             return;
         }
         warn!(

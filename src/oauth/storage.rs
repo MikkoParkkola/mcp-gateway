@@ -303,29 +303,28 @@ impl TokenStorage {
     /// another gateway instance sharing this directory registered first.
     ///
     /// The write is atomic and never exposes a world-readable window: content
-    /// goes to a per-process temp file locked to `0600` *before* it is linked
-    /// into place. `hard_link` fails with `AlreadyExists` when the final path is
-    /// already present, so a concurrent second instance adopts the existing id
-    /// instead of clobbering it (last-write-wins would churn the id across
-    /// instances — the very bug this persistence exists to prevent).
+    /// goes to a per-process temp file created with `O_EXCL` and mode `0600`
+    /// (on unix) *before* it is linked into place. Creating with `O_EXCL` also
+    /// guarantees a leftover temp from a crashed run is never truncated/reused.
+    /// `hard_link` fails with `AlreadyExists` when the final path is already
+    /// present, so a concurrent second instance adopts the existing id instead
+    /// of clobbering it (last-write-wins would churn the id across instances —
+    /// the very bug this persistence exists to prevent). If the existing final
+    /// file is corrupt/unreadable, it is removed and the link retried once so a
+    /// validated id becomes authoritative rather than silently diverging.
     ///
     /// # Errors
     ///
-    /// Returns an error when the id cannot be serialized, the temp file cannot
-    /// be written, its permissions cannot be tightened, and when the atomic link
-    /// fails for any reason other than the final path already existing.
+    /// Returns an error when the id cannot be serialized, a unique temp file
+    /// cannot be created or written, the existing final file is unreadable and
+    /// cannot be self-healed, or the atomic link fails for any reason other than
+    /// the final path already existing.
     pub fn save_client_id(
         &self,
         backend_name: &str,
         resource_url: &str,
         client_id: &str,
     ) -> Result<String> {
-        // Per-call unique temp name: a static nonce plus the pid keeps two
-        // concurrent same-process registrations for the same backend from
-        // stomping on each other's temp file (which would let one call return
-        // an id that disagrees with the authoritative on-disk value).
-        static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
-
         let path = self.client_path(backend_name, resource_url);
         let content = serde_json::to_string(client_id)
             .map_err(|e| Error::OAuth(format!("Failed to serialize client_id: {e}")))?;
@@ -334,44 +333,132 @@ impl TokenStorage {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("client");
-        let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
-        let tmp = self
-            .base_dir
-            .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
-        fs::write(&tmp, &content)
+
+        // Create the temp file with O_EXCL so a leftover temp from a crashed
+        // prior run is never truncated/reused: `create_new` fails with
+        // `AlreadyExists` rather than opening (and emptying) an existing path.
+        // On unix the 0600 mode is applied atomically at creation, closing the
+        // world-readable window that a post-write chmod would otherwise leave.
+        let tmp = self.create_client_tmp(file_name)?;
+
+        #[cfg(unix)]
+        let write_result = {
+            use std::io::Write as _;
+            let (mut file, tmp) = tmp;
+            file.write_all(content.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map(|()| tmp)
+        };
+        #[cfg(not(unix))]
+        let write_result = { fs::write(&tmp, &content).map(|()| tmp) };
+
+        let tmp = write_result
             .map_err(|e| Error::OAuth(format!("Failed to write client_id temp file: {e}")))?;
 
-        // Lock down permissions on the inode BEFORE it becomes reachable at the
-        // final path. A swallowed chmod would leave a public client_id file, so
-        // the error is propagated (after cleaning up the temp file).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)) {
-                let _ = fs::remove_file(&tmp);
-                return Err(Error::OAuth(format!(
-                    "Failed to set client_id permissions: {e}"
-                )));
+        // First-writer-wins: `hard_link` fails with `AlreadyExists` when the
+        // final path already exists, so a concurrent instance adopts the
+        // existing id instead of clobbering it. A corrupt/unreadable existing
+        // file, however, is unusable — self-heal by removing it and retrying
+        // the link once so our validated temp becomes authoritative.
+        let mut heal_attempts = 0u8;
+        let result = loop {
+            match fs::hard_link(&tmp, &path) {
+                Ok(()) => {
+                    info!(backend = %backend_name, "Saved registered OAuth client_id");
+                    break Ok(client_id.to_string());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    match self.load_client_id(backend_name, resource_url) {
+                        Some(existing) => {
+                            info!(backend = %backend_name, "client_id already persisted by another instance; adopting it");
+                            break Ok(existing);
+                        }
+                        None if heal_attempts < 1 => {
+                            // On-disk file is corrupt/unreadable; remove it and
+                            // retry the link so our validated temp wins.
+                            heal_attempts += 1;
+                            warn!(backend = %backend_name, "Existing client_id file is unreadable; removing and re-persisting from validated temp");
+                            let _ = fs::remove_file(&path);
+                        }
+                        None => {
+                            break Err(Error::OAuth(
+                                "client_id file exists but is unreadable and could not be self-healed".to_string(),
+                            ));
+                        }
+                    }
+                }
+                Err(e) => break Err(Error::OAuth(format!("Failed to persist client_id: {e}"))),
             }
-        }
-
-        let result = match fs::hard_link(&tmp, &path) {
-            Ok(()) => {
-                info!(backend = %backend_name, "Saved registered OAuth client_id");
-                Ok(client_id.to_string())
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Another instance won the race; adopt whatever is on disk.
-                let existing = self
-                    .load_client_id(backend_name, resource_url)
-                    .unwrap_or_else(|| client_id.to_string());
-                info!(backend = %backend_name, "client_id already persisted by another instance; adopting it");
-                Ok(existing)
-            }
-            Err(e) => Err(Error::OAuth(format!("Failed to persist client_id: {e}"))),
         };
         let _ = fs::remove_file(&tmp);
         result
+    }
+
+    /// Atomically create a private (`0600` on unix) temp file for a `client_id`
+    /// write, retrying with a fresh nonce if a stale temp path collides.
+    ///
+    /// Returns the open [`File`] handle plus its path on unix (so the caller
+    /// writes through the same fd the mode was set on), and just the path on
+    /// other platforms.
+    #[cfg(unix)]
+    fn create_client_tmp(&self, file_name: &str) -> Result<(fs::File, PathBuf)> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..8 {
+            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+            let tmp = self
+                .base_dir
+                .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)
+            {
+                Ok(file) => return Ok((file, tmp)),
+                // Stale temp collided; try the next nonce.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(Error::OAuth(format!(
+                        "Failed to create client_id temp file: {e}"
+                    )));
+                }
+            }
+        }
+        Err(Error::OAuth(
+            "Failed to create a unique client_id temp file after 8 attempts".to_string(),
+        ))
+    }
+
+    /// Non-unix fallback: pick a fresh temp path via `create_new`, closing the
+    /// handle immediately so the caller can `fs::write` it (no unix mode bits).
+    #[cfg(not(unix))]
+    fn create_client_tmp(&self, file_name: &str) -> Result<PathBuf> {
+        static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..8 {
+            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+            let tmp = self
+                .base_dir
+                .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Ok(_) => return Ok(tmp),
+                // Stale temp collided; try the next nonce.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(Error::OAuth(format!(
+                        "Failed to create client_id temp file: {e}"
+                    )));
+                }
+            }
+        }
+        Err(Error::OAuth(
+            "Failed to create a unique client_id temp file after 8 attempts".to_string(),
+        ))
     }
 
     /// Delete a stored client id so the next connection re-registers.
@@ -515,6 +602,100 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .count();
         assert_eq!(leaked, 0, "temp files leaked");
+    }
+
+    #[test]
+    fn save_client_id_self_heals_corrupt_final_file() {
+        // GIVEN: an existing client_id file whose contents are corrupt
+        // (not a valid JSON string), so load_client_id() returns None.
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        let final_path = store.client_path(backend, resource);
+        fs::write(&final_path, b"\x00\x00not json at all").unwrap();
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            None,
+            "precondition: corrupt file must be unreadable"
+        );
+
+        // WHEN: we persist a fresh id over the corrupt file.
+        let returned = store
+            .save_client_id(backend, resource, "healed-id")
+            .expect("self-heal should succeed");
+
+        // THEN: the validated id is authoritative and readable from disk,
+        // instead of silently diverging from a broken on-disk record.
+        assert_eq!(returned, "healed-id");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("healed-id".to_string()),
+            "disk must match the returned id after self-heal"
+        );
+    }
+
+    #[test]
+    fn save_client_id_self_heals_zero_byte_final_file() {
+        // GIVEN: a zero-byte final file (empty => not a valid JSON string).
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        fs::write(store.client_path(backend, resource), b"").unwrap();
+
+        // WHEN / THEN: save self-heals and returns a readable id.
+        let returned = store.save_client_id(backend, resource, "cid").unwrap();
+        assert_eq!(returned, "cid");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("cid".to_string())
+        );
+    }
+
+    #[test]
+    fn save_client_id_never_truncates_a_leftover_tmp() {
+        // GIVEN: leftover temp files (as if a prior run crashed mid-write),
+        // seeded with sentinel content. O_EXCL create_new must never open —
+        // and therefore never truncate — an existing path, whether or not the
+        // nonce collides with one the writer picks.
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+
+        let file_name = store
+            .client_path(backend, resource)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap()
+            .to_string();
+        let sentinel = b"DO-NOT-TRUNCATE";
+        let leftovers: Vec<PathBuf> = (0..4)
+            .map(|n| {
+                let p = dir
+                    .path()
+                    .join(format!("{file_name}.tmp.{}.{n}", std::process::id()));
+                fs::write(&p, sentinel).unwrap();
+                p
+            })
+            .collect();
+
+        // WHEN: we persist a client_id.
+        let returned = store.save_client_id(backend, resource, "safe-id").unwrap();
+
+        // THEN: the save produced a valid, readable authoritative id...
+        assert_eq!(returned, "safe-id");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("safe-id".to_string())
+        );
+        // ...and every seeded leftover is byte-for-byte intact (never emptied).
+        for p in &leftovers {
+            assert_eq!(
+                fs::read(p).unwrap(),
+                sentinel,
+                "leftover temp file was truncated/overwritten: {}",
+                p.display()
+            );
+        }
     }
 
     // =========================================================================
