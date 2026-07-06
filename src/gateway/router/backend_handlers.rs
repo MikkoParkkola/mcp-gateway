@@ -645,6 +645,7 @@ pub(super) async fn backend_handler(
             record_client_success(&state, client.as_ref());
             if method == "tools/list" {
                 normalize_tools_list_response(&name, &mut response);
+                scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
             } else if method == "tools/call" {
                 scan_direct_backend_response(
                     &state,
@@ -716,6 +717,51 @@ fn scan_direct_backend_response(
     _state: &AppState,
     _backend_name: &str,
     _params: Option<&Value>,
+    _client: Option<&AuthenticatedClient>,
+    _response: &mut JsonRpcResponse,
+) {
+}
+
+/// Scan a `tools/list` response through the same firewall response scanner used
+/// for `tools/call` (OWASP ASI01 tool-poisoning defense).
+///
+/// Backend-supplied tool `description`/metadata strings are scanned for prompt
+/// injection and have embedded credentials redacted in place before the tool
+/// list reaches the client — closing the gap where `tools/list` previously
+/// bypassed all content scanning. Gated on the same firewall config as the
+/// `tools/call` path: [`Firewall::check_response`] is a no-op when the firewall
+/// is absent or response scanning is disabled, so behavior is unchanged when
+/// the feature/config is off.
+#[cfg(feature = "firewall")]
+fn scan_direct_tools_list_response(
+    state: &AppState,
+    backend_name: &str,
+    client: Option<&AuthenticatedClient>,
+    response: &mut JsonRpcResponse,
+) {
+    let Some(ref fw) = state.firewall else {
+        return;
+    };
+    let Some(ref mut result) = response.result else {
+        return;
+    };
+
+    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
+    let session_id = format!("direct:{backend_name}");
+    let verdict = fw.check_response(&session_id, backend_name, "tools/list", result, caller_name);
+    if verdict.action == FirewallAction::Warn {
+        warn!(
+            backend = %backend_name,
+            findings = verdict.findings.len(),
+            "Firewall: direct tools/list response warning"
+        );
+    }
+}
+
+#[cfg(not(feature = "firewall"))]
+fn scan_direct_tools_list_response(
+    _state: &AppState,
+    _backend_name: &str,
     _client: Option<&AuthenticatedClient>,
     _response: &mut JsonRpcResponse,
 ) {

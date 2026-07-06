@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.3] - 2026-07-06
+
+### Security
+
+Hardening from a pre-release security audit. Three independent findings, no
+externally observed exploitation.
+
+- **Bearer token and API key comparison is now constant-time (CWE-208).** The
+  auth layer compared the presented credential against configured secrets with
+  `==`, whose early-exit on the first differing byte leaks match-prefix length
+  through timing. Comparison now uses `subtle::ConstantTimeEq`, matching the
+  existing constant-time path in the key server. Accepted and rejected
+  credentials are indistinguishable by timing.
+
+- **`tools/list` responses are now scanned by the firewall (OWASP ASI01
+  tool-poisoning).** Backend-supplied tool `description`/metadata strings
+  reached the client without passing through the response scanner that already
+  guards the `tools/call` path, so a malicious backend could smuggle prompt
+  injection or embedded credentials in tool metadata. Both the direct
+  `tools/list` route and the aggregated discovery surface (`gateway_list_tools`
+  / `gateway_search_tools`) now run the same `Firewall::check_response`
+  scan-and-redact pass. The check is a no-op when the firewall feature or
+  response scanning is disabled, so behavior is unchanged when unconfigured.
+
+- **`TokenInfo` no longer leaks OAuth secrets through its `Debug` output.** The
+  derived `Debug` impl printed `access_token`, `refresh_token`, and
+  `client_secret` verbatim, so any log line or panic message that formatted a
+  `TokenInfo` exposed live credentials. `Debug` is now a manual impl that
+  redacts the three secret fields while preserving the non-sensitive fields for
+  diagnostics.
+
+
 ## [3.1.2] - 2026-07-06
 
 ### Security

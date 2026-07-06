@@ -567,6 +567,29 @@ impl Gateway {
             );
         }
 
+        // ── Security firewall (RFC-0071) ──────────────────────────────────────
+        // Wire a firewall into `MetaMcp` so the aggregated discovery surface
+        // (`gateway_list_tools` / `gateway_search_tools`) is scanned. The direct
+        // `tools/call` + `tools/list` path builds its own firewall in `run()`
+        // (see `AppState`); each keeps its own `TransitionTracker`.
+        #[cfg(feature = "firewall")]
+        {
+            let fw_cfg = self.config.security.firewall.clone();
+            let fw_enabled = fw_cfg.enabled;
+            let fw_tt = if fw_cfg.anomaly_detection {
+                Some(Arc::new(TransitionTracker::new()))
+            } else {
+                None
+            };
+            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt));
+            if fw_enabled {
+                info!("Security firewall enabled (RFC-0071)");
+            }
+            Arc::get_mut(&mut meta_mcp)
+                .expect("no other Arc references at this point")
+                .set_firewall(Some(fw));
+        }
+
         Ok(BuiltMetaMcp {
             meta_mcp,
             tool_policy,

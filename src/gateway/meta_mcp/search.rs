@@ -593,11 +593,13 @@ impl MetaMcp {
                 .into_iter()
                 .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
                 .collect();
-            return Ok(json!({
+            let mut out = json!({
                 "server": server,
                 "status": if killed { "disabled" } else { "active" },
                 "tools": tools
-            }));
+            });
+            self.scan_tool_list_value(&mut out);
+            return Ok(out);
         }
 
         // Otherwise, look in MCP backends
@@ -620,11 +622,13 @@ impl MetaMcp {
             .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
             .collect();
 
-        Ok(json!({
+        let mut out = json!({
             "server": server,
             "status": if killed { "disabled" } else { "active" },
             "tools": tools
-        }))
+        });
+        self.scan_tool_list_value(&mut out);
+        Ok(out)
     }
 
     pub(super) async fn list_tools(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
@@ -700,10 +704,12 @@ impl MetaMcp {
             }
         }
 
-        Ok(json!({
+        let mut out = json!({
             "tools": all_tools,
             "total": all_tools.len()
-        }))
+        });
+        self.scan_tool_list_value(&mut out);
+        Ok(out)
     }
 
     /// Search tools across all backends.
@@ -774,12 +780,9 @@ impl MetaMcp {
             Vec::new()
         };
 
-        Ok(build_search_response(
-            &query,
-            &matches,
-            total_found,
-            &suggestions,
-        ))
+        let mut out = build_search_response(&query, &matches, total_found, &suggestions);
+        self.scan_tool_list_value(&mut out);
+        Ok(out)
     }
 }
 
