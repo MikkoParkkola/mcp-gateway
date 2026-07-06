@@ -23,6 +23,36 @@ use super::model::{
 use super::refs::{resolve_parameter, resolve_request_body, resolve_schema_refs};
 use super::sanitize::{sanitize_description, yaml_scalar};
 
+/// Maximum number of redirect hops followed before the fetch is abandoned.
+const MAX_REDIRECT_HOPS: usize = 5;
+
+/// Decision for a single redirect hop, extracted from the `convert_url`
+/// redirect policy so its fail-closed behavior is directly unit-testable
+/// without standing up a live server (the initial-URL SSRF guard rejects any
+/// loopback test target before a redirect could ever fire).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RedirectDecision {
+    /// Too many hops — stop following (treated as a non-redirect response).
+    Stop,
+    /// Next hop targets an SSRF-blocked address — abort with this message.
+    Block(String),
+    /// Next hop is safe — follow it.
+    Follow,
+}
+
+/// Decide whether a redirect hop to `next_url` may be followed. Re-validates
+/// every hop against the SSRF deny list so a public URL cannot redirect into
+/// an internal address (DNS-rebinding / open-redirect SSRF).
+pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> RedirectDecision {
+    if previous_hops >= MAX_REDIRECT_HOPS {
+        return RedirectDecision::Stop;
+    }
+    match validate_url_not_ssrf(next_url) {
+        Err(e) => RedirectDecision::Block(e.to_string()),
+        Ok(()) => RedirectDecision::Follow,
+    }
+}
+
 /// `OpenAPI` to Capability converter
 pub struct OpenApiConverter {
     /// Base name prefix for generated capabilities
@@ -153,15 +183,14 @@ impl OpenApiConverter {
         let response = reqwest::Client::builder()
             .user_agent(format!("mcp-gateway/{}", env!("CARGO_PKG_VERSION")))
             .dns_resolver(PinningResolver::new(SystemResolver))
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 {
-                    return attempt.stop();
-                }
-                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
-                    return attempt.error(e.to_string());
-                }
-                attempt.follow()
-            }))
+            .redirect(reqwest::redirect::Policy::custom(
+                |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str())
+                {
+                    RedirectDecision::Stop => attempt.stop(),
+                    RedirectDecision::Block(msg) => attempt.error(msg),
+                    RedirectDecision::Follow => attempt.follow(),
+                },
+            ))
             .build()
             .map_err(|e| Error::Config(format!("Failed to build HTTP client: {e}")))?
             .get(url)

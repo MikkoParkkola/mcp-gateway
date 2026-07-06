@@ -472,3 +472,34 @@ fn security_scheme_selection_prefers_bearer() {
 fn names(caps: &[GeneratedCapability]) -> Vec<&str> {
     caps.iter().map(|c| c.name.as_str()).collect()
 }
+
+#[test]
+fn redirect_decision_blocks_ssrf_hop() {
+    use super::convert::{RedirectDecision, redirect_decision};
+    // A redirect hop to the cloud-metadata endpoint must be blocked, never
+    // followed - closes the open-redirect SSRF vector on convert_url.
+    assert!(matches!(
+        redirect_decision(0, "http://169.254.169.254/latest/meta-data/"),
+        RedirectDecision::Block(_)
+    ));
+}
+
+#[test]
+fn redirect_decision_follows_public_hop() {
+    use super::convert::{RedirectDecision, redirect_decision};
+    // 1.1.1.1 is a public address literal: passes the SSRF check without DNS.
+    assert_eq!(
+        redirect_decision(0, "https://1.1.1.1/openapi.json"),
+        RedirectDecision::Follow
+    );
+}
+
+#[test]
+fn redirect_decision_stops_after_max_hops() {
+    use super::convert::{RedirectDecision, redirect_decision};
+    // Fail-closed: once the hop budget is exhausted, stop regardless of target.
+    assert_eq!(
+        redirect_decision(5, "https://1.1.1.1/openapi.json"),
+        RedirectDecision::Stop
+    );
+}
