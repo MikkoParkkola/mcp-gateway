@@ -262,11 +262,95 @@ impl TokenStorage {
 
         Ok(())
     }
+
+    /// Get the file path for a backend's dynamically-registered client id.
+    fn client_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
+        let key = Self::storage_key(backend_name, resource_url);
+        self.base_dir.join(format!("{key}_client.json"))
+    }
+
+    /// Load a previously-registered dynamic client id for a backend.
+    ///
+    /// Returns `None` if no client has been registered yet or the record is
+    /// unreadable. Persisting this is what prevents a fresh Dynamic Client
+    /// Registration (and its browser authorize tab) on every connection.
+    #[must_use]
+    pub fn load_client_id(&self, backend_name: &str, resource_url: &str) -> Option<String> {
+        let path = self.client_path(backend_name, resource_url);
+        if !path.exists() {
+            return None;
+        }
+        match fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<String>(&content) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    warn!(backend = %backend_name, error = %e, "Failed to parse stored client_id");
+                    None
+                }
+            },
+            Err(e) => {
+                warn!(backend = %backend_name, error = %e, "Failed to read client_id file");
+                None
+            }
+        }
+    }
+
+    /// Persist a dynamically-registered client id for a backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the id cannot be serialized or written to disk.
+    pub fn save_client_id(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        client_id: &str,
+    ) -> Result<()> {
+        let path = self.client_path(backend_name, resource_url);
+        let content = serde_json::to_string(client_id)
+            .map_err(|e| Error::OAuth(format!("Failed to serialize client_id: {e}")))?;
+        fs::write(&path, content)
+            .map_err(|e| Error::OAuth(format!("Failed to write client_id file: {e}")))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o600);
+            let _ = fs::set_permissions(&path, perms);
+        }
+
+        info!(backend = %backend_name, "Saved registered OAuth client_id");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_id_round_trips_and_is_absent_before_registration() {
+        let dir = std::env::temp_dir().join(format!("mcpgw-oauth-test-{}", std::process::id()));
+        let store = TokenStorage::new(dir.clone()).expect("create store");
+        let (backend, resource) = ("beeper", "http://127.0.0.1:23373/v0/mcp");
+
+        // No client registered yet -> None (would trigger DCR + browser tab).
+        assert_eq!(store.load_client_id(backend, resource), None);
+
+        // Persist then reload -> stable id, so the next connection reuses it.
+        store
+            .save_client_id(backend, resource, "persisted-client-123")
+            .expect("save client_id");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("persisted-client-123".to_string())
+        );
+
+        // A different backend must not collide.
+        assert_eq!(store.load_client_id("other", resource), None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     // =========================================================================
     // TokenInfo::from_response

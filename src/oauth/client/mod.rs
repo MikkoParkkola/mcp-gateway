@@ -188,6 +188,17 @@ impl OAuthClient {
             *self.current_token.write() = Some(token);
         }
 
+        // Restore a previously-registered dynamic client id so we do NOT
+        // re-register (and pop a fresh browser authorize tab) every time the
+        // process restarts or a connection is re-established.
+        if self.client_id.read().is_none()
+            && let Some(cid) = self
+                .storage
+                .load_client_id(&self.backend_name, &self.resource_url)
+        {
+            *self.client_id.write() = Some(cid);
+        }
+
         info!(backend = %self.backend_name, "OAuth client initialized");
         Ok(())
     }
@@ -648,6 +659,16 @@ impl OAuthClient {
             match self.register_client(reg_endpoint, redirect_uri).await {
                 Ok(client_id) => {
                     *self.client_id.write() = Some(client_id.clone());
+                    // Persist immediately: registration succeeded even if the
+                    // browser authorize step below never completes. Without this
+                    // every connection re-registers and opens a new OAuth tab.
+                    if let Err(e) = self.storage.save_client_id(
+                        &self.backend_name,
+                        &self.resource_url,
+                        &client_id,
+                    ) {
+                        warn!(error = %e, "Failed to persist registered client_id");
+                    }
                     return Ok(client_id);
                 }
                 Err(e) => {
