@@ -525,6 +525,38 @@ pub fn validate_redirect_chain(chain: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Maximum number of redirect hops followed before a fetch is abandoned.
+pub(crate) const MAX_REDIRECT_HOPS: usize = 5;
+
+/// Decision for a single redirect hop, extracted from the redirect policy so
+/// its fail-closed behavior is directly unit-testable without standing up a
+/// live server (the initial-URL SSRF guard rejects any loopback test target
+/// before a redirect could ever fire).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RedirectDecision {
+    /// Too many hops — stop following (treated as a non-redirect response).
+    Stop,
+    /// Next hop targets an SSRF-blocked address — abort with this message.
+    Block(String),
+    /// Next hop is safe — follow it.
+    Follow,
+}
+
+/// Decide whether a redirect hop to `next_url` may be followed. Re-validates
+/// every hop against the SSRF deny list so a public URL cannot redirect into
+/// an internal address (DNS-rebinding / open-redirect SSRF). Shared by the
+/// `OpenAPI` converter (`convert_url`) and the Web-UI spec importer
+/// (`fetch_spec`) so both fetch paths enforce one policy.
+pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> RedirectDecision {
+    if previous_hops >= MAX_REDIRECT_HOPS {
+        return RedirectDecision::Stop;
+    }
+    match validate_url_not_ssrf(next_url) {
+        Err(e) => RedirectDecision::Block(e.to_string()),
+        Ok(()) => RedirectDecision::Follow,
+    }
+}
+
 // ============================================================================
 // Internal dispatch
 // ============================================================================

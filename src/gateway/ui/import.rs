@@ -23,7 +23,7 @@ use super::super::router::AppState;
 use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
-use crate::security::ssrf::{PinningResolver, SystemResolver};
+use crate::security::ssrf::{PinningResolver, RedirectDecision, SystemResolver, redirect_decision};
 use crate::security::validate_url_not_ssrf;
 
 // ── Request / response types ────────────────────────────────────────
@@ -267,15 +267,14 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     if ssrf_protection {
         builder = builder
             .dns_resolver(PinningResolver::new(SystemResolver))
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 {
-                    return attempt.stop();
-                }
-                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
-                    return attempt.error(e.to_string());
-                }
-                attempt.follow()
-            }));
+            .redirect(reqwest::redirect::Policy::custom(
+                |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str())
+                {
+                    RedirectDecision::Stop => attempt.stop(),
+                    RedirectDecision::Block(msg) => attempt.error(msg),
+                    RedirectDecision::Follow => attempt.follow(),
+                },
+            ));
     }
     let client = builder.build().map_err(|e| {
         (
