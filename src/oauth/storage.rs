@@ -264,7 +264,7 @@ impl TokenStorage {
     }
 
     /// Get the file path for a backend's dynamically-registered client id.
-    fn client_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
+    pub(crate) fn client_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
         let key = Self::storage_key(backend_name, resource_url);
         self.base_dir.join(format!("{key}_client.json"))
     }
@@ -297,29 +297,92 @@ impl TokenStorage {
 
     /// Persist a dynamically-registered client id for a backend.
     ///
+    /// Returns the id that is now authoritative on disk: the one passed in when
+    /// this call won the first-registration race, and a pre-existing one when
+    /// another gateway instance sharing this directory registered first.
+    ///
+    /// The write is atomic and never exposes a world-readable window: content
+    /// goes to a per-process temp file locked to `0600` *before* it is linked
+    /// into place. `hard_link` fails with `AlreadyExists` when the final path is
+    /// already present, so a concurrent second instance adopts the existing id
+    /// instead of clobbering it (last-write-wins would churn the id across
+    /// instances — the very bug this persistence exists to prevent).
+    ///
     /// # Errors
     ///
-    /// Returns an error if the id cannot be serialized or written to disk.
+    /// Returns an error when the id cannot be serialized, the temp file cannot
+    /// be written, its permissions cannot be tightened, and when the atomic link
+    /// fails for any reason other than the final path already existing.
     pub fn save_client_id(
         &self,
         backend_name: &str,
         resource_url: &str,
         client_id: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let path = self.client_path(backend_name, resource_url);
         let content = serde_json::to_string(client_id)
             .map_err(|e| Error::OAuth(format!("Failed to serialize client_id: {e}")))?;
-        fs::write(&path, content)
-            .map_err(|e| Error::OAuth(format!("Failed to write client_id file: {e}")))?;
 
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("client");
+        let tmp = self
+            .base_dir
+            .join(format!("{file_name}.tmp.{}", std::process::id()));
+        fs::write(&tmp, &content)
+            .map_err(|e| Error::OAuth(format!("Failed to write client_id temp file: {e}")))?;
+
+        // Lock down permissions on the inode BEFORE it becomes reachable at the
+        // final path. A swallowed chmod would leave a public client_id file, so
+        // the error is propagated (after cleaning up the temp file).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&path, perms);
+            if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)) {
+                let _ = fs::remove_file(&tmp);
+                return Err(Error::OAuth(format!(
+                    "Failed to set client_id permissions: {e}"
+                )));
+            }
         }
 
-        info!(backend = %backend_name, "Saved registered OAuth client_id");
+        let result = match fs::hard_link(&tmp, &path) {
+            Ok(()) => {
+                info!(backend = %backend_name, "Saved registered OAuth client_id");
+                Ok(client_id.to_string())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Another instance won the race; adopt whatever is on disk.
+                let existing = self
+                    .load_client_id(backend_name, resource_url)
+                    .unwrap_or_else(|| client_id.to_string());
+                info!(backend = %backend_name, "client_id already persisted by another instance; adopting it");
+                Ok(existing)
+            }
+            Err(e) => Err(Error::OAuth(format!("Failed to persist client_id: {e}"))),
+        };
+        let _ = fs::remove_file(&tmp);
+        result
+    }
+
+    /// Delete a stored client id so the next connection re-registers.
+    ///
+    /// Called when the authorization server rejects the persisted id with
+    /// `invalid_client` (e.g. the registration was revoked or garbage-collected
+    /// server-side). Without this there is no in-product recovery from a stale
+    /// registration short of manual file deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be deleted.
+    pub fn delete_client_id(&self, backend_name: &str, resource_url: &str) -> Result<()> {
+        let path = self.client_path(backend_name, resource_url);
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| Error::OAuth(format!("Failed to delete client_id file: {e}")))?;
+            info!(backend = %backend_name, "Deleted stored OAuth client_id");
+        }
         Ok(())
     }
 }
@@ -330,17 +393,18 @@ mod tests {
 
     #[test]
     fn client_id_round_trips_and_is_absent_before_registration() {
-        let dir = std::env::temp_dir().join(format!("mcpgw-oauth-test-{}", std::process::id()));
-        let store = TokenStorage::new(dir.clone()).expect("create store");
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).expect("create store");
         let (backend, resource) = ("beeper", "http://127.0.0.1:23373/v0/mcp");
 
         // No client registered yet -> None (would trigger DCR + browser tab).
         assert_eq!(store.load_client_id(backend, resource), None);
 
         // Persist then reload -> stable id, so the next connection reuses it.
-        store
+        let persisted = store
             .save_client_id(backend, resource, "persisted-client-123")
             .expect("save client_id");
+        assert_eq!(persisted, "persisted-client-123");
         assert_eq!(
             store.load_client_id(backend, resource),
             Some("persisted-client-123".to_string())
@@ -348,8 +412,61 @@ mod tests {
 
         // A different backend must not collide.
         assert_eq!(store.load_client_id("other", resource), None);
+    }
 
-        let _ = fs::remove_dir_all(&dir);
+    #[cfg(unix)]
+    #[test]
+    fn save_client_id_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+
+        store.save_client_id(backend, resource, "cid").unwrap();
+        let path = store.client_path(backend, resource);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "client_id file must be owner-only, got {mode:o}"
+        );
+    }
+
+    #[test]
+    fn save_client_id_is_first_writer_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+
+        // First write wins and is returned verbatim.
+        assert_eq!(
+            store.save_client_id(backend, resource, "first").unwrap(),
+            "first"
+        );
+        // A concurrent second write does NOT clobber; it adopts the existing id.
+        assert_eq!(
+            store.save_client_id(backend, resource, "second").unwrap(),
+            "first"
+        );
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("first".to_string())
+        );
+
+        // After deletion, the next write wins again (re-registration path).
+        store.delete_client_id(backend, resource).unwrap();
+        assert_eq!(store.load_client_id(backend, resource), None);
+        assert_eq!(
+            store.save_client_id(backend, resource, "third").unwrap(),
+            "third"
+        );
+    }
+
+    #[test]
+    fn delete_client_id_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        // Deleting a non-existent record is a no-op, not an error.
+        store.delete_client_id("nope", "http://localhost").unwrap();
     }
 
     // =========================================================================

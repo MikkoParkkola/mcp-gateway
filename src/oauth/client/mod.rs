@@ -13,7 +13,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as TokioMutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 use super::callback;
@@ -554,6 +554,7 @@ impl OAuthClient {
                 http_status = status.as_u16(),
                 "OAuth token exchange failed"
             );
+            self.purge_client_id_if_invalid(&body);
             return Err(Error::OAuth(format!(
                 "Token exchange failed: HTTP {status} - {body}"
             )));
@@ -615,6 +616,7 @@ impl OAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            self.purge_client_id_if_invalid(&body);
             return Err(Error::OAuth(format!(
                 "Token refresh failed: HTTP {status} - {body}"
             )));
@@ -658,18 +660,41 @@ impl OAuthClient {
         if let Some(ref reg_endpoint) = auth_meta.registration_endpoint {
             match self.register_client(reg_endpoint, redirect_uri).await {
                 Ok(client_id) => {
-                    *self.client_id.write() = Some(client_id.clone());
                     // Persist immediately: registration succeeded even if the
                     // browser authorize step below never completes. Without this
                     // every connection re-registers and opens a new OAuth tab.
-                    if let Err(e) = self.storage.save_client_id(
+                    match self.storage.save_client_id(
                         &self.backend_name,
                         &self.resource_url,
                         &client_id,
                     ) {
-                        warn!(error = %e, "Failed to persist registered client_id");
+                        Ok(persisted) => {
+                            // First-writer-wins: a co-located instance may have
+                            // registered concurrently; adopt the authoritative
+                            // on-disk id so both instances converge on one.
+                            *self.client_id.write() = Some(persisted.clone());
+                            return Ok(persisted);
+                        }
+                        Err(e) => {
+                            // Do NOT silently swallow: a lost write re-opens the
+                            // "new client_id every restart" churn bug. The
+                            // in-memory id is still valid for THIS session, so
+                            // the live auth proceeds, but the operator must see
+                            // that persistence failed.
+                            let client_file = self
+                                .storage
+                                .client_path(&self.backend_name, &self.resource_url);
+                            error!(
+                                backend = %self.backend_name,
+                                error = %e,
+                                path = %client_file.display(),
+                                "Failed to persist registered client_id; it will be re-registered \
+                                 on next restart (auth churn until the write path is fixed)"
+                            );
+                            *self.client_id.write() = Some(client_id.clone());
+                            return Ok(client_id);
+                        }
                     }
-                    return Ok(client_id);
                 }
                 Err(e) => {
                     debug!(error = %e, "Dynamic registration failed, using generated ID");
@@ -681,6 +706,30 @@ impl OAuthClient {
         let generated = generate_client_id();
         *self.client_id.write() = Some(generated.clone());
         Ok(generated)
+    }
+
+    /// Purge a stored `client_id` when the authorization server rejects it.
+    ///
+    /// OAuth 2.0 signals an unrecognized client with an `invalid_client` error
+    /// in the token-endpoint response body. When that happens the persisted
+    /// registration is stale (revoked, expired, garbage-collected); we drop it
+    /// from memory and disk so the next attempt re-registers rather than looping
+    /// on `invalid_client` forever with no recovery inside the product.
+    fn purge_client_id_if_invalid(&self, response_body: &str) {
+        if !response_body.contains("invalid_client") {
+            return;
+        }
+        warn!(
+            backend = %self.backend_name,
+            "Server rejected client_id (invalid_client); purging stored registration so the next attempt re-registers"
+        );
+        *self.client_id.write() = None;
+        if let Err(e) = self
+            .storage
+            .delete_client_id(&self.backend_name, &self.resource_url)
+        {
+            warn!(backend = %self.backend_name, error = %e, "Failed to delete stale client_id file");
+        }
     }
 
     /// Register a new client dynamically with the specified redirect URI
