@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -319,6 +320,12 @@ impl TokenStorage {
         resource_url: &str,
         client_id: &str,
     ) -> Result<String> {
+        // Per-call unique temp name: a static nonce plus the pid keeps two
+        // concurrent same-process registrations for the same backend from
+        // stomping on each other's temp file (which would let one call return
+        // an id that disagrees with the authoritative on-disk value).
+        static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
+
         let path = self.client_path(backend_name, resource_url);
         let content = serde_json::to_string(client_id)
             .map_err(|e| Error::OAuth(format!("Failed to serialize client_id: {e}")))?;
@@ -327,9 +334,10 @@ impl TokenStorage {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("client");
+        let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
         let tmp = self
             .base_dir
-            .join(format!("{file_name}.tmp.{}", std::process::id()));
+            .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
         fs::write(&tmp, &content)
             .map_err(|e| Error::OAuth(format!("Failed to write client_id temp file: {e}")))?;
 
@@ -467,6 +475,46 @@ mod tests {
         let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
         // Deleting a non-existent record is a no-op, not an error.
         store.delete_client_id("nope", "http://localhost").unwrap();
+    }
+
+    #[test]
+    fn save_client_id_concurrent_same_backend_converges() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+        let (backend, resource) = ("b", "http://localhost");
+
+        // Many threads register distinct ids for the SAME backend at once.
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .save_client_id(backend, resource, &format!("cid-{i}"))
+                        .expect("save")
+                })
+            })
+            .collect();
+        let returned: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // Every caller must observe the SAME authoritative id (first wins), and
+        // it must match what is on disk.
+        let on_disk = store.load_client_id(backend, resource).expect("persisted");
+        assert!(
+            returned.iter().all(|r| *r == on_disk),
+            "callers disagreed with disk: returned={returned:?} disk={on_disk}"
+        );
+
+        // No temp files leaked.
+        let leaked = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+        assert_eq!(leaked, 0, "temp files leaked");
     }
 
     // =========================================================================
