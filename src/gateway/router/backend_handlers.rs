@@ -9,6 +9,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tracing::{debug, error, warn};
 
 use super::AppState;
@@ -26,6 +27,11 @@ use crate::trust::project_tool_descriptors_trust_cards;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Option<Result<Option<Value>, BackendRejection>>;
+
+/// Forwarded passthrough headers paired with the caller's stable upstream-session
+/// bucket key (MIK-6785): `Some(sha256_hex(credential))` when a credential is
+/// forwarded, `None` on the no-credential path. See [`resolve_passthrough_headers`].
+type PassthroughResolution = (Vec<(String, String)>, Option<String>);
 
 #[derive(Clone, Copy)]
 struct BackendAuthContext<'a> {
@@ -171,6 +177,29 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     }
 }
 
+/// Stable, collision-safe upstream-session bucket key for a passthrough caller
+/// (MIK-6785). On the passthrough route the forwarded backend credential is the
+/// only value that distinguishes one caller from another (there is usually no
+/// gateway-verified identity), so the caller's `MCP-Session-Id` bucket is keyed
+/// by the SHA-256 hex digest of that credential.
+///
+/// Privacy is load-bearing: the raw credential is hashed HERE, at the single
+/// point it is read from the inbound header, and the digest — never the token —
+/// becomes the in-memory `HttpTransport::sessions` map key. SHA-256 is one-way,
+/// so a leaked bucket key cannot recover the credential, and the raw token is
+/// never logged or stored anywhere else.
+///
+/// Correctness: distinct credentials produce distinct 64-char hex digests, hence
+/// distinct session buckets (isolation); the same credential always produces the
+/// same digest, hence a reused bucket (session continuity). A 64-char lowercase
+/// hex digest can never collide with the minting path's `idp:`-prefixed bindings
+/// nor with the shared default (`""`) bucket.
+fn passthrough_identity_key(credential: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(credential.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 /// Resolve passthrough headers for the direct backend route (ADR-008 rung 2,
 /// MIK-6746). Reads the caller's own backend credential from a fixed,
 /// gateway-specific inbound header and forwards it to the backend under
@@ -181,6 +210,15 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
 /// the caller); a non-required backend with none returns an empty vec (static
 /// path, after which the INV-2 guard decides whether a shared token may serve).
 ///
+/// Returns `(headers, identity_key)`. `identity_key` (MIK-6785) is the caller's
+/// stable upstream-session bucket key — `Some(sha256_hex(credential))` when a
+/// credential is forwarded, so each distinct passthrough caller gets its own
+/// `MCP-Session-Id` bucket and a stateful upstream cannot serve one caller's
+/// session-bound data to another; `None` on the no-credential path (shared
+/// default bucket, behavior unchanged). The credential is hashed at this single
+/// read point (see [`passthrough_identity_key`]) so the raw token is never
+/// re-extracted from the header vec downstream.
+///
 /// Also fails closed (MIK-6710) BEFORE reading the inbound header when
 /// `transport_carries_headers` is `false` for a `required` backend — a stdio
 /// or websocket backend would otherwise accept the caller's credential here
@@ -190,7 +228,7 @@ fn resolve_passthrough_headers(
     cfg: &crate::identity_propagation::IdentityPropagationConfig,
     inbound: &axum::http::HeaderMap,
     transport_carries_headers: bool,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<PassthroughResolution, String> {
     // The inbound header a capable client attaches its backend credential in
     // (advertised via RFC 9728 protected-resource metadata, MIK-6750). Distinct
     // from `Authorization` so the gateway-auth token is never forwarded.
@@ -207,7 +245,10 @@ fn resolve_passthrough_headers(
                     .to_string(),
             )
         } else {
-            Ok(Vec::new())
+            // No credential on a non-required backend: static path, and no
+            // per-caller session bucket — the shared default bucket is used,
+            // exactly as before MIK-6785.
+            Ok((Vec::new(), None))
         }
     };
     match inbound
@@ -216,7 +257,13 @@ fn resolve_passthrough_headers(
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        Some(v) => Ok(vec![("Authorization".to_string(), v.to_string())]),
+        Some(v) => Ok((
+            vec![("Authorization".to_string(), v.to_string())],
+            // Hash the credential at its single read point (MIK-6785): the raw
+            // token stays in the forwarded header vec only; the digest is the
+            // caller's per-identity upstream session bucket key.
+            Some(passthrough_identity_key(v)),
+        )),
         None => missing(),
     }
 }
@@ -434,11 +481,22 @@ pub(super) async fn backend_handler(
             c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
         });
         let resolved = if let Some(cfg) = passthrough_cfg {
-            resolve_passthrough_headers(
+            match resolve_passthrough_headers(
                 &cfg,
                 &inbound_headers,
                 backend.transport_carries_identity_headers(),
-            )
+            ) {
+                Ok((headers, binding)) => {
+                    // Bind the upstream session bucket to this passthrough caller
+                    // (MIK-6785): keyed by the SHA-256 of the forwarded
+                    // credential, so distinct callers never share a stateful
+                    // upstream's session-bound data. `None` on the no-credential
+                    // path keeps the shared default bucket (behavior unchanged).
+                    identity_key = binding;
+                    Ok(headers)
+                }
+                Err(e) => Err(e),
+            }
         } else {
             match state
                 .meta_mcp

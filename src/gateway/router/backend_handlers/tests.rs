@@ -35,11 +35,12 @@ mod passthrough {
     // is pure over its inputs, so it cannot persist a token (INV-4).
     #[test]
     fn present_credential_is_forwarded_as_authorization() {
-        let out = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer caller-tok"), true)
-            .expect("present credential resolves");
+        let (headers, _key) =
+            resolve_passthrough_headers(&cfg(true), &headers_with("cred-caller-tok"), true)
+                .expect("present credential resolves");
         assert_eq!(
-            out,
-            vec![("Authorization".to_string(), "Bearer caller-tok".to_string())]
+            headers,
+            vec![("Authorization".to_string(), "cred-caller-tok".to_string())]
         );
     }
 
@@ -47,12 +48,67 @@ mod passthrough {
     // own header value; there is no shared/mutable state between calls.
     #[test]
     fn concurrent_callers_are_isolated() {
-        let a =
-            resolve_passthrough_headers(&cfg(true), &headers_with("Bearer alice"), true).unwrap();
-        let b = resolve_passthrough_headers(&cfg(true), &headers_with("Bearer bob"), true).unwrap();
-        assert_eq!(a[0].1, "Bearer alice");
-        assert_eq!(b[0].1, "Bearer bob");
+        let (a, _) =
+            resolve_passthrough_headers(&cfg(true), &headers_with("cred-alice"), true).unwrap();
+        let (b, _) =
+            resolve_passthrough_headers(&cfg(true), &headers_with("cred-bob"), true).unwrap();
+        assert_eq!(a[0].1, "cred-alice");
+        assert_eq!(b[0].1, "cred-bob");
         assert_ne!(a[0].1, b[0].1);
+    }
+
+    // MIK.PT.1 — two DISTINCT passthrough credentials against one stateful
+    // backend resolve to DISTINCT upstream session buckets. `identity_key` is
+    // the bucket selector fed to `HttpTransport::bucket_key` (which is just
+    // `identity_key.unwrap_or("")`), so distinct `Some` keys ==> distinct
+    // `MCP-Session-Id` buckets ==> no cross-caller session-bound data leak
+    // (MIK-6785). Verified at the cheapest network-free seam.
+    #[test]
+    fn distinct_credentials_get_distinct_session_buckets() {
+        let (_, key_a) =
+            resolve_passthrough_headers(&cfg(true), &headers_with("cred-alice"), true).unwrap();
+        let (_, key_b) =
+            resolve_passthrough_headers(&cfg(true), &headers_with("cred-bob"), true).unwrap();
+        assert!(key_a.is_some() && key_b.is_some(), "both must key a bucket");
+        assert_ne!(
+            key_a, key_b,
+            "distinct credentials must select distinct upstream session buckets"
+        );
+    }
+
+    // MIK.PT.2 — the SAME passthrough credential reuses the SAME bucket, so a
+    // caller keeps its own negotiated upstream session across requests.
+    #[test]
+    fn same_credential_reuses_same_session_bucket() {
+        let (_, first) =
+            resolve_passthrough_headers(&cfg(true), &headers_with("cred-alice"), true).unwrap();
+        let (_, second) =
+            resolve_passthrough_headers(&cfg(true), &headers_with("cred-alice"), true).unwrap();
+        assert!(first.is_some(), "credential must key a bucket");
+        assert_eq!(
+            first, second,
+            "the same credential must select the same upstream session bucket"
+        );
+    }
+
+    // MIK-6785 privacy invariant — the bucket key is the SHA-256 hex digest of
+    // the credential, NOT the raw credential. The raw token must never appear
+    // in the key that is stored as the in-memory session-map key.
+    #[test]
+    fn identity_key_is_sha256_hex_not_raw_credential() {
+        const CRED: &str = "cred-super-secret-token-value";
+        let (_, key) = resolve_passthrough_headers(&cfg(true), &headers_with(CRED), true).unwrap();
+        let key = key.expect("credential must key a bucket");
+        // 64 lowercase hex chars — a SHA-256 digest, never the token.
+        assert_eq!(key.len(), 64, "SHA-256 hex is 64 chars");
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()), "hex only");
+        assert!(!key.contains(CRED), "raw credential must not appear in key");
+        assert!(
+            !key.contains("super-secret-token-value"),
+            "raw token bytes must not appear in key"
+        );
+        // Exactly the digest `passthrough_identity_key` computes.
+        assert_eq!(key, passthrough_identity_key(CRED));
     }
 
     // D.3 — a required backend with no caller credential fails closed.
@@ -63,12 +119,19 @@ mod passthrough {
         assert!(resolve_passthrough_headers(&cfg(true), &headers_with("   "), true).is_err());
     }
 
-    // A non-required backend with no caller credential yields the static
-    // path (empty), after which the INV-2 shared-token guard decides.
+    // MIK.PT.3 — a non-required backend with no caller credential yields the
+    // static path (empty headers) AND no per-caller session bucket (`None`), so
+    // `HttpTransport::bucket_key` returns the shared default (`""`) bucket
+    // exactly as before MIK-6785. The INV-2 shared-token guard then decides.
     #[test]
     fn optional_and_absent_is_empty() {
-        let out = resolve_passthrough_headers(&cfg(false), &HeaderMap::new(), true).unwrap();
-        assert!(out.is_empty());
+        let (headers, key) =
+            resolve_passthrough_headers(&cfg(false), &HeaderMap::new(), true).unwrap();
+        assert!(headers.is_empty());
+        assert!(
+            key.is_none(),
+            "no credential must select the shared default (\"\") bucket"
+        );
     }
 
     // MIK-6710 — a `required` backend on a transport that cannot carry
@@ -77,9 +140,8 @@ mod passthrough {
     // supplied a well-formed credential.
     #[test]
     fn required_and_transport_incapable_refuses_even_with_credential() {
-        let err =
-            resolve_passthrough_headers(&cfg(true), &headers_with("Bearer caller-tok"), false)
-                .expect_err("incapable transport must refuse regardless of credential");
+        let err = resolve_passthrough_headers(&cfg(true), &headers_with("cred-caller-tok"), false)
+            .expect_err("incapable transport must refuse regardless of credential");
         assert!(err.contains("MIK-6710"), "error: {err}");
     }
 
@@ -87,8 +149,9 @@ mod passthrough {
     // proceeds with the static path — best-effort, unaffected by MIK-6710.
     #[test]
     fn optional_and_transport_incapable_is_unaffected() {
-        let out = resolve_passthrough_headers(&cfg(false), &HeaderMap::new(), false).unwrap();
-        assert!(out.is_empty());
+        let (headers, _key) =
+            resolve_passthrough_headers(&cfg(false), &HeaderMap::new(), false).unwrap();
+        assert!(headers.is_empty());
     }
 }
 
@@ -274,7 +337,7 @@ mod identity_propagation_audit {
             "x-mcp-passthrough-authorization",
             CANARY_SECRET.parse().unwrap(),
         );
-        let headers = resolve_passthrough_headers(&cfg, &inbound, true)
+        let (headers, _key) = resolve_passthrough_headers(&cfg, &inbound, true)
             .expect("canary credential resolves into forwarded headers");
         assert!(
             headers.iter().any(|(_, v)| v.contains(CANARY_SECRET)),
