@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-07-06
+
+### Security
+
+- **Passthrough upstream session id is now partitioned per caller identity
+  (MIK-6785).** This closes the second code path of the session-sharing class
+  fixed for the minting path in 3.1.1 (MIK-6784). In Passthrough mode the direct
+  backend route left the caller identity key unset, so every passthrough caller
+  shared the empty-key default upstream-session bucket. Against a stateful
+  upstream that binds data to the `MCP-Session-Id` rather than the bearer token,
+  one passthrough caller could be served another caller's session-bound data.
+  The forwarded backend credential is now hashed at its single read point via
+  SHA-256 into a stable, collision-safe per-caller bucket key; the raw token is
+  never logged or stored except as that one-way in-memory session-map key. Each
+  distinct passthrough credential selects its own session bucket, the same
+  credential reuses its bucket, and the no-credential non-required path keeps the
+  shared default bucket, so single-tenant behavior is unchanged. With this the
+  entire upstream session-sharing class is closed across both code paths and no
+  follow-up remains.
+
 ## [3.1.1] - 2026-07-06
 
 ### Security
