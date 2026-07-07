@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-07-07
+
+### Added
+
+- **Per-user transport/session pool (MIK-6735).** Each caller identity now gets
+  its own isolated upstream MCP transport slot instead of sharing a single
+  connection. One identity's reconnect or failure no longer disrupts others on
+  the same backend. Pool keys are `Shared | PerUser{binding}`; the `Shared`
+  path is byte-identical to prior single-transport behaviour for backends that
+  do not opt into per-user isolation.
+- **Per-slot failsafe isolation.** The circuit breaker, rate limiter, and
+  health tracker now live on each pool slot rather than a single backend-wide
+  instance. A per-user slot tripping its circuit breaker Open can no longer
+  reject another identity's healthy slot.
+- **Identity-aware notifications.** `notify_with_headers()` routes client
+  notifications to the caller's own pool slot. Notifications resolve the
+  caller's session-bucket binding only and stay within the caller's identity
+  (fire-and-forget, no response body, no cross-tenant path).
+- **Pool telemetry.** `mcp_backend_pool_slots` gauge plus debug slot-count
+  logging on slot creation and idle eviction.
+
+### Changed
+
+- Idle per-user pool slots are evicted after a TTL (300s, 60s sweep) to bound
+  resource growth under many distinct identities.
+- Config now accepts per-user isolation settings (previously rejected),
+  retaining the http-required and oauth-conflict fail-closed validation.
+
 ## [3.1.3] - 2026-07-06
 
 ### Security
