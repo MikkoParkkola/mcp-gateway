@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-07-07
+
+### Changed
+
+- **Internal refactor (MIK-6863).** Split the 3038-line `src/backend/mod.rs`
+  into focused submodules (`pool`, `lifecycle`, `ops`, `metadata`,
+  `cached_metadata`, `registry`, `annotations`, plus `tests`/`pool_tests`) so no
+  file exceeds the 800-line hygiene cap. Pure move refactor: no behavioural or
+  public-API change, identical test coverage.
+
 ## [3.2.0] - 2026-07-07
 
 ### Added
