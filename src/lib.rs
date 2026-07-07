@@ -45,6 +45,7 @@ pub mod cost_accounting;
 pub mod discovery;
 pub mod error;
 pub mod failsafe;
+mod fs_lock;
 pub mod gateway;
 mod hashing;
 pub mod idempotency;

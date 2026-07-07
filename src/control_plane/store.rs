@@ -40,6 +40,7 @@ use crate::control_plane::{
     ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneGrant, ControlPlaneGrantStatus,
     ControlPlanePolicy, ControlPlaneRollbackPlan,
 };
+use crate::fs_lock::ExclusiveFileLock;
 use crate::security::TransparencyLogger;
 
 /// On-disk schema version for a persisted collection.
@@ -858,43 +859,10 @@ fn force_owner_only(_f: &std::fs::File) -> std::io::Result<()> {
 }
 
 // ── OS advisory file lock ────────────────────────────────────────────────────────
-
-/// An exclusive advisory lock on a dedicated lock file, released on drop.
-///
-/// On unix this is a real `flock`; the lock file's fd holds the lock across the
-/// collection file's atomic rename. On non-unix it degrades to opening the file
-/// with no advisory lock.
-struct ExclusiveFileLock {
-    _file: std::fs::File,
-}
-
-impl ExclusiveFileLock {
-    fn acquire(lock_path: &Path) -> std::io::Result<Self> {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.create(true).write(true).read(true);
-        set_owner_only(&mut opts);
-        let file = opts.open(lock_path)?;
-        lock_exclusive(&file)?;
-        Ok(Self { _file: file })
-    }
-}
-
-/// Take an exclusive `flock` on unix. `rustix` is an already-present dependency
-/// (promoted to direct with the `fs` feature); no new crate is compiled.
-#[cfg(unix)]
-fn lock_exclusive(file: &std::fs::File) -> std::io::Result<()> {
-    rustix::fs::flock(file, rustix::fs::FlockOperation::LockExclusive)
-        .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()))
-}
-
-/// ponytail: cross-process advisory locking on non-unix is out of scope for the
-/// single-node file backend. Atomic rename still prevents torn files, and the
-/// generation compare-and-swap still rejects an in-process lost update. Upgrade
-/// to `LockFileEx` if a Windows multi-process deployment ever needs it.
-#[cfg(not(unix))]
-fn lock_exclusive(_file: &std::fs::File) -> std::io::Result<()> {
-    Ok(())
-}
+//
+// `ExclusiveFileLock` moved to `crate::fs_lock` (2026-07-07, MIK-6750 r7) so the
+// oauth client_id self-heal path can share the same flock primitive instead of
+// duplicating it. See `crate::fs_lock` for the implementation.
 
 // ── Tests ────────────────────────────────────────────────────────────────────────
 

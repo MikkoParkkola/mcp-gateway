@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -262,11 +263,643 @@ impl TokenStorage {
 
         Ok(())
     }
+
+    /// Get the file path for a backend's dynamically-registered client id.
+    pub(crate) fn client_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
+        let key = Self::storage_key(backend_name, resource_url);
+        self.base_dir.join(format!("{key}_client.json"))
+    }
+
+    /// Path to the advisory-lock sidecar guarding a backend's `client_id`
+    /// corrupt-final repair (see [`repair_corrupt_final`](Self::repair_corrupt_final)).
+    /// Never renamed or linked itself, so the held fd's lock survives the
+    /// final file's remove/relink underneath it.
+    fn client_lock_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
+        let key = Self::storage_key(backend_name, resource_url);
+        self.base_dir.join(format!(".{key}_client.lock"))
+    }
+
+    /// Load a previously-registered dynamic client id for a backend.
+    ///
+    /// Returns `None` if no client has been registered yet or the record is
+    /// unreadable. Persisting this is what prevents a fresh Dynamic Client
+    /// Registration (and its browser authorize tab) on every connection.
+    #[must_use]
+    pub fn load_client_id(&self, backend_name: &str, resource_url: &str) -> Option<String> {
+        let path = self.client_path(backend_name, resource_url);
+        if !path.exists() {
+            return None;
+        }
+        match fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<String>(&content) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    warn!(backend = %backend_name, error = %e, "Failed to parse stored client_id");
+                    None
+                }
+            },
+            Err(e) => {
+                warn!(backend = %backend_name, error = %e, "Failed to read client_id file");
+                None
+            }
+        }
+    }
+
+    /// Persist a dynamically-registered client id for a backend.
+    ///
+    /// Returns the id that is now authoritative on disk: the one passed in when
+    /// this call won the first-registration race, and a pre-existing one when
+    /// another gateway instance sharing this directory registered first.
+    ///
+    /// The write is atomic and never exposes a world-readable window: content
+    /// goes to a per-process temp file created with `O_EXCL` and mode `0600`
+    /// (on unix) before it is linked into place. Creating with `O_EXCL` also
+    /// guarantees a leftover temp from a crashed run is never truncated/reused.
+    /// `hard_link` fails with `AlreadyExists` when the final path is already
+    /// present, so a concurrent second instance adopts the existing id instead
+    /// of clobbering it (last-write-wins would churn the id across instances,
+    /// the very bug this persistence exists to prevent). A corrupt/unreadable
+    /// final file is repaired under an exclusive advisory lock (see
+    /// [`repair_corrupt_final`](Self::repair_corrupt_final)) so two processes
+    /// that both observe the corruption can never race to remove each other's
+    /// freshly-written valid file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the id cannot be serialized, when a unique temp
+    /// file cannot be created, when the temp file cannot be written (in which
+    /// case the temp file is removed before the error is returned -- see
+    /// [`write_client_tmp`](Self::write_client_tmp)), when the existing final
+    /// file is unreadable and cannot be self-healed, or when the atomic link
+    /// fails for a reason other than the final path already existing.
+    pub fn save_client_id(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        client_id: &str,
+    ) -> Result<String> {
+        let path = self.client_path(backend_name, resource_url);
+        let content = serde_json::to_string(client_id)
+            .map_err(|e| Error::OAuth(format!("Failed to serialize client_id: {e}")))?;
+
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("client");
+
+        // Create the temp file with O_EXCL so a leftover temp from a crashed
+        // prior run is never truncated/reused: `create_new` fails with
+        // `AlreadyExists` rather than opening (and emptying) an existing path.
+        // On unix the 0600 mode is applied atomically at creation, closing the
+        // world-readable window that a post-write chmod would otherwise leave.
+        let tmp = self.create_client_tmp(file_name)?;
+        let tmp = Self::write_client_tmp(tmp, &content)?;
+
+        // First-writer-wins: `hard_link` fails with `AlreadyExists` when the
+        // final path already exists, so a concurrent instance adopts the
+        // existing id instead of clobbering it. A corrupt/unreadable existing
+        // file is unusable and gets repaired under a cross-process lock (see
+        // `repair_corrupt_final` for why the repair must be serialized).
+        let result = match fs::hard_link(&tmp, &path) {
+            Ok(()) => {
+                info!(backend = %backend_name, "Saved registered OAuth client_id");
+                Ok(client_id.to_string())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                match self.load_client_id(backend_name, resource_url) {
+                    Some(existing) => {
+                        info!(backend = %backend_name, "client_id already persisted by another instance; adopting it");
+                        Ok(existing)
+                    }
+                    None => self.repair_corrupt_final(
+                        backend_name,
+                        resource_url,
+                        &path,
+                        &tmp,
+                        client_id,
+                    ),
+                }
+            }
+            Err(e) => Err(Error::OAuth(format!("Failed to persist client_id: {e}"))),
+        };
+        let _ = fs::remove_file(&tmp);
+        result
+    }
+
+    /// Repair a corrupt/unreadable final `client_id` file under an exclusive
+    /// advisory lock (MIK-6750 r7).
+    ///
+    /// Without serialization, two processes that both observe
+    /// `load_client_id` return `None` for the same corrupt final can race:
+    /// process A reads `None`, process B repairs the file with a valid id and
+    /// returns, then process A — still acting on its stale `None` read —
+    /// removes B's freshly-written file and links its own, so the disk ends
+    /// up authoritative for A's id while B has already adopted its own. This
+    /// takes an exclusive `flock` on a `.lock` sidecar (never renamed, so the
+    /// held fd's lock survives the final file's remove/relink) across
+    /// re-read → remove → `hard_link`, so only one process repairs at a time
+    /// and a final that has become valid while we waited is never removed.
+    fn repair_corrupt_final(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        path: &std::path::Path,
+        tmp: &std::path::Path,
+        client_id: &str,
+    ) -> Result<String> {
+        let lock_path = self.client_lock_path(backend_name, resource_url);
+        let _lock = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
+            .map_err(|e| Error::OAuth(format!("Failed to acquire client_id repair lock: {e}")))?;
+
+        // Re-read under the lock: another process may have healed the file
+        // between our caller's unlocked read (which found it corrupt) and
+        // this call acquiring the lock. Never remove a final that now parses.
+        if let Some(existing) = self.load_client_id(backend_name, resource_url) {
+            info!(backend = %backend_name, "client_id healed by another instance while waiting for the repair lock; adopting it");
+            return Ok(existing);
+        }
+
+        warn!(backend = %backend_name, "Existing client_id file is unreadable; removing and re-persisting from validated temp");
+        let _ = fs::remove_file(path);
+
+        match fs::hard_link(tmp, path) {
+            Ok(()) => {
+                info!(backend = %backend_name, "Saved registered OAuth client_id (self-healed corrupt final)");
+                Ok(client_id.to_string())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // An unlocked fast-path writer (a fresh, non-repair save)
+                // won the link in the gap between our remove and this retry.
+                // Adopt whatever it left if valid; this is the same
+                // first-writer-wins contract as the normal case above.
+                self.load_client_id(backend_name, resource_url)
+                    .ok_or_else(|| {
+                        Error::OAuth(
+                            "client_id file exists but is unreadable and could not be self-healed"
+                                .to_string(),
+                        )
+                    })
+            }
+            Err(e) => Err(Error::OAuth(format!(
+                "Failed to persist client_id during self-heal: {e}"
+            ))),
+        }
+    }
+
+    /// Write `content` into the just-created temp file and return its path on
+    /// success.
+    ///
+    /// On any write or `fsync` failure (e.g. `ENOSPC`, `EIO`) the temp file is
+    /// removed (best-effort) before the error propagates, so a transient
+    /// write failure never leaks a private `0600` temp file under `base_dir`
+    /// (MIK-6750 r8, minor -- the previous code returned early via `?`
+    /// without cleanup, orphaning the temp on every such error).
+    #[cfg(unix)]
+    fn write_client_tmp(tmp: (fs::File, PathBuf), content: &str) -> Result<PathBuf> {
+        use std::io::Write as _;
+        let (mut file, tmp_path) = tmp;
+        match file
+            .write_all(content.as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            Ok(()) => Ok(tmp_path),
+            Err(e) => {
+                let _ = fs::remove_file(&tmp_path);
+                Err(Error::OAuth(format!(
+                    "Failed to write client_id temp file: {e}"
+                )))
+            }
+        }
+    }
+
+    /// Non-unix counterpart of [`write_client_tmp`](Self::write_client_tmp)
+    /// (see its docs for the cleanup-on-failure contract). `fs::write` opens,
+    /// writes, and closes the file in one call, so there is no separate
+    /// [`File`] handle to thread through.
+    #[cfg(not(unix))]
+    fn write_client_tmp(tmp: PathBuf, content: &str) -> Result<PathBuf> {
+        match fs::write(&tmp, content) {
+            Ok(()) => Ok(tmp),
+            Err(e) => {
+                let _ = fs::remove_file(&tmp);
+                Err(Error::OAuth(format!(
+                    "Failed to write client_id temp file: {e}"
+                )))
+            }
+        }
+    }
+
+    /// Atomically create a private (`0600` on unix) temp file for a `client_id`
+    /// write, retrying with a fresh nonce if a stale temp path collides.
+    ///
+    /// Returns the open [`File`] handle plus its path on unix (so the caller
+    /// writes through the same fd the mode was set on), and just the path on
+    /// other platforms.
+    #[cfg(unix)]
+    fn create_client_tmp(&self, file_name: &str) -> Result<(fs::File, PathBuf)> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..8 {
+            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+            let tmp = self
+                .base_dir
+                .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)
+            {
+                Ok(file) => return Ok((file, tmp)),
+                // Stale temp collided; try the next nonce.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(Error::OAuth(format!(
+                        "Failed to create client_id temp file: {e}"
+                    )));
+                }
+            }
+        }
+        Err(Error::OAuth(
+            "Failed to create a unique client_id temp file after 8 attempts".to_string(),
+        ))
+    }
+
+    /// Non-unix fallback: pick a fresh temp path via `create_new`, closing the
+    /// handle immediately so the caller can `fs::write` it (no unix mode bits).
+    #[cfg(not(unix))]
+    fn create_client_tmp(&self, file_name: &str) -> Result<PathBuf> {
+        static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..8 {
+            let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+            let tmp = self
+                .base_dir
+                .join(format!("{file_name}.tmp.{}.{nonce}", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Ok(_) => return Ok(tmp),
+                // Stale temp collided; try the next nonce.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(Error::OAuth(format!(
+                        "Failed to create client_id temp file: {e}"
+                    )));
+                }
+            }
+        }
+        Err(Error::OAuth(
+            "Failed to create a unique client_id temp file after 8 attempts".to_string(),
+        ))
+    }
+
+    /// Delete a stored client id so the next connection re-registers.
+    ///
+    /// Called when the authorization server rejects the persisted id with
+    /// `invalid_client` (e.g. the registration was revoked or garbage-collected
+    /// server-side). Without this there is no in-product recovery from a stale
+    /// registration short of manual file deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be deleted.
+    pub fn delete_client_id(&self, backend_name: &str, resource_url: &str) -> Result<()> {
+        let path = self.client_path(backend_name, resource_url);
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| Error::OAuth(format!("Failed to delete client_id file: {e}")))?;
+            info!(backend = %backend_name, "Deleted stored OAuth client_id");
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_id_round_trips_and_is_absent_before_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).expect("create store");
+        let (backend, resource) = ("beeper", "http://127.0.0.1:23373/v0/mcp");
+
+        // No client registered yet -> None (would trigger DCR + browser tab).
+        assert_eq!(store.load_client_id(backend, resource), None);
+
+        // Persist then reload -> stable id, so the next connection reuses it.
+        let persisted = store
+            .save_client_id(backend, resource, "persisted-client-123")
+            .expect("save client_id");
+        assert_eq!(persisted, "persisted-client-123");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("persisted-client-123".to_string())
+        );
+
+        // A different backend must not collide.
+        assert_eq!(store.load_client_id("other", resource), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_client_id_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+
+        store.save_client_id(backend, resource, "cid").unwrap();
+        let path = store.client_path(backend, resource);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "client_id file must be owner-only, got {mode:o}"
+        );
+    }
+
+    #[test]
+    fn save_client_id_is_first_writer_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+
+        // First write wins and is returned verbatim.
+        assert_eq!(
+            store.save_client_id(backend, resource, "first").unwrap(),
+            "first"
+        );
+        // A concurrent second write does NOT clobber; it adopts the existing id.
+        assert_eq!(
+            store.save_client_id(backend, resource, "second").unwrap(),
+            "first"
+        );
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("first".to_string())
+        );
+
+        // After deletion, the next write wins again (re-registration path).
+        store.delete_client_id(backend, resource).unwrap();
+        assert_eq!(store.load_client_id(backend, resource), None);
+        assert_eq!(
+            store.save_client_id(backend, resource, "third").unwrap(),
+            "third"
+        );
+    }
+
+    #[test]
+    fn delete_client_id_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        // Deleting a non-existent record is a no-op, not an error.
+        store.delete_client_id("nope", "http://localhost").unwrap();
+    }
+
+    #[test]
+    fn save_client_id_concurrent_same_backend_converges() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+        let (backend, resource) = ("b", "http://localhost");
+
+        // Many threads register distinct ids for the SAME backend at once.
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .save_client_id(backend, resource, &format!("cid-{i}"))
+                        .expect("save")
+                })
+            })
+            .collect();
+        let returned: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // Every caller must observe the SAME authoritative id (first wins), and
+        // it must match what is on disk.
+        let on_disk = store.load_client_id(backend, resource).expect("persisted");
+        assert!(
+            returned.iter().all(|r| *r == on_disk),
+            "callers disagreed with disk: returned={returned:?} disk={on_disk}"
+        );
+
+        // No temp files leaked.
+        let leaked = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+        assert_eq!(leaked, 0, "temp files leaked");
+    }
+
+    #[test]
+    fn save_client_id_self_heals_corrupt_final_file() {
+        // GIVEN: an existing client_id file whose contents are corrupt
+        // (not a valid JSON string), so load_client_id() returns None.
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        let final_path = store.client_path(backend, resource);
+        fs::write(&final_path, b"\x00\x00not json at all").unwrap();
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            None,
+            "precondition: corrupt file must be unreadable"
+        );
+
+        // WHEN: we persist a fresh id over the corrupt file.
+        let returned = store
+            .save_client_id(backend, resource, "healed-id")
+            .expect("self-heal should succeed");
+
+        // THEN: the validated id is authoritative and readable from disk,
+        // instead of silently diverging from a broken on-disk record.
+        assert_eq!(returned, "healed-id");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("healed-id".to_string()),
+            "disk must match the returned id after self-heal"
+        );
+    }
+
+    #[test]
+    fn save_client_id_self_heals_zero_byte_final_file() {
+        // GIVEN: a zero-byte final file (empty => not a valid JSON string).
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        fs::write(store.client_path(backend, resource), b"").unwrap();
+
+        // WHEN / THEN: save self-heals and returns a readable id.
+        let returned = store.save_client_id(backend, resource, "cid").unwrap();
+        assert_eq!(returned, "cid");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("cid".to_string())
+        );
+    }
+
+    #[test]
+    fn repair_corrupt_final_adopts_valid_final_without_removing_it() {
+        // GIVEN: the final file was corrupt when the *caller* first checked
+        // it, but has since become valid — as if another process repaired it
+        // between the caller's unlocked read and this call acquiring the
+        // repair lock. This is exactly the MIK-6750 r7 Defect 1 race: without
+        // a re-read-under-lock guard, this call would remove the other
+        // repairer's freshly-written valid file and overwrite it with our
+        // own, so a caller that already adopted "winner-id" would diverge
+        // from what ends up on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+        let path = store.client_path(backend, resource);
+
+        // The final is now VALID (as if another process just healed it).
+        fs::write(&path, serde_json::to_string("winner-id").unwrap()).unwrap();
+
+        // Our own (in this scenario, redundant) validated temp.
+        let tmp = dir.path().join("our.tmp");
+        fs::write(&tmp, serde_json::to_string("our-id").unwrap()).unwrap();
+
+        // WHEN: we attempt to repair what we believed (from a stale read)
+        // was corrupt.
+        let result = store.repair_corrupt_final(backend, resource, &path, &tmp, "our-id");
+
+        // THEN: we adopt the winner instead of overwriting it...
+        assert_eq!(result.unwrap(), "winner-id");
+        // ...and the final file was never removed/replaced.
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("winner-id".to_string()),
+            "a final that became valid under the lock must never be removed"
+        );
+    }
+
+    #[test]
+    fn save_client_id_self_heal_converges_under_thread_contention() {
+        // GIVEN: a corrupt final, and many threads racing to self-heal it
+        // with DIFFERENT ids at once (MIK-6750 r7, Defect 1).
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+        let (backend, resource) = ("b", "http://localhost");
+        fs::write(store.client_path(backend, resource), b"\x00corrupt").unwrap();
+
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .save_client_id(backend, resource, &format!("heal-{i}"))
+                        .expect("self-heal save")
+                })
+            })
+            .collect();
+        let returned: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // THEN: every caller converged on the SAME id, and it matches disk —
+        // the advisory lock serializes repair so no two threads can diverge.
+        let on_disk = store
+            .load_client_id(backend, resource)
+            .expect("healed and persisted");
+        assert!(
+            returned.iter().all(|r| *r == on_disk),
+            "callers disagreed with disk after self-heal race: returned={returned:?} disk={on_disk}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_client_tmp_removes_leaked_temp_on_write_failure() {
+        // GIVEN: a temp file opened read-only, so writing through it fails
+        // with EBADF -- simulating a real write/fsync failure (ENOSPC, EIO)
+        // deterministically, without exhausting real disk space (MIK-6750
+        // r8, minor -- Defect 3: the write path used to return early via `?`
+        // on failure without removing the temp, leaking a private 0600 file
+        // under `base_dir` on every such error).
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_path = dir.path().join("client.tmp.leak-check");
+        // Create the file first (needs write access to create), then close
+        // and reopen it read-only so the fd we hand to `write_client_tmp`
+        // has no write access at all.
+        fs::File::create(&tmp_path).unwrap();
+        let file = fs::OpenOptions::new().read(true).open(&tmp_path).unwrap();
+        assert!(
+            tmp_path.exists(),
+            "precondition: temp file exists before the write attempt"
+        );
+
+        // WHEN: the write fails (the fd has no write permission).
+        let result = TokenStorage::write_client_tmp((file, tmp_path.clone()), "some-content");
+
+        // THEN: the error propagates AND the temp file is gone -- nothing is
+        // left behind on disk for an operator to notice weeks later.
+        assert!(
+            result.is_err(),
+            "expected the write to fail on a read-only fd"
+        );
+        assert!(
+            !tmp_path.exists(),
+            "temp file must be removed when the write/fsync fails, not leaked"
+        );
+    }
+
+    #[test]
+    fn save_client_id_never_truncates_a_leftover_tmp() {
+        // GIVEN: leftover temp files (as if a prior run crashed mid-write),
+        // seeded with sentinel content. O_EXCL create_new must never open —
+        // and therefore never truncate — an existing path, whether or not the
+        // nonce collides with one the writer picks.
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let (backend, resource) = ("b", "http://localhost");
+
+        let file_name = store
+            .client_path(backend, resource)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap()
+            .to_string();
+        let sentinel = b"DO-NOT-TRUNCATE";
+        let leftovers: Vec<PathBuf> = (0..4)
+            .map(|n| {
+                let p = dir
+                    .path()
+                    .join(format!("{file_name}.tmp.{}.{n}", std::process::id()));
+                fs::write(&p, sentinel).unwrap();
+                p
+            })
+            .collect();
+
+        // WHEN: we persist a client_id.
+        let returned = store.save_client_id(backend, resource, "safe-id").unwrap();
+
+        // THEN: the save produced a valid, readable authoritative id...
+        assert_eq!(returned, "safe-id");
+        assert_eq!(
+            store.load_client_id(backend, resource),
+            Some("safe-id".to_string())
+        );
+        // ...and every seeded leftover is byte-for-byte intact (never emptied).
+        for p in &leftovers {
+            assert_eq!(
+                fs::read(p).unwrap(),
+                sentinel,
+                "leftover temp file was truncated/overwritten: {}",
+                p.display()
+            );
+        }
+    }
 
     // =========================================================================
     // TokenInfo::from_response
