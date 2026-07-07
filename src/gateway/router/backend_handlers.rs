@@ -332,6 +332,50 @@ fn audit_identity_propagation(
     }
 }
 
+/// Resolve just the identity-key session-bucket binding for a notification
+/// (MIK-6735 fix 2), WITHOUT the full propagation/OAuth-isolation enforcement
+/// gate `isolation_guarded` applies to id-bearing requests below.
+///
+/// `isolation_guarded` deliberately excludes `notifications/*` from that gate
+/// (the `idp_refuse` 403 path, `enforce_oauth_isolation`, and tool-policy) —
+/// notifications are fire-and-forget MCP protocol plumbing (e.g.
+/// `notifications/cancelled`), never a caller-data operation, so a
+/// propagation failure must never turn a notification into a hard error.
+/// Before this fix, `backend.notify()` also hardcoded the shared session
+/// bucket unconditionally, so even a successfully resolved per-user identity
+/// went unused and a notification correlating a per-user request could land
+/// on the wrong upstream session.
+///
+/// This is deliberately best-effort and side-effect free (no audit log entry,
+/// no error surfaced to the caller): any resolution failure — including no
+/// identity-propagation config on the backend at all, the overwhelmingly
+/// common case — falls back to `None`, the shared default bucket, exactly
+/// what every notification used unconditionally before this fix (IDP.5).
+async fn resolve_notification_identity_key(
+    state: &AppState,
+    backend: &crate::backend::Backend,
+    name: &str,
+    inbound_headers: &axum::http::HeaderMap,
+    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+) -> Option<String> {
+    let idp_cfg = backend.identity_propagation_config()?;
+    if idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough {
+        let (_headers, binding) = resolve_passthrough_headers(
+            idp_cfg,
+            inbound_headers,
+            backend.transport_carries_identity_headers(),
+        )
+        .ok()?;
+        return binding;
+    }
+    let (_headers, binding) = state
+        .meta_mcp
+        .resolve_propagation_credential(name, verified_identity)
+        .await
+        .ok()?;
+    binding
+}
+
 /// Backend handler (POST /mcp/{name})
 #[allow(clippy::too_many_lines)]
 pub(super) async fn backend_handler(
@@ -418,9 +462,27 @@ pub(super) async fn backend_handler(
 
     debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
 
-    // Handle notifications - forward to backend but return 202 Accepted
+    // Handle notifications - forward to backend but return 202 Accepted.
+    // Resolve (best-effort) the same session-bucket identity_key a matching
+    // `request_with_headers` call for this caller would have used (MIK-6735
+    // fix 2), so a notification correlating that request lands on the same
+    // upstream session instead of always the shared default bucket. Deliberately
+    // NOT routed through the `isolation_guarded` enforcement gate below —
+    // notifications stay exempt from the idp_refuse-403 / OAuth-isolation /
+    // tool-policy checks that apply to id-bearing requests.
     if method.starts_with("notifications/") {
-        return match backend.notify(&method, params).await {
+        let notif_identity_key = resolve_notification_identity_key(
+            &state,
+            &backend,
+            &name,
+            &inbound_headers,
+            verified_identity.as_ref(),
+        )
+        .await;
+        return match backend
+            .notify_with_headers(&method, params, notif_identity_key.as_deref())
+            .await
+        {
             Ok(()) => {
                 record_client_success(&state, client.as_ref());
                 (StatusCode::ACCEPTED, Json(json!({})))

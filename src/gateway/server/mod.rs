@@ -1169,17 +1169,31 @@ impl Gateway {
             }
         });
 
-        // Start idle checker task
-        let _backends_clone = Arc::clone(&self.backends);
+        // Start idle checker task: evict per-user transport/session slots
+        // (MIK-6735) that have been idle past the TTL. The canonical shared slot
+        // is never touched here; whole-backend hibernation remains future work.
+        let backends_idle = Arc::clone(&self.backends);
         let mut shutdown_rx2 = shutdown_tx.subscribe();
 
         tokio::spawn(async move {
+            // ponytail: fixed 5-min idle TTL; make it configurable if operators
+            // need per-backend tuning.
+            const PER_USER_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        // Check for idle backends to hibernate
-                        // (Implementation would check last_used timestamps)
+                        for backend in backends_idle.all() {
+                            let closed =
+                                backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL).await;
+                            if closed > 0 {
+                                debug!(
+                                    backend = %backend.name,
+                                    closed,
+                                    "Evicted idle per-user transport slots"
+                                );
+                            }
+                        }
                     }
                     _ = shutdown_rx2.recv() => {
                         break;

@@ -99,6 +99,16 @@ pub struct HttpTransport {
     /// no-identity static path (plain [`Transport::request`]), so single-tenant
     /// behavior is byte-for-byte unchanged.
     sessions: RwLock<HashMap<String, String>>,
+    /// Set by [`HttpTransport::mark_single_tenant`] when the owning `Backend`
+    /// built this instance for a per-user pool slot (MIK-6735 `PoolKey::PerUser`).
+    /// `false` (the default) means this instance may be the backend's shared
+    /// slot, Arc-shared across every caller — the exact scenario `sessions`
+    /// exists to isolate — so it stays multi-entry and load-bearing there;
+    /// only when `true` is it safe to assert the map is single-tenant. See
+    /// the `debug_assert!` at the session-write site below for the invariant
+    /// this hint unlocks.
+    single_tenant_hint: AtomicBool,
+
     /// Request ID counter
     request_id: AtomicU64,
     /// Connected flag
@@ -181,6 +191,7 @@ impl HttpTransport {
             message_url: RwLock::new(None),
             headers,
             sessions: RwLock::new(HashMap::new()),
+            single_tenant_hint: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
             connected: AtomicBool::new(false),
             timeout,
@@ -202,6 +213,19 @@ impl HttpTransport {
         if let Some(old) = self.refresh_task.write().replace(handle) {
             old.abort();
         }
+    }
+
+    /// Mark this instance as built for a per-user pool slot (MIK-6735).
+    ///
+    /// `Backend::start_entry` calls this immediately after construction, and
+    /// only for a `PoolKey::PerUser` slot, whose transport is dedicated to
+    /// one caller identity for its whole lifetime — no other identity is ever
+    /// routed through it. That is what makes the `sessions` single-tenant
+    /// `debug_assert!` provably safe to enable: it must stay OFF (the
+    /// default) for a `Shared`-slot instance, which is Arc-shared across
+    /// every caller and relies on `sessions` staying multi-entry.
+    pub(crate) fn mark_single_tenant(&self) {
+        self.single_tenant_hint.store(true, Ordering::Relaxed);
     }
 
     /// Initialize the connection
@@ -676,6 +700,21 @@ impl HttpTransport {
                 self.sessions
                     .write()
                     .insert(bucket.to_string(), id.to_string());
+                // Maintainability guard (MIK-6735 fix 2): under a per-user
+                // pool slot this instance serves exactly one caller identity
+                // for life, so `sessions` is provably <=1 entry — do NOT
+                // "simplify" this map to a single `Option<String>` on the
+                // strength of that; it stays multi-entry and load-bearing
+                // for the Shared slot (Stateless-mode backends and the
+                // no-identity path), which is Arc-shared across every caller
+                // and relies on this map to keep each identity's
+                // `MCP-Session-Id` isolated (MIK-6784).
+                debug_assert!(
+                    !self.single_tenant_hint.load(Ordering::Relaxed)
+                        || self.sessions.read().len() <= 1,
+                    "per-user pool slot's transport must never accumulate more \
+                     than one caller identity's session"
+                );
             }
         } else {
             // Debug: log all headers to find session ID
@@ -814,6 +853,20 @@ impl Transport for HttpTransport {
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+        self.notify_with_headers(method, params, None).await
+    }
+
+    // MIK-6735 fix 2: threads `identity_key` into `build_mcp_headers` so a
+    // notification for a per-user identity selects that same identity's
+    // `MCP-Session-Id` bucket — previously every notification hardcoded
+    // `HeaderMode::Notify, None`, i.e. the shared bucket, even when it
+    // correlated a request that had gone out on a per-user session.
+    async fn notify_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        identity_key: Option<&str>,
+    ) -> Result<()> {
         let message_url = self.get_message_url();
 
         let notification = JsonRpcNotification {
@@ -822,7 +875,9 @@ impl Transport for HttpTransport {
             params,
         };
 
-        let headers = self.build_mcp_headers(HeaderMode::Notify, None).await?;
+        let headers = self
+            .build_mcp_headers(HeaderMode::Notify, identity_key)
+            .await?;
 
         let response = self
             .client
