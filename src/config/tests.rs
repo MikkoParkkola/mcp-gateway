@@ -613,9 +613,9 @@ fn validate_accepts_stateless_signed_assertion_backend() {
 }
 
 #[test]
-fn validate_rejects_per_user_session_mode_until_pool_ships() {
-    // IDP.7: per_user needs the transport pool (slice 2c); refuse rather than
-    // reuse a shared session.
+fn validate_accepts_per_user_session_mode_now_that_pool_ships() {
+    // MIK-6735: the per-user transport pool gives each caller its own
+    // transport/session, so per_user validates rather than being rejected.
     let mut config = Config::default();
     config.backends.insert(
         "mem".to_string(),
@@ -628,12 +628,10 @@ fn validate_rejects_per_user_session_mode_until_pool_ships() {
             token_exchange_scope: None,
         }),
     );
-    let err = config.validate().unwrap_err().to_string();
     assert!(
-        err.contains("per_user"),
-        "error should name per_user: {err}"
+        config.validate().is_ok(),
+        "per_user must validate now that the transport pool ships (MIK-6735)"
     );
-    assert!(err.contains("mem"), "error should name the backend: {err}");
 }
 
 #[test]

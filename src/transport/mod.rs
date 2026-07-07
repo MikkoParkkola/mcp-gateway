@@ -68,6 +68,24 @@ pub trait Transport: Send + Sync {
     /// Send a notification (no response expected)
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()>;
 
+    /// Send a notification carrying the caller's identity key, so a
+    /// header-bearing transport can route it through the same
+    /// `MCP-Session-Id` bucket [`Transport::request_with_headers`] used for
+    /// that identity (MIK-6735 fix 2). Mirrors the `request`/
+    /// `request_with_headers` split above: `_identity_key` is ignored by the
+    /// default impl, which falls back to plain [`Transport::notify`] — exactly
+    /// right for stdio/websocket transports that carry no per-request HTTP
+    /// header channel and have no session bucket to select. `None` preserves
+    /// single-tenant behavior byte-for-byte.
+    async fn notify_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        _identity_key: Option<&str>,
+    ) -> Result<()> {
+        self.notify(method, params).await
+    }
+
     /// Check if transport is connected
     fn is_connected(&self) -> bool;
 

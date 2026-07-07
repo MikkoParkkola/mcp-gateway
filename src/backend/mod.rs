@@ -176,6 +176,71 @@ fn stdio_executable_hint(transport: &TransportConfig) -> Option<String> {
     shlex::split(command)?.into_iter().next()
 }
 
+/// Seconds since the Unix epoch, saturating to 0 on a pre-epoch clock.
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Identifies one transport/session slot in a backend's connection pool
+/// (MIK-6735).
+///
+/// A backend always owns the canonical [`PoolKey::Shared`] slot — the
+/// single-tenant default that also backs init, metadata, and canonical traffic.
+/// When `identity_propagation.session_mode = per_user` is configured and a
+/// caller identity is present, the backend additionally owns one
+/// [`PoolKey::PerUser`] slot per stable identity binding, so two distinct users
+/// never share a backend transport or its upstream MCP session (IDP.7).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum PoolKey {
+    /// The canonical single-tenant slot. Every non-per-user backend, and every
+    /// per-user backend request that lacks a resolved identity, collapses here
+    /// so single-tenant behavior is preserved byte-for-byte (IDP.5).
+    Shared,
+    /// A per-user slot keyed by the caller's stable identity binding
+    /// (`PropagatedCredential::cache_binding`, MIK-6784).
+    PerUser { binding: String },
+}
+
+/// One pooled transport slot: its lazily started transport, a start lock that
+/// serializes connection setup for that slot, a last-used clock driving idle
+/// eviction of per-user slots, and this slot's own failsafe mechanisms.
+///
+/// The failsafe (circuit breaker + rate limiter + retry policy + health
+/// tracker) is owned per-slot, not per-backend (MIK-6735 fix 1, adversarial
+/// review of commit bfd62b91). Gating `request_with_headers` on a single
+/// backend-wide `Failsafe` meant one caller identity's transport failing
+/// enough tripped the breaker for every OTHER identity sharing the same
+/// backend too — the exact cross-tenant blast radius the per-user pool
+/// exists to eliminate. Each slot now fails independently: the Shared slot
+/// keeps its own failsafe (behavior for non-per-user backends is byte-for-
+/// byte unchanged), and each `PerUser` slot gets a fresh one the moment it is
+/// first created.
+struct PooledEntry {
+    transport: RwLock<Option<Arc<dyn Transport>>>,
+    start_lock: Mutex<()>,
+    last_used: AtomicU64,
+    failsafe: Failsafe,
+}
+
+impl PooledEntry {
+    fn new(name: &str, failsafe_config: &crate::config::FailsafeConfig) -> Self {
+        Self {
+            transport: RwLock::new(None),
+            start_lock: Mutex::new(()),
+            last_used: AtomicU64::new(now_unix_secs()),
+            failsafe: Failsafe::new(name, failsafe_config),
+        }
+    }
+
+    /// Mark this slot as used now, deferring its idle eviction.
+    fn touch(&self) {
+        self.last_used.store(now_unix_secs(), Ordering::Relaxed);
+    }
+}
+
 /// MCP Backend - manages connection to a single MCP server
 pub struct Backend {
     /// Backend name
@@ -184,13 +249,18 @@ pub struct Backend {
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.
     runtime_plan: Option<RuntimePlan>,
-    /// Transport
-    transport: RwLock<Option<Arc<dyn Transport>>>,
-    /// Serializes backend startup so concurrent warm-start/client requests do
-    /// not spawn duplicate stdio processes for the same backend.
-    start_lock: Mutex<()>,
-    /// Failsafe mechanisms
-    failsafe: Failsafe,
+    /// Per-identity transport/session pool (MIK-6735). Always holds the
+    /// canonical [`PoolKey::Shared`] slot; gains one [`PoolKey::PerUser`] slot
+    /// per caller identity when `session_mode = per_user`. Each slot carries its
+    /// own transport and start lock, so concurrent warm-start/client requests do
+    /// not spawn duplicate connections for the same slot and distinct users
+    /// never share a session (IDP.7).
+    pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    /// Failsafe configuration, cloned so a freshly created pool slot
+    /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
+    /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
+    /// including Shared, now owns one.
+    failsafe_config: crate::config::FailsafeConfig,
     /// Cached tools
     tools_cache: CachedMetadata<Vec<Tool>>,
     /// Cached resources
@@ -234,9 +304,15 @@ impl Backend {
             name: name.to_string(),
             config,
             runtime_plan,
-            transport: RwLock::new(None),
-            start_lock: Mutex::new(()),
-            failsafe: Failsafe::new(name, failsafe_config),
+            pool: {
+                let pool = DashMap::new();
+                pool.insert(
+                    PoolKey::Shared,
+                    Arc::new(PooledEntry::new(name, failsafe_config)),
+                );
+                pool
+            },
+            failsafe_config: failsafe_config.clone(),
             tools_cache: CachedMetadata::new(),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
@@ -248,49 +324,223 @@ impl Backend {
         }
     }
 
+    /// The backend's configured session mode, if identity propagation is set.
+    fn session_mode(&self) -> Option<crate::identity_propagation::SessionMode> {
+        self.config
+            .identity_propagation
+            .as_ref()
+            .map(|c| c.session_mode)
+    }
+
+    /// Derive the pool slot for a request carrying `identity_key`.
+    ///
+    /// Only a `per_user` backend with a concrete caller identity gets its own
+    /// slot; every other case — no identity propagation, `stateless`, or
+    /// `per_user` without a resolved identity — collapses to the shared
+    /// canonical slot, preserving single-tenant behavior byte-for-byte (IDP.5).
+    fn pool_key_for(&self, identity_key: Option<&str>) -> PoolKey {
+        use crate::identity_propagation::SessionMode;
+        match (self.session_mode(), identity_key) {
+            (Some(SessionMode::PerUser), Some(binding)) => PoolKey::PerUser {
+                binding: binding.to_string(),
+            },
+            _ => PoolKey::Shared,
+        }
+    }
+
+    /// Fetch (or lazily create) the pooled entry for `key`. The `Arc` is cloned
+    /// out so the `DashMap` shard guard is released before any `.await`.
+    ///
+    /// Logs + gauges the live slot count on creation only (MIK-6735 fix 3) —
+    /// minimal observability into per-user pool growth without a per-request
+    /// cost on the (overwhelmingly more common) cache-hit path.
+    fn pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
+        let mut created = false;
+        let entry = Arc::clone(
+            self.pool
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    created = true;
+                    Arc::new(PooledEntry::new(&self.name, &self.failsafe_config))
+                })
+                .value(),
+        );
+        if created {
+            #[allow(clippy::cast_precision_loss)] // pool size is never remotely close to 2^52
+            let live = self.pool.len() as f64;
+            telemetry_metrics::gauge!(
+                "mcp_backend_pool_slots",
+                "backend" => self.name.clone()
+            )
+            .set(live);
+            tracing::debug!(backend = %self.name, ?key, live_slots = live, "Pool slot created");
+        }
+        entry
+    }
+
+    /// The canonical shared slot's `PooledEntry`. Inserted at construction and
+    /// never evicted (`evict_idle_per_user_entries` explicitly skips it), so
+    /// this is always present — used by status/metrics/health-loop accessors
+    /// that intentionally report the backend-wide, single-tenant view
+    /// regardless of how many per-user slots exist (MIK-6735 fix 1).
+    fn shared_entry(&self) -> Arc<PooledEntry> {
+        Arc::clone(
+            self.pool
+                .get(&PoolKey::Shared)
+                .expect("PoolKey::Shared is inserted at construction and never evicted")
+                .value(),
+        )
+    }
+
     /// Ensure backend is started
     ///
     /// # Errors
     ///
     /// Returns an error if the transport fails to start.
     pub async fn ensure_started(&self) -> Result<()> {
-        // Update last used
-        self.last_used.store(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            Ordering::Relaxed,
-        );
-
-        // Check if already connected
-        {
-            let transport = self.transport.read();
-            if transport.as_ref().is_some_and(|t| t.is_connected()) {
-                return Ok(());
-            }
-        }
-
-        let _start_guard = self.start_lock.lock().await;
-
-        {
-            let transport = self.transport.read();
-            if transport.as_ref().is_some_and(|t| t.is_connected()) {
-                return Ok(());
-            }
-        }
-
-        // Start transport
-        self.start().await
+        self.ensure_entry_started(&PoolKey::Shared).await?;
+        Ok(())
     }
 
-    /// Start the backend
+    /// Ensure the pooled entry for `key` is started, returning a clone of the
+    /// live transport.
+    ///
+    /// Double-checked under the entry's own start lock so concurrent callers for
+    /// the same slot never spawn duplicate connections, while different slots
+    /// (distinct users) start independently and in parallel.
+    ///
+    /// TOCTOU guard against `evict_idle_per_user_entries` (MIK-6735 POOL race
+    /// fix): the idle evictor can `remove_if` a per-user slot from `pool`
+    /// concurrently with this method building that same slot's transport —
+    /// the slot was cloned out via `pooled_entry` before it was touched, so
+    /// the evictor's idleness re-check still sees it as stale and wins the
+    /// race. If that happens, `entry` becomes orphaned: no longer reachable
+    /// via `self.pool`, and `PooledEntry` has no async `Drop` to close a
+    /// transport stored on an orphaned instance, so it would otherwise leak
+    /// the connection until OS teardown. After `start_entry` returns, this
+    /// method re-checks (by `Arc::ptr_eq`) that `key` still maps to the exact
+    /// entry it started; if the evictor won, it closes the just-built
+    /// transport itself — the side that loses the race owns the close — and
+    /// retries once against a fresh entry (bounded so a hypothetical
+    /// coincidence of repeated evictions cannot spin forever).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to start, or if the entry is
+    /// repeatedly evicted out from under every start attempt.
+    async fn ensure_entry_started(&self, key: &PoolKey) -> Result<Arc<dyn Transport>> {
+        const MAX_RACE_RETRIES: u8 = 3;
+
+        for _attempt in 0..MAX_RACE_RETRIES {
+            let entry = self.pooled_entry(key);
+
+            // Update last-used clocks (backend-wide + per-slot for idle eviction).
+            self.last_used.store(now_unix_secs(), Ordering::Relaxed);
+            entry.touch();
+
+            {
+                let transport = entry.transport.read();
+                if let Some(t) = transport.as_ref()
+                    && t.is_connected()
+                {
+                    return Ok(Arc::clone(t));
+                }
+            }
+
+            let _start_guard = entry.start_lock.lock().await;
+
+            {
+                let transport = entry.transport.read();
+                if let Some(t) = transport.as_ref()
+                    && t.is_connected()
+                {
+                    return Ok(Arc::clone(t));
+                }
+            }
+
+            // Start transport for this slot.
+            let transport = self.start_entry(key, &entry).await?;
+
+            // Reconcile: did the evictor remove this exact entry while we
+            // were building its transport?
+            if let Some(transport) = self.reconcile_after_start(key, &entry, transport).await {
+                return Ok(transport);
+            }
+            // Lost the race: `reconcile_after_start` already closed the
+            // orphaned transport. Loop and re-derive a fresh entry for `key`.
+        }
+
+        Err(Error::BackendUnavailable(self.name.clone()))
+    }
+
+    /// After [`Backend::start_entry`] builds and stores a transport into
+    /// `entry` for `key`, verify `entry` is still the exact instance the pool
+    /// has registered under `key` (by `Arc::ptr_eq`) — i.e. that
+    /// [`Backend::evict_idle_per_user_entries`] did not `remove_if` it out
+    /// from under this in-flight start.
+    ///
+    /// Returns `Some(transport)` when `entry` is still live: the transport is
+    /// visible to every future caller of `pooled_entry(key)` and callers here
+    /// own nothing extra to clean up. Returns `None` when the race was lost:
+    /// `entry` is orphaned (unreachable via `self.pool`), so nothing else will
+    /// ever call `close()` on the transport just stored into it — there is no
+    /// async `Drop` for `PooledEntry` — which would otherwise leak the
+    /// underlying connection until OS teardown. In that case this method
+    /// takes the transport back out and closes it itself before returning
+    /// `None`, so the side that loses the race is the side that owns the
+    /// close.
+    async fn reconcile_after_start(
+        &self,
+        key: &PoolKey,
+        entry: &Arc<PooledEntry>,
+        transport: Arc<dyn Transport>,
+    ) -> Option<Arc<dyn Transport>> {
+        let still_registered = self
+            .pool
+            .get(key)
+            .is_some_and(|slot| Arc::ptr_eq(slot.value(), entry));
+        if still_registered {
+            return Some(transport);
+        }
+
+        warn!(
+            backend = %self.name,
+            ?key,
+            "Pooled entry evicted mid-start; closing the orphaned transport \
+             we just built to avoid a connection leak"
+        );
+        // Bind the taken value before awaiting: `if let Some(x) = guard.take() {
+        // ... x.await ... }` would extend the `parking_lot::RwLockWriteGuard`
+        // temporary's lifetime across the `.await` (not `Send`), so the guard
+        // must be dropped by the end of this `let` statement first.
+        let orphaned = entry.transport.write().take();
+        if let Some(orphaned) = orphaned {
+            let _ = orphaned.close().await;
+        }
+        None
+    }
+
+    /// Start the backend's canonical (shared) transport.
     ///
     /// # Errors
     ///
     /// Returns an error if the transport fails to connect or initialize.
     pub async fn start(&self) -> Result<()> {
-        info!(backend = %self.name, "Starting backend");
+        let entry = self.pooled_entry(&PoolKey::Shared);
+        self.start_entry(&PoolKey::Shared, &entry).await?;
+        Ok(())
+    }
+
+    /// Build a fresh transport for the pooled `entry`, store it, and return a
+    /// clone. Per-user slots build the same transport shape as the shared slot;
+    /// end-user identity is carried per-request via headers, not baked into the
+    /// connection, so each user simply gets an independent session lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to connect or initialize.
+    async fn start_entry(&self, key: &PoolKey, entry: &PooledEntry) -> Result<Arc<dyn Transport>> {
+        info!(backend = %self.name, ?key, "Starting backend transport");
 
         let transport: Arc<dyn Transport> = match &self.config.transport {
             TransportConfig::Stdio {
@@ -325,6 +575,13 @@ impl Backend {
                     oauth_client,
                     protocol_version.clone(),
                 )?;
+                // MIK-6735 fix 2: a per-user pool slot's transport serves
+                // exactly one caller identity for its whole lifetime, which
+                // is what makes the transport's internal session-map
+                // single-tenant debug_assert provably safe — tell it so.
+                if matches!(key, PoolKey::PerUser { .. }) {
+                    transport.mark_single_tenant();
+                }
                 transport.initialize().await?;
                 transport
             }
@@ -341,13 +598,13 @@ impl Backend {
             }
         };
 
-        *self.transport.write() = Some(transport);
+        *entry.transport.write() = Some(Arc::clone(&transport));
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()
         // would create infinite async recursion
 
-        Ok(())
+        Ok(transport)
     }
 
     /// Create OAuth client if OAuth is configured for this backend
@@ -485,28 +742,46 @@ impl Backend {
         Ok(())
     }
 
-    /// Stop the backend
+    /// Stop the backend, draining every pooled transport slot.
     ///
     /// # Errors
     ///
-    /// Returns an error if the transport fails to close cleanly.
+    /// Never returns `Err` today: individual slot-close failures are logged and
+    /// the remaining slots are still drained. The `Result` is retained for
+    /// forward compatibility and to match the registry's stop contract.
     pub async fn stop(&self) -> Result<()> {
         info!(backend = %self.name, "Stopping backend");
 
-        let transport = self.transport.write().take();
-        if let Some(t) = transport {
-            t.close().await?;
+        // Take every slot's transport out first (dropping the parking_lot write
+        // guards) so no lock is held across the async close().
+        let transports: Vec<Arc<dyn Transport>> = self
+            .pool
+            .iter()
+            .filter_map(|entry| entry.value().transport.write().take())
+            .collect();
+
+        for transport in transports {
+            if let Err(e) = transport.close().await {
+                warn!(backend = %self.name, error = %e, "Failed to close pooled transport");
+            }
         }
 
         Ok(())
     }
 
-    /// Check if backend is running
+    /// Check if backend is running (canonical shared slot connected).
     pub fn is_running(&self) -> bool {
-        self.transport
-            .read()
-            .as_ref()
-            .is_some_and(|t| t.is_connected())
+        self.pool
+            .get(&PoolKey::Shared)
+            .and_then(|entry| {
+                entry
+                    .value()
+                    .transport
+                    .read()
+                    .as_ref()
+                    .map(|t| t.is_connected())
+            })
+            .unwrap_or(false)
     }
 
     /// Get cached tools (or fetch if needed)
@@ -700,33 +975,24 @@ impl Backend {
             .map(|prompts| prompts.as_ref().clone())
     }
 
+    /// Clone the canonical shared slot's live transport, if started.
+    fn shared_transport(&self) -> Option<Arc<dyn Transport>> {
+        self.pool
+            .get(&PoolKey::Shared)
+            .and_then(|entry| entry.value().transport.read().clone())
+    }
+
     /// Internal request without `ensure_started` (to avoid recursion)
     async fn request_internal(
         &self,
         method: &str,
         params: Option<Value>,
     ) -> Result<JsonRpcResponse> {
-        // Get transport
-        let transport = {
-            let t = self.transport.read();
-            t.clone()
-        };
-
-        let transport = transport.ok_or_else(|| Error::BackendUnavailable(self.name.clone()))?;
+        let transport = self
+            .shared_transport()
+            .ok_or_else(|| Error::BackendUnavailable(self.name.clone()))?;
 
         transport.request(method, params).await
-    }
-
-    /// Internal notification send without `ensure_started` (to avoid recursion)
-    async fn notify_internal(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let transport = {
-            let t = self.transport.read();
-            t.clone()
-        };
-
-        let transport = transport.ok_or_else(|| Error::BackendUnavailable(self.name.clone()))?;
-
-        transport.notify(method, params).await
     }
 
     /// Send a request to the backend
@@ -812,14 +1078,28 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
-        // Check failsafe
-        if !self.failsafe.can_proceed() {
+        // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
+        // review of commit bfd62b91). Each slot owns its own circuit breaker +
+        // rate limiter + health tracker, so which slot's failsafe to gate on
+        // must be known before the `can_proceed()` check runs — gating on a
+        // single backend-wide `Failsafe` let one caller identity's outage trip
+        // the breaker for every other identity sharing the backend, the exact
+        // cross-tenant blast radius this pool exists to eliminate. A non-per-
+        // user backend, or a per-user backend request without a resolved
+        // identity, collapses to the shared canonical slot (IDP.5); a per-user
+        // request gets its own transport/session/failsafe so users never
+        // collide (IDP.7).
+        let key = self.pool_key_for(identity_key);
+        let entry = self.pooled_entry(&key);
+
+        // Check THIS slot's failsafe, not the backend's.
+        if !entry.failsafe.can_proceed() {
             telemetry_metrics::gauge!(
                 "mcp_backend_circuit_state",
                 "backend" => self.name.clone()
             )
             .set(0.0_f64);
-            tracing::warn!(backend = %self.name, "Request rejected by circuit breaker");
+            tracing::warn!(backend = %self.name, ?key, "Request rejected by circuit breaker");
             return Err(Error::CircuitOpen(self.name.clone()));
         }
         telemetry_metrics::gauge!(
@@ -836,18 +1116,8 @@ impl Backend {
 
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
-        // Get transport
-        self.ensure_started().await?;
-
-        let transport = {
-            let t = self.transport.read();
-            t.clone()
-        };
-
-        let transport = transport.ok_or_else(|| {
-            tracing::error!("Transport not available");
-            Error::BackendUnavailable(self.name.clone())
-        })?;
+        // Ensure this slot's transport is live.
+        let transport = self.ensure_entry_started(&key).await?;
 
         // Execute with retry
         let name = self.name.clone();
@@ -855,7 +1125,7 @@ impl Backend {
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
-        let result = with_retry(&self.failsafe.retry_policy, &name, || {
+        let result = with_retry(&entry.failsafe.retry_policy, &name, || {
             let transport = Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
@@ -872,14 +1142,17 @@ impl Backend {
         // Calculate latency
         let latency = start_time.elapsed();
 
-        // Record success/failure with metrics
+        // Record success/failure against the SAME slot's failsafe used for the
+        // `can_proceed()` gate above, so gating and recording are always
+        // symmetric even if a concurrent idle-eviction later replaces this
+        // slot's `PooledEntry` for `key` (MIK-6735 fix 1).
         match &result {
             Ok(_) => {
                 tracing::info!(
                     latency_ms = latency.as_millis(),
                     "Request completed successfully"
                 );
-                self.failsafe.record_success(latency);
+                entry.failsafe.record_success(latency);
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
@@ -889,7 +1162,7 @@ impl Backend {
             }
             Err(e) => {
                 tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
-                self.failsafe.record_failure(&e.to_string(), latency);
+                entry.failsafe.record_failure(&e.to_string(), latency);
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
@@ -907,7 +1180,35 @@ impl Backend {
         result
     }
 
-    /// Send a notification to the backend.
+    /// Send a notification to the backend via the canonical shared slot's
+    /// session (non-per-user backends; single-tenant behavior unchanged).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend is unavailable, the concurrency limit
+    /// is reached, or the notification cannot be sent.
+    pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+        self.notify_with_headers(method, params, None).await
+    }
+
+    /// Send a notification carrying the caller's identity key so it is routed
+    /// through the SAME pool slot — and the SAME upstream `MCP-Session-Id`
+    /// bucket — that a prior `request_with_headers` call for that identity
+    /// used (MIK-6735 fix 2, adversarial review of commit bfd62b91).
+    ///
+    /// Before this fix, every notification hardcoded `ensure_started()` (the
+    /// canonical Shared slot) regardless of the caller's identity, so on a
+    /// `PerUser` backend a notification correlating a request that went
+    /// through a per-user slot (e.g. `notifications/cancelled`) went out on
+    /// the wrong upstream session — or, even once routed to the right
+    /// transport instance, with no session ID at all, since
+    /// [`crate::transport::Transport::notify`] never threaded an identity key
+    /// through to the transport's session-bucket lookup either. Both layers
+    /// are fixed together here: `identity_key` selects the same `PoolKey` as
+    /// `request_with_headers` (IDP.7), and is forwarded to
+    /// [`crate::transport::Transport::notify_with_headers`] so an HTTP
+    /// transport selects the matching `MCP-Session-Id` bucket. `None`
+    /// preserves the unchanged Shared-slot path (IDP.5).
     ///
     /// # Errors
     ///
@@ -921,16 +1222,26 @@ impl Backend {
             request_id = %uuid::Uuid::new_v4()
         )
     )]
-    pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+    pub async fn notify_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        identity_key: Option<&str>,
+    ) -> Result<()> {
         let start_time = std::time::Instant::now();
 
-        if !self.failsafe.can_proceed() {
+        // Derive the same slot `request_with_headers` would use for this
+        // identity, and gate/record against ITS failsafe (mirrors fix 1).
+        let key = self.pool_key_for(identity_key);
+        let entry = self.pooled_entry(&key);
+
+        if !entry.failsafe.can_proceed() {
             telemetry_metrics::gauge!(
                 "mcp_backend_circuit_state",
                 "backend" => self.name.clone()
             )
             .set(0.0_f64);
-            tracing::warn!(backend = %self.name, "Notification rejected by circuit breaker");
+            tracing::warn!(backend = %self.name, ?key, "Notification rejected by circuit breaker");
             return Err(Error::CircuitOpen(self.name.clone()));
         }
         telemetry_metrics::gauge!(
@@ -946,9 +1257,11 @@ impl Backend {
 
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
-        self.ensure_started().await?;
+        let transport = self.ensure_entry_started(&key).await?;
 
-        let result = self.notify_internal(method, params).await;
+        let result = transport
+            .notify_with_headers(method, params, identity_key)
+            .await;
         let latency = start_time.elapsed();
 
         match &result {
@@ -957,7 +1270,7 @@ impl Backend {
                     latency_ms = latency.as_millis(),
                     "Notification sent successfully"
                 );
-                self.failsafe.record_success(latency);
+                entry.failsafe.record_success(latency);
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
@@ -967,7 +1280,7 @@ impl Backend {
             }
             Err(e) => {
                 tracing::error!(error = %e, latency_ms = latency.as_millis(), "Notification failed");
-                self.failsafe.record_failure(&e.to_string(), latency);
+                entry.failsafe.record_failure(&e.to_string(), latency);
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
@@ -987,16 +1300,45 @@ impl Backend {
 
     #[cfg(test)]
     pub(crate) fn set_transport_for_test(&self, transport: Arc<dyn Transport>) {
-        *self.transport.write() = Some(transport);
+        let entry = self.pooled_entry(&PoolKey::Shared);
+        *entry.transport.write() = Some(transport);
     }
 
-    /// Test-only: trip this backend's circuit breaker open by recording
-    /// `failure_threshold` consecutive failures.
+    /// Test-only: inject a transport into a specific pool slot so isolation
+    /// tests can seed distinct per-user sessions (MIK-6735 POOL.4).
+    #[cfg(test)]
+    fn set_pooled_transport_for_test(&self, key: &PoolKey, transport: Arc<dyn Transport>) {
+        let entry = self.pooled_entry(key);
+        *entry.transport.write() = Some(transport);
+    }
+
+    /// Test-only: clone the transport `Arc` stored in a specific pool slot, so
+    /// isolation tests can assert distinct instances via `Arc::ptr_eq`.
+    #[cfg(test)]
+    fn pooled_transport_for_test(&self, key: &PoolKey) -> Option<Arc<dyn Transport>> {
+        self.pool
+            .get(key)
+            .and_then(|entry| entry.value().transport.read().clone())
+    }
+
+    /// Test-only: trip this backend's canonical Shared-slot circuit breaker
+    /// open by recording `failure_threshold` consecutive failures.
     #[cfg(test)]
     pub(crate) fn trip_circuit_breaker_for_test(&self) {
-        let threshold = self.failsafe.circuit_breaker.stats().failure_threshold;
+        self.trip_circuit_breaker_for_test_key(&PoolKey::Shared);
+    }
+
+    /// Test-only: trip an arbitrary pool slot's circuit breaker open
+    /// (MIK-6735 fix 1) — generalizes [`Self::trip_circuit_breaker_for_test`]
+    /// (Shared-only) to any [`PoolKey`], so cross-tenant isolation tests can
+    /// trip one identity's slot without touching another's.
+    #[cfg(test)]
+    fn trip_circuit_breaker_for_test_key(&self, key: &PoolKey) {
+        let entry = self.pooled_entry(key);
+        let threshold = entry.failsafe.circuit_breaker.stats().failure_threshold;
         for _ in 0..threshold {
-            self.failsafe
+            entry
+                .failsafe
                 .circuit_breaker
                 .record_failure("test-trip", std::time::Duration::ZERO);
         }
@@ -1025,15 +1367,22 @@ impl Backend {
         }
     }
 
-    /// Get backend status
+    /// Get backend status.
+    ///
+    /// Reports the canonical Shared slot's circuit/health state (MIK-6735
+    /// fix 1): this is the backend-wide, single-tenant view — the same one
+    /// `status()` reported before per-user slots existed — and deliberately
+    /// does not aggregate across per-user slots, which each fail
+    /// independently and are not surfaced individually here.
     pub fn status(&self) -> BackendStatus {
-        let health = self.failsafe.health_metrics();
+        let entry = self.shared_entry();
+        let health = entry.failsafe.health_metrics();
         BackendStatus {
             name: self.name.clone(),
             running: self.is_running(),
             transport: self.config.transport.transport_type().to_string(),
             tools_cached: self.cached_tools_count(),
-            circuit_state: self.failsafe.circuit_breaker.state().as_str().to_string(),
+            circuit_state: entry.failsafe.circuit_breaker.state().as_str().to_string(),
             request_count: self.request_count.load(Ordering::Relaxed),
             healthy: health.healthy,
             consecutive_failures: health.consecutive_failures,
@@ -1076,24 +1425,28 @@ impl Backend {
         })
     }
 
-    /// Get circuit breaker stats for this backend.
+    /// Get circuit breaker stats for this backend's canonical Shared slot
+    /// (MIK-6735 fix 1).
     pub fn circuit_breaker_stats(&self) -> crate::failsafe::CircuitBreakerStats {
-        self.failsafe.circuit_breaker.stats()
+        self.shared_entry().failsafe.circuit_breaker.stats()
     }
 
-    /// Force this backend's circuit breaker back to `Closed` (MIK-5983).
+    /// Force this backend's canonical Shared-slot circuit breaker back to
+    /// `Closed` (MIK-5983; slot-scoped per MIK-6735 fix 1).
     ///
     /// Called by `gateway_revive_server` so the documented manual recovery
     /// path also clears a tripped breaker, not just the kill switch.
     pub fn reset_circuit_breaker(&self) {
-        self.failsafe.circuit_breaker.reset();
+        self.shared_entry().failsafe.circuit_breaker.reset();
     }
 
-    /// Whether this backend's circuit breaker is currently tripped
-    /// (`Open` or `HalfOpen` — i.e. not `Closed`).
+    /// Whether this backend's canonical Shared-slot circuit breaker is
+    /// currently tripped (`Open` or `HalfOpen` — i.e. not `Closed`; slot-scoped
+    /// per MIK-6735 fix 1).
     #[must_use]
     pub fn is_circuit_tripped(&self) -> bool {
-        self.failsafe.circuit_breaker.state() != crate::failsafe::CircuitState::Closed
+        self.shared_entry().failsafe.circuit_breaker.state()
+            != crate::failsafe::CircuitState::Closed
     }
 
     /// Tear down the current transport (killing any child process) and start a
@@ -1109,14 +1462,19 @@ impl Backend {
     ///
     /// Returns an error if the fresh transport fails to start or initialize.
     pub async fn force_restart(&self) -> Result<()> {
-        let _guard = self.start_lock.lock().await;
+        // Rebuild only the canonical shared slot; per-user sessions are left
+        // intact so one caller's health recovery cannot tear down another's
+        // in-flight session (MIK-6735). The idle reaper reclaims per-user slots.
+        let entry = self.pooled_entry(&PoolKey::Shared);
+        let _guard = entry.start_lock.lock().await;
         // Take the transport out and drop the RwLock write guard *before*
         // awaiting close() — a parking_lot guard is not Send across an await.
-        let old = self.transport.write().take();
+        let old = entry.transport.write().take();
         if let Some(old) = old {
             let _ = old.close().await;
         }
-        self.start().await
+        self.start_entry(&PoolKey::Shared, &entry).await?;
+        Ok(())
     }
 
     /// Active health/recovery probe driven by the background health loop.
@@ -1148,7 +1506,7 @@ impl Backend {
             return Err(e);
         }
 
-        let transport = { self.transport.read().clone() };
+        let transport = self.shared_transport();
         let Some(transport) = transport else {
             return Err(Error::BackendUnavailable(self.name.clone()));
         };
@@ -1160,7 +1518,7 @@ impl Backend {
                         backend = %self.name,
                         "Health probe succeeded; resetting tripped circuit breaker"
                     );
-                    self.failsafe.circuit_breaker.reset();
+                    self.reset_circuit_breaker();
                 }
                 Ok(())
             }
@@ -1181,9 +1539,64 @@ impl Backend {
         }
     }
 
-    /// Get health metrics for this backend.
+    /// Get health metrics for this backend's canonical Shared slot (MIK-6735
+    /// fix 1).
     pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
-        self.failsafe.health_metrics()
+        self.shared_entry().failsafe.health_metrics()
+    }
+
+    /// Idle-evict per-user pool slots whose last use predates `idle_ttl`,
+    /// closing their transports. The canonical [`PoolKey::Shared`] slot is never
+    /// evicted (it backs init, metadata, and single-tenant traffic). Returns the
+    /// number of slots closed (MIK-6735 POOL.2).
+    pub async fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
+        let cutoff = idle_ttl.as_secs();
+
+        // First pass: collect candidate keys without holding a guard across the
+        // async close(). Skip the shared slot outright.
+        let candidates: Vec<PoolKey> = self
+            .pool
+            .iter()
+            .filter(|entry| !matches!(entry.key(), PoolKey::Shared))
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        let mut closed = 0;
+        for key in candidates {
+            // Atomically remove only if STILL idle — re-checked inside the shard
+            // lock so a request that touched the slot after the first pass keeps
+            // it alive and is never torn down mid-flight.
+            let removed = self.pool.remove_if(&key, |k, entry| {
+                !matches!(k, PoolKey::Shared)
+                    && now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed))
+                        >= cutoff
+            });
+            if let Some((_, entry)) = removed {
+                let transport = entry.transport.write().take();
+                if let Some(transport) = transport {
+                    let _ = transport.close().await;
+                }
+                closed += 1;
+            }
+        }
+        if closed > 0 {
+            // MIK-6735 fix 3: gauge + log the live slot count after eviction,
+            // mirroring the creation-side observability in `pooled_entry`.
+            #[allow(clippy::cast_precision_loss)] // pool size is never remotely close to 2^52
+            let live = self.pool.len() as f64;
+            telemetry_metrics::gauge!(
+                "mcp_backend_pool_slots",
+                "backend" => self.name.clone()
+            )
+            .set(live);
+            tracing::debug!(
+                backend = %self.name,
+                evicted = closed,
+                live_slots = live,
+                "Idle per-user pool slots evicted"
+            );
+        }
+        closed
     }
 }
 
@@ -1615,7 +2028,7 @@ mod tests {
             Duration::from_secs(60),
         ));
         let mock = Arc::new(RecoveryMock::connected());
-        *backend.transport.write() = Some(mock.clone() as Arc<dyn Transport>);
+        backend.set_transport_for_test(mock.clone() as Arc<dyn Transport>);
 
         backend.trip_circuit_breaker_for_test();
         assert!(backend.is_circuit_tripped(), "precondition: breaker open");
@@ -1643,7 +2056,7 @@ mod tests {
         ));
         let mock = Arc::new(RecoveryMock::connected());
         mock.fail.store(true, Ordering::Relaxed);
-        *backend.transport.write() = Some(mock.clone() as Arc<dyn Transport>);
+        backend.set_transport_for_test(mock.clone() as Arc<dyn Transport>);
 
         backend.trip_circuit_breaker_for_test();
         let result = backend.health_probe(Duration::from_secs(5)).await;
@@ -2176,7 +2589,7 @@ mod tests {
         );
         let transport = Arc::new(MockTransport::new(response, Duration::from_millis(25)));
         let transport_dyn: Arc<dyn Transport> = transport.clone();
-        *backend.transport.write() = Some(transport_dyn);
+        backend.set_transport_for_test(transport_dyn);
 
         let barrier = Arc::new(Barrier::new(6));
         let mut tasks = Vec::new();
@@ -2217,12 +2630,409 @@ mod tests {
         let response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "backend down");
         let transport = Arc::new(MockTransport::new(response, Duration::from_millis(0)));
         let transport_dyn: Arc<dyn Transport> = transport.clone();
-        *backend.transport.write() = Some(transport_dyn);
+        backend.set_transport_for_test(transport_dyn);
 
         let result = backend.get_tools().await;
 
         assert!(result.is_err());
         assert!(!backend.has_cached_tools());
         assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+    }
+
+    // ---- MIK-6735: per-user transport/session pool ----
+
+    // Method-agnostic transport that echoes the session tag it was built for,
+    // so a routed request proves which pool slot served it.
+    struct SessionMock {
+        session: String,
+        requests: AtomicUsize,
+        notifications: AtomicUsize,
+        closed: AtomicBool,
+    }
+
+    impl SessionMock {
+        fn new(session: &str) -> Self {
+            Self {
+                session: session.to_string(),
+                requests: AtomicUsize::new(0),
+                notifications: AtomicUsize::new(0),
+                closed: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Transport for SessionMock {
+        async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            Ok(JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({ "session": self.session }),
+            ))
+        }
+
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+            self.notifications.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        async fn close(&self) -> Result<()> {
+            self.closed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn per_user_backend() -> Arc<Backend> {
+        let idp = crate::identity_propagation::IdentityPropagationConfig {
+            strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
+            audience: "https://mem.internal".to_string(),
+            required: true,
+            session_mode: crate::identity_propagation::SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        };
+        let cfg = BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://mem.internal/mcp".to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            identity_propagation: Some(idp),
+            ..BackendConfig::default()
+        };
+        Arc::new(Backend::new(
+            "mem",
+            cfg,
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ))
+    }
+
+    fn per_user_key(binding: &str) -> PoolKey {
+        PoolKey::PerUser {
+            binding: binding.to_string(),
+        }
+    }
+
+    // POOL.4 (headline isolation guarantee): two callers on a per_user backend
+    // are served by distinct transport instances and distinct sessions, and a
+    // caller reusing its identity reuses its one slot — userA traffic never
+    // touches userB's session (IDP.7).
+    #[tokio::test]
+    async fn per_user_requests_route_to_isolated_transport_slots() {
+        let backend = per_user_backend();
+
+        let mock_a = Arc::new(SessionMock::new("A"));
+        let mock_b = Arc::new(SessionMock::new("B"));
+        backend.set_pooled_transport_for_test(
+            &per_user_key("userA"),
+            mock_a.clone() as Arc<dyn Transport>,
+        );
+        backend.set_pooled_transport_for_test(
+            &per_user_key("userB"),
+            mock_b.clone() as Arc<dyn Transport>,
+        );
+
+        let resp_a = backend
+            .request_with_headers("tools/list", None, &[], Some("userA"))
+            .await
+            .unwrap();
+        let resp_b = backend
+            .request_with_headers("tools/list", None, &[], Some("userB"))
+            .await
+            .unwrap();
+        assert_eq!(resp_a.result.unwrap()["session"], json!("A"));
+        assert_eq!(resp_b.result.unwrap()["session"], json!("B"));
+
+        let transport_a = backend
+            .pooled_transport_for_test(&per_user_key("userA"))
+            .unwrap();
+        let transport_b = backend
+            .pooled_transport_for_test(&per_user_key("userB"))
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(&transport_a, &transport_b),
+            "distinct users must not share a transport instance"
+        );
+
+        // Same identity reuses the one slot; userB is untouched by userA traffic.
+        backend
+            .request_with_headers("tools/list", None, &[], Some("userA"))
+            .await
+            .unwrap();
+        assert_eq!(
+            mock_a.requests.load(Ordering::SeqCst),
+            2,
+            "userA must reuse its own slot"
+        );
+        assert_eq!(
+            mock_b.requests.load(Ordering::SeqCst),
+            1,
+            "userB session must not serve userA traffic"
+        );
+    }
+
+    // MIK-6735 fix 1 (adversarial review of commit bfd62b91): the headline
+    // regression this fix closes. Before the fix, `request_with_headers`
+    // gated every caller on ONE backend-wide `Failsafe`, so tripping the
+    // breaker for userA's traffic also rejected userB's — one identity's
+    // outage took down every other tenant sharing the backend, exactly the
+    // blast radius the per-user pool exists to eliminate. Each slot must now
+    // fail independently: tripping userA's slot rejects ONLY userA, and
+    // userB's request on its own (untripped) slot still succeeds.
+    #[tokio::test]
+    async fn cross_tenant_circuit_breaker_trip_does_not_reject_other_identity() {
+        let backend = per_user_backend();
+        backend
+            .set_pooled_transport_for_test(&per_user_key("userA"), Arc::new(SessionMock::new("A")));
+        let mock_b = Arc::new(SessionMock::new("B"));
+        backend.set_pooled_transport_for_test(&per_user_key("userB"), mock_b.clone());
+
+        // Trip ONLY userA's slot.
+        backend.trip_circuit_breaker_for_test_key(&per_user_key("userA"));
+
+        let err = backend
+            .request_with_headers("tools/list", None, &[], Some("userA"))
+            .await
+            .expect_err("userA's own tripped slot must reject its traffic");
+        assert!(
+            matches!(err, Error::CircuitOpen(_)),
+            "expected CircuitOpen for userA, got {err:?}"
+        );
+
+        // userB's slot was never tripped and must be entirely unaffected.
+        let resp_b = backend
+            .request_with_headers("tools/list", None, &[], Some("userB"))
+            .await
+            .expect("userB's untripped slot must still serve requests");
+        assert_eq!(resp_b.result.unwrap()["session"], json!("B"));
+        assert_eq!(mock_b.requests.load(Ordering::SeqCst), 1);
+
+        // The canonical Shared slot (and thus backend-wide status/metrics
+        // accessors) must also be unaffected by a per-user slot tripping.
+        assert!(
+            !backend.is_circuit_tripped(),
+            "Shared slot must stay closed when only a PerUser slot tripped"
+        );
+    }
+
+    // MIK-6735 fix 2: before this fix, `Backend::notify` unconditionally used
+    // `ensure_started()` (the canonical Shared slot) regardless of the
+    // caller's identity, so a notification correlating a per-user request
+    // went out on the WRONG transport instance (and, once routed correctly,
+    // still the wrong upstream session — fixed at the `Transport` layer by
+    // `notify_with_headers`). Assert `notify_with_headers` routes to the SAME
+    // slot `request_with_headers` uses for that identity: userA's
+    // notification reaches only userA's transport, never userB's.
+    #[tokio::test]
+    async fn notify_with_headers_routes_to_the_callers_own_pool_slot() {
+        let backend = per_user_backend();
+        let mock_a = Arc::new(SessionMock::new("A"));
+        let mock_b = Arc::new(SessionMock::new("B"));
+        backend.set_pooled_transport_for_test(&per_user_key("userA"), mock_a.clone());
+        backend.set_pooled_transport_for_test(&per_user_key("userB"), mock_b.clone());
+
+        backend
+            .notify_with_headers("notifications/cancelled", None, Some("userA"))
+            .await
+            .expect("userA's notification must succeed");
+
+        assert_eq!(
+            mock_a.notifications.load(Ordering::SeqCst),
+            1,
+            "userA's notification must reach userA's own transport slot"
+        );
+        assert_eq!(
+            mock_b.notifications.load(Ordering::SeqCst),
+            0,
+            "userA's notification must never reach userB's transport slot"
+        );
+
+        // Plain `notify` (no identity) is a pass-through to the Shared slot,
+        // never a per-user slot — single-tenant behavior unchanged (IDP.5).
+        backend.set_pooled_transport_for_test(&PoolKey::Shared, Arc::new(SessionMock::new("S")));
+        backend
+            .notify("notifications/cancelled", None)
+            .await
+            .expect("shared-slot notification must succeed");
+        assert_eq!(
+            mock_a.notifications.load(Ordering::SeqCst),
+            1,
+            "an identity-less notify must not touch a per-user slot"
+        );
+    }
+
+    // POOL.1 / IDP.5: without a resolved per-user identity — or on a backend
+    // that is not per_user at all — every request collapses to the shared
+    // canonical slot, preserving single-tenant behavior byte-for-byte.
+    #[test]
+    fn pool_key_collapses_to_shared_without_per_user_identity() {
+        let backend = per_user_backend();
+        assert_eq!(backend.pool_key_for(None), PoolKey::Shared);
+        assert_eq!(backend.pool_key_for(Some("userA")), per_user_key("userA"));
+
+        let plain = Backend::new(
+            "plain",
+            BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        assert_eq!(
+            plain.pool_key_for(Some("userA")),
+            PoolKey::Shared,
+            "a non-idp backend never mints a per-user slot"
+        );
+    }
+
+    // POOL.2: idle per-user slots are evicted and their transports closed, the
+    // shared canonical slot is NEVER evicted, and a later request lazily
+    // re-creates a fresh slot.
+    #[tokio::test]
+    async fn evict_idle_per_user_entries_reaps_idle_users_but_spares_shared() {
+        let backend = per_user_backend();
+        backend
+            .set_pooled_transport_for_test(&per_user_key("userA"), Arc::new(SessionMock::new("A")));
+
+        // Age BOTH the user slot and the shared slot into the deep past.
+        for key in [per_user_key("userA"), PoolKey::Shared] {
+            backend
+                .pool
+                .get(&key)
+                .unwrap()
+                .value()
+                .last_used
+                .store(0, Ordering::Relaxed);
+        }
+
+        let closed = backend
+            .evict_idle_per_user_entries(Duration::from_secs(1))
+            .await;
+        assert_eq!(closed, 1, "only the per-user slot is reaped");
+        assert!(
+            backend
+                .pooled_transport_for_test(&per_user_key("userA"))
+                .is_none(),
+            "evicted per-user slot is gone"
+        );
+        assert!(
+            backend.pool.contains_key(&PoolKey::Shared),
+            "shared canonical slot must survive eviction even when idle"
+        );
+
+        // A fresh request re-creates the slot lazily with a new transport.
+        backend.set_pooled_transport_for_test(
+            &per_user_key("userA"),
+            Arc::new(SessionMock::new("A2")),
+        );
+        let resp = backend
+            .request_with_headers("tools/list", None, &[], Some("userA"))
+            .await
+            .unwrap();
+        assert_eq!(resp.result.unwrap()["session"], json!("A2"));
+    }
+
+    // POOL.3 companion: a per_user request and a no-identity request on the same
+    // backend land in different slots, so canonical/init traffic (shared) is
+    // never commingled with a user's session.
+    #[tokio::test]
+    async fn shared_and_per_user_slots_are_separate_on_one_backend() {
+        let backend = per_user_backend();
+        backend
+            .set_pooled_transport_for_test(&PoolKey::Shared, Arc::new(SessionMock::new("shared")));
+        backend
+            .set_pooled_transport_for_test(&per_user_key("userA"), Arc::new(SessionMock::new("A")));
+
+        let shared = backend
+            .request_with_headers("tools/list", None, &[], None)
+            .await
+            .unwrap();
+        let user = backend
+            .request_with_headers("tools/list", None, &[], Some("userA"))
+            .await
+            .unwrap();
+        assert_eq!(shared.result.unwrap()["session"], json!("shared"));
+        assert_eq!(user.result.unwrap()["session"], json!("A"));
+    }
+
+    // POOL race fix (adversarial review): `evict_idle_per_user_entries` can
+    // `remove_if` a per-user slot out of `pool` WHILE `ensure_entry_started`
+    // is mid-build for that exact slot — the entry is cloned out of the pool
+    // via `pooled_entry` before it is touched, so the evictor's idleness
+    // re-check still sees it as stale and wins. `PooledEntry` has no async
+    // `Drop`, so a transport stored into an orphaned entry would otherwise
+    // leak the connection until OS teardown. This drives `reconcile_after_start`
+    // (the exact method `ensure_entry_started` calls after `start_entry`)
+    // directly, simulating the evictor having already won, and asserts the
+    // orphaned transport is closed rather than leaked.
+    #[tokio::test]
+    async fn reconcile_after_start_closes_orphaned_transport_when_evictor_wins_race() {
+        let backend = per_user_backend();
+        let key = per_user_key("userA");
+
+        // Simulate ensure_entry_started's in-flight state: an entry was
+        // cloned out of the pool (as pooled_entry would) and start_entry
+        // just finished building its transport into it.
+        let entry = backend.pooled_entry(&key);
+        let transport = Arc::new(SessionMock::new("A"));
+        *entry.transport.write() = Some(Arc::clone(&transport) as Arc<dyn Transport>);
+
+        // The evictor wins the race: it removes this exact entry from the
+        // pool before the build above is reconciled.
+        let removed = backend.pool.remove(&key);
+        assert!(
+            removed.is_some_and(|(_, removed_entry)| Arc::ptr_eq(&removed_entry, &entry)),
+            "the entry removed by the simulated evictor must be the SAME entry \
+             the in-flight start was building into"
+        );
+
+        let outcome = backend
+            .reconcile_after_start(&key, &entry, Arc::clone(&transport) as Arc<dyn Transport>)
+            .await;
+
+        assert!(
+            outcome.is_none(),
+            "a lost race must be reported so ensure_entry_started retries \
+             against a fresh entry instead of handing back a doomed transport"
+        );
+        assert!(
+            transport.closed.load(Ordering::SeqCst),
+            "the orphaned transport must be closed by the side that lost the \
+             race, not silently dropped/leaked"
+        );
+        assert!(
+            entry.transport.read().is_none(),
+            "the orphaned entry's transport slot must be cleared after close"
+        );
+    }
+
+    // Companion happy-path: when nobody evicted the entry mid-build,
+    // reconcile_after_start must hand the transport back untouched and never
+    // close a live, still-registered connection.
+    #[tokio::test]
+    async fn reconcile_after_start_keeps_transport_when_still_registered() {
+        let backend = per_user_backend();
+        let key = per_user_key("userA");
+
+        let entry = backend.pooled_entry(&key);
+        let transport = Arc::new(SessionMock::new("A"));
+        *entry.transport.write() = Some(Arc::clone(&transport) as Arc<dyn Transport>);
+
+        // No eviction happened: `entry` is still the pool's registered slot.
+        let outcome = backend
+            .reconcile_after_start(&key, &entry, Arc::clone(&transport) as Arc<dyn Transport>)
+            .await;
+
+        assert!(
+            outcome.is_some(),
+            "a still-registered entry must hand its transport back, not report a lost race"
+        );
+        assert!(
+            !transport.closed.load(Ordering::SeqCst),
+            "the winning side's live transport must never be closed"
+        );
     }
 }

@@ -309,11 +309,10 @@ impl Config {
 
     /// Validate per-backend identity-propagation config (MIK-6704 / ADR-007),
     /// failing closed at load so a misconfigured propagation backend never
-    /// starts. Also rejects `SessionMode::PerUser` until the per-user transport
-    /// pool ships (a required `PerUser` backend would otherwise reuse one shared
-    /// MCP session across users — IDP.7); `Stateless` is supported now.
+    /// starts. Both `Stateless` and `PerUser` session modes are supported: the
+    /// per-user transport pool (MIK-6735) gives each caller its own session, so
+    /// `PerUser` no longer needs to be rejected here.
     fn validate_identity_propagation(&self) -> Result<()> {
-        use crate::identity_propagation::SessionMode;
         for (name, backend) in &self.backends {
             let Some(idp) = backend.identity_propagation.as_ref() else {
                 continue;
@@ -332,14 +331,10 @@ impl Config {
                      stdio/websocket cannot carry the credential header (IDP.2)"
                 )));
             }
-            if idp.session_mode == SessionMode::PerUser {
-                return Err(Error::ConfigValidation(format!(
-                    "backend '{name}' identity_propagation.session_mode=per_user is not yet \
-                     supported (needs the per-user transport pool, MIK-6728 slice 2c); use \
-                     stateless for a backend that keeps no per-session state, or wait for the \
-                     pool. Refusing to start rather than reuse a shared session (IDP.7)."
-                )));
-            }
+            // `SessionMode::PerUser` is now supported by the per-user transport
+            // pool (MIK-6735): the backend keeps a distinct transport/session per
+            // caller identity, so no shared session is reused across users
+            // (IDP.7). No rejection needed here.
             // A backend running the gateway's own OAuth client authorizes and
             // persists a gateway-held token during initialize(), authenticating
             // the transport session as the gateway *before* the per-request
