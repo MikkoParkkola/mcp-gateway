@@ -26,6 +26,8 @@ jobs:
         run: tests/public_repo_hygiene.sh
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh
+      - name: Enforce per-file license boundary (MIT core vs PolyForm-NC default)
+        run: scripts/ci/check-license-headers.sh
 
   service-template-smoke:
     name: Service template smoke

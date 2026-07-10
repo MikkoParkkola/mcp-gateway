@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Transform pipeline execution engine.
 
 use regex::Regex;

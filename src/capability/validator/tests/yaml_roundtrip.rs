@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! YAML round-trip tests — parse a YAML string and validate the result.
 //!
 //! These tests exercise the full `serde_yaml` → `CapabilityDefinition` →

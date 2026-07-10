@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Structural validator for capability YAML definitions.
 //!
 //! Catches schema format errors, malformed providers, dangling URL placeholders,

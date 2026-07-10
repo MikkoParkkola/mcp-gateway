@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Skill document renderer.
 //!
 //! Converts [`CapabilityDefinition`] instances into two Markdown artefacts:

@@ -1,0 +1,48 @@
+# Licensing
+
+mcp-gateway is **dual-licensed on a per-file basis**.
+
+## The rule
+
+- Files whose first line is `// SPDX-License-Identifier: MIT` are licensed under
+  the **MIT License** (see [`LICENSE-MIT`](LICENSE-MIT)).
+- **Every other file is licensed under the PolyForm Noncommercial License 1.0.0**
+  (see [`LICENSE-NONCOMMERCIAL`](LICENSE-NONCOMMERCIAL)). This is the
+  **default** — absence of an MIT header means PolyForm-Noncommercial.
+
+There is no third state. If a source file is not explicitly marked MIT, it is
+Noncommercial.
+
+## What that means in practice
+
+- **Noncommercial and personal use** of the whole project (including running the
+  gateway) is free under PolyForm-Noncommercial.
+- **Commercial use** — using the gateway inside a business, in a paid product, or
+  as part of a commercial service — requires a **commercial license** for the
+  Noncommercial-licensed files, which is effectively the whole runnable gateway.
+  See [`COMMERCIAL.md`](COMMERCIAL.md).
+- The **MIT core** is the open, reusable contribution: the MCP protocol types,
+  tool-selection intelligence (ranking, semantic search), the community
+  capability registry, the capability **definition format** (how you describe an
+  API — definition schema, YAML parser, structural + schema validation, and
+  OpenAPI-to-definition conversion), plus adoption/quality helpers (validator,
+  skills bridge, projection, transform). The MIT core is a set of building
+  blocks; it is **not** a runnable free-for-commercial gateway.
+
+The precise MIT-core paths are listed in [`.mit-core-allowlist`](.mit-core-allowlist)
+and enforced in CI (`scripts/ci/check-license-headers.sh`).
+
+## Why per-file, not a single package license
+
+The commercial/enterprise logic (multi-user identity, isolation, security
+governance, control plane, cost, attestation, key server, deployment) is woven
+through the runtime, so a single package-level license would be wrong for at
+least some files. Cargo's `license` field cannot express per-file mixed
+licensing, so the crate uses `license-file = "LICENSES.md"`.
+
+## History / correction
+
+Versions **3.0.0 through 3.2.1** were published with package metadata indicating
+MIT for code that was intended to be Enterprise (Noncommercial). See
+[`NOTICE.md`](NOTICE.md) for the correction. We cannot and do not revoke rights
+already granted for copies obtained under MIT; those versions are deprecated.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Capability definition types
 //!
 //! These types map directly to the YAML capability definition format.

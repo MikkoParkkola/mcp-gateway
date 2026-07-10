@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! TF-IDF index for MCP tool description matching.
 //!
 //! Term Frequency–Inverse Document Frequency ranks documents by how

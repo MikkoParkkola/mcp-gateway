@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Static curated registry of popular MCP servers.
 //!
 //! Provides compile-time metadata for ~50 well-known MCP servers so commands

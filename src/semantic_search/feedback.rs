@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! User-selection feedback tracker for semantic search result boosting.
 //!
 //! When a user picks a tool from search results that signal carries strong

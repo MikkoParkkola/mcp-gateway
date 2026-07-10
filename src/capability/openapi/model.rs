@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Parsed `OpenAPI` document model.
 //!
 //! Single responsibility: serde deserialization types mirroring the subset

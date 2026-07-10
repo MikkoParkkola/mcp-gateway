@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! MCP Protocol type definitions
 
 use std::collections::HashMap;

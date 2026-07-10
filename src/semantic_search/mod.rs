@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Semantic search for natural language MCP tool discovery (RFC-0072).
 //!
 //! Provides [`SemanticIndex`], a self-contained index that accepts tool

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Plugin marketplace registry
 //!
 //! Provides discovery, installation, and lifecycle management of gateway plugins.

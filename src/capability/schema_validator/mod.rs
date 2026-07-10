@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Strict JSON Schema validator for capability tool arguments and results.
 //!
 //! Validates LLM-supplied arguments against the `schema.input` defined in a

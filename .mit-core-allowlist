@@ -1,0 +1,13 @@
+src/protocol
+src/ranking
+src/semantic_search
+src/registry
+src/validator
+src/transform
+src/projection
+src/skills
+src/capability/definition
+src/capability/parser.rs
+src/capability/validator
+src/capability/schema_validator
+src/capability/openapi

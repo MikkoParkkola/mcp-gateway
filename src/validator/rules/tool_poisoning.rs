@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! AX-010: Tool Poisoning Detection
 //!
 //! Detects "tool poisoning attacks" where malicious MCP tool descriptions embed

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Agent-UX validation rules
 //!
 //! Based on Phil Schmid's "MCP is a User Interface for Agents" principles:

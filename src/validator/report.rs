@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Validation reporting structures
 
 use std::collections::HashMap;

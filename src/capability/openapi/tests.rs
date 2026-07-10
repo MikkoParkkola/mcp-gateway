@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Unit tests for the `OpenAPI` converter module.
 
 use super::*;

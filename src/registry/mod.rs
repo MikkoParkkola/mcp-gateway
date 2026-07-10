@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Capability registry for community-shared capability definitions
 //!
 //! Provides discovery and installation of pre-built capability definitions

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Canonical projection schema (MIK-3530 / MIK-3531).
 //!
 //! The gateway proxies the union of many heterogeneous backend tool surfaces

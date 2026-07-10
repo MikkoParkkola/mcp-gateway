@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Tool role taxonomy for the projection layer (MIK-3530 / MIK-3531).
 //!
 //! Every gateway-advertised tool can be tagged with the role it plays in an

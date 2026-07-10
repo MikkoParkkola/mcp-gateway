@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! SARIF 2.1.0 output format for CI integration
 //!
 //! Produces Static Analysis Results Interchange Format (SARIF) reports

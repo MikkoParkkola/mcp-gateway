@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Imported skill registry.
 //!
 //! An append-only, file-backed store of [`ImportedSkill`] records.  The

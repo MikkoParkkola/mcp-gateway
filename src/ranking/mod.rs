@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Smart search ranking based on usage frequency
 //!
 //! Ranks search results by combining text relevance with usage-based popularity.

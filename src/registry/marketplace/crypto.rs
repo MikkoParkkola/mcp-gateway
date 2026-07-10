@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Cryptographic primitives for plugin marketplace signatures.
 //!
 //! Ed25519 signature and public key newtypes with structural validation,

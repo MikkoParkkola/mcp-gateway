@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! CLI handler for the validate command.
 
 use std::path::PathBuf;

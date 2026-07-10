@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! `OpenAPI` -> capability conversion engine.
 //!
 //! Single responsibility: drive spec parsing, SSRF-guarded fetching, and

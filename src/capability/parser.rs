@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! YAML capability parser
 
 use super::CapabilityDefinition;
