@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 //! Identity-scoped capability grants for personal MCP tools.
 //!
 //! This module is the MIK-6553 grant contract. It models who may use a

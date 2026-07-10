@@ -28,7 +28,16 @@ are licensed under the **PolyForm Noncommercial** license (version 1.0.0). All o
 - `src/cost_accounting/`
 - `src/key_server/`
 - `src/transparency_log/` (new in v2.11, per MIK-3034)
+- `src/identity_propagation/` (v3.1, ADR-007 — end-user identity propagation to backends, a multi-user/multitenant feature)
+- `src/identity_grants.rs` and `src/identity_grants_tests.rs` (MIK-6553 — identity-scoped capability grants, a multi-user access-control feature)
+- `src/cli/identity.rs` and `src/commands/identity.rs` (grant administration surface for the above)
 - Future EE features per `docs/plans/`
+
+All multi-user / multitenant features (per-user identity, per-user capability
+grants, per-user OAuth isolation, and their administration surfaces) are
+Enterprise Edition and carry the PolyForm-Noncommercial SPDX header. This has
+applied since those features were introduced; the header/coverage-list entries
+above were reconciled to match that intent.
 
 ## Summary of PolyForm Noncommercial terms
 
