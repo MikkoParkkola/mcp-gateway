@@ -107,10 +107,7 @@ impl AuthorizationServerMetadata {
     ///
     /// Returns an error if the metadata endpoint is unreachable or returns invalid data.
     pub async fn discover(client: &Client, base_url: &str) -> Result<Self> {
-        let url = format!(
-            "{}/.well-known/oauth-authorization-server",
-            base_url.trim_end_matches('/')
-        );
+        let url = well_known_url(base_url, "oauth-authorization-server")?;
         info!(url = %url, "Discovering OAuth authorization server metadata");
 
         let response = client
@@ -150,10 +147,7 @@ impl ProtectedResourceMetadata {
     ///
     /// Returns an error if the metadata endpoint is unreachable or returns invalid data.
     pub async fn discover(client: &Client, base_url: &str) -> Result<Self> {
-        let url = format!(
-            "{}/.well-known/oauth-protected-resource",
-            base_url.trim_end_matches('/')
-        );
+        let url = well_known_url(base_url, "oauth-protected-resource")?;
         info!(url = %url, "Discovering OAuth protected resource metadata");
 
         let response = client.get(&url).send().await.map_err(|e| {
@@ -201,9 +195,76 @@ pub fn base_url(url: &str) -> Result<String> {
     Ok(base)
 }
 
+/// Build an RFC 8414 / RFC 9728 well-known metadata URL.
+///
+/// The `.well-known/<suffix>` segment is inserted **between the authority and
+/// the issuer/resource path** (if any), not appended after the path. Per
+/// RFC 8414 §3.1, for an issuer `https://host/auth/public` the authorization
+/// server metadata lives at
+/// `https://host/.well-known/oauth-authorization-server/auth/public`, NOT at
+/// `https://host/auth/public/.well-known/oauth-authorization-server`.
+///
+/// When the input has no path component (or just `/`), this reduces to the
+/// common `https://host/.well-known/<suffix>` form.
+///
+/// # Errors
+///
+/// Returns an error if `input` is not a valid absolute URL.
+pub fn well_known_url(input: &str, suffix: &str) -> Result<String> {
+    let parsed = Url::parse(input).map_err(|e| Error::OAuth(format!("Invalid URL: {e}")))?;
+    let authority = base_url(input)?;
+    let path = parsed.path().trim_end_matches('/');
+    Ok(format!("{authority}/.well-known/{suffix}{path}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // =========================================================================
+    // well_known_url — RFC 8414 §3.1 path-aware construction (issue #346)
+    // =========================================================================
+
+    #[test]
+    fn well_known_url_inserts_between_authority_and_path() {
+        // The #346 case: issuer with a path. The .well-known segment must go
+        // between host and path, not after it.
+        let got = well_known_url(
+            "https://mcp.kapa.ai/auth/public",
+            "oauth-authorization-server",
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            "https://mcp.kapa.ai/.well-known/oauth-authorization-server/auth/public"
+        );
+    }
+
+    #[test]
+    fn well_known_url_no_path_is_plain_wellknown() {
+        let got = well_known_url("https://auth.example.com", "oauth-authorization-server").unwrap();
+        assert_eq!(
+            got,
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+    }
+
+    #[test]
+    fn well_known_url_trailing_slash_and_port_and_resource() {
+        assert_eq!(
+            well_known_url("https://host/", "oauth-protected-resource").unwrap(),
+            "https://host/.well-known/oauth-protected-resource"
+        );
+        assert_eq!(
+            well_known_url("https://host:8443/deep/path/", "oauth-protected-resource").unwrap(),
+            "https://host:8443/.well-known/oauth-protected-resource/deep/path"
+        );
+    }
+
+    #[test]
+    fn well_known_url_rejects_invalid() {
+        assert!(well_known_url("not a url", "oauth-authorization-server").is_err());
+    }
 
     // =========================================================================
     // deserialize_scopes
