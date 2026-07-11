@@ -19,10 +19,11 @@ for v in "${OLD[@]}"; do run cargo yank --version "$v" mcp-gateway; done
 echo "== 2. npm: deprecate the mis-licensed range"
 run npm deprecate "@mikkoparkkola/mcp-gateway@>=3.0.0 <3.3.0" "$note"
 
-echo "== 3. ghcr / Docker: delete old container package versions (keep digests documented in NOTICE)"
-echo "   Manual/gated — list versions then delete by id:"
-echo "   gh api /user/packages/container/mcp-gateway/versions --jq '.[] | select(.metadata.container.tags[]? | test(\"^3\\\\.(0|1|2)\\\\.\")) | .id'"
-echo "   gh api --method DELETE /user/packages/container/mcp-gateway/versions/<id>"
+echo "== 3. ghcr / Docker: DEPRECATE/UNLIST old container versions — do NOT delete (counsel: destroying"
+echo "   published artifacts risks bad-faith/access-removal claims and breaks digest-pinned users)."
+echo "   Prefer a deprecation label/README note; document digests in NOTICE.md. If deletion is ever"
+echo "   required, it is a deliberate, counsel-approved step — not part of this routine withdrawal:"
+echo "   # gh api /user/packages/container/mcp-gateway/versions --jq '.[] | select(.metadata.container.tags[]? | test(\"^3\\\\.(0|1|2)\\\\.\")) | .id'"
 
 echo "== 4. GitHub Releases: add NOTICE banner, remove 'latest' from old (DO NOT delete tags)"
 for v in "${OLD[@]}"; do
