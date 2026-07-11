@@ -91,4 +91,7 @@ Signed-off-by: Your Name <your@email>
 Corporate/entity CLAs and questions: **mikko.parkkola@iki.fi**.
 
 This CLA is governed by the laws of Finland, without regard to conflict-of-laws
-rules. If any provision is unenforceable, the remainder stays in effect.
+rules. The courts of Finland have exclusive jurisdiction over any dispute arising
+out of or relating to this CLA, with the District Court of Helsinki (Helsingin
+käräjäoikeus) as the court of first instance. If any provision is unenforceable,
+the remainder stays in effect.

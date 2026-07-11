@@ -167,3 +167,22 @@ Remaining items are genuinely human-counsel calls, not script-fixable: CLA
 venue/jurisdiction mechanics, patent-termination scope tuning, and the factual
 chain-of-title audit (AI-assisted contributions, copied snippets, vendored
 material). Engineering readiness holds; the sign-off gate is unchanged.
+
+## Round 4 (2026-07-11) — operator clearances
+
+The licensor confirmed two of the three remaining items directly:
+
+- **Venue/jurisdiction (RESOLVED)** — Finnish jurisdiction cleared. `CLA.md` now
+  names the courts of Finland as exclusive forum, District Court of Helsinki
+  (Helsingin käräjäoikeus) as court of first instance, alongside the existing
+  Finnish governing-law clause.
+- **Patent posture (RESOLVED)** — the licensor has filed no patents. The CLA's
+  patent-termination clause is a defensive grant on the *contributor's* patents
+  (Apache-2.0 style) and functions independently of any licensor portfolio, so it
+  needs no tuning. No active doc asserts the project holds patents, and
+  COMMERCIAL.md promises no patent protection — verified, no overclaim.
+
+**Only one human-counsel item now remains open:** the factual chain-of-title
+audit (AI-assisted contributions, copied snippets, vendored material) before
+asserting authorship. Everything else is engineering-ready and operator-cleared;
+the bar-admitted-attorney sign-off on the overall scheme is still the tag gate.
