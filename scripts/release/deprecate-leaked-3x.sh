@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deprecate-leaked-3x.sh — withdraw the mis-licensed v3.0.0–v3.2.1 releases
+# deprecate-leaked-3x.sh — withdraw the superseded v3.0.0–v3.2.1 releases
 # across channels after the corrected release (v3.3.0) is published.
 #
 # Honest limit: this removes DISTRIBUTION, it does NOT revoke MIT rights already
@@ -11,12 +11,12 @@ set -euo pipefail
 APPLY=false; [ "${1:-}" = "--apply" ] && APPLY=true
 OLD=(3.0.0 3.0.1 3.0.2 3.1.0 3.1.1 3.1.2 3.1.3 3.1.4 3.2.0 3.2.1)  # adjust to the exact published set
 run() { echo "+ $*"; $APPLY && "$@"; }
-note="Licensing correction: v3.0.0–v3.2.1 shipped enterprise code under MIT by mistake. Deprecated; use >=3.3.0. See NOTICE.md."
+note="Licensing update: v3.0.0-v3.2.1 were published with MIT metadata; from v3.3.0 mcp-gateway uses mixed, per-file licensing (Noncommercial default). Deprecated; use >=3.3.0. See NOTICE.md."
 
 echo "== 1. crates.io: yank old versions (blocks new resolution; existing lockfiles unaffected)"
 for v in "${OLD[@]}"; do run cargo yank --version "$v" mcp-gateway; done
 
-echo "== 2. npm: deprecate the mis-licensed range"
+echo "== 2. npm: deprecate the superseded range"
 run npm deprecate "@mikkoparkkola/mcp-gateway@>=3.0.0 <3.3.0" "$note"
 
 echo "== 3. ghcr / Docker: DEPRECATE/UNLIST old container versions — do NOT delete (counsel: destroying"

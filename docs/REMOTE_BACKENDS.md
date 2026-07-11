@@ -134,7 +134,7 @@ evidence pointers such as sanitized endpoints, executable basenames, ports, and
 config paths.
 
 The same handoff also carries `shadow_radar.enterprise_boundary.v1`, an
-explicit contract for the dual-license split. `free_core_scan` is always local,
+explicit contract for the per-file license split. `free_core_scan` is always local,
 passive, and lists network-range discovery, scheduled scans, fleet scope, tool
 invocation, and config mutation under `denied_capabilities`. `enterprise_scan`
 allows network-range discovery, scheduled scans, and fleet scope while still

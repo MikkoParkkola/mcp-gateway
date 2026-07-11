@@ -554,7 +554,7 @@ mcp-gateway is part of a suite of MCP tools:
 
 ## License
 
-mcp-gateway is dual-licensed **per file**, and the default is Noncommercial.
+mcp-gateway uses **mixed, per-file licensing**, and the default is Noncommercial.
 
 | Scope | License |
 |-------|---------|
@@ -575,9 +575,9 @@ What this means:
   gateway — dispatch, transport, backend management, identity, security,
   governance — is Noncommercial. The MIT core is building blocks, not a
   free-for-commercial gateway. See [COMMERCIAL.md](COMMERCIAL.md).
-- Versions 3.0.0–3.2.1 shipped enterprise code under the MIT default by mistake.
-  Those copies stay MIT (we cannot revoke a granted license) but are deprecated.
-  See [NOTICE.md](NOTICE.md).
+- Versions 3.0.0–3.2.1 were published with MIT metadata for code now licensed as
+  Noncommercial from v3.3.0. Those copies stay MIT (a granted license cannot be
+  revoked) but are deprecated. See [NOTICE.md](NOTICE.md).
 
 Full model: [LICENSES.md](LICENSES.md).
 

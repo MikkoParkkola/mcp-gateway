@@ -1,6 +1,6 @@
 # Licensing
 
-mcp-gateway is **dual-licensed on a per-file basis**.
+mcp-gateway uses **mixed, per-file licensing**.
 
 ## The rule
 
@@ -10,8 +10,29 @@ mcp-gateway is **dual-licensed on a per-file basis**.
   (see [`LICENSE-NONCOMMERCIAL`](LICENSE-NONCOMMERCIAL)). This is the
   **default** — absence of an MIT header means PolyForm-Noncommercial.
 
-There is no third state. If a source file is not explicitly marked MIT, it is
-Noncommercial.
+Every MIT-licensed file also carries a copyright line
+(`// SPDX-FileCopyrightText: <year> Mikko Parkkola`) above the MIT identifier,
+and every Noncommercial file carries the same copyright line above an explicit
+`// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` header. The license is
+affirmative on every file, not inferred from absence.
+
+## Scope of the default
+
+The Noncommercial default applies to **first-party material authored for
+mcp-gateway and owned by Mikko Parkkola**. It does **not** silently relicense:
+
+- **Third-party material** — vendored code, dependencies, and any file carrying
+  its own upstream license or copyright, which remains under its own terms.
+- **Generated files** — anything produced by a build or codegen step, governed
+  by the license of its generator/inputs.
+- The license texts themselves (`LICENSE`, `LICENSE-MIT`,
+  `LICENSE-NONCOMMERCIAL`), which are the standard license documents.
+
+Any such out-of-scope path is recorded in
+[`.license-scope-exclude`](.license-scope-exclude). The repository currently
+contains no vendored or generated source files (no `@generated` markers, no
+`build.rs`), so that list is empty today; it exists so the boundary stays
+explicit if third-party material is ever added.
 
 ## What that means in practice
 
@@ -48,6 +69,6 @@ licensing, so the crate uses `license-file = "LICENSES.md"`.
 ## History / correction
 
 Versions **3.0.0 through 3.2.1** were published with package metadata indicating
-MIT for code that was intended to be Enterprise (Noncommercial). See
+MIT for code now licensed as Noncommercial from v3.3.0 onward. See
 [`NOTICE.md`](NOTICE.md) for the correction. We cannot and do not revoke rights
 already granted for copies obtained under MIT; those versions are deprecated.

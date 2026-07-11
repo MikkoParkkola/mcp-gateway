@@ -1,6 +1,6 @@
 # Commercial Use
 
-`mcp-gateway` is dual-licensed **per file**, and the default is Noncommercial (as
+`mcp-gateway` uses **mixed, per-file licensing**, and the default is Noncommercial (as
 of v3.3.0).
 
 - The default license is **PolyForm Noncommercial 1.0.0**. Every source file is
