@@ -4,8 +4,9 @@ mcp-gateway uses **mixed, per-file licensing**.
 
 ## The rule
 
-- Files whose first line is `// SPDX-License-Identifier: MIT` are licensed under
-  the **MIT License** (see [`LICENSE-MIT`](LICENSE-MIT)).
+- Files whose header carries `// SPDX-License-Identifier: MIT` (on the line
+  immediately following the `SPDX-FileCopyrightText` copyright line) are licensed
+  under the **MIT License** (see [`LICENSE-MIT`](LICENSE-MIT)).
 - **Every other file is licensed under the PolyForm Noncommercial License 1.0.0**
   (see [`LICENSE-NONCOMMERCIAL`](LICENSE-NONCOMMERCIAL)). This is the
   **default** — absence of an MIT header means PolyForm-Noncommercial.
