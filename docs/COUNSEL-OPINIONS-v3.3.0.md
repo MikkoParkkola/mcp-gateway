@@ -144,3 +144,26 @@ land but naming four residual gaps. All four now fixed:
 
 Still engineering readiness, not legal clearance. The named-human-lawyer gate is
 unchanged: no tag without sign-off.
+
+## Round 3 (2026-07-11) — drafting-risk items neutralized
+
+The re-review's "adequately resolved WITH drafting risk" flags were text-fixable
+without a lawyer's judgment; done:
+
+- **"sole copyright owner" overclaim** — the CLA has contributors *retain*
+  copyright, so claiming sole ownership is internally contradictory and becomes
+  false on the first external contribution. `CLA.md` and `COMMERCIAL.md` now say
+  "copyright holder of the original work". (The factual chain-of-title audit
+  remains a human-counsel item.)
+- **Fault/intent admissions** — removed "by mistake" from
+  `docs/LEGAL-REVIEW-BRIEF-v3.3.0.md` (now: "distributed enterprise features
+  under MIT") and rewrote `ADR-011`'s "these were meant to be Enterprise / the
+  allowlist was incomplete / shipped under MIT default" into the neutral
+  structural rationale (enterprise logic is woven into the runtime, so a per-file
+  allowlist is unworkable — hence the flip). No self-incriminating intent language
+  in any active doc.
+
+Remaining items are genuinely human-counsel calls, not script-fixable: CLA
+venue/jurisdiction mechanics, patent-termination scope tuning, and the factual
+chain-of-title audit (AI-assisted contributions, copied snippets, vendored
+material). Engineering readiness holds; the sign-off gate is unchanged.

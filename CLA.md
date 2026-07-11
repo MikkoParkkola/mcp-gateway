@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA)
 
-**mcp-gateway** — Licensor: **Mikko Parkkola** ("Licensor"), sole copyright owner.
+**mcp-gateway** — Licensor: **Mikko Parkkola** ("Licensor"), copyright holder of the original work.
 
 > Maintainer note: this CLA exists so the Licensor can offer **commercial
 > licenses** for the Noncommercial-licensed code. A plain inbound=outbound clause

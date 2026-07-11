@@ -68,4 +68,4 @@ This does not change the MIT license for existing MIT releases or for core gatew
 - **Custom terms, annual invoicing, procurement, resale, or licensing
   questions:** email **mikko.parkkola@iki.fi**.
 
-Licensor: Mikko Parkkola, sole copyright owner of `mcp-gateway`.
+Licensor: Mikko Parkkola, copyright holder of the original `mcp-gateway` work.

@@ -7,12 +7,13 @@
 
 The whole 3.x line added enterprise features (multi-user identity, per-user
 isolation, security governance, control plane, cost accounting, key server,
-attestation). These were meant to be Enterprise Edition (PolyForm-Noncommercial),
-marked per file with an SPDX header and enumerated in an allowlist. The allowlist
-was incomplete — enterprise features (e.g. `identity_grants`, the per-user
-transport pool) shipped under the repository's MIT default. Because enterprise
-logic is **woven into the runtime** (`gateway`, `backend`, `transport`, `config`,
-`commands`), an "EE allowlist" cannot be made complete or kept complete.
+attestation). These features are Noncommercial (PolyForm-Noncommercial-1.0.0).
+An "EE allowlist" approach — marking each enterprise file and enumerating it —
+is structurally unworkable here because enterprise logic is **woven into the
+runtime** (`gateway`, `backend`, `transport`, `config`, `commands`): the
+boundary cannot be drawn cleanly per file (features such as `identity_grants`
+and the per-user transport pool span both). An allowlist therefore cannot be
+made complete or kept complete.
 
 ## Decision
 

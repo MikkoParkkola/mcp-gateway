@@ -24,7 +24,7 @@ The mechanism, files, and enforcement are in `LICENSES.md`, `LICENSE`,
    `LICENSES.md` statement (e.g. a per-file copyright/notice line)?
 
 2. **Is the `NOTICE.md` correction wording right?**
-   Versions 3.0.0–3.2.1 shipped enterprise code under MIT by mistake. We state
+   Versions 3.0.0–3.2.1 distributed enterprise features under MIT. We state
    plainly that MIT rights already granted on distributed copies **cannot be
    revoked**, that those versions are deprecated, and that from 3.3.0 the model
    is as above. Does the wording adequately protect us without over-claiming?
