@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # apply-mit-headers.sh — reconcile MIT SPDX headers to match .mit-core-allowlist.
 # Files under an allowlist path get `// SPDX-License-Identifier: MIT` as line 1;
 # every other .rs file must NOT have it (stripped if present). Everything

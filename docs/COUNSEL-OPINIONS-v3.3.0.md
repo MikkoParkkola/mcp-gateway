@@ -119,3 +119,28 @@ Net: the eight convergent MUST-FIX items are implemented and green in CI. This
 is **engineering readiness, not legal clearance** — a bar-admitted attorney must
 still confirm the per-file marking scheme, the CLA, and the NOTICE/withdrawal
 wording before any release tag. No tag without that sign-off.
+
+## Re-review round 2 (gpt-5.6-sol, 2026-07-11) — residual gaps closed
+
+The re-review returned **COUNSEL: FIX FIRST** again, confirming the eight items
+land but naming four residual gaps. All four now fixed:
+
+- **#1 header scope** — the guard was Rust-only, so 23 first-party shell scripts
+  fell back to the "absence = Noncommercial" fragility the affirmative-header
+  model exists to kill. `apply-license-headers.sh` + `check-license-headers.sh`
+  are now comment-style-aware (`//` for `.rs`, `#` for `.sh`) and scan
+  `src crates tests examples benches scripts deploy tools`. All 23 scripts stamped
+  Noncommercial; check green under bash 3.2 and 5.x; 422 files total covered.
+- **#4 terminology** — the primary `LICENSE` file itself still opened with
+  "dual-licensed on a per-file basis"; changed to "mixed, per-file licensing".
+- **#7 artifact license text** — GitHub release uploaded raw binaries + checksums
+  with no license text. `release.yml` "Prepare release files" now copies the six
+  license/notice files into `release/`, so they ship as release assets and enter
+  `SHA256SUMS.txt`.
+- **Stale/contradictory docs** — deleted the dead `packaging/homebrew/mcp-gateway.rb`
+  duplicate (v2.0.0, PLACEHOLDER sha, `license "MIT"`, referenced by no release
+  path); corrected ADR-011's "Noncommercial without needing a header" line to the
+  affirmative-header model.
+
+Still engineering readiness, not legal clearance. The named-human-lawyer gate is
+unchanged: no tag without sign-off.

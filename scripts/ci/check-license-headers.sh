@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # check-license-headers.sh — enforce the affirmative per-file license boundary.
 #
 # Model (see LICENSES.md): the repository default is PolyForm-Noncommercial.
@@ -24,9 +26,11 @@
 # Apply/repair with scripts/ci/apply-license-headers.sh.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-COPYR_RE='^// SPDX-FileCopyrightText: [0-9]{4} Mikko Parkkola$'
-MIT='// SPDX-License-Identifier: MIT'
-NC='// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0'
+# Comment prefix is per-file: '//' for Rust, '#' for shell. The copyright regex
+# and the MIT/NC id strings accept either prefix.
+COPYR_RE='^(//|#) SPDX-FileCopyrightText: [0-9]{4} Mikko Parkkola$'
+MIT_ID='SPDX-License-Identifier: MIT'
+NC_ID='SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0'
 ALLOW=.mit-core-allowlist
 EXCLUDE=.license-scope-exclude
 
@@ -44,6 +48,8 @@ in_list() {
 no_copyright=(); bad_id=(); leaked=(); nc_in_core=(); core_not_mit=()
 while IFS= read -r f; do
   in_list "$f" "$EXCLUDE" && continue
+  case "$f" in *.sh) c='#' ;; *) c='//' ;; esac
+  MIT="$c $MIT_ID"; NC="$c $NC_ID"
 
   # Header is the first two non-shebang lines.
   l1="$(head -n1 "$f")"
@@ -64,7 +70,7 @@ while IFS= read -r f; do
   else
     $is_mit && leaked+=("$f")
   fi
-done < <(find src crates tests examples benches -name '*.rs' 2>/dev/null)
+done < <(find src crates tests examples benches scripts deploy tools -type f \( -name '*.rs' -o -name '*.sh' \) 2>/dev/null)
 
 rc=0
 report() { local title="$1"; shift; [ "$#" -gt 0 ] || return 0; echo "error: $title" >&2; printf '  %s\n' "$@" >&2; rc=1; }

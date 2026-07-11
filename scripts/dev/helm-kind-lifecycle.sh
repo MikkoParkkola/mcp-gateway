@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Helm release lifecycle on a real kind cluster: install -> upgrade -> rollback,
 # asserting convergence at each step (MIK-6694 / HELM.2). Proves the CHART's
 # release mechanics (helm upgrade / helm rollback), not just raw kubectl.

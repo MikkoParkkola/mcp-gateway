@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # deprecate-leaked-3x.sh — withdraw the superseded v3.0.0–v3.2.1 releases
 # across channels after the corrected release (v3.3.0) is published.
 #

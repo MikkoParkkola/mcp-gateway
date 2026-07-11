@@ -148,6 +148,9 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -type f -name 'mcp-gateway-*' -exec cp {} release/ \;
+          # Bundle license/notice text with every published binary (counsel #7:
+          # each artifact must carry its own license, not just the repo).
+          cp LICENSE LICENSE-MIT LICENSE-NONCOMMERCIAL LICENSES.md NOTICE.md COMMERCIAL.md release/
           ls -la release/
 
       - name: Create checksums

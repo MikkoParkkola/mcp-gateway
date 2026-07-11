@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # apply-license-headers.sh — stamp affirmative SPDX headers on every source file.
 #
 # Counsel (grok-4.5 + gpt-5.6-sol, both FIX FIRST) flagged "absence = Noncommercial"
@@ -19,9 +21,11 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 APPLY=false; [ "${1:-}" = "--apply" ] && APPLY=true
-COPYR='// SPDX-FileCopyrightText: 2026 Mikko Parkkola'
-MIT='// SPDX-License-Identifier: MIT'
-NC='// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0'
+# Comment prefix is per-file: '//' for Rust, '#' for shell. The SPDX tag bodies
+# are prefix-agnostic; the leading token is chosen per extension below.
+CR='SPDX-FileCopyrightText: 2026 Mikko Parkkola'
+MIT_ID='SPDX-License-Identifier: MIT'
+NC_ID='SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0'
 ALLOW=.mit-core-allowlist
 EXCLUDE=.license-scope-exclude   # third-party/generated paths, one per line (optional)
 
@@ -39,7 +43,9 @@ in_list() {
 changed=0; skipped=0
 while IFS= read -r f; do
   if in_list "$f" "$EXCLUDE"; then skipped=$((skipped+1)); continue; fi
-  if in_list "$f" "$ALLOW"; then id="$MIT"; else id="$NC"; fi
+  case "$f" in *.sh) c='#' ;; *) c='//' ;; esac
+  COPYR="$c $CR"
+  if in_list "$f" "$ALLOW"; then id="$c $MIT_ID"; else id="$c $NC_ID"; fi
 
   # Split optional shebang from the body. A shebang is '#!/...' or '#! ...';
   # Rust inner attributes ('#![...]') are NOT shebangs and must stay in the body.
@@ -51,14 +57,15 @@ while IFS= read -r f; do
 
   # Rebuild: shebang (if any) -> canonical 2-line header -> body with any existing
   # leading SPDX copyright/identifier lines stripped (NR<=4 = still in header run),
-  # so re-runs and pre-existing MIT-line-1 files converge idempotently.
+  # so re-runs and pre-existing MIT-line-1 files converge idempotently. Strip works
+  # for both '//' and '#' comment prefixes.
   tmp="$(mktemp)"
   {
     [ -n "$shebang" ] && printf '%s\n' "$shebang"
     printf '%s\n' "$COPYR"
     printf '%s\n' "$id"
     tail -n +"$body_start" "$f" \
-      | awk 'NR<=4 && /^\/\/ SPDX-(FileCopyrightText|License-Identifier)/ {next} {print}'
+      | awk 'NR<=4 && /^(\/\/|#) SPDX-(FileCopyrightText|License-Identifier)/ {next} {print}'
   } > "$tmp"
 
   if cmp -s "$tmp" "$f"; then
@@ -67,7 +74,7 @@ while IFS= read -r f; do
     changed=$((changed+1))
     if $APPLY; then mv "$tmp" "$f"; else echo "would stamp [$id]: $f"; rm -f "$tmp"; fi
   fi
-done < <(find src crates tests examples benches -name '*.rs' 2>/dev/null | sort)
+done < <(find src crates tests examples benches scripts deploy tools -type f \( -name '*.rs' -o -name '*.sh' \) 2>/dev/null | sort)
 
 echo "headers: $changed to stamp, $skipped already-correct/excluded"
 $APPLY || echo "(dry-run — re-run with --apply to write)"

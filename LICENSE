@@ -1,4 +1,4 @@
-mcp-gateway is dual-licensed on a per-file basis.
+mcp-gateway uses mixed, per-file licensing.
 
 - Files whose first line is `// SPDX-License-Identifier: MIT` are licensed under
   the MIT License: see LICENSE-MIT.

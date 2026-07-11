@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # verify-artifact-licenses.sh — every published artifact must carry the license
 # files, not just the git repo (counsel: verify license/notice files in the
 # crates tarball, npm tarball, container filesystem, and Homebrew output).

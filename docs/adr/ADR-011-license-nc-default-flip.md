@@ -18,8 +18,10 @@ logic is **woven into the runtime** (`gateway`, `backend`, `transport`, `config`
 
 Flip the default. The repository is **PolyForm-Noncommercial-1.0.0 by default**;
 only files explicitly carrying `// SPDX-License-Identifier: MIT` are MIT. The MIT
-core is small and enumerated in `.mit-core-allowlist`; everything else is
-Noncommercial without needing a header. Enforced bidirectionally in CI
+core is small and enumerated in `.mit-core-allowlist`; every other first-party
+source file carries an affirmative `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`
+header (not mere absence — an extracted file must carry its own governing license).
+Enforced bidirectionally in CI
 (`scripts/ci/check-license-headers.sh`): allowlist files must be MIT, and no file
 outside the allowlist may be MIT.
 

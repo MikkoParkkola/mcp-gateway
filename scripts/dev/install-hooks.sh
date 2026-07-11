@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 src="$REPO_ROOT/scripts/dev/pre-push.sh"
