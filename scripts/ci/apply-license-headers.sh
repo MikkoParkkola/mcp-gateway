@@ -72,7 +72,7 @@ while IFS= read -r f; do
     rm -f "$tmp"; skipped=$((skipped+1))
   else
     changed=$((changed+1))
-    if $APPLY; then mv "$tmp" "$f"; else echo "would stamp [$id]: $f"; rm -f "$tmp"; fi
+    if $APPLY; then cat "$tmp" > "$f"; rm -f "$tmp"; else echo "would stamp [$id]: $f"; rm -f "$tmp"; fi
   fi
 done < <(find src crates tests examples benches scripts deploy tools -type f \( -name '*.rs' -o -name '*.sh' \) 2>/dev/null | sort)
 
