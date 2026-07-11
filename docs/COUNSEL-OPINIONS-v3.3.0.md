@@ -37,10 +37,53 @@ Key points:
 6. **COMMERCIAL.md** — define commercial triggers, and the patent/trademark
    grants withheld from the free license.
 
-## gpt-5.6-sol — not obtained
-The codex/gpt-5.6-sol path failed repeatedly in this environment (empty output,
-trusted-dir error, prompt-echo across three attempts). Its opinion was not
-captured. Recommend obtaining a second AI or human opinion separately.
+## gpt-5.6-sol — **COUNSEL: FIX FIRST**
+Full opinion obtained (it is a slow thinking model; earlier capture attempts
+misread it). Converges with grok on FIX FIRST; adds sharper points:
+- **"Absence = Noncommercial" is the core weakness** (same as grok). Wants an
+  affirmative header on every NC file: `// SPDX-FileCopyrightText: 2026 Mikko
+  Parkkola` + `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`, with a
+  shebang permitted before it.
+- **"dual-licensed" is dangerous terminology** — conventionally it means the
+  recipient may choose either license for the whole project. Use "mixed, per-file
+  licensing"; reserve "dual license" for the separate commercial offer.
+- **Scope the default to Mikko-owned original material** and expressly exclude
+  third-party + generated files (else the rule wrongly claims NC over vendored
+  code, generated files, and LICENSE-MIT itself). "There is no third state" is
+  unsafe if any third-party material exists.
+- **DCO is not enough — use a CLA.** A DCO certifies provenance; it does not give
+  Mikko the ownership/relicensing authority needed to *sell* commercial licenses.
+  The CLA needs copyright assignment (or a broad, sublicensable, relicensable
+  license) + an express patent license + authority representations.
+- **NOTICE: remove admissions.** "intended to be Enterprise" / "by mistake" are
+  unnecessary internal-intent admissions that could be quoted against him. It gave
+  neutral replacement wording (in the PR discussion).
+- **Verify license/notice files in EVERY artifact** (crates tarball, npm tarball,
+  container filesystem, Homebrew archive, binaries) — not just the repo.
+- **Audit chain of title** before asserting "sole copyright owner" (AI-assisted
+  contributions, copied snippets, vendored material).
+- **Withdrawal:** don't call old versions "unauthorized/infringing/insecure"
+  (disparagement/misrepresentation risk); check customer contracts/SLAs before
+  deleting containers; preserve immutable release evidence first.
+- **COMMERCIAL.md** must have a working contact and not over-claim the definition
+  of "commercial" beyond the license text.
+
+## Synthesis — both counsel agree: FIX FIRST
+Convergent MUST-FIX (2/2), in priority order:
+1. **Affirmative per-file headers** — copyright + explicit NC SPDX on every
+   licensor-owned NC file (not mere absence). *(Biggest gap, both.)*
+2. **CLA with relicensing authority + patent grant** for contributors (DCO
+   insufficient for selling commercial licenses).
+3. **Neutral NOTICE** — keep the non-revocation sentence; remove "mistake"/
+   "intended as Enterprise" admissions; scope to exact artifacts. *(Partly done.)*
+4. **Terminology** — "mixed, per-file licensing," not "dual-licensed."
+5. **Scope the default to Mikko-owned originals**; exclude third-party/generated.
+6. **CI validates BOTH MIT and NC headers** + packaging + allowlist closure +
+   unknown-license states.
+7. **Verify license files in every published artifact**, not just the repo.
+8. **COMMERCIAL.md** — working contact + commercial-license terms; don't over-claim.
+Plus: chain-of-title audit; preserve release evidence; trademark policy.
+
 
 ## Status of grok's must-fixes
 - [x] #3 NOTICE tightening — done (exact-artifacts scope, code-mixing, AS-IS).
