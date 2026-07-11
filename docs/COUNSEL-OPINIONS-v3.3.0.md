@@ -85,14 +85,37 @@ Convergent MUST-FIX (2/2), in priority order:
 Plus: chain-of-title audit; preserve release evidence; trademark policy.
 
 
-## Status of grok's must-fixes
-- [x] #3 NOTICE tightening — done (exact-artifacts scope, code-mixing, AS-IS).
-- [x] #4 Container withdrawal — runbook now deprecate/unlist, not delete.
-- [ ] #1 Per-file headers (copyright + NC marker on ~330 files) — **not yet**;
-      the largest item, tracked for a focused pass.
-- [ ] #2 Contributor CLA/DCO — not yet.
-- [ ] #5 CI/allowlist release gate — guard exists; wire into the release workflow.
-- [ ] #6 COMMERCIAL.md commercial-trigger + patent/trademark clarity — not yet.
+## Status of the convergent must-fixes (all addressed 2026-07-11)
+- [x] #1 Affirmative per-file headers — copyright + explicit SPDX id on all 399
+      first-party `.rs` (MIT core: MIT; all else: PolyForm-Noncommercial-1.0.0).
+      `scripts/ci/apply-license-headers.sh` (idempotent, shebang/inner-attr-safe);
+      `cargo check --all-targets` green.
+- [x] #2 CLA (not DCO) — `CLA.md`: contributor keeps copyright, grants a broad
+      sublicensable **relicensable** copyright license (incl. commercial), an
+      express patent license with defensive termination, and authority reps.
+      `CONTRIBUTING.md` requires signing; its "new files need no header" error
+      (which contradicted the new guard) corrected.
+- [x] #3 Neutral NOTICE — intent/fault admissions ("by mistake", "intended as
+      Enterprise") removed here and in README/LICENSES/COMMERCIAL/deprecate
+      runbook; non-revocation sentence, AS-IS, exact-artifacts scope kept.
+- [x] #4 Terminology — "mixed, per-file licensing" replaces "dual-licensed" in
+      all active docs (superseded LICENSE-EE + historical CHANGELOG left as records).
+- [x] #5 Scope — default scoped to Mikko-owned originals; third-party/generated
+      and the license texts excluded via `.license-scope-exclude` (empty today —
+      no vendored/generated source). Replaces the unsafe "no third state".
+- [x] #6 CI validates BOTH ids — `check-license-headers.sh` now checks copyright
+      + MIT/NC id + unknown-license + leak + NC-in-core, both directions.
+- [x] #7 License files in every artifact — Docker COPY into image; Homebrew
+      `license :cannot_represent` + caveat (and the release.yml generator fixed);
+      `verify-artifact-licenses.sh` audits crates/npm/Docker/Homebrew, wired into CI.
+- [x] #8 COMMERCIAL.md — working contact + sponsor link; states the PolyForm-NC
+      text (not the doc) defines "noncommercial"; stale "Enterprise Edition"
+      framing normalized.
 
-Net: **not clear to ship** until #1, #2, #6 are addressed. The human lawyer
-should confirm the per-file marking scheme and the NOTICE/withdrawal wording.
+Plus SHOULD items still open for the human review: chain-of-title audit,
+preservation of immutable release evidence before withdrawal, trademark policy.
+
+Net: the eight convergent MUST-FIX items are implemented and green in CI. This
+is **engineering readiness, not legal clearance** — a bar-admitted attorney must
+still confirm the per-file marking scheme, the CLA, and the NOTICE/withdrawal
+wording before any release tag. No tag without that sign-off.
