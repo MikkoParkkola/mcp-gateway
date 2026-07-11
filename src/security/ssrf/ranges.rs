@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! RFC special-use IP range checks for [`super::validate_url_not_ssrf`] and
 //! [`super::check_host_not_ssrf`].
 //!

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Step-level checkpoint persistence using JSONL files.
 //!
 //! Each chain gets one file: `~/.mcp-gateway/chains/<chain_id>.jsonl`.

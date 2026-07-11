@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `GET /ui/api/costs` — cost governance dashboard endpoint.
 //!
 //! Returns current daily spend, limits, and aggregate token/call stats.

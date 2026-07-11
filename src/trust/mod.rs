@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `TrustCard` and CBOM metadata for MCP servers and tools.
 //!
 //! `TrustCard` is the human-facing summary. CBOM is the machine-readable

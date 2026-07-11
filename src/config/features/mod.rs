@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Feature-specific configuration types.
 //!
 //! Each domain has its own sub-module; this `mod.rs` re-exports everything so

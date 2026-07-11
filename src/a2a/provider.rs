@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `A2aProvider` — implements the gateway [`Provider`] trait for A2A backends.
 //!
 //! An A2A backend is discovered via its Agent Card and invoked through the

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #![allow(clippy::float_cmp, clippy::manual_string_new)]
 
 use std::collections::HashMap;

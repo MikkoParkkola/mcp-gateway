@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Auth-scheme resolution.
 //!
 //! Single responsibility: turn an `OpenAPI` `securitySchemes` entry into the

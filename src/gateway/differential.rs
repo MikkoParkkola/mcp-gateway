@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Differential descriptions for tool families in search results.
 //!
 //! When a search returns multiple tools from the same "family" (common name prefix,

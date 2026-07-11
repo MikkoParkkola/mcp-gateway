@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `TransformChain` — wraps a provider with an ordered list of transforms.
 //!
 //! The chain itself implements [`Provider`], so chains can be nested and

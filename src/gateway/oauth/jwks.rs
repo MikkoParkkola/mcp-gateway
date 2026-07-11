@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! JWKS endpoint — expose gateway's own EC key pair.
 //!
 //! The `/.well-known/jwks.json` endpoint allows backends to independently

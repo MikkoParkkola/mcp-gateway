@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Provider abstraction — pluggable tool sources for `FastMCP` 3.0.
 //!
 //! This module unifies all tool sources (MCP backends, REST capabilities,

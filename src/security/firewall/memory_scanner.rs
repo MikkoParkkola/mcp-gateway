@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! Memory-poisoning detection for OWASP ASI06 (Excessive Agency via memory).

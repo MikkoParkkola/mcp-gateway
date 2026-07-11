@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Phase 3 spec-preview handlers — SEP-1821 filtered tools/list, SEP-1862 tools/resolve,
 //! and dynamic tool promotion (§5.10).
 //!

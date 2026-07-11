@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: MIT
 
 //! Capability file SHA-256 hash pinning.

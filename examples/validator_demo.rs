@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Example demonstrating the Agent-UX Validator
 //!
 //! This example shows how to validate MCP tool definitions against

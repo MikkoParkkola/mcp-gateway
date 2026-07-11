@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! End-to-end tests for SKILL.md import → registry → search → show.
 //!
 //! Exercises the public `mcp_gateway::skills` API to verify the import

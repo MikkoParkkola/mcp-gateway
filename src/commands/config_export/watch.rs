@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Watch-mode implementation for `mcp-gateway setup export`.
 //!
 //! Monitors `config_path` for file-system changes and re-exports client

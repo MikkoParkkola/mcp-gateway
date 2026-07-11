@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `OpenAPI` `$ref` resolution against the components section.
 //!
 //! Single responsibility: dereference parameter, request-body, and schema

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Surfaced-tool management for Meta-MCP.
 //!
 //! Contains the builder for statically surfaced tools (populated from

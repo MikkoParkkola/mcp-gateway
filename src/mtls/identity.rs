@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Certificate identity extraction.
 //!
 //! Parses an X.509 DER-encoded certificate and extracts the fields used for

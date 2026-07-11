@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: MIT
 
 //! AX-010: Tool Poisoning Detection

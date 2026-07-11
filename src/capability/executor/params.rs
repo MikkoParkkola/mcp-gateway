@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Parameter substitution, response extraction, and cache-key helpers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};

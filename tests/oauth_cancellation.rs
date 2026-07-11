@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-4486: OAuth cancellation-survival behavioral tests.
 //!
 //! The OAuth interactive browser flow in `src/transport/http/mod.rs`

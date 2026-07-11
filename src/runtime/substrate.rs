@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Substrate detection and enumeration.
 //!
 //! The [`Substrate`] enum represents the two supported containerization

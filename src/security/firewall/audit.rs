@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! Structured NDJSON audit log for every tool invocation through the firewall.

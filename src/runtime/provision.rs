@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Runtime-substrate provisioning entry point (the wired call path).
 //!
 //! **WIRING (MIK-5226 follow-up)**: the [`runtime`](super) module ships a

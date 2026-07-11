@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Acceptance-criterion tests for MIK-5223 — RUNTIME-A: attestation token
 //! injection at sandbox creation (B1-IDENT).
 //!

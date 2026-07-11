@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: MIT
 
 //! Projection layer for the gateway proxy surface (MIK-3530).

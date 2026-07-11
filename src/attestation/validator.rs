@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway-side attestation validation (MIK-5223 AC.3–AC.5, AC.9).
 //!
 //! The [`AttestationValidator`] is the single validation point: every

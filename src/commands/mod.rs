@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! CLI command handlers for `mcp-gateway`.
 //!
 //! Each public function corresponds to a top-level `Command` variant and

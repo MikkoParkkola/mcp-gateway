@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: MIT
 
 //! Semantic search for natural language MCP tool discovery (RFC-0072).

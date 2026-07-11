@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! CLI definition for `mcp-gateway skills generate`.
 //!
 //! Generates agent skill bundles from loaded capability YAML files and

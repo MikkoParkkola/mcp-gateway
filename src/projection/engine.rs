@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: MIT
 
 //! Projection engine (MIK-3533): map a backend response onto the canonical

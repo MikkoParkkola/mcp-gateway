@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared platform path helpers for AI client config locations.
 //!
 //! These helpers are used by both `setup.rs` (import wizard) and

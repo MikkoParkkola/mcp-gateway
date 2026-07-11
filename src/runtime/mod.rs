@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! RUNTIME-D: dual-substrate OCI abstraction layer.
 //!
 //! Provides a unified [`SandboxDescriptor`] that compiles to either a gVisor

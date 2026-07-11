@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Deterministic Kubernetes controller-manager contract.
 //!
 //! The controller manager runs the same reconciliation planner used by the

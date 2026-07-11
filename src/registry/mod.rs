@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Capability registry for community-shared capability definitions
 //!
 //! Provides discovery and installation of pre-built capability definitions

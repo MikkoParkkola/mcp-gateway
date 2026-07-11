@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Structural validator for capability YAML definitions.
 //!
 //! Catches schema format errors, malformed providers, dangling URL placeholders,

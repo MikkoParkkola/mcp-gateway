@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Idempotency key support for `gateway_invoke`
 //!
 //! Prevents duplicate side effects when LLMs retry tool calls due to timeouts.

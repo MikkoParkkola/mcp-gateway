@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! Per-agent identity verification (OWASP ASI03 — Identity and Privilege Abuse).

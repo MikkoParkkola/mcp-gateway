@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Standalone helpers and the `ToolInvoker` bridge for `MetaMcp`.
 //!
 //! Contains idempotency key resolution, tag collection, Code Mode result

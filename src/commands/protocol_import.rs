@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Safe protocol import preview and draft-apply command handlers.
 
 use std::{path::Path, process::ExitCode};

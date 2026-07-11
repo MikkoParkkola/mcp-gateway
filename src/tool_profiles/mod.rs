@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Per-user tool usage profiles (RFC-0073).
 //!
 //! Tracks how often each user invokes each tool, when they last used it,

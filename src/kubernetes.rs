@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Kubernetes enterprise reconciliation planning.
 //!
 //! This module is the typed planning contract for the enterprise Kubernetes

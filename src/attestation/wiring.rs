@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Env-driven wiring of the gateway attestation validator (MIK-6163 rollout).
 //!
 //! The validator and the [`MetaMcp::with_attestation`] builder already exist

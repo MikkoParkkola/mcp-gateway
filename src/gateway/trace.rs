@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Trace ID generation and task-local propagation.
 //!
 //! A `TraceId` is a UUID v4 string prefixed with `"gw-"` that is minted

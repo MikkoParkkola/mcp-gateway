@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! REST protocol executor
 //!
 //! Implements [`ProtocolExecutor`] for HTTP/REST APIs — the original and

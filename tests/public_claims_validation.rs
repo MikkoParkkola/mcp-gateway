@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use mcp_gateway::{

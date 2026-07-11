@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway-embedded signing client for the bnaut-attestation platform
 //! component (MIK-5223 AC.2, B1-IDENT / B4-PLATFORM).
 //!

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `OpenAPI` to Capability converter
 //!
 //! Generates capability YAML definitions from `OpenAPI` specifications.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_http_error_response, build_json_response, extract_request_id, extract_tools_call_params,

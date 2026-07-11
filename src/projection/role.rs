@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: MIT
 
 //! Tool role taxonomy for the projection layer (MIK-3530 / MIK-3531).

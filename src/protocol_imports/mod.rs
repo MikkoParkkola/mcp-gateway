@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Safe protocol import planning for external API and MCP package sources.
 //!
 //! This module does not activate imported tools. It produces deterministic,

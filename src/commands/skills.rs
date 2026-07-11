@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Command handlers for `mcp-gateway skills *` subcommands.
 //!
 //! - `generate` — render capability YAML files as SKILL.md bundles (existing).

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Variable interpolation for chain step inputs.
 //!
 //! Resolves `$step_name.json.path` and `$inputs.key` references in JSON values,

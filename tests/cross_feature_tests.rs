@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Cross-feature integration tests for mcp-gateway v2.6.0.
 //!
 //! Each test exercises two or more feature-gated modules together, verifying

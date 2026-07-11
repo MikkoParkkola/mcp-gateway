@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! OAuth 2.0 Client for MCP Gateway
 //!
 //! Implements OAuth Authorization Code flow with PKCE (RFC 7636) for

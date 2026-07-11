@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Fail-closed sandbox boot gate with attestation injection (MIK-5223 AC.1,
 //! AC.6) — no token, no start.
 //!

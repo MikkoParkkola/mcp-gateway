@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! YAML round-trip tests — parse a YAML string and validate the result.
 //!
 //! These tests exercise the full `serde_yaml` → `CapabilityDefinition` →

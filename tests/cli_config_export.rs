@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Integration tests for `mcp-gateway setup export` (RFC-0070).
 //!
 //! These tests exercise the full export pipeline: a minimal `gateway.yaml`

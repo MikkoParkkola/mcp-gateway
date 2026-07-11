@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Integration tests for the `OpenApiConverter` — the library side of
 //! `mcp-gateway cap import`.
 //!

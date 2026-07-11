@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Substrate override hook.
 //!
 //! **AC.5 (MIK-NEW.RUNTIME-D.5)**: the [`OverrideHook`] lets an operator pin

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Usage statistics tracking for the gateway
 //!
 //! Tracks invocations, cache hits, tools discovered, cached token counts, and

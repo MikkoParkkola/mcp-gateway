@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
 
 fn assert_check(results: &[CheckResult], label: &str, status: &CheckStatus) {

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MCP Gateway - Universal Model Context Protocol Gateway
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Backend warm-start orchestration shared by HTTP and stdio server modes.
 
 use std::sync::Arc;

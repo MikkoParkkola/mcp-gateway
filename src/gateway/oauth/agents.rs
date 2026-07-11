@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Agent registration and in-memory store.
 //!
 //! An agent is a registered OAuth 2.0 client that receives a `client_id` and

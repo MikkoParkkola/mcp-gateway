@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Prometheus metrics recorder installation and text-format rendering.
 //!
 //! Only active when compiled with the `metrics` feature (opt-in, enabled by

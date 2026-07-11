@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Acceptance-criterion tests for MIK-5226 (RUNTIME-D).
 //!
 //! Each test maps 1:1 to an acceptance criterion from the ticket.

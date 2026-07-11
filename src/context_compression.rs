@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! DSA-inspired context compression for proxied conversations — Issue #79.
 //!
 //! When the gateway proxies conversations that include tool definitions, the

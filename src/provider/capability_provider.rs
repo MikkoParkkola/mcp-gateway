@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `CapabilityProvider` — adapts [`CapabilityBackend`] to the [`Provider`] trait.
 //!
 //! Phase 2 adapter from RFC-0032.  The existing `CapabilityBackend` (YAML-defined

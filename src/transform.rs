@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Response transform pipeline for stripping noise from API responses.
 //!
 //! Transforms sit between the executor response and the MCP response,

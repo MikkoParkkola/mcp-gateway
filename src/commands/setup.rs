@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Implementation of `mcp-gateway setup`.
 //!
 //! Scans all known AI-client configs for MCP servers, lets the user

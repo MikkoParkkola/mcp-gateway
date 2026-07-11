@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 const ROADMAP: &str = include_str!("../docs/roadmap/mik-6550-trust-fabric-roadmap.md");
 const README: &str = include_str!("../README.md");
 

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MCP ↔ A2A translation layer.
 //!
 //! This module is the semantic bridge between the two protocols.  All

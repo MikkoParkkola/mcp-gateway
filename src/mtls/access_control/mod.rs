@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Certificate-based tool access control.
 //!
 //! Compiles the YAML policy list from [`MtlsConfig`] into an efficient

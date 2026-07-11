@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Capability YAML file management API endpoints.
 //!
 //! Provides CRUD operations for capability YAML files stored in the configured

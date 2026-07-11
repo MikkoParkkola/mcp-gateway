@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! SSRF protection: comprehensive RFC special-use IP range blocking, with
 //! DNS-rebinding prevention via resolve-and-pin.
 //!

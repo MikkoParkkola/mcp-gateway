@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Unit tests for the `ssrf` module: RFC range checks, [`super::validate_url_not_ssrf`],
 //! redirect-chain validation, and the DNS-pinning resolver (MIK-4019).
 

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Direct tool invocation for the `mcp-gateway tool invoke` command.
 //!
 //! Loads capabilities from the configured directory, resolves the requested

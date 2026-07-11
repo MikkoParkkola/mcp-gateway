@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Request/notify dispatch through the per-identity pool, plus status,
 //! circuit-breaker, and health-metric accessors on [`super::Backend`].
 

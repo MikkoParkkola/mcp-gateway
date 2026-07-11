@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Map a verified identity (OIDC/SCIM) to a control-plane role (MIK-6688).
 //!
 //! Mirrors the key-server policy engine (issuer/email/domain/group match,

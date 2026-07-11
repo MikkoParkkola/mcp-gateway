@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Integration tests for the Web UI management API endpoints.
 //!
 //! Tests the following endpoint groups end-to-end through the in-process router:

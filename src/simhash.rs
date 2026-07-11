@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Simhash-based request routing and cache sharing for MCP Gateway — Issue #46.
 //!
 //! Sessions that invoke similar sets of tools tend to benefit from sharing

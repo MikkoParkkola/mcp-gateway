@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! RFC 8693 OAuth 2.0 Token Exchange identity-propagation strategy (MIK-6729).

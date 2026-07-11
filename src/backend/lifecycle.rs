@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Backend construction and connection lifecycle: creation, starting pool
 //! slots (stdio/HTTP transport launch, OAuth client setup, runtime-provider
 //! policy enforcement), stopping, and health-probe-driven recovery.
