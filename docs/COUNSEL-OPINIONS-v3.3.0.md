@@ -186,3 +186,34 @@ The licensor confirmed two of the three remaining items directly:
 audit (AI-assisted contributions, copied snippets, vendored material) before
 asserting authorship. Everything else is engineering-ready and operator-cleared;
 the bar-admitted-attorney sign-off on the overall scheme is still the tag gate.
+
+## Round 5 (2026-07-12) — chain-of-title audit + dual-counsel review
+
+The last open human-counsel item — the factual chain-of-title audit — was run as
+a dual AI-counsel review (GPT-5.5 via codex + Grok) with independent web
+verification of every legal anchor. Full analysis:
+[`docs/CHAIN-OF-TITLE-ANALYSIS.md`](CHAIN-OF-TITLE-ANALYSIS.md). Raw transcripts:
+`/Users/mikko/cot_gpt.txt`, `/Users/mikko/cot_grok.txt` (out-of-repo).
+
+**Both models independently returned COUNSEL: SHIP-ABLE (risk manageable).**
+
+- **Precedent** — every authority on point *helps*: *Thaler v. Perlmutter* (D.C.
+  Cir. 2025, verified) bars only AI-as-sole-author with human input disclaimed;
+  USCO "Copyright and AI" Part 2 (2025, verified) protects human selection /
+  arrangement / modification of AI output; EU Software Directive 2009/24/EC Art
+  1(3) + CJEU AOIC line (Infopaq / Painer / SAS / BSA, all verified) protect the
+  integrated work via free and creative choices. No hallucinated cases in either
+  output; one Grok reporter cite (130 F.4th 1039) left UNVERIFIED, low materiality.
+- **Favorable law** — EU/Finland ("author's own intellectual creation") is at
+  least as good as, arguably cleaner than, US law for software on these facts.
+- **Residual risk** — copied snippets, not AI-authorship. Audit found **none**.
+
+Chain-of-title de-risking implemented this round: `AUTHORSHIP.md` (dated
+declaration), `docs/legal/snippet-provenance.md` (clean audit),
+`docs/legal/dependency-licenses.md` + `.tsv` (426-crate SBOM, no copyleft
+contamination), and the stale MIT claim in `docs/show-hn.md` reconciled.
+
+**Every AI-counsel and operator-clearable item is now closed.** The single
+remaining gate is unchanged: sign-off by a bar-admitted Finnish/EU IP attorney on
+the per-file marking scheme, the CLA, and the NOTICE/withdrawal wording before
+the release tag. AI counsel ≠ legal clearance.
