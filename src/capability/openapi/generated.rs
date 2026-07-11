@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 //! Generated capability output types.
 //!
 //! Single responsibility: the public `GeneratedCapability` and its auth/cache

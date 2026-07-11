@@ -22,9 +22,15 @@
     "mcp-gateway": "run.js"
   },
   "files": [
-    "run.js"
+    "run.js",
+    "LICENSE",
+    "LICENSE-MIT",
+    "LICENSE-NONCOMMERCIAL",
+    "LICENSES.md",
+    "NOTICE.md"
   ],
   "scripts": {
+    "prepack": "for f in LICENSE LICENSE-MIT LICENSE-NONCOMMERCIAL LICENSES.md NOTICE.md; do cp \"../$f\" \"./$f\"; done",
     "postinstall": "node run.js --install"
   },
   "os": [

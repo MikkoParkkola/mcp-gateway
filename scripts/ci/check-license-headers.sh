@@ -33,7 +33,7 @@ while IFS= read -r f; do
   else
     $has_mit && leaked+=("$f")
   fi
-done < <(find src -name '*.rs')
+done < <(find src crates tests examples benches -name '*.rs' 2>/dev/null)
 
 rc=0
 if [ "${#missing[@]}" -gt 0 ]; then

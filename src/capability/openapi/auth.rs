@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 //! Auth-scheme resolution.
 //!
 //! Single responsibility: turn an `OpenAPI` `securitySchemes` entry into the

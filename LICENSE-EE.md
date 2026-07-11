@@ -8,7 +8,7 @@
 
 # Enterprise Edition License (PolyForm Noncommercial)
 
-**Status**: Active as of v2.11.0 (2026-04-25). See MIK-3034, MIK-3036.
+**Status**: SUPERSEDED as of v3.3.0 (see banner above). Historical reference only.
 
 This file describes the license terms that apply to designated **Enterprise Edition (EE)** files within the `mcp-gateway` repository. The Path C dual-license refactor landed in v2.11.0.
 

@@ -9,7 +9,7 @@
 # is already published and is "latest" on each channel. Operator-run only.
 set -euo pipefail
 APPLY=false; [ "${1:-}" = "--apply" ] && APPLY=true
-OLD=(3.0.0 3.1.0 3.1.1 3.1.2 3.1.3 3.1.4 3.2.0 3.2.1)  # adjust to the exact published set
+OLD=(3.0.0 3.0.1 3.0.2 3.1.0 3.1.1 3.1.2 3.1.3 3.1.4 3.2.0 3.2.1)  # adjust to the exact published set
 run() { echo "+ $*"; $APPLY && "$@"; }
 note="Licensing correction: v3.0.0–v3.2.1 shipped enterprise code under MIT by mistake. Deprecated; use >=3.3.0. See NOTICE.md."
 
@@ -17,7 +17,7 @@ echo "== 1. crates.io: yank old versions (blocks new resolution; existing lockfi
 for v in "${OLD[@]}"; do run cargo yank --version "$v" mcp-gateway; done
 
 echo "== 2. npm: deprecate the mis-licensed range"
-run npm deprecate "mcp-gateway@>=3.0.0 <3.3.0" "$note"
+run npm deprecate "@mikkoparkkola/mcp-gateway@>=3.0.0 <3.3.0" "$note"
 
 echo "== 3. ghcr / Docker: delete old container package versions (keep digests documented in NOTICE)"
 echo "   Manual/gated — list versions then delete by id:"

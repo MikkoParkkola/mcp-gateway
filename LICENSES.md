@@ -21,12 +21,17 @@ Noncommercial.
   as part of a commercial service — requires a **commercial license** for the
   Noncommercial-licensed files, which is effectively the whole runnable gateway.
   See [`COMMERCIAL.md`](COMMERCIAL.md).
-- The **MIT core** is the open, reusable contribution: the MCP protocol types,
-  tool-selection intelligence (ranking, semantic search), the community
-  capability registry, the capability **definition format** (how you describe an
-  API — definition schema, YAML parser, structural + schema validation, and
-  OpenAPI-to-definition conversion), plus adoption/quality helpers (validator,
-  skills bridge, projection, transform). The MIT core is a set of building
+- The **MIT core** is a small set of simple, self-contained, generic building
+  blocks with no enterprise-specific logic: the MCP protocol types (`protocol`),
+  natural-language tool search (`semantic_search`), response shaping and
+  transforms (`projection`, `transform`), the MCP-server design validator
+  (`validator`), the capability→skill bridge (`skills`), generic capability
+  JSON-schema validation and file hashing (`capability/schema_validator`,
+  `capability/hash`), the foundational error type (`error.rs`), and the
+  `gateway-core` crate (pure discovery/routing primitives). Anything an
+  enterprise needs — the runnable gateway, ranking/authorization, the capability
+  registry/marketplace, the capability definition + execution engine, identity,
+  security, governance, deployment — is Noncommercial. The MIT core is building
   blocks; it is **not** a runnable free-for-commercial gateway.
 
 The precise MIT-core paths are listed in [`.mit-core-allowlist`](.mit-core-allowlist)

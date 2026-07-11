@@ -14,9 +14,10 @@ distributed. If you obtained mcp-gateway 3.0.0–3.2.1 under MIT, your rights to
 that copy are unchanged.
 
 **Those versions are deprecated and should not be used as canonical licensing
-guidance.** They have been withdrawn from active distribution channels where
-possible (crates.io yank, deprecation notices on npm/Homebrew, container tags),
-and are no longer the recommended or supported versions.
+guidance.** As part of the v3.3.0 release they are being withdrawn from active
+distribution channels where possible (crates.io yank, deprecation notices on
+npm/Homebrew, container tags) so that new installs resolve to the corrected
+release; they are no longer the recommended or supported versions.
 
 **Starting with version 3.3.0:**
 

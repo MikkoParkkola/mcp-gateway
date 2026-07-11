@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 /// Return the synonym group for a given word (all lowercase).
 ///
 /// Each word maps to the *other* members of its group. Matches against synonyms

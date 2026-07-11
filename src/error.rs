@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Error types for MCP Gateway
 
 use std::io;

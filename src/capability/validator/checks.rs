@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 //! Individual structural checks for capability definitions.
 //!
 //! Each `check_*` function appends zero or more [`Issue`]s to the provided

@@ -1,17 +1,29 @@
 # Commercial Use
 
-`mcp-gateway` is dual-licensed.
+`mcp-gateway` is dual-licensed **per file**, and the default is Noncommercial (as
+of v3.3.0).
 
-- Core gateway code remains MIT-licensed.
-- Enterprise Edition files marked with `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` are licensed under PolyForm Noncommercial 1.0.0.
-- Releases before v2.11.0 remain entirely MIT-licensed and stay MIT forever.
+- The default license is **PolyForm Noncommercial 1.0.0**. Every source file is
+  Noncommercial unless its first line is `// SPDX-License-Identifier: MIT`.
+- Only a small **MIT core** of simple, generic building blocks is MIT (listed in
+  `.mit-core-allowlist`; see `LICENSES.md`).
+- Releases before v3.3.0 shipped enterprise code under the MIT default by
+  mistake; those copies stay MIT (we cannot revoke a granted license) but are
+  deprecated. See `NOTICE.md`.
 
-Commercial use of Enterprise Edition files requires a separate commercial license.
+**Running the gateway commercially requires a commercial license.** The runnable
+gateway — dispatch, transport, backend management, ranking/authorization, the
+capability registry/engine, identity, security, governance, cost, deployment —
+is Noncommercial. The MIT core is reusable building blocks, not a runnable
+free-for-commercial gateway.
 
 Examples that require a commercial license:
 
-- A company uses Enterprise Edition modules internally for agent governance, cost accounting, security, identity, audit, or policy enforcement.
-- Enterprise Edition code is forked, wrapped, modified, or copied into a business system.
+- A company runs the gateway (in any configuration) internally or in a product.
+- A company uses the ranking, capability, identity, security, cost, governance,
+  or control-plane code in a business system.
+- Noncommercial-licensed code is forked, wrapped, modified, or copied into a
+  business system.
 - Enterprise Edition code is run as a hosted, shared, or managed MCP gateway service.
 - Enterprise Edition code powers a paid product, SaaS, agent platform, consulting deliverable, or internal platform.
 - Enterprise Edition capabilities materially improve a commercial workflow, product, or service.

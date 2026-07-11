@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 //! `OpenAPI` `$ref` resolution against the components section.
 //!
 //! Single responsibility: dereference parameter, request-body, and schema

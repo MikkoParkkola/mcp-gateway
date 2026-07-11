@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 //! Text sanitization for generated YAML.
 //!
 //! Single responsibility: escape values into safe YAML scalars and scrub

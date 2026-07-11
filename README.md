@@ -153,7 +153,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
 | Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
 | Deployment | Local, team gateway, Docker Compose, systemd, launchd, and enterprise Kubernetes alpha manifests | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
-| Licensing | Dual-license posture: free/core local gateway plus enterprise governance and fleet features | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
+| Licensing | Noncommercial-default (PolyForm-NC) with a small MIT core of generic building blocks; commercial use of the runnable gateway requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
 
 ### vs Anthropic MCP tunnels
 
@@ -561,11 +561,11 @@ mcp-gateway is dual-licensed **per file**, and the default is Noncommercial.
 | Files whose first line is `// SPDX-License-Identifier: MIT` | MIT ([LICENSE-MIT](LICENSE-MIT)) |
 | Everything else (the default) | PolyForm Noncommercial 1.0.0 ([LICENSE-NONCOMMERCIAL](LICENSE-NONCOMMERCIAL)) |
 
-If a file is not explicitly marked MIT, it is Noncommercial. The MIT core is the
-open, reusable contribution: the MCP protocol types, tool-selection intelligence
-(ranking, semantic search), the community capability registry, and the
-capability **definition format** (how you describe an API — schema, YAML parser,
-validation, OpenAPI conversion), plus adoption helpers. The exact paths are in
+If a file is not explicitly marked MIT, it is Noncommercial. The MIT core is a
+small set of simple, generic building blocks with no enterprise logic: the MCP
+protocol types, natural-language tool search, response shaping/transforms, the
+server design validator, the skills bridge, generic capability schema-validation
+and hashing, and the `gateway-core` primitives crate. The exact paths are in
 [`.mit-core-allowlist`](.mit-core-allowlist).
 
 What this means:

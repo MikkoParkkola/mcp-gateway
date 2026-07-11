@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 mod yaml_roundtrip;
 
 use super::checks::extract_placeholders;

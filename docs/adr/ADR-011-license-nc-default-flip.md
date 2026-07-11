@@ -28,21 +28,34 @@ Three operator decisions set the boundary:
 1. **Companies pay to run it.** Free = personal/noncommercial only. No
    free-commercial tier, so no runtime refactor now. The runnable gateway is
    Noncommercial.
-2. **The capability engine is split.** The *definition format* (schema, YAML
-   parser, structural + schema validation, OpenAPI→definition conversion) is MIT
-   so the community can write and share connectors. The *execution engine* and
-   integration (`executor/`, `backend.rs`, `execution_context.rs`, `hash.rs`,
-   `discovery/`) are Noncommercial.
+2. **Simple/config is MIT; anything an enterprise needs is NC.** The capability
+   *definition format* was initially intended MIT, but it embeds the multi-user
+   grant model and its parser/converter pull in NC engine + network-security
+   code, so the definition, parser, OpenAPI conversion, and structural validator
+   are Noncommercial. Only the generic, self-contained sub-utilities
+   (`schema_validator`, `hash`) stay MIT.
 3. **Old mis-licensed versions (3.0.0–3.2.1) are withdrawn** from active channels.
 
 ## MIT core (the entire open surface)
 
-Whole modules: `protocol`, `ranking`, `semantic_search`, `registry`, `validator`,
-`transform`, `projection`, `skills`. Capability format subset:
-`capability/definition`, `capability/parser.rs`, `capability/validator`,
-`capability/schema_validator`, `capability/openapi`. That is **~55 of ~370 source
-files**. Everything else — all runtime, all security/identity/governance, all
-deploy/ops — is Noncommercial.
+Simple, generic, self-contained, enterprise-free building blocks only:
+`protocol`, `semantic_search`, `transform`, `projection`, `validator`, `skills`
+(whole modules); `capability/schema_validator` and `capability/hash` (generic
+JSON-schema validation + file hashing); `error.rs`; and the `crates/gateway-core`
+crate (pure discovery/routing primitives). That is **~46 of ~370 source files**.
+Everything else — the runnable gateway, `ranking` (authorization), `registry`
+(marketplace), the capability definition/engine, all identity/security/
+governance, all deploy/ops — is Noncommercial.
+
+**Correction (post gpt-5.6-sol review):** an earlier draft of this ADR put
+`ranking`, `registry`, and the capability *definition format* in the MIT core.
+The adversarial review found they carry enterprise logic — `ranking` embeds
+authorization/policy suppression, `registry` includes a plugin marketplace, and
+`capability/definition` embeds the multi-user grant model (`CapabilityExposure`,
+`GrantSubject`). Under the operator rule "simple/config is MIT, anything an
+enterprise needs is NC," they are Noncommercial. The MIT core was shrunk to the
+dependency-closed, enterprise-free set above (verified: zero enterprise imports,
+zero enterprise logic).
 
 ## How this was decided
 

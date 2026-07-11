@@ -198,14 +198,24 @@ Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/label
 
 ## License
 
-By contributing, you agree your contributions will be licensed under the license that applies to the files you modify:
+By contributing, you agree your contributions are licensed under the license
+that applies to the files you modify. As of v3.3.0 the repository default is
+**PolyForm Noncommercial 1.0.0**:
 
-- MIT for core gateway files.
-- PolyForm Noncommercial 1.0.0 for Enterprise Edition files marked with `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`.
+- A file is MIT **only** if its first line is `// SPDX-License-Identifier: MIT`
+  and its path is in `.mit-core-allowlist`. Every other file (and every new file
+  by default) is PolyForm Noncommercial.
+- **New files need no header** — the Noncommercial default applies automatically.
+- A new file may be MIT only if it is a simple, generic, self-contained building
+  block with no enterprise logic AND the maintainer adds its path to
+  `.mit-core-allowlist`. The CI guard (`scripts/ci/check-license-headers.sh`)
+  enforces both directions: MIT-core files must carry the header, and no file
+  outside the allowlist may.
 
-If a pull request adds a new Enterprise Edition file, include the PolyForm Noncommercial SPDX header. If it adds a new core file, use the MIT license boundary unless the maintainer explicitly marks the feature as Enterprise Edition.
-
-Maintainers may designate new files as Enterprise Edition when the feature is primarily valuable for enterprise governance, identity, audit, cost control, security policy, hosted operations, multi-tenant service operation, or commercial platform integration. Existing MIT releases and core files that remain MIT are not retroactively relicensed.
+Anything an enterprise needs — ranking/authorization, the capability
+registry/engine, identity, security, governance, cost, deployment, multi-user,
+hosted operation — is Noncommercial. Existing MIT releases and files are not
+retroactively relicensed; see `NOTICE.md`.
 
 ## Contributor Checklist
 

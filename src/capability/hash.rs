@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Capability file SHA-256 hash pinning.
 //!
 //! ## Why

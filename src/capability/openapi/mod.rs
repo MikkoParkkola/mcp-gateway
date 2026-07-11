@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: MIT
-
 //! `OpenAPI` to Capability converter
 //!
 //! Generates capability YAML definitions from `OpenAPI` specifications.
