@@ -236,10 +236,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.0.0
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      # Node 20 bundles npm 10.x; OIDC trusted publishing requires npm >= 11.5.1.
+      # Node 22 bundles npm 10.x; OIDC trusted publishing requires npm >= 11.5.1,
+      # and current npm@latest (12.x) requires Node >= 22.22.2, so pin Node 22.
       - name: Upgrade npm CLI for OIDC trusted publishing
         run: npm install -g npm@latest
 
