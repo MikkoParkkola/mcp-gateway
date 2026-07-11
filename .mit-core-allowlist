@@ -8,3 +8,4 @@ src/error.rs
 src/capability/schema_validator
 src/capability/hash.rs
 crates/gateway-core/src
+src/tracing_context
