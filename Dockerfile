@@ -53,6 +53,11 @@ RUN groupadd -r -g 1001 gateway && \
 # Copy binary from builder
 COPY --from=builder /app/target/release/mcp-gateway /usr/local/bin/mcp-gateway
 
+# License files must travel with the image (mixed, per-file licensing; the
+# runnable gateway is PolyForm Noncommercial 1.0.0 — commercial use needs a
+# license). Verified in CI by scripts/ci/verify-artifact-licenses.sh.
+COPY LICENSE LICENSE-MIT LICENSE-NONCOMMERCIAL LICENSES.md NOTICE.md COMMERCIAL.md /usr/share/doc/mcp-gateway/
+
 # Create directories for config and capabilities (mount points)
 RUN mkdir -p /etc/mcp-gateway /capabilities && \
     chown -R gateway:gateway /etc/mcp-gateway /capabilities

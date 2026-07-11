@@ -28,6 +28,8 @@ jobs:
         run: scripts/dev/check-public-repo-hygiene.sh
       - name: Enforce per-file license boundary (MIT core vs PolyForm-NC default)
         run: scripts/ci/check-license-headers.sh
+      - name: Verify license files ship in every packaged artifact
+        run: scripts/ci/verify-artifact-licenses.sh
 
   service-template-smoke:
     name: Service template smoke
