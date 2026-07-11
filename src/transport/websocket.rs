@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! WebSocket transport implementation for full-duplex MCP communication.
 //!
 //! Implements the [`Transport`] trait over a persistent WebSocket connection.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Capability backend - integrates capabilities with the gateway
 //!
 //! This module provides a bridge between the capability system and the

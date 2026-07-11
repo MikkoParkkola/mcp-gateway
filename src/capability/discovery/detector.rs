@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `SpecDetector` — reliable format sniffing from raw content.
 //!
 //! Parses the content as JSON or YAML and inspects the root object for

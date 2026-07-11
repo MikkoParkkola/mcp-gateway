@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Mutual TLS (mTLS) authenticated tool access.
 //!
 //! This module implements RFC-0051: certificate-based authentication and

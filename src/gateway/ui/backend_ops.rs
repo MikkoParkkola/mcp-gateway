@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Reusable backend management operations for both CLI and HTTP handlers.
 //!
 //! This module extracts the core add/remove/update/list logic from the CLI

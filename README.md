@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.95+-blue.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/crates/l/mcp-gateway.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-PolyForm--NC%20%2B%20MIT%20core-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
@@ -153,7 +153,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
 | Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
 | Deployment | Local, team gateway, Docker Compose, systemd, launchd, and enterprise Kubernetes alpha manifests | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
-| Licensing | Dual-license posture: free/core local gateway plus enterprise governance and fleet features | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
+| Licensing | Noncommercial-default (PolyForm-NC) with a small MIT core of generic building blocks; commercial use of the runnable gateway requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
 
 ### vs Anthropic MCP tunnels
 
@@ -554,32 +554,32 @@ mcp-gateway is part of a suite of MCP tools:
 
 ## License
 
-mcp-gateway is **dual-licensed** as of v2.11.0:
+mcp-gateway uses **mixed, per-file licensing**, and the default is Noncommercial.
 
-| Scope | License | File |
-|-------|---------|------|
-| Core gateway, capabilities, transport, CLI, and everything not listed below | MIT | [LICENSE](LICENSE) |
-| Designated Enterprise Edition modules (see below) | PolyForm Noncommercial 1.0.0 | [LICENSE-EE.md](LICENSE-EE.md) |
+| Scope | License |
+|-------|---------|
+| Files whose first line is `// SPDX-License-Identifier: MIT` | MIT ([LICENSE-MIT](LICENSE-MIT)) |
+| Everything else (the default) | PolyForm Noncommercial 1.0.0 ([LICENSE-NONCOMMERCIAL](LICENSE-NONCOMMERCIAL)) |
 
-EE-designated paths (each file carries `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`):
+If a file is not explicitly marked MIT, it is Noncommercial. The MIT core is a
+small set of simple, generic building blocks with no enterprise logic: the MCP
+protocol types, natural-language tool search, response shaping/transforms, the
+server design validator, the skills bridge, generic capability schema-validation
+and hashing, and the `gateway-core` primitives crate. The exact paths are in
+[`.mit-core-allowlist`](.mit-core-allowlist).
 
-- `src/security/firewall/`: egress filtering
-- `src/security/agent_identity.rs`: identity-based access control (OWASP ASI03)
-- `src/security/data_flow.rs`: data-flow tracking (EU AI Act Art. 12)
-- `src/security/message_signing.rs`: HMAC inter-agent signing (OWASP ASI07)
-- `src/security/policy.rs`: advanced policy enforcement
-- `src/security/response_inspect.rs`, `response_scanner.rs`: outbound credential and exfil detection
-- `src/security/scope_collision.rs`: scope conflict detection
-- `src/security/tool_integrity.rs`: tool-poisoning detection (OWASP ASI04)
-- `src/cost_accounting/`: cost governance
-- `src/key_server/`: OIDC-backed scoped key issuance
+What this means:
 
-**What this means in practice**:
-- Free for noncommercial use, modification, and redistribution.
-- Commercial use of EE modules requires a separate commercial license.
-- Companies can buy a standard commercial-use license via [GitHub Sponsors](https://github.com/sponsors/MikkoParkkola) at EUR 500/month per named project.
-- See [COMMERCIAL.md](COMMERCIAL.md) for business use, forks, wrappers, shared services, and managed-service deployments.
-- All releases prior to v2.11.0 remain entirely MIT and stay MIT forever.
+- **Personal and noncommercial use is free**, including running the whole gateway.
+- **Running the gateway commercially requires a commercial license.** The runnable
+  gateway — dispatch, transport, backend management, identity, security,
+  governance — is Noncommercial. The MIT core is building blocks, not a
+  free-for-commercial gateway. See [COMMERCIAL.md](COMMERCIAL.md).
+- Versions 3.0.0–3.2.1 were published with MIT metadata for code now licensed as
+  Noncommercial from v3.3.0. Those copies stay MIT (a granted license cannot be
+  revoked) but are deprecated. See [NOTICE.md](NOTICE.md).
+
+Full model: [LICENSES.md](LICENSES.md).
 
 ## Credits
 

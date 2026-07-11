@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Substrate-divergence detection and audit registry.
 //!
 //! **AC.4 (MIK-NEW.RUNTIME-D.4)**: any behavior delta between substrates logs

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `ResponseTransform` — project and redact fields in tool responses.
 //!
 //! Wraps the existing [`TransformPipeline`] from `crate::transform` to

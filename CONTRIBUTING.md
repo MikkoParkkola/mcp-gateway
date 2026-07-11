@@ -196,16 +196,38 @@ Use ignored local paths for private strategy work: `docs/strategy/`, `docs/compe
 
 Look for [`good first issue`](https://github.com/MikkoParkkola/mcp-gateway/labels/good%20first%20issue) or [`help wanted`](https://github.com/MikkoParkkola/mcp-gateway/labels/help%20wanted). Good starters: adding a zero-config capability, improving error messages, adding edge-case tests, documentation.
 
+## Contributor License Agreement (required)
+
+Before your first contribution can be merged, you must agree to the
+**[Contributor License Agreement](CLA.md)**. It lets the maintainer offer
+commercial licenses for the Noncommercial-licensed code (which a bare
+inbound=outbound or DCO cannot do): you keep your copyright, and you grant a
+broad, sublicensable, **relicensable** copyright and patent license, plus
+represent that you have the right to contribute the work. Signing is a one-line
+statement in your first PR — see `CLA.md` for the exact wording and how to sign.
+
 ## License
 
-By contributing, you agree your contributions will be licensed under the license that applies to the files you modify:
+Contributions are licensed per the **mixed, per-file model** in `LICENSES.md`.
+As of v3.3.0 the repository default is **PolyForm Noncommercial 1.0.0**:
 
-- MIT for core gateway files.
-- PolyForm Noncommercial 1.0.0 for Enterprise Edition files marked with `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`.
+- **Every source file carries an affirmative header** — a copyright line plus an
+  explicit `// SPDX-License-Identifier: ...`. New files are **not** exempt: run
+  `bash scripts/ci/apply-license-headers.sh --apply` (or add the two-line header
+  by hand) so the file declares its license. The CI guard
+  (`scripts/ci/check-license-headers.sh`) fails on any file missing the copyright
+  line or a known license id.
+- A file is MIT **only** if its SPDX id is `MIT` **and** its path is in
+  `.mit-core-allowlist`. Every other first-party file is PolyForm Noncommercial.
+- A new file may be MIT only if it is a simple, generic, self-contained building
+  block with no enterprise logic AND the maintainer adds its path to
+  `.mit-core-allowlist`. The guard enforces both directions: MIT-core files must
+  carry the MIT id, and no file outside the allowlist may.
 
-If a pull request adds a new Enterprise Edition file, include the PolyForm Noncommercial SPDX header. If it adds a new core file, use the MIT license boundary unless the maintainer explicitly marks the feature as Enterprise Edition.
-
-Maintainers may designate new files as Enterprise Edition when the feature is primarily valuable for enterprise governance, identity, audit, cost control, security policy, hosted operations, multi-tenant service operation, or commercial platform integration. Existing MIT releases and core files that remain MIT are not retroactively relicensed.
+Anything an enterprise needs — ranking/authorization, the capability
+registry/engine, identity, security, governance, cost, deployment, multi-user,
+hosted operation — is Noncommercial. Existing MIT releases and files are not
+retroactively relicensed; see `NOTICE.md`.
 
 ## Contributor Checklist
 

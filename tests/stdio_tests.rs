@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Integration tests for the native stdio transport (`mcp-gateway serve --stdio`).
 //!
 //! These tests verify the dispatch logic used by `Gateway::run_stdio()` by

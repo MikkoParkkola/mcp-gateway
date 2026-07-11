@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Implementation of `mcp-gateway add` and `mcp-gateway remove`.
 //!
 //! `add` creates a new backend entry in gateway.yaml, optionally bootstrapped

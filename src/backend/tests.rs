@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Unit tests for [`super::Backend`] construction, start/health-probe
 //! lifecycle, request/notify dispatch, cached-metadata single-flight
 //! behavior, and tool-annotation inference.

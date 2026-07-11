@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A2A (`Agent2Agent`) transport adapter — Phase 1.
 //!
 //! Enables the gateway to proxy A2A backends as if they were MCP tool

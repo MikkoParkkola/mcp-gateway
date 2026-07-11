@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! CLI handler for `cap import-url` (RFC-0074).
 //!
 //! Runs the full discovery pipeline:

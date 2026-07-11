@@ -1,0 +1,15 @@
+# .license-scope-exclude — paths OUTSIDE the per-file license default.
+#
+# The mixed, per-file licensing model (see LICENSES.md) applies only to
+# first-party material authored for mcp-gateway and owned by Mikko Parkkola.
+# Files listed here are third-party (vendored, upstream-licensed) or generated,
+# and are governed by their own terms — NOT the Noncommercial default. The
+# header tooling (scripts/ci/apply-license-headers.sh) skips these paths, and
+# the guard (scripts/ci/check-license-headers.sh) does not require an SPDX
+# header on them.
+#
+# Format: one path prefix per line (directory or file), '#' comments allowed.
+#
+# The repository currently has no vendored or generated source (verified: no
+# @generated markers, no build.rs). This list is intentionally empty; add a
+# path here when third-party or generated material is introduced.

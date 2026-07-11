@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tunnel integration for secure remote access.
 //!
 //! Implements two remote-access mechanisms:

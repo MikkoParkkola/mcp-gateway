@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Auto-fix for validation issues
 //!
 //! Provides suggested fixes and the ability to apply them to capability YAML files.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use serde_json::{Value, json};
 
 use crate::{Error, Result, capability::OpenApiConverter, hashing::sha256_hex};

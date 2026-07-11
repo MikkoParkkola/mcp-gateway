@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Response caching with TTL for `gateway_invoke` results
 //!
 //! Provides a thread-safe, TTL-based cache for tool invocation responses.

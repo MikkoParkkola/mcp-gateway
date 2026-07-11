@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Durable Capability Chains — step-level checkpoint + retry for multi-tool pipelines.
 //!
 //! When an agent chains multiple tool calls (e.g., search → extract → summarize),

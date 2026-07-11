@@ -148,6 +148,9 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -type f -name 'mcp-gateway-*' -exec cp {} release/ \;
+          # Bundle license/notice text with every published binary (counsel #7:
+          # each artifact must carry its own license, not just the repo).
+          cp LICENSE LICENSE-MIT LICENSE-NONCOMMERCIAL LICENSES.md NOTICE.md COMMERCIAL.md release/
           ls -la release/
 
       - name: Create checksums
@@ -311,7 +314,9 @@ jobs:
             desc "Universal MCP gateway — single port for all your MCP servers, ~95% token savings"
             homepage "https://github.com/MikkoParkkola/mcp-gateway"
             version "${VERSION}"
-            license "MIT"
+            # Mixed, per-file licensing (PolyForm-Noncommercial default + MIT core);
+            # SPDX can't express it. See LICENSES.md / COMMERCIAL.md.
+            license :cannot_represent
 
             on_macos do
               on_arm do
@@ -355,6 +360,14 @@ jobs:
               system "xattr", "-dr", "com.apple.quarantine", "#{bin}/mcp-gateway" if OS.mac?
             rescue
               nil
+            end
+
+            def caveats
+              <<~CAVEATS
+                Licensing: mcp-gateway uses mixed, per-file licensing; the runnable
+                gateway is PolyForm Noncommercial 1.0.0. Commercial use requires a
+                license. See https://github.com/MikkoParkkola/mcp-gateway/blob/main/COMMERCIAL.md
+              CAVEATS
             end
 
             test do

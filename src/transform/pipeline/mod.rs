@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Transform pipeline execution engine.
 
 use regex::Regex;

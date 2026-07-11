@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # pre-push gate — public hygiene + local fmt + lint + lib-test parity with CI.
 # Bypass: SKIP_PREPUSH=1 (logged, audit-only).
 # Wall-clock budget on warm cache: <60s.

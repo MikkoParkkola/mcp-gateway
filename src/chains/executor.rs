@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Chain execution engine with checkpoint/retry/observability.
 //!
 //! [`ChainExecutor`] orchestrates the full lifecycle of a [`Chain`]:

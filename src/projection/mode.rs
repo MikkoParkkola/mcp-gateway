@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Projection rollout control (MIK-5877).
 //!
 //! Projection ships behind a deliberate gate so it can be rolled out as an

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Client-side capability proxying for MCP Gateway.
 //!
 //! MCP defines several **server-to-client** capabilities where a backend MCP

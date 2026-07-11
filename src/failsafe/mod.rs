@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Failsafe mechanisms: circuit breaker, retry, rate limiting, health tracking
 
 mod circuit_breaker;

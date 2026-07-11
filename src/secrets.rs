@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Secret resolution with keychain integration
 //!
 //! Resolves credential patterns like `{keychain.SERVICE}` and `{env.VAR}`

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! gateway-core — MCP tool discovery and routing primitives.
 //!
 //! Core library providing tool registry, search, and execution

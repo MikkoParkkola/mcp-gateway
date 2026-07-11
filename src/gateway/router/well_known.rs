@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! RFC 9728 OAuth Protected Resource Metadata endpoint.
 //!
 //! `GET /.well-known/oauth-protected-resource` lets an MCP client discover,

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Passive `ShadowRadar` report model for unmanaged MCP discovery.
 //!
 //! The report builder only normalizes already-discovered config/process

@@ -1,6 +1,14 @@
+> **SUPERSEDED (v3.3.0).** This file described the old model — MIT by default
+> with an *allowlist* of Enterprise files under PolyForm-Noncommercial. That
+> model leaked (enterprise features shipped under MIT when the allowlist missed
+> them). As of v3.3.0 the default is **flipped**: PolyForm-Noncommercial is the
+> default and a small, explicit MIT core is the carve-out. See
+> [`LICENSES.md`](LICENSES.md) for the current model and [`NOTICE.md`](NOTICE.md)
+> for the correction. This file is kept for historical reference only.
+
 # Enterprise Edition License (PolyForm Noncommercial)
 
-**Status**: Active as of v2.11.0 (2026-04-25). See MIK-3034, MIK-3036.
+**Status**: SUPERSEDED as of v3.3.0 (see banner above). Historical reference only.
 
 This file describes the license terms that apply to designated **Enterprise Edition (EE)** files within the `mcp-gateway` repository. The Path C dual-license refactor landed in v2.11.0.
 

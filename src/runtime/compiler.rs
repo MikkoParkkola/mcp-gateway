@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Descriptor-to-substrate compiler.
 //!
 //! **AC.2 (MIK-NEW.RUNTIME-D.2)**: The [`Compiler`] transforms a

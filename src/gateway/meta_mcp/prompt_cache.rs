@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Prompt cache key derivation and stable tool ordering for OpenAI-compatible backends.
 //!
 //! OpenAI-compatible APIs (including Anthropic) support `prompt_cache_key` to enable

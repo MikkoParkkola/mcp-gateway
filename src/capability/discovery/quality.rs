@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Quality scoring for discovered capabilities.
 //!
 //! Scores each `GeneratedCapability` on a 0-100 scale based on factors that

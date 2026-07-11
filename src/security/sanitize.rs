@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Input sanitization for MCP gateway traffic.
 //!
 //! Rejects null bytes, strips unsafe control characters, and normalizes

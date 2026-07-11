@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Per-identity transport/session pool (MIK-6735): [`PoolKey`], [`PooledEntry`],
 //! and the [`super::Backend`] methods that create, look up, and idle-evict
 //! pool slots.

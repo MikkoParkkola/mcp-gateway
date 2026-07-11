@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Context integrity kernel for tool-result boundary protection.
 //!
 //! The kernel classifies gateway-routed tool output before that output is

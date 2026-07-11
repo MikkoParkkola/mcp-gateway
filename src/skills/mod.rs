@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! MCP Capability to Agent Skills bridge.
 //!
 //! This module converts [`CapabilityDefinition`] YAML files into agent skill

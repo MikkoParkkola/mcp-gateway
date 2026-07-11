@@ -1,0 +1,11 @@
+src/protocol
+src/transform
+src/projection
+src/validator
+src/skills
+src/semantic_search
+src/error.rs
+src/capability/schema_validator
+src/capability/hash.rs
+crates/gateway-core/src
+src/tracing_context

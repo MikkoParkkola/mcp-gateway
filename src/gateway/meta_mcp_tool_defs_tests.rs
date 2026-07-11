@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tests for `meta_mcp_tool_defs` — extracted for LOC compliance.
 
 use super::*;

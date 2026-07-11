@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Live-cluster Kubernetes apply adapter plan.
 //!
 //! This module turns a deterministic reconcile plan into an operator-facing

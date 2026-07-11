@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `McpProvider` — adapts an existing [`Backend`] to the [`Provider`] trait.
 //!
 //! This is the Phase 1 adapter described in RFC-0032.  The existing

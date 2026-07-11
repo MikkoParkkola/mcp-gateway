@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Skill document renderer.
 //!
 //! Converts [`CapabilityDefinition`] instances into two Markdown artefacts:

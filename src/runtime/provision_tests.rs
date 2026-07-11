@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Wiring tests for the runtime-substrate provisioning call path.
 //!
 //! These exercise [`super`] — the hardened entry point that turns the dormant

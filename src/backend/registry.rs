@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Backend status/runtime-status report types and the [`BackendRegistry`]
 //! that owns all configured backends by name.
 

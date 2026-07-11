@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Distributed tracing for tool call chains — Issue #63.
 //!
 //! Generates W3C Trace Context (`traceparent` / `tracestate`) headers,

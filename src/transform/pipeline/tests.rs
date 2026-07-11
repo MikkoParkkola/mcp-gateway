@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 use std::collections::HashMap;
 
 use super::super::{JsonPathSegment, RedactRule};

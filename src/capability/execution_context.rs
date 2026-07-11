@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use crate::capability::CapabilityDefinition;
 use crate::identity_grants::{CapabilityExposure, GrantSubject};
 use crate::security::validate_url_not_ssrf;

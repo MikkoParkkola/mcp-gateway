@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Static curated registry of popular MCP servers.
 //!
 //! Provides compile-time metadata for ~50 well-known MCP servers so commands

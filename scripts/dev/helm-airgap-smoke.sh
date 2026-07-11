@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Helm air-gap proof (MIK-6699 / HELM.7): export the signed image + signed chart
 # + SBOM attestation to offline media, import them into a SEPARATE registry that
 # never talked to the source, then verify signatures and install the chart

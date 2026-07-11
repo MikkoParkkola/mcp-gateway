@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Playbook engine for multi-step tool chains.
 //!
 //! A playbook collapses multiple sequential tool calls into a single

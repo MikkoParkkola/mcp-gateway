@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Cross-process advisory file locking, shared by every on-disk store that
 //! needs to serialize a read-repair-write (or read-modify-write) critical
 //! section across independent OS processes sharing a directory.

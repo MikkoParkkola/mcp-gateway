@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Sliding-window error budget primitives and configuration types.
 //!
 //! Provides [`BudgetWindow`] (the core sliding-window tracker) together with the

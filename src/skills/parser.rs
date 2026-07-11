@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! SKILL.md parser — ingest Agent Skills format files.
 //!
 //! Parses a SKILL.md file into an [`ImportedSkill`] struct.  The format follows

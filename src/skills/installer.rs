@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Skill bundle installer.
 //!
 //! Writes rendered [`SkillBundle`]s to the filesystem and optionally links

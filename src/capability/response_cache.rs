@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Simple response cache with TTL support
 //!
 //! Provides a thread-safe cache for capability REST responses,

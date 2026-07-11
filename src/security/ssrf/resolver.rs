@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! DNS-pinning resolver (MIK-4019: anti-rebinding).
 //!
 //! Abstracts DNS lookups behind [`HostResolver`] so [`PinningResolver`] can

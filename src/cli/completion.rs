@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shell completion script generation for the `mcp-gateway` CLI.
 // String-building from iterators via format! is the clearest approach here.
 #![allow(clippy::format_collect)]

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! OAuth Metadata Discovery
 //!
 //! Implements RFC 8414 (OAuth Authorization Server Metadata) and

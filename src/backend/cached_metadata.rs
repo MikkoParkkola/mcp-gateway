@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Generic single-flight TTL cache used by [`super::Backend`] for the four
 //! metadata lists (tools/resources/resource-templates/prompts).
 

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Unit tests for the MIK-6735 per-identity transport/session pool: slot
 //! isolation, cross-tenant circuit-breaker independence, notification
 //! routing, idle eviction, and the evictor-vs-start race in

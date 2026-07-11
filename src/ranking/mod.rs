@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Smart search ranking based on usage frequency
 //!
 //! Ranks search results by combining text relevance with usage-based popularity.

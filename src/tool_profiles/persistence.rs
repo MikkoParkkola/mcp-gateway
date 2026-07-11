@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Profile persistence for RFC-0073.
 //!
 //! Saves/loads a `PersistedProfiles` snapshot to a JSON file.

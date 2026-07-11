@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Persistence for the enterprise control plane (MIK-6685).
 //!
 //! Grants and policies persist across restarts on a single node; the audit

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Routing profiles for session-scoped tool access control.
 //!
 //! A routing profile defines named allow/deny rules (both backend-level and

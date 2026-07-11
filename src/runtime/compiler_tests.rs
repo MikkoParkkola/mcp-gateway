@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,

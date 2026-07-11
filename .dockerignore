@@ -9,3 +9,12 @@ tests/
 homebrew/
 packaging/
 LICENSE
+
+# License/notice files the Dockerfile copies into the image (must override the
+# *.md and LICENSE exclusions above). Keep in sync with the COPY in Dockerfile.
+!LICENSE
+!LICENSE-MIT
+!LICENSE-NONCOMMERCIAL
+!LICENSES.md
+!NOTICE.md
+!COMMERCIAL.md

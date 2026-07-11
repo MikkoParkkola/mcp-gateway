@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Text tokenization for semantic search.
 //!
 //! Provides lowercasing, stopword removal, and basic suffix-stripping

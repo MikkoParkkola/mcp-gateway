@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Implementation of `mcp-gateway doctor`.
 //!
 //! Performs a series of diagnostic checks and prints a pass/fail/warn table.

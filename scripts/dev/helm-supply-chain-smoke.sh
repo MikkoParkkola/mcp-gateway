@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Helm supply-chain smoke: sign the chart + image with cosign and verify the
 # exact digests, then generate an SBOM and assert its presence (MIK-6698 /
 # HELM.6). Self-contained + deterministic: builds its OWN minimal images (no

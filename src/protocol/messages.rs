@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! MCP JSON-RPC message types
 
 use serde::{Deserialize, Serialize};

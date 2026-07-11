@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A2A HTTP client.
 //!
 //! Wraps `reqwest` to talk the A2A JSON-RPC 2.0 wire protocol.

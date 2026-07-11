@@ -1,11 +1,11 @@
 [package]
 name = "mcp-gateway"
-version = "3.2.1"
+version = "3.3.0"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
 description = "Universal MCP Gateway - Single-port multiplexing with Meta-MCP for ~95% context token savings"
-license = "MIT"
+license-file = "LICENSES.md"
 homepage = "https://github.com/MikkoParkkola/mcp-gateway"
 repository = "https://github.com/MikkoParkkola/mcp-gateway"
 documentation = "https://github.com/MikkoParkkola/mcp-gateway#readme"
@@ -19,6 +19,12 @@ include = [
     "Cargo.lock",
     "README.md",
     "LICENSE",
+    "LICENSE-MIT",
+    "LICENSE-NONCOMMERCIAL",
+    "LICENSES.md",
+    "NOTICE.md",
+    "COMMERCIAL.md",
+    ".mit-core-allowlist",
     "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",

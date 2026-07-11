@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Agent-scoped OAuth 2.0 tool permissions.
 //!
 //! This module implements agent registration, JWT validation middleware,

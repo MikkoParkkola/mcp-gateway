@@ -2,7 +2,11 @@ class McpGateway < Formula
   desc "Universal MCP Gateway with Meta-MCP for ~95% context token savings"
   homepage "https://github.com/MikkoParkkola/mcp-gateway"
   version "2.0.1"
-  license "MIT"
+  # Mixed, per-file licensing (default PolyForm-Noncommercial-1.0.0 + a small MIT
+  # core) — SPDX cannot express it, so Homebrew's declaration is :cannot_represent.
+  # See LICENSES.md / NOTICE.md in the repo. The distributed release binary is
+  # Noncommercial; commercial use needs a license (COMMERCIAL.md).
+  license :cannot_represent
 
   on_macos do
     on_arm do
@@ -42,6 +46,10 @@ class McpGateway < Formula
 
       Example config at:
         https://github.com/MikkoParkkola/mcp-gateway#configuration
+
+      Licensing: mcp-gateway uses mixed, per-file licensing; the runnable
+      gateway is PolyForm Noncommercial 1.0.0. Commercial use requires a
+      license. See https://github.com/MikkoParkkola/mcp-gateway/blob/main/COMMERCIAL.md
     EOS
   end
 

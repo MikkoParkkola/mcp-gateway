@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! XML-to-JSON conversion helpers
 //!
 //! The mapping is intentionally simple and lossless:

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tool-annotation inference: fills in MCP `ToolAnnotations` hints
 //! (read-only / destructive / idempotent / open-world) that a backend did not
 //! declare itself, from naming conventions.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Hot-reload skill regeneration watcher.
 //!
 //! Watches capability YAML directories and regenerates only the affected skill

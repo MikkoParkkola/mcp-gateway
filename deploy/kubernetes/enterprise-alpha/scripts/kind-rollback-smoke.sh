@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Real apply -> upgrade -> rollback lifecycle smoke on a kind cluster.
 #
 # Closes MIK-6560.K8S.4 / MIK-6679: proves the enterprise-alpha manifests apply

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `DiscoveryChain` — parallel well-known path probing.
 //!
 //! Probes up to 10 well-known paths concurrently via `futures::future::join_all`

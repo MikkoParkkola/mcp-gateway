@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Text sanitization for generated YAML.
 //!
 //! Single responsibility: escape values into safe YAML scalars and scrub

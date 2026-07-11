@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Helm chart smoke: lint, render the expected Kind set, and prove values.schema
 # rejects invalid input. Mac/CI-buildable, no cluster required (MIK-6693 / HELM.1).
 set -euo pipefail

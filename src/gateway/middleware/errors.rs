@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use axum::{http::StatusCode, response::Response};
 
 use crate::gateway::http_error::{attach_static_header, json_response, jsonrpc_error_body};

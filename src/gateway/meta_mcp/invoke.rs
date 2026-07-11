@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tool invocation, dispatch, and operator-control handlers.
 //!
 //! Implements `gateway_invoke` (with idempotency and error-budget tracking),

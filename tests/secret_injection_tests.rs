@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tests for secret injection — extracted from `src/secret_injection.rs`.
 
 #![allow(unsafe_code)] // Tests use set_var/remove_var which are unsafe in edition 2024

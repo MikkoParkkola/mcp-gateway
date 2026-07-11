@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Cross-user analytics for RFC-0073.
 //!
 //! Aggregates data from all profiles in a [`super::ProfileRegistry`] to answer

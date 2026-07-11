@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Configurable retry with exponential backoff for chain steps.
 //!
 //! This module provides [`ChainRetryPolicy`] and the async [`retry_step`] helper

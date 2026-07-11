@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Protocol version negotiation helpers.
 //!
 //! Shared logic for negotiating MCP protocol versions between the gateway

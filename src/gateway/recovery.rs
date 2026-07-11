@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Structured recovery hints for tool-call errors (issue #115).
 //!
 //! When a tool call fails the gateway attaches a `recovery` object to the MCP

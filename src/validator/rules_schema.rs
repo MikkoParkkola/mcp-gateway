@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
 //! Schema validation rules (AX-007, AX-008, AX-009)
 //!
 //! These rules validate JSON Schema completeness, detect conflicts across tools,

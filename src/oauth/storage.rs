@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! OAuth Token Storage
 //!
 //! Persists OAuth tokens to disk for reuse across gateway restarts.

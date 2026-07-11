@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A2A protocol types.
 //!
 //! Implements the `Agent2Agent` (A2A) wire-format types per the A2A specification.

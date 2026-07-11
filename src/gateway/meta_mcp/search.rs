@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Tool search and listing handlers.
 //!
 //! Implements `gateway_search` (Code Mode), `gateway_execute` (Code Mode),

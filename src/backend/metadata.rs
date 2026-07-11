@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Cached metadata accessors: tools, resources, resource templates, and
 //! prompts, each backed by a single-flight [`super::cached_metadata::CachedMetadata`]
 //! slot on [`super::Backend`].

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Hot-reload file watcher for capabilities
 //!
 //! Watches capability directories for changes and triggers reload

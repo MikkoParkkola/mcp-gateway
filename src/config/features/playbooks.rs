@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Playbook configuration for multi-step tool chains.
 
 use serde::{Deserialize, Serialize};

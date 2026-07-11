@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Destructive-tool confirmation gate (OWASP ASI09 — Human Trust Exploitation).
 //!
 //! Before executing any meta-tool annotated with `destructiveHint: true`, the

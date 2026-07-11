@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Attestation token wire format and claims (MIK-5223 AC.2).
 //!
 //! A token is `base64url(claims_json) + "." + base64url(hmac_sha256_sig)`.

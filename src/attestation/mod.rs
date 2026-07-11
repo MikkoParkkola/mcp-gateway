@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Symphony+ sandbox attestation — token injection at sandbox creation (MIK-5223, B1-IDENT).
 //!
 //! Every sandbox boot receives a signed attestation token issued by the

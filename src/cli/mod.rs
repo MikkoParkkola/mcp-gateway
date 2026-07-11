@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Command-line interface definitions for `mcp-gateway`.
 //!
 //! Defines the top-level [`Cli`] struct parsed by `clap` and the [`Command`] /

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Auto-Capability Discovery from URL (RFC-0074)
 //!
 //! Implements the `cap import-url` pipeline:

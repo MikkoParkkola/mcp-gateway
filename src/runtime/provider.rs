@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `RuntimeProvider` policy, planning, and apply contract for MCP server execution.
 //!
 //! The planner compiles least-privilege policy first. Apply/start paths consume
