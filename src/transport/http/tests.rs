@@ -197,6 +197,96 @@ fn resolve_message_url_scheme_relative_authority_rejected() {
 }
 
 // =========================================================================
+// evaluate_redirect (redirect-policy same-origin credential-exfil guard)
+// =========================================================================
+
+fn url(s: &str) -> url::Url {
+    url::Url::parse(s).unwrap()
+}
+
+#[test]
+fn evaluate_redirect_cross_origin_public_host_rejected() {
+    // A same-origin backend answering with `30x Location: https://evil…` points
+    // at a PUBLIC host that clears the SSRF check but is a different origin.
+    // Following it would replay the per-user bearer cross-origin: must reject.
+    let decision = evaluate_redirect(
+        &url("https://api.example.com/sse"),
+        &url("https://evil.example.com/steal"),
+        0,
+    );
+    match decision {
+        RedirectDecision::Reject(msg) => assert!(
+            msg.contains("cross-origin"),
+            "expected cross-origin rejection, got: {msg}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn evaluate_redirect_same_origin_allowed() {
+    // A redirect that stays on the base origin (different path) is legitimate
+    // per the MCP spec and must be followed.
+    let decision = evaluate_redirect(
+        &url("https://api.example.com/sse"),
+        &url("https://api.example.com/messages?session_id=abc"),
+        0,
+    );
+    assert_eq!(decision, RedirectDecision::Follow);
+}
+
+#[test]
+fn evaluate_redirect_same_origin_different_port_rejected() {
+    // Same host+scheme but a different port is a distinct origin (WHATWG) —
+    // still a credential-exfil target, so reject.
+    let decision = evaluate_redirect(
+        &url("https://api.example.com/sse"),
+        &url("https://api.example.com:8443/messages"),
+        0,
+    );
+    assert!(
+        matches!(&decision, RedirectDecision::Reject(m) if m.contains("cross-origin")),
+        "expected cross-origin rejection, got: {decision:?}"
+    );
+}
+
+#[test]
+fn evaluate_redirect_internal_range_still_ssrf_rejected() {
+    // An internal/metadata target is rejected by the SSRF guard, which runs
+    // before the same-origin check, so the reason names SSRF (not cross-origin).
+    let decision = evaluate_redirect(
+        &url("https://api.example.com/sse"),
+        &url("http://169.254.169.254/latest/meta-data/"),
+        0,
+    );
+    match decision {
+        RedirectDecision::Reject(msg) => {
+            assert!(
+                msg.contains("SSRF"),
+                "expected SSRF rejection reason, got: {msg}"
+            );
+            assert!(
+                !msg.contains("cross-origin"),
+                "SSRF guard must fire before same-origin, got: {msg}"
+            );
+        }
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn evaluate_redirect_hop_cap_stops() {
+    // At the fifth prior hop the policy stops following, matching the prior cap,
+    // regardless of whether the target would otherwise be allowed.
+    let decision = evaluate_redirect(
+        &url("https://api.example.com/sse"),
+        &url("https://api.example.com/again"),
+        5,
+    );
+    assert_eq!(decision, RedirectDecision::Stop);
+}
+
+// =========================================================================
 // get_message_url
 // =========================================================================
 

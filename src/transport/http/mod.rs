@@ -42,6 +42,52 @@ fn same_origin(a: &Url, b: &Url) -> bool {
         && a.port_or_known_default() == b.port_or_known_default()
 }
 
+/// Outcome of evaluating one redirect hop for the transport's HTTP client.
+///
+/// Extracted from the [`reqwest::redirect::Policy::custom`] closure so the
+/// policy is unit-testable: reqwest's `Attempt` cannot be constructed in a
+/// test, but this pure decision can. See [`evaluate_redirect`].
+#[derive(Debug, PartialEq, Eq)]
+enum RedirectDecision {
+    /// Hop budget exhausted — stop and surface the last response as-is.
+    Stop,
+    /// Refuse the redirect; the payload is the operator-facing reason.
+    Reject(String),
+    /// Safe to follow.
+    Follow,
+}
+
+/// Decide whether to follow a single redirect on the SSE/message client.
+///
+/// Three guards, each of which a hop must clear:
+/// 1. **Hop cap** — at most five redirects, matching the prior policy.
+/// 2. **SSRF** — the target must not resolve to an internal/metadata range
+///    ([`validate_url_not_ssrf`]).
+/// 3. **Same-origin** — the target must share the base URL's origin. The SSE
+///    message POST carries the per-user `Authorization: Bearer <assertion>`
+///    (MIK-6704); without this guard a legitimate same-origin backend could
+///    answer with `30x Location: https://evil.example/…` — a *public* host
+///    that clears the SSRF check — and reqwest would replay the bearer
+///    cross-origin, defeating the same-origin guard `resolve_message_url`
+///    added. MCP message endpoints are same-origin by spec, so this rejects
+///    nothing legitimate.
+fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> RedirectDecision {
+    if previous_hops >= 5 {
+        return RedirectDecision::Stop;
+    }
+    if let Err(e) = validate_url_not_ssrf(target.as_str()) {
+        return RedirectDecision::Reject(e.to_string());
+    }
+    if !same_origin(base, target) {
+        return RedirectDecision::Reject(format!(
+            "redirect target is cross-origin to the transport base URL; \
+             refusing to replay per-user credentials to a different origin \
+             (base={base}, target={target})"
+        ));
+    }
+    RedirectDecision::Follow
+}
+
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches three observed shapes:
@@ -178,21 +224,29 @@ impl HttpTransport {
         oauth_client: Option<OAuthClient>,
         protocol_version: Option<String>,
     ) -> Result<Arc<Self>> {
+        // Parse the base URL once so the redirect policy can enforce
+        // same-origin on every hop (credential-exfil guard, see
+        // `evaluate_redirect`). An unparseable base cannot function as a
+        // transport at all, so failing construction here is correct.
+        let base_origin = Url::parse(url)
+            .map_err(|e| Error::Transport(format!("Invalid transport base URL {url:?}: {e}")))?;
         let client = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(30))
             .tcp_nodelay(true)
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 {
-                    return attempt.stop();
-                }
-                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
-                    return attempt.error(e.to_string());
-                }
-                attempt.follow()
-            }))
+            .redirect(reqwest::redirect::Policy::custom(
+                move |attempt| match evaluate_redirect(
+                    &base_origin,
+                    attempt.url(),
+                    attempt.previous().len(),
+                ) {
+                    RedirectDecision::Stop => attempt.stop(),
+                    RedirectDecision::Reject(msg) => attempt.error(msg),
+                    RedirectDecision::Follow => attempt.follow(),
+                },
+            ))
             .build()
             .map_err(|e| Error::Transport(e.to_string()))?;
 
