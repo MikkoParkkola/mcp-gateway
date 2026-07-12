@@ -708,7 +708,7 @@ impl Default for MetaMcpConfig {
 // ── Backend ───────────────────────────────────────────────────────────────────
 
 /// Backend configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BackendConfig {
     /// Human-readable description.
@@ -752,6 +752,29 @@ pub struct BackendConfig {
     pub identity_propagation: Option<crate::identity_propagation::IdentityPropagationConfig>,
 }
 
+// Manual `Debug` that redacts the credential-injection rules (CWE-532, mirrors
+// PR #323). A derived `Debug` would recurse into `secrets` and print the
+// injected credential material verbatim into any trace or error context; only
+// the rule count is surfaced.
+impl std::fmt::Debug for BackendConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackendConfig")
+            .field("description", &self.description)
+            .field("enabled", &self.enabled)
+            .field("transport", &self.transport)
+            .field("idle_timeout", &self.idle_timeout)
+            .field("timeout", &self.timeout)
+            .field("env", &self.env)
+            .field("headers", &self.headers)
+            .field("oauth", &self.oauth)
+            .field("secrets", &format!("<{} rules>", self.secrets.len()))
+            .field("passthrough", &self.passthrough)
+            .field("runtime_profile", &self.runtime_profile)
+            .field("identity_propagation", &self.identity_propagation)
+            .finish()
+    }
+}
+
 impl Default for BackendConfig {
     fn default() -> Self {
         Self {
@@ -772,7 +795,7 @@ impl Default for BackendConfig {
 }
 
 /// OAuth configuration for a backend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthConfig {
     /// Enable OAuth for this backend.
     #[serde(default = "default_true")]
@@ -819,6 +842,26 @@ pub struct OAuthConfig {
     /// ignores this flag — the sole caller always owns the token.
     #[serde(default)]
     pub shared_account: bool,
+}
+
+// Manual `Debug` that redacts the fixed OAuth client secret (CWE-532, mirrors
+// PR #323). A derived `Debug` would print `client_secret` verbatim into any
+// trace or error context; only its presence is surfaced.
+impl std::fmt::Debug for OAuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("OAuthConfig")
+            .field("enabled", &self.enabled)
+            .field("scopes", &self.scopes)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &redact_opt(&self.client_secret))
+            .field("callback_host", &self.callback_host)
+            .field("callback_port", &self.callback_port)
+            .field("callback_path", &self.callback_path)
+            .field("token_refresh_buffer_secs", &self.token_refresh_buffer_secs)
+            .field("shared_account", &self.shared_account)
+            .finish()
+    }
 }
 
 fn default_token_refresh_buffer() -> u64 {
@@ -992,3 +1035,59 @@ pub mod humantime_serde {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // BackendConfig::Debug must never recurse into the credential-injection
+    // rules; only the rule count is surfaced.
+    #[test]
+    fn backend_config_debug_redacts_secret_rules() {
+        let cfg = BackendConfig {
+            secrets: vec![crate::secret_injection::CredentialRule {
+                name: "openai_api_key".to_string(),
+                credential_type: crate::secret_injection::CredentialType::ApiKey,
+                value: SENTINEL.to_string(),
+                inject_as: crate::secret_injection::InjectTarget::Header,
+                inject_key: "Authorization".to_string(),
+                tools: vec!["*".to_string()],
+            }],
+            ..Default::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked credential value: {dbg}");
+        assert!(
+            dbg.contains("<1 rules>"),
+            "missing rule-count marker: {dbg}"
+        );
+    }
+
+    // OAuthConfig::Debug must never surface the fixed client secret.
+    #[test]
+    fn oauth_config_debug_redacts_client_secret() {
+        let cfg = OAuthConfig {
+            enabled: true,
+            scopes: vec!["read".to_string()],
+            client_id: Some("client-123".to_string()),
+            client_secret: Some(SENTINEL.to_string()),
+            callback_host: None,
+            callback_port: None,
+            callback_path: None,
+            token_refresh_buffer_secs: 300,
+            shared_account: false,
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked client_secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("client-123"),
+            "client_id should stay visible: {dbg}"
+        );
+    }
+}

@@ -160,6 +160,43 @@ class TestCwe532Lint(unittest.TestCase):
                 logs = [f for f in findings if f.kind == "log"]
                 self.assertEqual(logs, [], f"benign value wrongly flagged: {line}")
 
+    # (5c) secret VALUE wrapped in an accessor chain on a NEUTRAL field NAME ->
+    # flagged. This is the residual gap: `value = %access_token.expose_secret()`
+    # leaks the secret bytes even though the field name (`value`, `v`) is benign
+    # and the accessor (`.expose_secret()`, `.unwrap()`) is outside BARE_TAIL_RE.
+    def test_wrapped_accessor_secret_value_flagged(self):
+        cases = [
+            # explicit neutral field name + secret-shaped wrapped value
+            "info!(value = %access_token.expose_secret());",
+            "warn!(v = %token.as_deref().unwrap());",
+            # sigil-shorthand forms (the exact forms named in the finding)
+            "info!(%access_token.expose_secret());",
+            "warn!(%secret.as_deref().unwrap());",
+        ]
+        for line in cases:
+            with self.subTest(line=line):
+                findings = _scan_source("fn f() {\n    " + line + "\n}\n")
+                logs = [f for f in findings if f.kind == "log"]
+                self.assertTrue(
+                    logs, f"expected wrapped-accessor secret value flagged: {line}"
+                )
+
+    # (5d) genuinely-neutral wrapped VALUE (a count/label) -> NOT flagged, even
+    # though the accessor chain is the same shape as the leak above.
+    def test_wrapped_accessor_neutral_value_not_flagged(self):
+        safe = [
+            "info!(value = %count.to_string());",
+            "debug!(%count.to_string());",
+            "info!(v = %name.clone());",
+        ]
+        for line in safe:
+            with self.subTest(line=line):
+                findings = _scan_source("fn f() {\n    " + line + "\n}\n")
+                logs = [f for f in findings if f.kind == "log"]
+                self.assertEqual(
+                    logs, [], f"neutral wrapped value wrongly flagged: {line}"
+                )
+
     # (6) multiline derive -> flagged
     def test_multiline_derive_flagged(self):
         src = (

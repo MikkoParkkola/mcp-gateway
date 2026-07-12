@@ -197,6 +197,53 @@ BARE_TAIL_RE = re.compile(
     r"(?:\.(?:clone|to_string|as_str|as_ref|as_deref|to_owned)\(\))*$"
 )
 
+# A "simple accessor chain" VALUE: a base identifier followed by any number of
+# field accesses (`.field`) or no-arg-ish method calls (`.method()`), with an
+# optional leading `&`/`*` and a trailing `?`. This is broader than
+# BARE_TAIL_RE (which whitelists only a handful of no-op accessors) and exists
+# to catch a secret-shaped VALUE wrapped in accessors on a *neutral*-named
+# structured field, e.g. `value = %access_token.expose_secret()` or
+# `v = %token.as_deref().unwrap()` — both leak the secret bytes to the sink
+# while the field NAME check and BARE_TAIL_RE stay blind. Method arguments are
+# constrained to a single non-paren group so genuine expressions (closures,
+# nested calls, arithmetic) are NOT treated as simple chains and do not widen
+# the false-positive surface.
+SIMPLE_ACCESSOR_CHAIN_RE = re.compile(
+    r"^&?\**[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\.\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^()]*\))?)*"
+    r"\??$"
+)
+
+# Method-call accessors that PRESERVE the secret value: the credential (or a
+# trivial re-wrapping of it — a slice, an owned copy, the inner `Option`
+# payload) still reaches the log sink. A chain built only of these over a
+# secret-shaped base is a genuine CWE-532 leak.
+#
+# Any method call OUTSIDE this set (`.is_some()`, `.len()`, `.count()`,
+# `.time_until_expiry()`, `.hash()`, `.fingerprint()`) transforms the secret
+# into a derived NON-secret — a bool, count, Duration, or digest — which is not
+# a leak. Excluding those preserves the existing numeric / bool / Duration
+# exclusions on the value side of the accessor chain.
+SECRET_PRESERVING_ACCESSORS = frozenset(
+    {
+        "clone",
+        "to_string",
+        "to_owned",
+        "as_str",
+        "as_ref",
+        "as_deref",
+        "as_bytes",
+        "as_slice",
+        "expose_secret",
+        "expose",
+        "unwrap",
+        "unwrap_or_default",
+        "borrow",
+        "deref",
+        "trim",
+    }
+)
+
 
 @dataclass
 class Finding:
@@ -500,6 +547,66 @@ def value_is_provably_safe(value: str) -> bool:
     return False
 
 
+def accessor_chain_secret(value: str) -> str | None:
+    """Return a secret-shaped identifier if `value` is a simple accessor chain
+    that EXPOSES a secret-shaped base/field, else None.
+
+    Catches a secret VALUE wrapped in a secret-preserving accessor chain on a
+    NEUTRAL-named structured field — `value = %access_token.expose_secret()`,
+    `v = %token.as_deref().unwrap()` — which the field-NAME check and
+    BARE_TAIL_RE (narrow accessor whitelist) both miss.
+
+    Two conditions must both hold, keeping the false-positive surface narrow:
+
+    1. Every `.method(...)` segment is in `SECRET_PRESERVING_ACCESSORS`. A
+       single transforming call (`.is_some()`, `.len()`, `.time_until_expiry()`)
+       means the logged value is a derived bool / count / Duration, not the
+       secret — so the chain is NOT flagged (preserves the existing
+       numeric/bool/Duration exclusions on the value side).
+    2. The TERMINAL data segment — the last field/base identifier the chain
+       actually yields (trailing preserving-method calls don't change which
+       value is logged) — is secret-shaped and not safe-by-name. Checking the
+       terminal, not the base, is what separates `token.expose_secret()` (logs
+       the secret → flag) from `token_response.expires_in` (logs a numeric
+       field of a secret-*named* container → safe).
+    """
+    v = value.strip()
+    if not v or v.startswith('"'):
+        return None
+    # A terminal count / label / duration accessor (`config.secrets.len()`,
+    # `rule.name.clone()`) logs a number or label, never the secret bytes —
+    # reuse the same provably-safe guard the field-name branch applies so this
+    # broader chain scan does not regress those benign audit-log call sites.
+    if value_is_provably_safe(v):
+        return None
+    if not SIMPLE_ACCESSOR_CHAIN_RE.match(v):
+        return None
+    body = v.lstrip("&*").rstrip("?")
+    terminal_data: str | None = None
+    for seg in body.split("."):
+        seg = seg.strip().rstrip("?").strip()
+        if not seg:
+            continue
+        if "(" in seg:
+            # A `.method(...)` call. If it transforms the secret into a derived
+            # non-secret, the whole value is safe — bail out. Preserving calls
+            # (`.expose_secret()`, `.unwrap()`, `.clone()`) leave the logged
+            # value equal to the preceding data expression, so they do not
+            # change `terminal_data`.
+            method = seg.split("(", 1)[0].strip()
+            if method not in SECRET_PRESERVING_ACCESSORS:
+                return None
+            continue
+        # A data-access segment (base identifier or `.field`): this is now the
+        # value the chain yields unless a later data/method segment follows.
+        terminal_data = seg
+    if terminal_data and SECRET_RE.search(terminal_data) and not is_safe_by_name(
+        terminal_data
+    ):
+        return terminal_data
+    return None
+
+
 def scan_log_macros(path: str, lines: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     # Join with a joined-text + per-char line map so a macro call spanning
@@ -547,6 +654,15 @@ def scan_log_macros(path: str, lines: list[str]) -> list[Finding]:
                 bare = is_bare_secret_arg(fval)
                 if bare:
                     flagged_names.append(bare)
+                    continue
+                # A secret-shaped value wrapped in a simple accessor chain is
+                # still a leak even when the field NAME is neutral:
+                # `value = %access_token.expose_secret()`,
+                # `v = %token.as_deref().unwrap()`. BARE_TAIL_RE's narrow
+                # accessor whitelist and the field-name check both miss this.
+                chained = accessor_chain_secret(fval)
+                if chained:
+                    flagged_names.append(chained)
                     continue
                 # Otherwise flag on the field NAME — but only when the value is
                 # not provably a benign label/count/duration. This catches a

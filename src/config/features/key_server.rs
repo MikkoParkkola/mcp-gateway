@@ -38,7 +38,7 @@ const DEFAULT_CLEANUP_INTERVAL_SECS: u64 = 60;
 ///         tools: ["*"]
 ///         rate_limit: 100
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KeyServerConfig {
     /// Enable the key server (default: `false`).
@@ -73,6 +73,26 @@ pub struct KeyServerConfig {
     /// provider and a policy rule, so enabling it does not bypass policy.
     #[serde(default)]
     pub delegated_bearer: bool,
+}
+
+// Manual `Debug` that redacts the admin bearer token (CWE-532, mirrors PR
+// #323). A derived `Debug` would print the revocation-endpoint admin token
+// verbatim into any trace or error context; only its presence is surfaced.
+impl std::fmt::Debug for KeyServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("KeyServerConfig")
+            .field("enabled", &self.enabled)
+            .field("token_ttl_secs", &self.token_ttl_secs)
+            .field("max_tokens_per_identity", &self.max_tokens_per_identity)
+            .field("max_oidc_token_age_secs", &self.max_oidc_token_age_secs)
+            .field("cleanup_interval_secs", &self.cleanup_interval_secs)
+            .field("oidc", &self.oidc)
+            .field("policies", &self.policies)
+            .field("admin_token", &redact_opt(&self.admin_token))
+            .field("delegated_bearer", &self.delegated_bearer)
+            .finish()
+    }
 }
 
 fn default_token_ttl_secs() -> u64 {
@@ -319,5 +339,27 @@ mod tests {
             ..KeyServerConfig::default()
         };
         assert!(cfg.validate().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // KeyServerConfig::Debug must never surface the admin revocation token.
+    #[test]
+    fn key_server_config_debug_redacts_admin_token() {
+        let cfg = KeyServerConfig {
+            admin_token: Some(SENTINEL.to_string()),
+            ..KeyServerConfig::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked admin_token: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
     }
 }

@@ -97,7 +97,7 @@ pub struct OAuthClient {
 }
 
 /// OAuth token response
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     token_type: Option<String>,
@@ -106,19 +106,48 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
+// Manual `Debug` that redacts the OAuth tokens (CWE-532, mirrors PR #323). A
+// derived `Debug` would print `access_token` / `refresh_token` verbatim into
+// any trace or error context.
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("TokenResponse")
+            .field("access_token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("refresh_token", &redact_opt(&self.refresh_token))
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
 /// Client registration response
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct ClientRegistrationResponse {
     client_id: String,
     #[allow(dead_code)]
     client_secret: Option<String>,
 }
 
+// Manual `Debug` that redacts the issued client secret (CWE-532, mirrors PR
+// #323). A derived `Debug` would print `client_secret` verbatim into any trace
+// or error context; only its presence is surfaced.
+impl std::fmt::Debug for ClientRegistrationResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("ClientRegistrationResponse")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &redact_opt(&self.client_secret))
+            .finish()
+    }
+}
+
 /// Configuration for constructing an [`OAuthClient`].
 ///
 /// Bundles the optional per-provider settings so that [`OAuthClient::new`]
 /// stays within Clippy's argument-count limit.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct OAuthClientConfig {
     /// Pre-configured client ID.
     pub client_id: Option<String>,
@@ -132,6 +161,23 @@ pub struct OAuthClientConfig {
     pub callback_path: Option<String>,
     /// Seconds before expiry to proactively refresh (default: 300).
     pub token_refresh_buffer_secs: u64,
+}
+
+// Manual `Debug` that redacts the fixed OAuth client secret (CWE-532, mirrors
+// PR #323). A derived `Debug` would print `client_secret` verbatim into any
+// trace or error context; only its presence is surfaced.
+impl std::fmt::Debug for OAuthClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("OAuthClientConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &redact_opt(&self.client_secret))
+            .field("callback_host", &self.callback_host)
+            .field("callback_port", &self.callback_port)
+            .field("callback_path", &self.callback_path)
+            .field("token_refresh_buffer_secs", &self.token_refresh_buffer_secs)
+            .finish()
+    }
 }
 
 impl OAuthClient {
@@ -893,3 +939,71 @@ fn open_browser(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // TokenResponse::Debug must never surface the access/refresh tokens.
+    #[test]
+    fn token_response_debug_redacts_tokens() {
+        let r = TokenResponse {
+            access_token: SENTINEL.to_string(),
+            token_type: Some("Bearer".to_string()),
+            expires_in: Some(3600),
+            refresh_token: Some(format!("{SENTINEL}-refresh")),
+            scope: Some("read".to_string()),
+        };
+        let dbg = format!("{r:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked token: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("Bearer"),
+            "token_type should stay visible: {dbg}"
+        );
+    }
+
+    // ClientRegistrationResponse::Debug must never surface the issued secret.
+    #[test]
+    fn client_registration_response_debug_redacts_secret() {
+        let r = ClientRegistrationResponse {
+            client_id: "client-123".to_string(),
+            client_secret: Some(SENTINEL.to_string()),
+        };
+        let dbg = format!("{r:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked client_secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("client-123"),
+            "client_id should stay visible: {dbg}"
+        );
+    }
+
+    // OAuthClientConfig::Debug must never surface the fixed client secret.
+    #[test]
+    fn oauth_client_config_debug_redacts_client_secret() {
+        let cfg = OAuthClientConfig {
+            client_secret: Some(SENTINEL.to_string()),
+            client_id: Some("client-123".to_string()),
+            ..Default::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked client_secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("client-123"),
+            "client_id should stay visible: {dbg}"
+        );
+    }
+}

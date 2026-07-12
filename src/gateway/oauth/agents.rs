@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::scopes::Scope;
 
 /// A registered agent definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AgentDefinition {
     /// Unique client identifier (issued at registration).
     pub client_id: String,
@@ -43,6 +43,24 @@ pub struct AgentDefinition {
     /// Optional expected audience (`aud` claim).
     #[serde(default)]
     pub audience: Option<String>,
+}
+
+// Manual `Debug` that redacts the HS256 shared secret (CWE-532, mirrors PR
+// #323). A derived `Debug` would print the token-signing secret verbatim; the
+// RSA *public* key is not secret and stays visible.
+impl std::fmt::Debug for AgentDefinition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("AgentDefinition")
+            .field("client_id", &self.client_id)
+            .field("name", &self.name)
+            .field("hs256_secret", &redact_opt(&self.hs256_secret))
+            .field("rs256_public_key", &self.rs256_public_key)
+            .field("scopes", &self.scopes)
+            .field("issuer", &self.issuer)
+            .field("audience", &self.audience)
+            .finish()
+    }
 }
 
 impl AgentDefinition {
@@ -195,5 +213,37 @@ mod tests {
 
         // Both should see the same underlying store
         assert_eq!(reg2.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // AgentDefinition::Debug must redact the HS256 secret while keeping the
+    // (non-secret) RSA public key visible.
+    #[test]
+    fn agent_definition_debug_redacts_hs256_secret() {
+        let agent = AgentDefinition {
+            client_id: "agent-1".to_string(),
+            name: "Agent One".to_string(),
+            hs256_secret: Some(SENTINEL.to_string()),
+            rs256_public_key: Some("-----BEGIN PUBLIC KEY-----".to_string()),
+            scopes: vec!["tools:*".to_string()],
+            issuer: None,
+            audience: None,
+        };
+        let dbg = format!("{agent:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked hs256_secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("BEGIN PUBLIC KEY"),
+            "public key is not secret and should stay visible: {dbg}"
+        );
     }
 }

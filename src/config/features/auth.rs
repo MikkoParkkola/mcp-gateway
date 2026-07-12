@@ -12,7 +12,7 @@ use crate::{Error, Result};
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
 /// Authentication configuration for gateway access.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AuthConfig {
     /// Enable authentication (default: false for backwards compatibility).
@@ -42,6 +42,24 @@ pub struct AuthConfig {
     /// overrides this hint (see [`AuthConfig::implies_multi_user`]).
     #[serde(default)]
     pub single_user: bool,
+}
+
+// Manual `Debug` that redacts the bearer token and API keys (CWE-532, mirrors
+// PR #323). A derived `Debug` would print the plaintext bearer token and every
+// API key verbatim into any trace or error context. The bearer presence and
+// the API-key count are surfaced so diagnostics stay useful.
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("AuthConfig")
+            .field("enabled", &self.enabled)
+            .field("bearer_token", &redact_opt(&self.bearer_token))
+            .field("api_keys", &format!("<{} entries>", self.api_keys.len()))
+            .field("public_paths", &self.public_paths)
+            .field("client_circuit_breaker", &self.client_circuit_breaker)
+            .field("single_user", &self.single_user)
+            .finish()
+    }
 }
 
 fn default_public_paths() -> Vec<String> {
@@ -196,7 +214,7 @@ pub struct AgentAuthConfig {
 }
 
 /// Static agent definition in the configuration file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AgentDefinitionConfig {
     /// Unique client identifier.
     pub client_id: String,
@@ -217,6 +235,24 @@ pub struct AgentDefinitionConfig {
     /// Expected audience (`aud` claim). Optional.
     #[serde(default)]
     pub audience: Option<String>,
+}
+
+// Manual `Debug` that redacts the HS256 shared secret (CWE-532, mirrors PR
+// #323). A derived `Debug` would print the signing secret verbatim; the RSA
+// *public* key is not secret and stays visible.
+impl std::fmt::Debug for AgentDefinitionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("AgentDefinitionConfig")
+            .field("client_id", &self.client_id)
+            .field("name", &self.name)
+            .field("hs256_secret", &redact_opt(&self.hs256_secret))
+            .field("rs256_public_key", &self.rs256_public_key)
+            .field("scopes", &self.scopes)
+            .field("issuer", &self.issuer)
+            .field("audience", &self.audience)
+            .finish()
+    }
 }
 
 impl AgentDefinitionConfig {
@@ -333,6 +369,54 @@ mod multi_user_tests {
         assert!(
             cfg.implies_multi_user(true),
             "any OIDC issuer means many end users"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // AuthConfig::Debug must redact the bearer token and never print API keys.
+    #[test]
+    fn auth_config_debug_redacts_bearer_token() {
+        let cfg = AuthConfig {
+            enabled: true,
+            bearer_token: Some(SENTINEL.to_string()),
+            ..AuthConfig::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked bearer_token: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+    }
+
+    // AgentDefinitionConfig::Debug must redact the HS256 secret while keeping
+    // the (non-secret) RSA public key visible.
+    #[test]
+    fn agent_definition_config_debug_redacts_hs256_secret() {
+        let cfg = AgentDefinitionConfig {
+            client_id: "agent-1".to_string(),
+            name: "Agent One".to_string(),
+            hs256_secret: Some(SENTINEL.to_string()),
+            rs256_public_key: Some("-----BEGIN PUBLIC KEY-----".to_string()),
+            scopes: vec!["tools:*".to_string()],
+            issuer: None,
+            audience: None,
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked hs256_secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("BEGIN PUBLIC KEY"),
+            "public key is not secret and should stay visible: {dbg}"
         );
     }
 }

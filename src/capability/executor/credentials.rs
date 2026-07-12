@@ -294,13 +294,29 @@ impl CapabilityExecutor {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RefreshTokenResponse {
     access_token: String,
     token_type: Option<String>,
     refresh_token: Option<String>,
     expires_in: Option<u64>,
     scope: Option<String>,
+}
+
+// Manual `Debug` that redacts the OAuth tokens (CWE-532, mirrors PR #323). A
+// derived `Debug` would print `access_token` / `refresh_token` verbatim into
+// any trace or error context.
+impl std::fmt::Debug for RefreshTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("RefreshTokenResponse")
+            .field("access_token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .field("refresh_token", &redact_opt(&self.refresh_token))
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .finish()
+    }
 }
 
 fn expand_home_dir(path: &str) -> Result<std::path::PathBuf> {
@@ -500,5 +516,34 @@ mod tests {
         let ex = CapabilityExecutor::new();
         let err = ex.fetch_from_file("/path/to/file.json:").unwrap_err();
         assert!(err.to_string().contains("Empty field name"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // RefreshTokenResponse::Debug must never surface the OAuth tokens.
+    #[test]
+    fn refresh_token_response_debug_redacts_tokens() {
+        let r = RefreshTokenResponse {
+            access_token: SENTINEL.to_string(),
+            token_type: Some("Bearer".to_string()),
+            refresh_token: Some(format!("{SENTINEL}-refresh")),
+            expires_in: Some(3600),
+            scope: Some("read".to_string()),
+        };
+        let dbg = format!("{r:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked token: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("Bearer"),
+            "token_type should stay visible: {dbg}"
+        );
     }
 }
