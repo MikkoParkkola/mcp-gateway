@@ -173,7 +173,7 @@ fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
     state
 }
 
-/// AppState whose Meta-MCP has an identity-propagation strategy wired (so a
+/// `AppState` whose Meta-MCP has an identity-propagation strategy wired (so a
 /// `required` backend actually MINTS a per-user credential) AND a transparency
 /// log on the Meta-MCP side (so the shared mint chokepoint's own audit
 /// succeeds) — but with `state.transparency_log = None`. This split-config

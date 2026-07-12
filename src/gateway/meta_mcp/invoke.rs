@@ -1555,9 +1555,18 @@ impl MetaMcp {
                         Some(audience),
                         None,
                     ) {
+                        // CWE-209: `audit_err` can carry the transparency-log
+                        // filesystem path / IO detail. Keep it in the server log
+                        // only; return a generic client-facing message so the
+                        // sensitive detail never reaches the JSON-RPC caller
+                        // (mirrors the direct route in backend_handlers.rs).
+                        tracing::warn!(
+                            server,
+                            error = %audit_err,
+                            "identity-propagation mint audit write failed"
+                        );
                         return Err(Error::Internal(format!(
-                            "identity-propagation audit write failed for backend '{server}': \
-                             {audit_err}"
+                            "identity-propagation audit unavailable for backend '{server}'"
                         )));
                     }
                 }
@@ -3018,6 +3027,113 @@ mod identity_propagation_enforcement_tests {
             captured.lock()
         );
     }
+
+    // CWE-209 (PR #355 codex re-review): when a required mint SUCCEEDS but the
+    // mint audit-write FAILS, the branch must fail closed AND return a GENERIC
+    // client-facing error — never interpolate the underlying transparency-log
+    // error (`PropagationError::AuditFailed`, which wraps the append IO error /
+    // filesystem detail) into the caller-visible string. This drives a genuine
+    // audit-write failure through `resolve_caller_credential` and asserts the
+    // returned `Error::Internal` carries only the generic message.
+    //
+    // Failure-injection mirrors
+    // `identity_propagation::tests::audit_fail_closed::mint_write_failure_is_fail_closed`:
+    // POSIX checks file permissions only at `open(2)`, so a real write failure
+    // is forced with process-wide `RLIMIT_FSIZE=0` (every write -> `EFBIG`) in a
+    // re-exec'd CHILD process. `open()` writes nothing so it still succeeds;
+    // in-memory minting still succeeds; only the audit append fails. Unix-only.
+    #[cfg(unix)]
+    #[test]
+    fn mint_audit_write_failure_returns_generic_error_no_leak() {
+        const ENV_VAR: &str = "IDP_INVOKE_AUDIT_FSIZE_CHILD_PATH";
+        const MARK_OK: &str = "MINT_AUDIT_ERROR_WAS_GENERIC";
+        const TEST_PATH: &str = "gateway::meta_mcp::invoke::identity_propagation_enforcement_tests::mint_audit_write_failure_returns_generic_error_no_leak";
+
+        if std::env::var(ENV_VAR).is_ok() {
+            // Child: RLIMIT_FSIZE=0 is already active (parent shell wrapper), so
+            // the transparency-log append write fails while the in-memory mint
+            // succeeds — exercising exactly the fixed mint-audit-failure branch.
+            use crate::security::TransparencyLogger;
+            use crate::security::transparency_log::TransparencyLogConfig;
+
+            let path = std::env::var(ENV_VAR).expect("child path env var");
+            let cfg = Arc::new(TransparencyLogConfig {
+                enabled: true,
+                path,
+                key_id: "test".to_string(),
+                shared_secret: String::new(),
+            });
+            let logger = Arc::new(
+                TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed"),
+            );
+            let mut m = meta_with_strategy();
+            m.enable_transparency_log(logger);
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime");
+            let err = rt.block_on(async {
+                m.resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
+                    .await
+                    .expect_err("required mint whose audit write fails must fail closed")
+            });
+            let msg = err.to_string();
+
+            // Fail-closed preserved: still an Internal error (mint aborted).
+            assert!(
+                matches!(err, crate::Error::Internal(_)),
+                "mint-audit failure must fail closed as Internal: {err}"
+            );
+            // Generic client-facing message (backend name is a non-sensitive id).
+            assert!(
+                msg.contains("audit unavailable") && msg.contains("memory"),
+                "must return the generic audit-unavailable message: {msg}"
+            );
+            // The pre-fix leak: none of the underlying transparency-log /
+            // AuditFailed detail may reach the caller-visible string.
+            for leaked in [
+                "transparency-log write failed",
+                "audit write failed",
+                "action 'idp_mint'",
+                "File too large",
+                "os error",
+            ] {
+                assert!(
+                    !msg.contains(leaked),
+                    "client-facing mint-audit error must not leak {leaked:?}: {msg}"
+                );
+            }
+            println!("{MARK_OK}");
+            return;
+        }
+
+        // Parent: re-exec this exact test under RLIMIT_FSIZE=0 and assert on
+        // what the child observed. `trap '' XFSZ` ignores SIGXFSZ (whose default
+        // disposition would kill the child) so the write returns `Err` instead.
+        let exe = std::env::current_exe().expect("current test binary path");
+        let file = tempfile::NamedTempFile::new().expect("tempfile");
+        let path = file.path().to_string_lossy().to_string();
+        let script =
+            format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .arg(&exe)
+            .env(ENV_VAR, &path)
+            .output()
+            .expect("spawn fsize-limited child process");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(MARK_OK),
+            "child did not confirm a generic (non-leaking) mint-audit error \
+             (status={:?}, stdout={stdout}, stderr={})",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[tokio::test]
     async fn mints_bearer_credential_for_identity() {
         let mut m = meta_with_strategy();
