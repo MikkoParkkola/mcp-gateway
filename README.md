@@ -17,7 +17,7 @@
 
 **One gateway between your AI and every tool it needs, without flooding the context window.**
 
-MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 14 to 16 tools instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand. On a 100-tool stack that is about 89% less context-token overhead per request, and the answer to "how many tools can I connect" becomes "unlimited."
+MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 14 to 16 tools instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand. The tool surface the agent sees stays fixed no matter how many tools you connect. 110+ capabilities ship built in, you add more by pointing it at additional MCP servers or dropping in REST APIs, and the context cost never grows. On a 100-tool stack that is about 89% less context-token overhead per request, and the more you connect the higher that number climbs. "How many tools can I connect" really does become "unlimited."
 
 ![demo](demo.gif)
 
@@ -38,7 +38,7 @@ flowchart LR
     T2["MCP backend<br/>Context7 (http)"]
     C1["REST capability<br/>GitHub"]
     C2["REST capability<br/>Stripe"]
-    Cn["110+ capabilities"]
+    Cn["110+ capabilities<br/>(add unlimited)"]
 
     AI -->|"14-16 tool defs"| META
     META --> DISC
@@ -51,16 +51,36 @@ flowchart LR
 
 ## What you get
 
-- **About 89% less context overhead.** In the README benchmark, 100 backend tools cost roughly 1,600 tokens instead of 15,000, because the agent only loads the tools it uses this turn. Numbers are reproducible; see [Benchmarks](docs/BENCHMARKS.md).
-- **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
-- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
+- **Savings that grow with your catalog.** In the README benchmark, 100 backend tools cost roughly 1,600 tokens instead of 15,000, about 89% less, because the agent only loads the tools it uses this turn. And because the tool surface is fixed, that percentage only rises as you connect more. Numbers are reproducible; see [Benchmarks](docs/BENCHMARKS.md).
+- **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The tool surface stays fixed however many you connect, so the agent just searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
+- **Add capabilities in minutes.** Point the gateway at another MCP server, or drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in and the set keeps growing.
+- **Result-integrity kernel.** Every backend response passes through provenance tracking and prompt-injection, PII, and exfiltration classifiers before it enters the agent's context, which then allows, strips, quarantines, or denies it. See [context integrity](docs/context_integrity_kernel.md).
 - **End-user identity to backends, with no stored credentials (v3.1.0).** When a backend needs to know which real end user a call is for, the gateway propagates the verified identity through one of three configured strategies: a per-user gateway-signed assertion, the caller's own forwarded token, or an RFC 8693 token exchange. It keeps no copy of any long-lived credential. A backend that requires identity fails closed rather than fall back to a shared key, and per-user results stay isolated in the cache. This is enforced across every invocation path. See [What is new in v3.1.0](#end-user-identity-v31).
 - **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, SHA-256 pinning with rug-pull detection protects each capability, and the OWASP Agentic AI Top 10 is covered 10 out of 10. The whole binary is `#![forbid(unsafe_code)]`, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
 - **Dual protocol.** MCP plus an A2A (agent-to-agent) transport adapter, so the same gateway routes tool calls and cross-provider agent messages.
 
-### What MCP Gateway is, and what it is not
+## Install and try it
+
+The fastest path is to let your agent do it. Point Claude Code, Cursor, Windsurf, or Codex at the repo:
+
+> Read https://github.com/MikkoParkkola/mcp-gateway and install mcp-gateway to consolidate all my MCP servers behind one gateway
+
+It installs the binary, runs the setup wizard, imports your existing MCP servers, and wires itself up. Or do it by hand:
+
+```bash
+brew install MikkoParkkola/tap/mcp-gateway   # install
+mcp-gateway setup wizard --configure-client  # import existing servers + wire up clients
+mcp-gateway serve                            # run
+mcp-gateway doctor                           # verify everything is healthy
+```
+
+Your AI clients now talk to the gateway at a flat `~15 tools` instead of `~150`. From the client, call `gateway_search_tools` to find any backend tool, then `gateway_invoke` to run it. No servers to import yet? `mcp-gateway init --with-examples` writes a working config with public capabilities so you can confirm it is alive first.
+
+Full install matrix (Cargo, Docker, Windows, direct binary) and the three setup options are in [Quick Start](#quick-start) below.
+
+## What MCP Gateway is, and what it is not
 
 MCP Gateway is a tool and capability **router**. It routes MCP tool, resource, and prompt traffic to backend MCP servers and to capability-backed REST APIs, and it can proxy MCP server-to-client requests like `sampling/createMessage`, `elicitation/create`, and `roots/list` back to the connected client over the existing session.
 
@@ -72,45 +92,13 @@ Compared with the default approach of loading every tool definition into every r
 
 ## What is new in v3.1.0: end-user identity to backends
 
-A multitenant backend (email, memory, calendar) that runs its own OIDC normally sees only "the gateway." It cannot tell which user is calling, so it cannot enforce per-user access. It cannot produce a per-user audit trail either. Sharing one static backend credential across every caller is the usual workaround, and it erases the user boundary.
+A multitenant backend (email, memory, calendar) that runs its own OIDC normally sees only "the gateway," so it cannot enforce per-user access or keep a per-user audit trail. Sharing one static backend credential across every caller is the usual workaround, and it erases the user boundary.
 
-The 3.0 line introduced identity propagation: a strategy-agnostic `IdentityPropagation` trait that carries the full verified identity through dispatch to the backend-invoke boundary, plus a gateway-signed assertion strategy and RFC 9728 metadata advertisement. v3.1.0 completes the picture with a third outbound strategy, RFC 8693 token exchange, so OAuth-native third-party backends are now covered by the same trait and the same safety invariants. Throughout, the gateway holds no long-lived credential for anyone.
+The gateway carries the verified end-user identity through to the backend call instead, holding no long-lived credential for anyone. v3.1.0 adds RFC 8693 token exchange as a third outbound strategy, so OAuth-native third-party backends (Gmail) join the gateway-signed assertion and client-token passthrough strategies already shipped in 3.0. All three run on one `IdentityPropagation` trait and clear the same safety gate: fail-closed when identity is missing, per-tenant credential scoping, session isolation, per-user cache keying, and a signed audit log.
 
-```mermaid
-sequenceDiagram
-    participant U as End user
-    participant C as AI client
-    participant G as MCP Gateway
-    participant B as Backend (identity required)
+On a multi-user gateway a backend that requires a per-user identity now refuses a call that lacks one rather than serving a shared token; `auth.single_user: true` opts back into the old behavior for a personal gateway.
 
-    U->>C: request
-    C->>G: gateway_invoke + verified identity (OIDC)
-    Note over G: pick the configured strategy:<br/>1. mint gateway-signed assertion<br/>2. forward the client's own token<br/>3. RFC 8693 token exchange
-    G->>B: call carrying the per-user credential
-    B-->>G: per-user result
-    G-->>C: result (cache keyed per user)
-    Note over G: gateway stores no<br/>long-lived credential
-```
-
-Three outbound strategies ship in 3.1.0, none of which stores a long-lived secret:
-
-- **Signed-assertion strategy.** The gateway mints a short-lived ES256 assertion (`sub`, `email`, `tenant`, `aud`, with `exp`/`nbf`/`jti`) signed by its own key. Backends that trust the gateway verify it. This serves first-party, gateway-trusting backends and needs no external IdP. Wired across meta-MCP dispatch (`gateway_invoke`), Code Mode (`gateway_execute`), and the direct backend route (`/mcp/{name}`).
-- **Client-supplied token passthrough.** A caller can attach its own backend credential on the request. The gateway forwards it verbatim and keeps no copy.
-- **RFC 8693 token exchange.** For OAuth-native third-party backends (for example Gmail or Microsoft Graph), the gateway exchanges the verified identity for a scoped, short-lived backend token at call time. The strategy is implemented on the same `IdentityPropagation` trait (`src/identity_propagation/token_exchange.rs`), selected on the live invoke path (`src/gateway/meta_mcp/invoke.rs`), and constructed at production startup (`src/gateway/server/mod.rs`). It activates only when an operator configures a backend for the `token_exchange` strategy; a backend with no strategy keeps today's static-credential behavior unchanged.
-
-The gateway also carries forward RFC 9728 protected-resource metadata from the 3.0 line. It advertises each backend's OAuth requirements so a capable client can run its own browser login and attach its own token per request, instead of relying on a gateway-held credential.
-
-The safety invariants are the release gate, not any single auth model:
-
-- **Fail-closed.** A backend marked `required` refuses the call rather than downgrade to a shared credential when there is no verified identity, no strategy wired, or minting fails.
-- **Tenant isolation.** A credential for `(user, backend, audience)` is scoped to exactly that tuple and never cross-presented.
-- **Session isolation.** An identity-required backend must either use per-user session instances or declare itself `stateless`; otherwise the gateway refuses rather than reuse a shared backend session across users.
-- **Cache awareness.** Response and idempotency caches key on the per-user credential binding, or bypass the cache, so one user never receives another user's cached result.
-- **Audit.** Each propagation event is written to a signed transparency log with subject, backend, and audience, never the token bytes. For a required backend, an audit-write failure is itself fail-closed.
-
-The token-exchange endpoint is a separate, opt-in facility. The OIDC-backed key server exposes `POST /auth/token` (`src/key_server/handler.rs`) to mint short-lived, scoped gateway tokens from a verified OIDC identity. The key server is disabled by default and is enabled with `key_server.enabled: true`. It is distinct from outbound backend propagation: one issues gateway tokens, the other attaches credentials to backend calls.
-
-Related defaults changed in the 3.0 line. On a multi-user gateway, a backend that requires a per-user OAuth identity refuses a call that lacks one instead of serving a shared stored token. Opt back into shared-credential behavior with `auth.single_user: true` for a personal gateway or `oauth.shared_account: true` for a specific backend. Upgrading from 2.x backs up `gateway.yaml`, detects your posture, and prints a one-time notice. It changes no config automatically. See [docs/UPGRADING-3.0.md](docs/UPGRADING-3.0.md), [ADR-007](docs/adr/ADR-007-identity-propagation.md), and [ADR-008](docs/adr/ADR-008-multi-user-oauth-isolation.md).
+For the full picture, including the propagation sequence, each strategy's wiring, the five safety invariants, the opt-in `POST /auth/token` key server, and the 2.x upgrade path, see **[What is new in v3.1.0: end-user identity to backends](docs/whats-new-v3.1-identity.md)**.
 
 ### Independent reviews
 
@@ -121,7 +109,7 @@ Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BE
 
 ## Why the token math matters
 
-Every MCP tool you connect costs about 150 tokens of context overhead. Connect 20 servers with 100 tools and you have burned roughly 15,000 tokens before the first message, on definitions the AI probably will not use this turn. Worse, context limits force you to choose which tools to connect at all, so the agent makes weaker decisions because the right data is out of reach.
+You have already seen the shape of the problem: every connected tool costs context whether or not the agent uses it, and context limits force you to leave useful tools out. The gateway removes both costs at once. Here is what that looks like on the same 100-tool stack, with and without it:
 
 | | Without gateway | With gateway |
 |---|----------------|--------------|
@@ -343,7 +331,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 </details>
 
-## Key benefits
+## The benefits in detail, with the numbers
 
 ### 1. Unlimited tools, minimal tokens
 
