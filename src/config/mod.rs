@@ -764,8 +764,12 @@ impl std::fmt::Debug for BackendConfig {
             .field("transport", &self.transport)
             .field("idle_timeout", &self.idle_timeout)
             .field("timeout", &self.timeout)
-            .field("env", &self.env)
-            .field("headers", &self.headers)
+            // `env` and `headers` values routinely carry credentials
+            // (Authorization bearers, API keys, env-injected secrets). The
+            // field names are neutral, so the name-based leak lint cannot see
+            // them — redact to counts here, matching `secrets` below.
+            .field("env", &format!("<{} vars>", self.env.len()))
+            .field("headers", &format!("<{} headers>", self.headers.len()))
             .field("oauth", &self.oauth)
             .field("secrets", &format!("<{} rules>", self.secrets.len()))
             .field("passthrough", &self.passthrough)
@@ -1043,10 +1047,13 @@ mod cwe532_debug_redaction {
     const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
 
     // BackendConfig::Debug must never recurse into the credential-injection
-    // rules; only the rule count is surfaced.
+    // rules, nor print `env`/`headers` values (Authorization bearers, API
+    // keys); only counts are surfaced.
     #[test]
     fn backend_config_debug_redacts_secret_rules() {
         let cfg = BackendConfig {
+            env: HashMap::from([("OPENAI_API_KEY".to_string(), SENTINEL.to_string())]),
+            headers: HashMap::from([("Authorization".to_string(), SENTINEL.to_string())]),
             secrets: vec![crate::secret_injection::CredentialRule {
                 name: "openai_api_key".to_string(),
                 credential_type: crate::secret_injection::CredentialType::ApiKey,
@@ -1062,6 +1069,11 @@ mod cwe532_debug_redaction {
         assert!(
             dbg.contains("<1 rules>"),
             "missing rule-count marker: {dbg}"
+        );
+        assert!(dbg.contains("<1 vars>"), "missing env-count marker: {dbg}");
+        assert!(
+            dbg.contains("<1 headers>"),
+            "missing headers-count marker: {dbg}"
         );
     }
 
