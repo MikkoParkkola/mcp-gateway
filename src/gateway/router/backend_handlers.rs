@@ -608,6 +608,30 @@ pub(super) async fn backend_handler(
                     // audit-write failure here aborts the mint instead of
                     // proceeding with the headers below (mirrors
                     // `identity_propagation::mod.rs`'s `resolve_caller_credential`).
+                    //
+                    // Operator-misconfig fail-OPEN guard: the audit helper
+                    // treats a missing logger (`None`) as a no-op `Ok(())`. On a
+                    // `required` backend that would ship a per-user credential
+                    // with NO audit record. When propagation is REQUIRED for
+                    // this backend but no transparency log is configured, fail
+                    // closed on the same error path as an audit-write failure.
+                    // (Non-required backends keep the best-effort `None -> Ok`.)
+                    let required = idp_cfg.as_ref().is_some_and(|c| c.required);
+                    if required && state.transparency_log.is_none() {
+                        warn!(
+                            backend = %name,
+                            "identity-propagation required but no transparency log is \
+                             configured; refusing to mint without a durable audit record"
+                        );
+                        return build_http_error_response(
+                            Some(id.clone()),
+                            -32603,
+                            // CWE-209: generic client-facing message; the
+                            // operational detail stays in the server log above.
+                            "identity-propagation audit unavailable".to_string(),
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                        );
+                    }
                     if let Err(audit_err) = audit_identity_propagation(
                         state.transparency_log.as_deref(),
                         "idp_mint",
@@ -616,13 +640,18 @@ pub(super) async fn backend_handler(
                         audience,
                         None,
                     ) {
+                        // CWE-209: the audit error can carry the transparency-log
+                        // filesystem path / IO error. Keep it in the server log
+                        // only; return a generic client-facing message.
+                        warn!(
+                            backend = %name,
+                            error = %audit_err,
+                            "identity-propagation mint audit write failed; failing closed"
+                        );
                         return build_http_error_response(
                             Some(id.clone()),
                             -32603,
-                            format!(
-                                "identity-propagation audit write failed for backend \
-                                 '{name}': {audit_err}"
-                            ),
+                            "identity-propagation audit unavailable".to_string(),
                             StatusCode::INTERNAL_SERVER_ERROR,
                         );
                     }

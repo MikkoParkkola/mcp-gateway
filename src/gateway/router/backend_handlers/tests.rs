@@ -488,6 +488,16 @@ mod identity_propagation_audit {
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
+        // The child must also EXIT cleanly: a child that prints the marker and
+        // then aborts (panic/abort after the observation) must not read as a
+        // pass.
+        assert!(
+            output.status.success(),
+            "child printed the marker but did not exit successfully \
+             (status={:?}, stderr={})",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 

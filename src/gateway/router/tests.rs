@@ -173,6 +173,81 @@ fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
     state
 }
 
+/// AppState whose Meta-MCP has an identity-propagation strategy wired (so a
+/// `required` backend actually MINTS a per-user credential) AND a transparency
+/// log on the Meta-MCP side (so the shared mint chokepoint's own audit
+/// succeeds) — but with `state.transparency_log = None`. This split-config
+/// exercises the direct route's OWN mint-audit fail-closed guard (MIK-6740):
+/// the Meta-MCP mint + audit succeed, then the direct route finds no
+/// `state.transparency_log` and must fail closed (500) rather than ship the
+/// per-user credential without recording it on this route.
+fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> Arc<AppState> {
+    use crate::identity_propagation::SignedAssertionStrategy;
+    use crate::security::TransparencyLogger;
+    use crate::security::transparency_log::TransparencyLogConfig;
+
+    let backends = Arc::new(BackendRegistry::new());
+    backends.register(backend);
+    let mut meta = MetaMcp::new(Arc::clone(&backends));
+    let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+    meta.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
+    // Meta-MCP side gets an audit sink (leaked tempfile — reclaimed at process
+    // exit); the DIRECT route deliberately does NOT (`transparency_log: None`).
+    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = file.path().to_string_lossy().to_string();
+    std::mem::forget(file);
+    let cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path,
+        key_id: "test".to_string(),
+        shared_secret: String::new(),
+    });
+    meta.enable_transparency_log(Arc::new(
+        TransparencyLogger::open(cfg).expect("logger opens"),
+    ));
+    let meta_mcp = Arc::new(meta);
+
+    let streaming_config = StreamingConfig::default();
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        streaming_config.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
+
+    Arc::new(AppState {
+        backends,
+        meta_mcp,
+        meta_mcp_enabled: true,
+        multiplexer,
+        proxy_manager,
+        streaming_config,
+        auth_config,
+        key_server: None,
+        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+        sanitize_input: false,
+        ssrf_protection: false,
+        trust_configured_backends: false,
+        inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+        agent_auth,
+        gateway_key_pair,
+        capability_dirs: Vec::new(),
+        config_path: None,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        control_plane_store: None,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        export_status: None,
+        transparency_log: None,
+    })
+}
+
 fn test_router_app_state_with_ssrf(
     ssrf_protection: bool,
     trust_configured_backends: bool,
@@ -892,6 +967,85 @@ async fn backend_handler_discovery_method_fails_closed_for_required_propagation(
             .contains("required"),
         "fail-closed error message: {}",
         json["error"]["message"]
+    );
+}
+
+#[tokio::test]
+async fn backend_handler_required_mint_without_route_audit_fails_closed_generically() {
+    // MIK-6740 operator-misconfig fail-OPEN guard on the DIRECT route: a
+    // `required` backend whose per-user credential mints successfully but whose
+    // route-side transparency log is UNCONFIGURED must fail closed (500) — never
+    // ship the credential without a durable audit record. CWE-209: the 500 body
+    // must be a GENERIC client message, never the transparency-log path / IO
+    // error.
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+    use crate::key_server::oidc::VerifiedIdentity;
+
+    let config = BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "https://mem.internal/mcp".to_string(),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        identity_propagation: Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "https://mem.internal/mcp".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        }),
+        enabled: true,
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "demo",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let router = create_router(test_router_app_state_minting_without_route_audit(backend));
+
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": "read", "arguments": {} }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    // Inject a verified end-user identity so the required backend actually MINTS
+    // a per-user credential. Auth is disabled in this test state, so the
+    // middleware does not overwrite the extension.
+    request.extensions_mut().insert(VerifiedIdentity {
+        subject: "alice".to_string(),
+        email: "alice@corp".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp".to_string(),
+    });
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let msg = json["error"]["message"].as_str().unwrap();
+    // Generic client-facing message — the whole point of the CWE-209 fix.
+    assert_eq!(msg, "identity-propagation audit unavailable");
+    // Defense-in-depth: no filesystem path or IO detail leaks to the client.
+    assert!(!msg.contains('/'), "must not leak a filesystem path: {msg}");
+    assert!(
+        !msg.to_lowercase().contains("write failed"),
+        "must not leak audit IO detail: {msg}"
     );
 }
 

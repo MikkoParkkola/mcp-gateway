@@ -1528,6 +1528,25 @@ impl MetaMcp {
                     // reach the caller without a durable audit record, so an
                     // audit-write failure here aborts the mint instead of
                     // proceeding to `Ok(CallerCredential{..})`.
+                    //
+                    // Operator-misconfig fail-OPEN guard: the audit helper
+                    // treats `logger = None` (transparency log disabled) as a
+                    // no-op `Ok(())`. On a `required` backend that would let a
+                    // minted per-user credential go on the wire with NO audit
+                    // record — the "no mint without a durable audit record"
+                    // guarantee silently evaporating via misconfiguration. When
+                    // propagation is REQUIRED but no transparency log is
+                    // configured, fail closed on the SAME path as an audit-write
+                    // failure rather than mint blind. (Non-required backends
+                    // keep the `None -> Ok(())` best-effort behavior — a mint
+                    // there is not covered by the durable-record guarantee.)
+                    if idp_cfg.required && audit_logger.is_none() {
+                        return Err(Error::Internal(format!(
+                            "identity-propagation is required for backend '{server}' but no \
+                             transparency log is configured; refusing to mint a per-user \
+                             credential without a durable audit record"
+                        )));
+                    }
                     if let Err(audit_err) = crate::identity_propagation::audit_identity_propagation(
                         audit_logger,
                         "idp_mint",
@@ -2848,9 +2867,45 @@ mod identity_propagation_enforcement_tests {
         (m, captured)
     }
 
+    /// A transparency logger backed by a leaked tempfile — kept alive for the
+    /// whole test process so a `required`-backend mint has a durable audit sink
+    /// (without one, the MIK-6740 fail-closed guard aborts the mint). Leaking is
+    /// fine in a unit test: the file is reclaimed when the process exits.
+    fn leaked_test_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
+        use crate::security::TransparencyLogger;
+        use crate::security::transparency_log::TransparencyLogConfig;
+
+        let file = tempfile::NamedTempFile::new().expect("tempfile");
+        let path = file.path().to_string_lossy().to_string();
+        std::mem::forget(file); // keep the on-disk file alive for the test
+        let cfg = Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path,
+            key_id: "test".to_string(),
+            shared_secret: String::new(),
+        });
+        Arc::new(TransparencyLogger::open(cfg).expect("logger opens"))
+    }
+
     /// Like [`meta_with_capturing_backend`] but also exposes the buffer of
-    /// identity keys the transport received (MIK-6784).
+    /// identity keys the transport received (MIK-6784). Wires a transparency log
+    /// so a `required`-backend mint succeeds (the MIK-6740 fail-closed guard
+    /// aborts a required mint when no audit sink is configured).
     fn meta_with_capturing_backend_full() -> (MetaMcp, CapturedHeaders, CapturedIdentityKeys) {
+        build_capturing_backend(true)
+    }
+
+    /// Like [`meta_with_capturing_backend`] but with NO transparency log wired,
+    /// so a `required`-backend mint must fail closed (MIK-6740 operator-misconfig
+    /// guard).
+    fn meta_with_capturing_backend_no_log() -> (MetaMcp, CapturedHeaders) {
+        let (m, captured, _identity) = build_capturing_backend(false);
+        (m, captured)
+    }
+
+    fn build_capturing_backend(
+        with_transparency_log: bool,
+    ) -> (MetaMcp, CapturedHeaders, CapturedIdentityKeys) {
         use crate::backend::Backend;
         use crate::config::{BackendConfig, TransportConfig};
 
@@ -2878,9 +2933,12 @@ mod identity_propagation_enforcement_tests {
         }));
         registry.register(backend);
 
-        let m = MetaMcp::new(registry);
+        let mut m = MetaMcp::new(registry);
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
         m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
+        if with_transparency_log {
+            m.enable_transparency_log(leaked_test_transparency_logger());
+        }
         (m, captured, captured_identity)
     }
 
@@ -2926,11 +2984,45 @@ mod identity_propagation_enforcement_tests {
         );
     }
 
-    // IDP.1 — with a verified identity + strategy, resolve mints an
-    // Authorization: Bearer credential scoped to the caller, and a cache binding.
+    // MIK-6740 operator-misconfig fail-OPEN guard (caller-level, end-to-end
+    // through Code Mode): a `required` backend whose credential mints
+    // successfully but whose transparency log is UNCONFIGURED must fail closed —
+    // the mint aborts with an error AND no per-user header reaches the backend
+    // transport. Without the guard, the audit helper's `None -> Ok(())` no-op
+    // would let the credential go on the wire with zero audit record.
+    #[tokio::test]
+    async fn required_mint_without_transparency_log_fails_closed() {
+        // Same required backend + strategy + capturing transport as the
+        // propagation-succeeds test, but with NO transparency log wired.
+        let (m, captured) = meta_with_capturing_backend_no_log();
+        let id = identity();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            verified_identity: Some(&id),
+            ..Default::default()
+        };
+        let args = json!({ "tool": "mem:read", "arguments": {} });
+        let err = m
+            .code_mode_execute(&args, Some("s1"), &caller)
+            .await
+            .expect_err("required mint with no audit sink must fail closed");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("transparency log") || msg.contains("audit"),
+            "fail-closed error must cite the missing audit sink: {msg}"
+        );
+        // The security property: no per-user credential reached the wire.
+        assert!(
+            captured.lock().is_empty(),
+            "no per-user header must reach the backend when the mint fails closed; \
+             got {:?}",
+            captured.lock()
+        );
+    }
     #[tokio::test]
     async fn mints_bearer_credential_for_identity() {
-        let m = meta_with_strategy();
+        let mut m = meta_with_strategy();
+        // A `required` mint needs a durable audit sink (MIK-6740 fail-closed).
+        m.enable_transparency_log(leaked_test_transparency_logger());
         let cred = m
             .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
             .await
@@ -2946,7 +3038,9 @@ mod identity_propagation_enforcement_tests {
     // calling the same tool with the same arguments cannot collide in the cache.
     #[tokio::test]
     async fn distinct_identities_get_distinct_cache_bindings() {
-        let m = meta_with_strategy();
+        let mut m = meta_with_strategy();
+        // A `required` mint needs a durable audit sink (MIK-6740 fail-closed).
+        m.enable_transparency_log(leaked_test_transparency_logger());
         let alice = m
             .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
             .await
