@@ -207,7 +207,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 - **About 89% less context overhead.** In the README benchmark, 100 backend tools cost roughly 1,600 tokens instead of 15,000, because the agent only loads the tools it uses this turn. Numbers are reproducible; see [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
-- **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored credential. See [Multitenant identity](#end-user-identity-v31).
+- **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
 - **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, SHA-256 pinning with rug-pull detection protects each capability, and the OWASP Agentic AI Top 10 is covered 10 out of 10. The whole binary is `#![forbid(unsafe_code)]`, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
