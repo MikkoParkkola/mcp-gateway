@@ -33,6 +33,61 @@ use crate::protocol::{
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
+/// Origin equality per WHATWG (scheme + host + effective port). Used to enforce
+/// that an SSE-advertised message endpoint is same-origin as the SSE stream
+/// before any per-user credential is sent to it (SSRF + credential-exfil guard).
+fn same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// Outcome of evaluating one redirect hop for the transport's HTTP client.
+///
+/// Extracted from the [`reqwest::redirect::Policy::custom`] closure so the
+/// policy is unit-testable: reqwest's `Attempt` cannot be constructed in a
+/// test, but this pure decision can. See [`evaluate_redirect`].
+#[derive(Debug, PartialEq, Eq)]
+enum RedirectDecision {
+    /// Hop budget exhausted — stop and surface the last response as-is.
+    Stop,
+    /// Refuse the redirect; the payload is the operator-facing reason.
+    Reject(String),
+    /// Safe to follow.
+    Follow,
+}
+
+/// Decide whether to follow a single redirect on the SSE/message client.
+///
+/// Three guards, each of which a hop must clear:
+/// 1. **Hop cap** — at most five redirects, matching the prior policy.
+/// 2. **SSRF** — the target must not resolve to an internal/metadata range
+///    ([`validate_url_not_ssrf`]).
+/// 3. **Same-origin** — the target must share the base URL's origin. The SSE
+///    message POST carries the per-user `Authorization: Bearer <assertion>`
+///    (MIK-6704); without this guard a legitimate same-origin backend could
+///    answer with `30x Location: https://evil.example/…` — a *public* host
+///    that clears the SSRF check — and reqwest would replay the bearer
+///    cross-origin, defeating the same-origin guard `resolve_message_url`
+///    added. MCP message endpoints are same-origin by spec, so this rejects
+///    nothing legitimate.
+fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> RedirectDecision {
+    if previous_hops >= 5 {
+        return RedirectDecision::Stop;
+    }
+    if let Err(e) = validate_url_not_ssrf(target.as_str()) {
+        return RedirectDecision::Reject(e.to_string());
+    }
+    if !same_origin(base, target) {
+        return RedirectDecision::Reject(format!(
+            "redirect target is cross-origin to the transport base URL; \
+             refusing to replay per-user credentials to a different origin \
+             (base={base}, target={target})"
+        ));
+    }
+    RedirectDecision::Follow
+}
+
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches three observed shapes:
@@ -169,21 +224,29 @@ impl HttpTransport {
         oauth_client: Option<OAuthClient>,
         protocol_version: Option<String>,
     ) -> Result<Arc<Self>> {
+        // Parse the base URL once so the redirect policy can enforce
+        // same-origin on every hop (credential-exfil guard, see
+        // `evaluate_redirect`). An unparseable base cannot function as a
+        // transport at all, so failing construction here is correct.
+        let base_origin = Url::parse(url)
+            .map_err(|e| Error::Transport(format!("Invalid transport base URL {url:?}: {e}")))?;
         let client = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(30))
             .tcp_nodelay(true)
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 {
-                    return attempt.stop();
-                }
-                if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
-                    return attempt.error(e.to_string());
-                }
-                attempt.follow()
-            }))
+            .redirect(reqwest::redirect::Policy::custom(
+                move |attempt| match evaluate_redirect(
+                    &base_origin,
+                    attempt.url(),
+                    attempt.previous().len(),
+                ) {
+                    RedirectDecision::Stop => attempt.stop(),
+                    RedirectDecision::Reject(msg) => attempt.error(msg),
+                    RedirectDecision::Follow => attempt.follow(),
+                },
+            ))
             .build()
             .map_err(|e| Error::Transport(e.to_string()))?;
 
@@ -558,11 +621,24 @@ impl HttpTransport {
         let mut buffer = String::new();
         let mut event_type: Option<String> = None;
 
+        // Bound the unparsed handshake buffer at 64 KiB. The endpoint event is
+        // a single short SSE line; complete lines are drained below, so a
+        // well-behaved backend never approaches this. A compromised/misbehaving
+        // backend streaming bytes without a newline is capped here rather than
+        // growing `buffer` without limit (trusted-backend DoS defence in depth).
+        let max_sse_handshake_buffer: usize = 64 * 1024;
+
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result
                 .map_err(|e| Error::Transport(format!("Failed to read SSE chunk: {e}")))?;
 
             buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            if buffer.len() > max_sse_handshake_buffer {
+                return Err(Error::Transport(format!(
+                    "SSE handshake exceeded {max_sse_handshake_buffer}-byte buffer without an endpoint event"
+                )));
+            }
 
             // Process complete lines in the buffer
             while let Some(newline_pos) = buffer.find('\n') {
@@ -611,21 +687,47 @@ impl HttpTransport {
         ))
     }
 
-    /// Resolve a potentially relative message URL against the SSE URL
+    /// Resolve a potentially relative message URL against the SSE URL.
+    ///
+    /// The `endpoint` value is backend-controlled (it arrives on the SSE
+    /// stream). Per the MCP SSE spec the message endpoint MUST be same-origin
+    /// as the SSE stream. Every endpoint — absolute, relative, network-path
+    /// (`//host/x`), backslash (`\\host`, `/\host`), or scheme-relative
+    /// (`https:/\/\host`) — is **resolved against the base URL first**, then the
+    /// *resolved* origin is checked. Classifying by string prefix instead
+    /// (`starts_with("http://")`) is unsafe: WHATWG URL resolution normalizes
+    /// backslashes to slashes and treats `//host` as an authority-relative
+    /// reference, so `base.join("//169.254.169.254/x")` REPLACES the authority
+    /// and yields a cross-origin URL despite not starting with a scheme. Without
+    /// checking the resolved origin, a malicious backend could return
+    /// `data: //169.254.169.254/latest/meta-data/...` and the gateway would POST
+    /// the JSON-RPC request together with the per-user identity credential
+    /// headers (`Authorization: Bearer <assertion>`, MIK-6704) to an
+    /// attacker-chosen internal / metadata host — an SSRF + credential-exfil
+    /// vector. Same-origin equality (rather than the outbound SSRF guard) is
+    /// used deliberately: legitimate MCP backends commonly bind to loopback,
+    /// which a private/loopback SSRF reject would break — the real defect is a
+    /// *cross-origin* redirect of credentials, which same-origin equality stops.
     fn resolve_message_url(&self, endpoint: &str) -> Result<String> {
-        // If endpoint is already absolute, use it directly
-        if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-            return Ok(endpoint.to_string());
-        }
-
-        // Parse the base SSE URL
         let base_url = Url::parse(&self.base_url)
             .map_err(|e| Error::Transport(format!("Invalid SSE URL: {e}")))?;
 
-        // Resolve relative URL
+        // Resolve every endpoint shape against the base, then validate the
+        // *resolved* origin. `Url::join` handles absolute and relative inputs
+        // alike, so absolute and relative branches collapse into one path — and
+        // authority-replacing shapes (`//host`, `\\host`, `https:/\/\host`) can
+        // no longer slip past a prefix-based classifier.
         let resolved = base_url
             .join(endpoint)
             .map_err(|e| Error::Transport(format!("Failed to resolve endpoint URL: {e}")))?;
+
+        if !same_origin(&base_url, &resolved) {
+            return Err(Error::Transport(
+                "SSE message endpoint is cross-origin to the SSE stream; \
+                 refusing to send credentials to a different host"
+                    .to_string(),
+            ));
+        }
 
         Ok(resolved.to_string())
     }

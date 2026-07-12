@@ -31,10 +31,8 @@
 //! ```text
 //! TunnelManager::setup_tailscale  →  tailscale CLI  →  TunnelInfo { public_url }
 //! TunnelManager::setup_pipenet    →  HTTP POST /register  →  TunnelInfo { public_url }
-//! TailscaleIdentity::from_headers →  identity extracted from request headers
 //! ```
 
-use std::collections::HashMap;
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -154,82 +152,6 @@ pub struct TunnelInfo {
     pub status: TunnelStatus,
     /// Human-readable description of the tunnel type.
     pub tunnel_type: String,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TailscaleIdentity — header extraction
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Identity injected by `tailscale serve` into proxied HTTP requests.
-///
-/// When the gateway is behind `tailscale serve`, Tailscale unconditionally
-/// adds these headers and prevents external clients from spoofing them.
-/// Enable `auth_via_identity: true` to trust them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TailscaleIdentity {
-    /// Tailscale login e-mail address (`Tailscale-User-Login`).
-    pub login: Option<String>,
-    /// Display name of the Tailscale user (`Tailscale-User-Name`).
-    pub name: Option<String>,
-    /// Tailscale profile picture URL (`Tailscale-User-Profile-Pic`).
-    pub profile_pic: Option<String>,
-}
-
-/// Header name for the Tailscale user login.
-const HEADER_USER_LOGIN: &str = "Tailscale-User-Login";
-/// Header name for the Tailscale user display name.
-const HEADER_USER_NAME: &str = "Tailscale-User-Name";
-/// Header name for the Tailscale user profile picture.
-const HEADER_USER_PROFILE_PIC: &str = "Tailscale-User-Profile-Pic";
-
-impl TailscaleIdentity {
-    /// Extract Tailscale identity from a `HashMap<String, String>` of HTTP headers.
-    ///
-    /// Header lookup is **case-insensitive** to comply with HTTP/1.1 and HTTP/2
-    /// specifications.
-    ///
-    /// Returns `None` when neither `Tailscale-User-Login` nor `Tailscale-User-Name`
-    /// are present (i.e. the request did not arrive via `tailscale serve`).
-    #[must_use]
-    pub fn from_headers(headers: &HashMap<String, String>) -> Option<Self> {
-        let login = find_header(headers, HEADER_USER_LOGIN);
-        let name = find_header(headers, HEADER_USER_NAME);
-        let profile_pic = find_header(headers, HEADER_USER_PROFILE_PIC);
-
-        if login.is_none() && name.is_none() {
-            return None;
-        }
-
-        Some(Self {
-            login,
-            name,
-            profile_pic,
-        })
-    }
-
-    /// Returns `true` when at least a login or display name was found.
-    #[must_use]
-    pub fn is_authenticated(&self) -> bool {
-        self.login.is_some() || self.name.is_some()
-    }
-
-    /// Best-effort display label for audit logs: login > name > `"<unknown>"`.
-    #[must_use]
-    pub fn display_name(&self) -> &str {
-        self.login
-            .as_deref()
-            .or(self.name.as_deref())
-            .unwrap_or("<unknown>")
-    }
-}
-
-/// Case-insensitive header lookup.
-fn find_header(headers: &HashMap<String, String>, name: &str) -> Option<String> {
-    let lower = name.to_ascii_lowercase();
-    headers
-        .iter()
-        .find(|(k, _)| k.to_ascii_lowercase() == lower)
-        .map(|(_, v)| v.clone())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -574,118 +496,6 @@ pipenet:
         assert!(cfg.pipenet.is_some());
     }
 
-    // ── TailscaleIdentity header extraction ───────────────────────────────────
-
-    fn make_headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect()
-    }
-
-    #[test]
-    fn tailscale_identity_extracts_login_and_name() {
-        let headers = make_headers(&[
-            ("Tailscale-User-Login", "alice@example.com"),
-            ("Tailscale-User-Name", "Alice Smith"),
-        ]);
-        let id = TailscaleIdentity::from_headers(&headers).unwrap();
-        assert_eq!(id.login.as_deref(), Some("alice@example.com"));
-        assert_eq!(id.name.as_deref(), Some("Alice Smith"));
-    }
-
-    #[test]
-    fn tailscale_identity_returns_none_when_no_headers() {
-        let headers = make_headers(&[("Authorization", "Bearer token123")]);
-        assert!(TailscaleIdentity::from_headers(&headers).is_none());
-    }
-
-    #[test]
-    fn tailscale_identity_present_with_login_only() {
-        let headers = make_headers(&[("Tailscale-User-Login", "bob@corp.com")]);
-        let id = TailscaleIdentity::from_headers(&headers).unwrap();
-        assert_eq!(id.login.as_deref(), Some("bob@corp.com"));
-        assert!(id.name.is_none());
-    }
-
-    #[test]
-    fn tailscale_identity_present_with_name_only() {
-        let headers = make_headers(&[("Tailscale-User-Name", "Bob Jones")]);
-        let id = TailscaleIdentity::from_headers(&headers).unwrap();
-        assert!(id.login.is_none());
-        assert_eq!(id.name.as_deref(), Some("Bob Jones"));
-    }
-
-    #[test]
-    fn tailscale_identity_case_insensitive_lookup() {
-        // HTTP headers are case-insensitive per spec
-        let headers = make_headers(&[
-            ("tailscale-user-login", "carol@example.com"),
-            ("TAILSCALE-USER-NAME", "Carol White"),
-        ]);
-        let id = TailscaleIdentity::from_headers(&headers).unwrap();
-        assert_eq!(id.login.as_deref(), Some("carol@example.com"));
-        assert_eq!(id.name.as_deref(), Some("Carol White"));
-    }
-
-    #[test]
-    fn tailscale_identity_extracts_profile_pic() {
-        let headers = make_headers(&[
-            ("Tailscale-User-Login", "dave@example.com"),
-            (
-                "Tailscale-User-Profile-Pic",
-                "https://cdn.example.com/dave.jpg",
-            ),
-        ]);
-        let id = TailscaleIdentity::from_headers(&headers).unwrap();
-        assert_eq!(
-            id.profile_pic.as_deref(),
-            Some("https://cdn.example.com/dave.jpg")
-        );
-    }
-
-    #[test]
-    fn tailscale_identity_is_authenticated_with_login() {
-        let id = TailscaleIdentity {
-            login: Some("user@example.com".to_owned()),
-            name: None,
-            profile_pic: None,
-        };
-        assert!(id.is_authenticated());
-    }
-
-    #[test]
-    fn tailscale_identity_is_not_authenticated_when_empty() {
-        let id = TailscaleIdentity::default();
-        assert!(!id.is_authenticated());
-    }
-
-    #[test]
-    fn tailscale_identity_display_name_prefers_login() {
-        let id = TailscaleIdentity {
-            login: Some("user@example.com".to_owned()),
-            name: Some("Full Name".to_owned()),
-            profile_pic: None,
-        };
-        assert_eq!(id.display_name(), "user@example.com");
-    }
-
-    #[test]
-    fn tailscale_identity_display_name_falls_back_to_name() {
-        let id = TailscaleIdentity {
-            login: None,
-            name: Some("Full Name".to_owned()),
-            profile_pic: None,
-        };
-        assert_eq!(id.display_name(), "Full Name");
-    }
-
-    #[test]
-    fn tailscale_identity_display_name_is_unknown_when_empty() {
-        let id = TailscaleIdentity::default();
-        assert_eq!(id.display_name(), "<unknown>");
-    }
-
     // ── AuthMethod and TunnelStatus serde ─────────────────────────────────────
 
     #[test]
@@ -765,13 +575,5 @@ pipenet:
         assert_eq!(info2.auth_method, info.auth_method);
         assert_eq!(info2.status, info.status);
         assert_eq!(info2.tunnel_type, info.tunnel_type);
-    }
-
-    // ── TailscaleIdentity empty map edge case ─────────────────────────────────
-
-    #[test]
-    fn tailscale_identity_from_empty_headers_returns_none() {
-        let headers: HashMap<String, String> = HashMap::new();
-        assert!(TailscaleIdentity::from_headers(&headers).is_none());
     }
 }
