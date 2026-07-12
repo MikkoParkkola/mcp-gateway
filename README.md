@@ -248,7 +248,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced. The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant; the rest are operator helpers for stats, cost report, playbooks, profile controls, disabled-capability visibility, reload, and webhook status.
+The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
 
 
 ## Security
@@ -311,6 +311,8 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 | **mTLS** | Certificate-based auth for tool execution | [CHANGELOG](CHANGELOG.md#240---2026-02-25) |
 
 ### Integration and discovery
+
+The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
 
 | Feature | Description |
 |---------|-------------|
