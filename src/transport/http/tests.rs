@@ -286,6 +286,29 @@ fn evaluate_redirect_hop_cap_stops() {
     assert_eq!(decision, RedirectDecision::Stop);
 }
 
+#[test]
+fn evaluate_redirect_cross_origin_rejected_mid_chain() {
+    // A same-origin first hop must not become a springboard for a later
+    // cross-origin pivot: every target is compared against the ORIGINAL base
+    // origin, not the immediately-preceding hop. Here the chain has already
+    // followed same-origin hops (previous_hops in 1..5) and now pivots to a
+    // public but foreign origin — it must still Reject, not Follow.
+    for previous_hops in [2, 4] {
+        let decision = evaluate_redirect(
+            &url("https://api.example.com/sse"),
+            &url("https://evil.example.com/steal"),
+            previous_hops,
+        );
+        match decision {
+            RedirectDecision::Reject(msg) => assert!(
+                msg.contains("cross-origin"),
+                "expected cross-origin rejection at hop {previous_hops}, got: {msg}"
+            ),
+            other => panic!("expected Reject at hop {previous_hops}, got {other:?}"),
+        }
+    }
+}
+
 // =========================================================================
 // get_message_url
 // =========================================================================
