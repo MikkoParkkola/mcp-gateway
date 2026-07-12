@@ -79,6 +79,30 @@ SAFE_FIELD_SUFFIXES = (
     "_fingerprint",
     "_type",
     "_types",
+    # An OAuth/RFC-8693 `scope` is a permission identifier advertised in
+    # authorization requests and consent screens (e.g. `api://backend/.default`).
+    # It is public by construction, never live credential material — unlike an
+    # access_token or client_secret. Covers `token_exchange_scope`, `oauth_scope`.
+    "_scope",
+    "_scopes",
+    # Time quantities (TTL / durations / timestamps). A `token_ttl_secs` or
+    # `token_expiry_ms` is a NUMBER, never credential material — same rationale
+    # as NUMERIC_OR_BOOL_TYPE_RE, applied by name where no type is available
+    # (e.g. structured log fields).
+    "_secs",
+    "_seconds",
+    "_ms",
+    "_millis",
+    "_ttl",
+    "_duration",
+)
+
+# Bare identifier names that are labels / counts / sizes, never secret values.
+# Used chiefly to classify the VALUE of a structured log field: logging
+# `credential = %rule.name` writes the rule's human-readable *name*, not the
+# secret bytes, so it is not a CWE-532 leak.
+SAFE_EXACT_NAMES = frozenset(
+    {"name", "names", "id", "ids", "count", "counts", "len", "length", "index"}
 )
 
 # Substring (not just suffix) exclusions: OAuth discovery metadata
@@ -138,10 +162,29 @@ LOG_MACROS = (
     "println",
     "eprintln",
     "print",
+    # `dbg!` prints its expression to stderr (Debug-formatted) — a classic
+    # accidental-leak sink left in after debugging. `panic!`/`unimplemented!`/
+    # `todo!` interpolate their format args into a panic message that lands in
+    # logs, backtraces, and crash reporters. All are CWE-532 sinks.
+    "dbg",
+    "panic",
+    "unimplemented",
+    "todo",
 )
 MACRO_CALL_RE = re.compile(r"\b(" + "|".join(LOG_MACROS) + r")!\s*\(")
 
 INLINE_CAPTURE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_.]*)(?::[^}]*)?\}")
+
+# Structured tracing field: `ident = expr`, `ident = %expr`, `ident = ?expr`
+# (Display/Debug sigils). This is the IDIOMATIC `tracing` form —
+# `warn!(access_token = %access_token, "auth failed")` — and is the dominant
+# real-world leak vector the bare-positional scan was blind to. The `=(?![=>])`
+# guard rejects `==` comparisons and `=>` match arms; `!=`/`<=`/`>=` never
+# match because their leading punctuation is not part of the field-name class.
+# re.S so a value spanning physical lines (multiline macro call) still parses.
+STRUCTURED_FIELD_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_.]*)\s*=(?![=>])\s*(.*)$", re.S
+)
 
 # A "bare" argument: an identifier or a simple field-access / method chain
 # with only no-op accessors, e.g. `token`, `self.bearer_token`,
@@ -171,6 +214,8 @@ class Finding:
 
 def is_safe_by_name(name: str) -> bool:
     lname = name.lower()
+    if lname in SAFE_EXACT_NAMES:
+        return True
     if any(lname.endswith(suf) for suf in SAFE_FIELD_SUFFIXES):
         return True
     if any(sub in lname for sub in SAFE_FIELD_CONTAINS):
@@ -215,14 +260,30 @@ def scan_struct_debug(path: str, lines: list[str], manual_impls: set[str]) -> li
     i = 0
     while i < n:
         line = lines[i]
-        dm = DERIVE_RE.search(line)
+        # A `#[derive(...)]` attribute may span multiple physical lines:
+        #   #[derive(
+        #       Debug,
+        #       Clone,
+        #   )]
+        # Accumulate lines until the closing `)]` so the multiline form is
+        # parsed as one derive. `[^)]` already spans newlines in DERIVE_RE.
+        dm = None
+        derive_end_idx = i
+        if "#[derive(" in line:
+            combined = line
+            k = i
+            while ")]" not in combined and k + 1 < n and k < i + 12:
+                k += 1
+                combined += "\n" + lines[k]
+            derive_end_idx = k
+            dm = DERIVE_RE.search(combined)
         if dm and "Debug" in [p.strip() for p in dm.group(1).split(",")]:
             derive_line_idx = i
             # Walk forward past any further attributes/doc comments to the
             # struct declaration.
-            j = i + 1
+            j = derive_end_idx + 1
             struct_name = None
-            while j < n and j < i + 12:
+            while j < n and j < derive_end_idx + 12:
                 sm = STRUCT_RE.search(lines[j])
                 if sm:
                     struct_name = sm.group(1)
@@ -376,6 +437,69 @@ def is_bare_secret_arg(arg: str) -> str | None:
     return None
 
 
+def is_string_literal(arg: str) -> bool:
+    """True if `arg` is a Rust string literal we should scan for inline
+    `{ident}` captures: plain `"..."`, raw `r"..."`, or raw-hash
+    `r#"..."#` / `r##"..."##` forms."""
+    a = arg.lstrip()
+    if a.startswith('"') or a.startswith('r"'):
+        return True
+    # r#"..."#, r##"..."##, ...
+    return bool(re.match(r'r#+"', a))
+
+
+def parse_structured_field(arg: str) -> tuple[str, str] | None:
+    """Parse an idiomatic `tracing` structured field argument.
+
+    Handles `ident = expr`, `ident = %expr`, `ident = ?expr`, and the
+    sigil-shorthand forms `%ident` / `?ident` (where the field name is the
+    identifier itself). Returns `(field_name, value_expr)` with any leading
+    `%`/`?` sigil stripped from the value, or None if `arg` is not a
+    structured field.
+    """
+    arg = arg.strip()
+    if not arg:
+        return None
+    # Sigil-shorthand: `%token` / `?token` — field name is the identifier.
+    if arg[0] in ("%", "?"):
+        inner = arg[1:].strip()
+        # Only shorthand if there's no explicit `=` (that case is handled by
+        # STRUCTURED_FIELD_RE below via the `ident = %expr` form).
+        if inner and STRUCTURED_FIELD_RE.match(inner) is None:
+            return inner, inner
+        return None
+    m = STRUCTURED_FIELD_RE.match(arg)
+    if not m:
+        return None
+    name = m.group(1)
+    value = m.group(2).strip()
+    if value[:1] in ("%", "?"):
+        value = value[1:].strip()
+    return name, value
+
+
+def value_is_provably_safe(value: str) -> bool:
+    """True if a structured-field VALUE cannot carry a secret: a numeric /
+    bool literal, or a bare accessor whose tail is a label/count/duration
+    (e.g. `rule.name`, `injected_names`, `token_ttl_secs`). What reaches the
+    log sink is the value; a benign value means no CWE-532 leak even when the
+    field NAME is secret-shaped. A value that is an expression / call / bare
+    secret ident is NOT provably safe and remains subject to the name check."""
+    v = value.strip()
+    if not v:
+        return True
+    if re.match(r"^-?\d", v) or v in ("true", "false"):
+        return True
+    # Terminal count / emptiness accessors return a number or bool, never a
+    # plaintext secret: `config.secrets.len()`, `rules.count()`, `.is_empty()`.
+    if re.search(r"\.(len|count|is_empty|size|capacity)\(\)\s*$", v):
+        return True
+    m = BARE_TAIL_RE.match(v)
+    if m and is_safe_by_name(m.group(1)):
+        return True
+    return False
+
+
 def scan_log_macros(path: str, lines: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     # Join with a joined-text + per-char line map so a macro call spanning
@@ -410,25 +534,44 @@ def scan_log_macros(path: str, lines: list[str]) -> list[Finding]:
         if not args:
             continue
 
-        # First arg is conventionally the format string for these macros.
-        fmt_arg = args[0]
-        rest_args = args[1:]
-
         flagged_names: list[str] = []
 
-        if fmt_arg.startswith('"') or fmt_arg.startswith('r"'):
-            for cm in INLINE_CAPTURE_RE.finditer(fmt_arg):
-                ident = cm.group(1).split(".")[-1]
-                if SECRET_RE.search(ident) and not is_safe_by_name(ident):
-                    flagged_names.append(ident)
-        else:
-            # No literal format string (e.g. a single non-string arg to
-            # println!-style macros isn't valid Rust, but be defensive).
-            bare = is_bare_secret_arg(fmt_arg)
-            if bare:
-                flagged_names.append(bare)
+        for a in args:
+            # 1. Idiomatic tracing structured field: `ident = [%|?]? expr`.
+            field = parse_structured_field(a)
+            if field is not None:
+                fname, fval = field
+                short = fname.split(".")[-1]
+                # A bare secret-named VALUE is always a leak (the secret bytes
+                # reach the sink): `access_token = %access_token`.
+                bare = is_bare_secret_arg(fval)
+                if bare:
+                    flagged_names.append(bare)
+                    continue
+                # Otherwise flag on the field NAME — but only when the value is
+                # not provably a benign label/count/duration. This catches a
+                # secret assigned from an expression (`token = %get_token()`)
+                # while sparing audit logs of labels (`credential = %rule.name`,
+                # `token_ttl_secs = <number>`), where the logged value carries
+                # no secret.
+                if (
+                    SECRET_RE.search(fname)
+                    and not is_safe_by_name(short)
+                    and not value_is_provably_safe(fval)
+                ):
+                    flagged_names.append(fname)
+                continue
 
-        for a in rest_args:
+            # 2. String literal (incl. raw `r"..."` / `r#"..."#`): scan for
+            #    inline `{ident}` format captures.
+            if is_string_literal(a):
+                for cm in INLINE_CAPTURE_RE.finditer(a):
+                    ident = cm.group(1).split(".")[-1]
+                    if SECRET_RE.search(ident) and not is_safe_by_name(ident):
+                        flagged_names.append(ident)
+                continue
+
+            # 3. Bare positional argument.
             bare = is_bare_secret_arg(a)
             if bare:
                 flagged_names.append(bare)
@@ -450,10 +593,11 @@ def scan_log_macros(path: str, lines: list[str]) -> list[Finding]:
 
 
 def scan_file(path: Path) -> list[Finding]:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        return []
+    # Fail CLOSED: read errors propagate to the caller so an unreadable /
+    # undecodable file becomes a non-zero outcome, never a silent "clean"
+    # result. A file the gate cannot inspect is treated as a gate failure,
+    # not as an absence of secrets.
+    text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     manual_impls = find_manual_debug_impls(lines)
     findings = scan_struct_debug(str(path), lines, manual_impls)
@@ -498,8 +642,25 @@ def main(argv: list[str]) -> int:
         return 2
 
     all_findings: list[Finding] = []
+    read_errors: list[tuple[str, str]] = []
     for f in files:
-        all_findings.extend(scan_file(f))
+        try:
+            all_findings.extend(scan_file(f))
+        except (UnicodeDecodeError, OSError) as exc:
+            read_errors.append((str(f), f"{type(exc).__name__}: {exc}"))
+
+    # Fail CLOSED before any clean/finding reporting: a file the gate could
+    # not read might be exactly where a secret hides. Exit 2 (internal error).
+    if read_errors:
+        print(
+            f"cwe532-leak-lint: {len(read_errors)} file(s) could not be read — "
+            "failing closed (a file the gate cannot inspect is a gate failure, "
+            "not a clean result):",
+            file=sys.stderr,
+        )
+        for p, err in read_errors:
+            print(f"  {p}: {err}", file=sys.stderr)
+        return 2
 
     if not all_findings:
         print(f"cwe532-leak-lint: clean ({len(files)} files scanned, 0 findings)")
