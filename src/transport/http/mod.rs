@@ -33,6 +33,15 @@ use crate::protocol::{
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
+/// Origin equality per WHATWG (scheme + host + effective port). Used to enforce
+/// that an SSE-advertised message endpoint is same-origin as the SSE stream
+/// before any per-user credential is sent to it (SSRF + credential-exfil guard).
+fn same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
 /// Matches three observed shapes:

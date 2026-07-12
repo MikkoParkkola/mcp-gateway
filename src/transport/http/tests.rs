@@ -123,10 +123,18 @@ fn parse_supported_versions_empty_after_colon() {
 // =========================================================================
 
 #[test]
-fn resolve_message_url_absolute_http() {
+fn resolve_message_url_absolute_cross_origin_rejected() {
+    // A backend-advertised absolute endpoint on a different origin than the SSE
+    // stream must be rejected: sending per-user credentials there is the SSRF +
+    // credential-exfil vector this guard closes.
     let t = make_transport("http://localhost:8080/sse");
-    let result = t.resolve_message_url("http://other:9090/messages").unwrap();
-    assert_eq!(result, "http://other:9090/messages");
+    let err = t
+        .resolve_message_url("http://other:9090/messages")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("cross-origin"),
+        "expected cross-origin rejection, got: {err}"
+    );
 }
 
 #[test]
