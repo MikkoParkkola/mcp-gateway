@@ -216,10 +216,11 @@ mod identity_propagation_audit {
     }
 
     // A disabled transparency log (`logger = None`) must not panic and
-    // must not create a log file — pure no-op.
+    // must not create a log file — pure no-op success, not a failure (the
+    // mint path must not be blocked when no transparency log is configured).
     #[test]
     fn audit_identity_propagation_is_noop_when_logger_disabled() {
-        audit_identity_propagation(
+        let result = audit_identity_propagation(
             None,
             "idp_mint",
             "unauthenticated",
@@ -227,6 +228,7 @@ mod identity_propagation_audit {
             Some("https://aud.test.invalid"),
             None,
         );
+        assert_eq!(result, Ok(()));
     }
 
     // IDP4.1 — a successful mint records `action="idp_mint"` with subject,
@@ -237,7 +239,7 @@ mod identity_propagation_audit {
         let id = identity("alice");
         let subject = audit_subject(Some(&id));
 
-        audit_identity_propagation(
+        let result = audit_identity_propagation(
             Some(&logger),
             "idp_mint",
             &subject,
@@ -245,6 +247,7 @@ mod identity_propagation_audit {
             Some("https://github.test.invalid/api"),
             None,
         );
+        assert_eq!(result, Ok(()));
 
         let entries = read_entries(file.path());
         assert_eq!(entries.len(), 1);
@@ -265,7 +268,7 @@ mod identity_propagation_audit {
         let (file, logger) = open_logger();
         let subject = audit_subject(None);
 
-        audit_identity_propagation(
+        let result = audit_identity_propagation(
             Some(&logger),
             "idp_refuse",
             &subject,
@@ -276,6 +279,7 @@ mod identity_propagation_audit {
                      no passthrough credential (ADR-008 D.3, fail-closed)",
             ),
         );
+        assert_eq!(result, Ok(()));
 
         let entries = read_entries(file.path());
         assert_eq!(entries.len(), 1);
@@ -355,7 +359,8 @@ mod identity_propagation_audit {
             "backend-a",
             Some(audience),
             None,
-        );
+        )
+        .expect("mint audit write succeeds");
         // A refuse: the reason string is a fixed fail-closed message, never
         // the credential the caller failed to supply.
         audit_identity_propagation(
@@ -365,7 +370,8 @@ mod identity_propagation_audit {
             "backend-b",
             Some("https://backend-b.test.invalid"),
             Some("identity propagation required but no credential was supplied"),
-        );
+        )
+        .expect("refuse audit write succeeds");
 
         let raw = std::fs::read_to_string(file.path()).expect("log file readable");
         assert!(
@@ -399,6 +405,99 @@ mod identity_propagation_audit {
         }
         assert_eq!(entries[0]["action"], "idp_mint");
         assert_eq!(entries[1]["action"], "idp_refuse");
+    }
+
+    // Fail-closed hardening: a genuine transparency-log write failure MUST
+    // surface as `Err(PropagationError::AuditFailed)` from this hand-duplicated
+    // copy too — never be swallowed. Mirrors
+    // `identity_propagation::tests::audit_fail_closed::mint_write_failure_is_fail_closed`.
+    //
+    // Failure-injection technique: POSIX only checks file permissions at
+    // `open(2)`, not at each `write(2)` (verified empirically — chmod/`chflags
+    // uchg` on an already-open fd do NOT make subsequent writes fail on
+    // macOS/Linux). A real write failure is forced with `RLIMIT_FSIZE=0`
+    // (every write becomes `EFBIG`), which is process-wide and would corrupt
+    // any other test in this binary that touches a file concurrently — so the
+    // limited write happens in a *child process* only. A POSIX shell wrapper
+    // (`ulimit -f 0; trap '' XFSZ; exec ...`) sets the limit and ignores
+    // `SIGXFSZ` (default disposition kills the process) before re-`exec`ing
+    // this exact test binary/test with an env var that makes the child branch
+    // run the actual assertion and report its outcome over stdout — no
+    // `unsafe` code, no new dependency, isolated to the child only. Unix-only
+    // (the technique is POSIX shell + rlimit).
+    #[cfg(unix)]
+    #[test]
+    fn mint_write_failure_is_fail_closed() {
+        const ENV_VAR: &str = "IDP_AUDIT_FSIZE_CHILD_PATH_BACKEND_HANDLERS";
+        const MARK_OK: &str = "AUDIT_WRITE_FAILED_AS_EXPECTED";
+        const TEST_PATH: &str = "gateway::router::backend_handlers::tests::\
+             identity_propagation_audit::mint_write_failure_is_fail_closed";
+
+        if let Ok(path) = std::env::var(ENV_VAR) {
+            // Child process: RLIMIT_FSIZE=0 + SIGXFSZ ignored are already
+            // active (set by the parent's shell wrapper below), so any write
+            // here returns `Err` (`EFBIG`), never panics/aborts.
+            let cfg = Arc::new(TransparencyLogConfig {
+                enabled: true,
+                path,
+                key_id: "test".to_string(),
+                shared_secret: String::new(),
+            });
+            // `open()` performs no write (only reads an existing tail, if
+            // any), so it must still succeed under the zero file-size limit —
+            // only the append write below is expected to fail.
+            let logger =
+                TransparencyLogger::open(cfg).expect("open() writes nothing, must succeed");
+            let result = audit_identity_propagation(
+                Some(&logger),
+                "idp_mint",
+                "alice",
+                "github",
+                Some("https://github.test.invalid/api"),
+                None,
+            );
+            match result {
+                Err(crate::identity_propagation::PropagationError::AuditFailed(_)) => {
+                    println!("{MARK_OK}");
+                }
+                other => println!("UNEXPECTED_RESULT:{other:?}"),
+            }
+            return;
+        }
+
+        // Parent: re-exec this exact test in an RLIMIT_FSIZE=0 child and
+        // assert on what it observed.
+        let exe = std::env::current_exe().expect("current test binary path");
+        let file = NamedTempFile::new().expect("tempfile");
+        let path = file.path().to_string_lossy().to_string();
+        let script =
+            format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .arg(&exe)
+            .env(ENV_VAR, &path)
+            .output()
+            .expect("spawn fsize-limited child process");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(MARK_OK),
+            "child did not observe a fail-closed AuditFailed error \
+             (status={:?}, stdout={stdout}, stderr={})",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The child must also EXIT cleanly: a child that prints the marker and
+        // then aborts (panic/abort after the observation) must not read as a
+        // pass.
+        assert!(
+            output.status.success(),
+            "child printed the marker but did not exit successfully \
+             (status={:?}, stderr={})",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 

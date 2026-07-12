@@ -295,12 +295,28 @@ fn audit_subject(verified_identity: Option<&crate::key_server::oidc::VerifiedIde
 /// [`crate::security::TransparencyLogger::append_event`] — never the resolved
 /// credential header value or a raw assertion.
 ///
-/// ponytail: audit is best-effort, not fail-closed — a write failure is
-/// `warn!`'d and the caller's request proceeds/fails on its own merits,
-/// mirroring how `TransparencyLogger::log_invocation` failures are handled
-/// elsewhere in the gateway. A regulated buyer that needs "no mint without a
-/// durable audit record" would need this gated fail-closed instead; tracked
-/// as a possible future hardening, not required for MIK-6740.
+/// ponytail: duplicate of `identity_propagation::audit_identity_propagation`;
+/// kept in place to avoid a large-deletion refactor — dedup is follow-up debt.
+///
+/// Fail-closed hardening (mirrors `identity_propagation::audit_identity_propagation`,
+/// MIK-6740 hardening carried forward to this hand-duplicated copy): a
+/// transparency-log write failure is no longer swallowed. It is `warn!`'d AND
+/// returned as `Err(PropagationError::AuditFailed)`.
+///
+/// - **`idp_mint` callers MUST fail-closed**: propagate the `Err` and abort
+///   the mint/request. No mint without a durable audit record.
+/// - **`idp_refuse` callers**: the request is already being refused on other
+///   grounds, so the `Err` does not need to change the outcome, but MUST NOT
+///   be silently dropped (log via `tracing::warn!`).
+///
+/// `logger = None` (transparency log disabled) is `Ok(())` — a no-op, not a
+/// failure.
+///
+/// # Errors
+/// [`crate::identity_propagation::PropagationError::AuditFailed`] when
+/// [`crate::security::TransparencyLogger::append_event`] fails (e.g. disk
+/// full, permission revoked, filesystem gone read-only underneath the
+/// gateway).
 fn audit_identity_propagation(
     logger: Option<&crate::security::TransparencyLogger>,
     action: &'static str,
@@ -308,9 +324,9 @@ fn audit_identity_propagation(
     backend: &str,
     audience: Option<&str>,
     reason: Option<&str>,
-) {
+) -> Result<(), crate::identity_propagation::PropagationError> {
     let Some(logger) = logger else {
-        return;
+        return Ok(());
     };
 
     let mut fields = serde_json::Map::new();
@@ -325,13 +341,17 @@ fn audit_identity_propagation(
         fields.insert("reason".into(), reason.into());
     }
 
-    if let Err(e) = logger.append_event(fields) {
+    logger.append_event(fields).map(|_| ()).map_err(|e| {
         warn!(
             backend,
             action, error = %e,
-            "Failed to write identity-propagation audit entry (transparency log)"
+            "Failed to write identity-propagation audit entry (transparency log); \
+             fail-closed on idp_mint"
         );
-    }
+        crate::identity_propagation::PropagationError::AuditFailed(format!(
+            "transparency-log write failed for action '{action}' on backend '{backend}': {e}"
+        ))
+    })
 }
 
 /// Resolve just the identity-key session-bucket binding for a notification
@@ -583,26 +603,81 @@ pub(super) async fn backend_handler(
                 // unchanged static-credential fallback (IDP.5), not a mint —
                 // only audit when a per-user credential was actually attached.
                 if !headers.is_empty() {
-                    audit_identity_propagation(
+                    // Fail-closed hardening: a minted credential must never
+                    // reach the caller without a durable audit record, so an
+                    // audit-write failure here aborts the mint instead of
+                    // proceeding with the headers below (mirrors
+                    // `identity_propagation::mod.rs`'s `resolve_caller_credential`).
+                    //
+                    // Operator-misconfig fail-OPEN guard: the audit helper
+                    // treats a missing logger (`None`) as a no-op `Ok(())`. On a
+                    // `required` backend that would ship a per-user credential
+                    // with NO audit record. When propagation is REQUIRED for
+                    // this backend but no transparency log is configured, fail
+                    // closed on the same error path as an audit-write failure.
+                    // (Non-required backends keep the best-effort `None -> Ok`.)
+                    let required = idp_cfg.as_ref().is_some_and(|c| c.required);
+                    if required && state.transparency_log.is_none() {
+                        warn!(
+                            backend = %name,
+                            "identity-propagation required but no transparency log is \
+                             configured; refusing to mint without a durable audit record"
+                        );
+                        return build_http_error_response(
+                            Some(id.clone()),
+                            -32603,
+                            // CWE-209: generic client-facing message; the
+                            // operational detail stays in the server log above.
+                            "identity-propagation audit unavailable".to_string(),
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                        );
+                    }
+                    if let Err(audit_err) = audit_identity_propagation(
                         state.transparency_log.as_deref(),
                         "idp_mint",
                         &subject,
                         &name,
                         audience,
                         None,
-                    );
+                    ) {
+                        // CWE-209: the audit error can carry the transparency-log
+                        // filesystem path / IO error. Keep it in the server log
+                        // only; return a generic client-facing message.
+                        warn!(
+                            backend = %name,
+                            error = %audit_err,
+                            "identity-propagation mint audit write failed; failing closed"
+                        );
+                        return build_http_error_response(
+                            Some(id.clone()),
+                            -32603,
+                            "identity-propagation audit unavailable".to_string(),
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                        );
+                    }
                 }
                 headers
             }
             Err(e) => {
-                audit_identity_propagation(
+                // The request is already being refused on identity-propagation
+                // grounds; an audit-write failure here does not change that
+                // outcome (unlike the mint path above, which is fail-closed on
+                // the audit write itself) — but it must not be silently
+                // dropped, so it is logged.
+                if let Err(audit_err) = audit_identity_propagation(
                     state.transparency_log.as_deref(),
                     "idp_refuse",
                     &subject,
                     &name,
                     audience,
                     Some(&e),
-                );
+                ) {
+                    warn!(
+                        backend = %name,
+                        error = %audit_err,
+                        "identity-propagation refuse audit write failed"
+                    );
+                }
                 return build_http_error_response(
                     Some(id.clone()),
                     -32003,
