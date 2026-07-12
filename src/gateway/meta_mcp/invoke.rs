@@ -3132,6 +3132,16 @@ mod identity_propagation_enforcement_tests {
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
+        // The child must also EXIT cleanly: a child that prints the marker and
+        // then aborts (panic/abort after the observation) must not read as a
+        // pass. Mirrors the two sibling fail-closed subprocess tests.
+        assert!(
+            output.status.success(),
+            "child printed the marker but did not exit successfully \
+             (status={:?}, stderr={})",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[tokio::test]
