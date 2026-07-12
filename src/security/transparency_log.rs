@@ -79,7 +79,7 @@ const MAX_TAIL_SCAN_BYTES: u64 = 4 * 1024 * 1024;
 ///
 /// Serialisation lives in `src/config/features/security.rs` alongside the
 /// other security configs; this struct is the "resolved" in-memory copy.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TransparencyLogConfig {
     /// Enable the transparency log.  Default: `false` (opt-in).
     pub enabled: bool,
@@ -90,6 +90,27 @@ pub struct TransparencyLogConfig {
     /// HMAC shared secret.  When empty, the `sig` / `key_id` fields are
     /// omitted from each entry (hash chain still provides tamper evidence).
     pub shared_secret: String,
+}
+
+// Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
+// #323). A derived `Debug` would print the resolved signing secret verbatim
+// into any trace or error context; only its presence is surfaced.
+impl std::fmt::Debug for TransparencyLogConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransparencyLogConfig")
+            .field("enabled", &self.enabled)
+            .field("path", &self.path)
+            .field("key_id", &self.key_id)
+            .field(
+                "shared_secret",
+                &if self.shared_secret.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .finish()
+    }
 }
 
 impl Default for TransparencyLogConfig {
@@ -1293,5 +1314,28 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         let ok = bounded_read_to_string(tmp.path(), 200).unwrap();
         assert_eq!(ok.len(), 100);
+    }
+}
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // The resolved in-memory TransparencyLogConfig::Debug must never surface
+    // the HMAC shared secret.
+    #[test]
+    fn transparency_log_config_debug_redacts_shared_secret() {
+        let cfg = TransparencyLogConfig {
+            shared_secret: SENTINEL.to_string(),
+            ..TransparencyLogConfig::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked shared_secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
     }
 }

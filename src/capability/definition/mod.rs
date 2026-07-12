@@ -734,7 +734,7 @@ pub struct WebhookTransform {
 }
 
 /// Webhook endpoint definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookDefinition {
     /// URL path relative to `base_path` (e.g., "/linear/webhook")
     pub path: String,
@@ -753,6 +753,23 @@ pub struct WebhookDefinition {
     /// Payload transform configuration
     #[serde(default)]
     pub transform: WebhookTransform,
+}
+
+// Manual `Debug` that redacts the HMAC verification secret (CWE-532, mirrors
+// PR #323). A derived `Debug` would print the webhook `secret` verbatim into
+// any trace or error context; only its presence is surfaced.
+impl std::fmt::Debug for WebhookDefinition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("WebhookDefinition")
+            .field("path", &self.path)
+            .field("method", &self.method)
+            .field("secret", &redact_opt(&self.secret))
+            .field("signature_header", &self.signature_header)
+            .field("notify", &self.notify)
+            .field("transform", &self.transform)
+            .finish()
+    }
 }
 
 fn default_notify() -> bool {
@@ -997,3 +1014,33 @@ impl CapabilityDefinition {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // WebhookDefinition::Debug must never surface the HMAC verification secret.
+    #[test]
+    fn webhook_definition_debug_redacts_secret() {
+        let w = WebhookDefinition {
+            path: "/linear/webhook".to_string(),
+            method: "POST".to_string(),
+            secret: Some(SENTINEL.to_string()),
+            signature_header: Some("X-Linear-Signature".to_string()),
+            notify: true,
+            transform: WebhookTransform::default(),
+        };
+        let dbg = format!("{w:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked webhook secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+        assert!(
+            dbg.contains("/linear/webhook"),
+            "path should stay visible: {dbg}"
+        );
+    }
+}

@@ -24,7 +24,7 @@ pub use crate::security::remote_provenance::RemoteServerSigningConfig;
 ///     shared_secret: "${MCP_GATEWAY_TRANSPARENCY_SECRET}"
 ///     key_id: "v1"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TransparencyLogConfig {
     /// Enable the transparency log. Default: `false` (opt-in).
@@ -38,6 +38,27 @@ pub struct TransparencyLogConfig {
     /// When empty, `sig` / `key_id` are omitted from each entry — the hash
     /// chain alone still provides tamper evidence.
     pub shared_secret: String,
+}
+
+// Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
+// #323). A derived `Debug` would print the signing secret verbatim into any
+// trace or error context; only its presence is surfaced.
+impl std::fmt::Debug for TransparencyLogConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransparencyLogConfig")
+            .field("enabled", &self.enabled)
+            .field("path", &self.path)
+            .field("key_id", &self.key_id)
+            .field(
+                "shared_secret",
+                &if self.shared_secret.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .finish()
+    }
 }
 
 impl Default for TransparencyLogConfig {
@@ -70,7 +91,7 @@ impl Default for TransparencyLogConfig {
 ///     replay_window: 300
 ///     key_id: "default"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MessageSigningConfig {
     /// Enable message signing. Default: `false` (opt-in).
@@ -89,6 +110,30 @@ pub struct MessageSigningConfig {
     pub replay_window: u64,
     /// Key identifier included in `_signature.key_id` for rotation tracking.
     pub key_id: String,
+}
+
+// Manual `Debug` that redacts both HMAC signing secrets (CWE-532, mirrors PR
+// #323). A derived `Debug` would print the current and previous signing
+// material verbatim — leaking either lets an attacker forge signed responses.
+// Only secret presence is surfaced.
+impl std::fmt::Debug for MessageSigningConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact = |s: &str| {
+            if s.is_empty() {
+                "<empty>"
+            } else {
+                "<redacted>"
+            }
+        };
+        f.debug_struct("MessageSigningConfig")
+            .field("enabled", &self.enabled)
+            .field("shared_secret", &redact(&self.shared_secret))
+            .field("previous_secret", &redact(&self.previous_secret))
+            .field("require_nonce", &self.require_nonce)
+            .field("replay_window", &self.replay_window)
+            .field("key_id", &self.key_id)
+            .finish()
+    }
 }
 
 impl Default for MessageSigningConfig {
@@ -425,6 +470,45 @@ mod context_integrity_config_tests {
         assert_eq!(
             policy.effective_mode(),
             ContextIntegrityPolicyMode::MonitorOnly
+        );
+    }
+}
+
+#[cfg(test)]
+mod cwe532_debug_redaction {
+    use super::*;
+
+    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
+
+    // TransparencyLogConfig::Debug must never surface the HMAC shared secret.
+    #[test]
+    fn transparency_log_config_debug_redacts_shared_secret() {
+        let cfg = TransparencyLogConfig {
+            shared_secret: SENTINEL.to_string(),
+            ..TransparencyLogConfig::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked shared_secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
+        );
+    }
+
+    // MessageSigningConfig::Debug must redact both the current and previous
+    // rotation secrets.
+    #[test]
+    fn message_signing_config_debug_redacts_both_secrets() {
+        let cfg = MessageSigningConfig {
+            shared_secret: SENTINEL.to_string(),
+            previous_secret: format!("{SENTINEL}-prev"),
+            ..MessageSigningConfig::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains(SENTINEL), "leaked signing secret: {dbg}");
+        assert!(
+            dbg.contains("<redacted>"),
+            "missing redaction marker: {dbg}"
         );
     }
 }

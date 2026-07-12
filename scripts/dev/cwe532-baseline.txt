@@ -1,0 +1,20 @@
+# cwe532-leak-lint baseline — CLEAN RATCHET AT ZERO.
+#
+# This file intentionally contains ZERO entries. It is retained (not deleted)
+# so the gate still loads a baseline and the ratchet stays wired: any NEW
+# secret-shaped Debug-derived field or secret-shaped log/trace value, anywhere,
+# fails the build immediately.
+#
+# History: this baseline once grandfathered 21 pre-existing (file, struct,
+# field) triples — genuine CWE-532 risks that PR #323 (fix(security): redact
+# credentials from Debug output) had not yet reached. All 21 have since been
+# remediated with manual `impl std::fmt::Debug` redactions that mask the secret
+# field(s) while keeping non-secret fields visible (same pattern as PR #323 in
+# gateway/auth.rs, security/message_signing.rs, oauth/storage.rs). The baseline
+# was then emptied — the honest end state: no real secret is `ci-allow`-ed as a
+# false positive, and no debt is parked here.
+#
+# Do NOT add entries to re-grandfather new findings. Fix the code instead: give
+# the struct a manual redacting `impl Debug`, or — only for a provable false
+# positive — annotate the site with `// ci-allow-secret-debug: <reason>` /
+# `// ci-allow-secret-log: <reason>`.
