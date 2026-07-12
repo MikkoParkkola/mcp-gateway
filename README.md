@@ -248,7 +248,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant. The README benchmark scenario also surfaces stats, cost report, playbooks, profile controls, disabled-capability visibility, and reload for a 15-tool surface. Surfacing webhook status adds the 16th tool.
+The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced. The base discovery quartet (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`, `gateway_invoke`) stays constant; the rest are operator helpers for stats, cost report, playbooks, profile controls, disabled-capability visibility, reload, and webhook status.
 
 
 ## Security
