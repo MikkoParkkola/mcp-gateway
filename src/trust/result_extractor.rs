@@ -33,10 +33,12 @@
 //! - **`github_search_repos`** — GitHub's `/search/repositories` response
 //!   carries a server-computed `total_count` (the exact number of matching
 //!   repositories) alongside `incomplete_results`. `total_count == 0` is an
-//!   authoritative empty; `incomplete_results == true` means GitHub's search
-//!   did not finish, so the count is *not* authoritative and the extractor
-//!   yields [`None`] (could-not-check). This is the one strong candidate the
-//!   MIK-6914 catalog survey identified.
+//!   authoritative empty; `total_count` is trusted *only* when
+//!   `incomplete_results` is explicitly `false` — a positive completion
+//!   signal, not merely the absence of `true`. A missing, `null`, or
+//!   otherwise malformed `incomplete_results` field abstains rather than
+//!   assume completeness. This is the one strong candidate the MIK-6914
+//!   catalog survey identified.
 
 use serde_json::Value;
 
@@ -98,21 +100,28 @@ fn unwrap_payload(result: &Value) -> Option<Value> {
 
 /// Read GitHub's authoritative `total_count` from a search payload.
 ///
-/// `incomplete_results == true` means GitHub's search timed out before
-/// completing, so neither `total_count` nor `items` is authoritative — the
-/// extractor yields [`None`] (could-not-check), never a partial count dressed
-/// up as ground truth. Otherwise a numeric `total_count` (including `0`, an
-/// authoritative empty) is returned verbatim.
+/// `total_count` is trusted **only** when `incomplete_results` is present and
+/// explicitly `false` — a positive statement from GitHub that the search
+/// completed. Any other shape of that field (`true`, missing, `null`, or a
+/// non-boolean value) means completeness was never confirmed, so the count is
+/// *not* authoritative and the extractor yields [`None`] (could-not-check).
+/// Checking for the affirmative `Some(false)` rather than merely rejecting
+/// `Some(true)` matters: a malformed, truncated, or schema-drifted payload
+/// that simply lacks the field must abstain, not silently fall through to
+/// treating an unconfirmed count as ground truth. Otherwise a numeric
+/// `total_count` (including `0`, an authoritative empty) is returned verbatim.
 ///
 /// If a future projection ever wraps the payload, the untouched backend body is
 /// preserved under `_raw` (the [`crate::projection`] contract); the count is
 /// read from there when the top level does not carry it.
 fn github_search_row_count(payload: &Value) -> Option<u64> {
     let body = github_body(payload);
-    if body.get("incomplete_results").and_then(Value::as_bool) == Some(true) {
-        return None;
+    match body.get("incomplete_results").and_then(Value::as_bool) {
+        Some(false) => body.get("total_count").and_then(Value::as_u64),
+        // `Some(true)` (search timed out), missing, `null`, or non-boolean:
+        // completeness was never confirmed, so the count cannot be trusted.
+        _ => None,
     }
-    body.get("total_count").and_then(Value::as_u64)
 }
 
 /// Choose the object that actually carries `total_count`: the payload itself
@@ -217,6 +226,29 @@ mod tests {
     #[test]
     fn github_payload_without_total_count_abstains() {
         let result = structured(json!({ "items": [{}, {}], "message": "rate limited" }));
+        assert_eq!(extract_row_count("caps", GH, &result, true), None);
+    }
+
+    /// GPT-5-Codex adversarial review (MIK-6914 PR #375, Q2): a payload that
+    /// carries `total_count` but omits `incomplete_results` entirely must
+    /// abstain, not silently treat an unconfirmed-completeness response as
+    /// authoritative. Checking for the affirmative `Some(false)` (not merely
+    /// rejecting `Some(true)`) is what closes this gap — a schema-drifted or
+    /// malformed payload that simply lacks the field is exactly the case the
+    /// MIK-5854 stop-line exists to catch.
+    #[test]
+    fn github_missing_incomplete_results_flag_abstains() {
+        let result = structured(json!({ "total_count": 42, "items": [{}, {}] }));
+        assert_eq!(extract_row_count("caps", GH, &result, true), None);
+    }
+
+    /// Same gap, `null` instead of a missing field — `as_bool()` returns
+    /// `None` for a non-boolean JSON value, so this must abstain too.
+    #[test]
+    fn github_null_incomplete_results_flag_abstains() {
+        let result = structured(json!({
+            "total_count": 42, "incomplete_results": null, "items": [{}, {}]
+        }));
         assert_eq!(extract_row_count("caps", GH, &result, true), None);
     }
 
