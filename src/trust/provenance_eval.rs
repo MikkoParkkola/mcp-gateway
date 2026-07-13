@@ -168,6 +168,64 @@ pub fn replay(cases: &[ReplayCase], validator: &AttestationValidator) -> EvalRep
     report
 }
 
+/// One line of an offline provenance-eval corpus (MIK-6908, rung 3): the
+/// claim under scrutiny, the signed receipt it should be judged against, and
+/// the `call_id` join key that binds the two together.
+///
+/// A corpus is assembled from two independently sourced streams — an agent's
+/// rendered claims and the gateway's signed receipt log — so nothing
+/// guarantees they arrive pre-zipped in the right order. `call_id` is the
+/// join key [`super::result_provenance::RuntimeProvenanceReceipt::call_id`]
+/// exists for: [`score_corpus`] enforces it explicitly rather than trusting
+/// positional alignment between the two streams.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorpusRecord {
+    /// The call this record is about. Must equal the `call_id` carried
+    /// inside `receipt.receipt` for the record to be scored — see
+    /// [`score_corpus`].
+    pub call_id: String,
+    /// What the agent claimed about the result of that call.
+    pub claim: Claim,
+    /// The signed provenance receipt rung 1 stamped for that call.
+    pub receipt: SignedResultProvenance,
+}
+
+/// Score a corpus of independently sourced (claim, receipt) pairs, enforcing
+/// the `call_id` join before any record reaches [`replay`].
+///
+/// A record whose `call_id` does not equal the `call_id` carried inside its
+/// own `receipt` is a **mis-join**: two independently authored streams (an
+/// agent transcript and a gateway receipt log) were zipped together
+/// incorrectly, so the claim and the receipt do not describe the same call.
+/// Mis-joined records are counted in the returned `usize` and are excluded
+/// entirely from the [`EvalReport`] — they are never scored, because judging
+/// a claim against the wrong call's receipt would produce a number that
+/// looks like a metric but measures nothing (MIK-6908.RUNG3.2).
+///
+/// Returns `(report, mis_joined_count)`.
+#[must_use]
+pub fn score_corpus(
+    records: &[CorpusRecord],
+    validator: &AttestationValidator,
+) -> (EvalReport, usize) {
+    let mut mis_joined = 0usize;
+    let cases: Vec<ReplayCase> = records
+        .iter()
+        .filter_map(|record| {
+            if record.receipt.receipt.call_id.as_deref() == Some(record.call_id.as_str()) {
+                Some(ReplayCase {
+                    claim: record.claim.clone(),
+                    signed: record.receipt.clone(),
+                })
+            } else {
+                mis_joined += 1;
+                None
+            }
+        })
+        .collect();
+    (replay(&cases, validator), mis_joined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +256,27 @@ mod tests {
             cache,
             backend_ok,
         );
+        if let Some(n) = row_count {
+            r = r.with_row_count(n);
+        }
+        r.sign(&signer())
+    }
+
+    /// Build a signed receipt carrying an explicit `call_id`, for
+    /// [`score_corpus`] join-key tests.
+    fn signed_receipt_with_call_id(
+        call_id: &str,
+        backend_ok: bool,
+        row_count: Option<u64>,
+    ) -> SignedResultProvenance {
+        let mut r = RuntimeProvenanceReceipt::observed(
+            "demo",
+            "search",
+            "2026-07-13T10:15:30Z",
+            CacheOutcome::Miss,
+            backend_ok,
+        )
+        .with_call_id(call_id);
         if let Some(n) = row_count {
             r = r.with_row_count(n);
         }
@@ -374,5 +453,143 @@ mod tests {
     #[test]
     fn empty_replay_has_no_rate() {
         assert_eq!(EvalReport::default().unsupported_rate(), None);
+    }
+
+    /// MIK-6908.RUNG3.2 — correctly-joined records (record `call_id` equals
+    /// the `call_id` inside their own receipt) score exactly as [`replay`]
+    /// would score them directly, and nothing is flagged mis-joined.
+    #[test]
+    fn score_corpus_scores_correctly_joined_records() {
+        let records = vec![
+            CorpusRecord {
+                call_id: "gw-call-1".to_string(),
+                claim: Claim::FoundRows { count: 3 },
+                receipt: signed_receipt_with_call_id("gw-call-1", true, Some(3)),
+            },
+            CorpusRecord {
+                call_id: "gw-call-2".to_string(),
+                claim: Claim::FoundRows { count: 10 },
+                receipt: signed_receipt_with_call_id("gw-call-2", true, Some(3)),
+            },
+            CorpusRecord {
+                call_id: "gw-call-3".to_string(),
+                claim: Claim::AuthoritativeEmpty,
+                receipt: signed_receipt_with_call_id("gw-call-3", true, None),
+            },
+        ];
+        let (report, mis_joined) = score_corpus(&records, &validator());
+        assert_eq!(mis_joined, 0);
+        assert_eq!(report.total, 3);
+        assert_eq!(report.supported, 1, "the honest count claim");
+        assert_eq!(report.unsupported, 1, "the inflated count claim");
+        assert_eq!(report.abstained, 1, "no observed row_count");
+        assert_eq!(report.rejected, 0);
+    }
+
+    /// MIK-6908.RUNG3.2 — a record whose `call_id` disagrees with the
+    /// `call_id` carried inside its own receipt is a mis-join: it is counted
+    /// in the returned `usize` and never reaches [`replay`], so it cannot
+    /// pollute `total`/`supported`/`unsupported`/`abstained`/`rejected`.
+    #[test]
+    fn score_corpus_excludes_mis_joined_records_from_the_report() {
+        let records = vec![
+            // Correctly joined — must still be scored.
+            CorpusRecord {
+                call_id: "gw-call-1".to_string(),
+                claim: Claim::Succeeded,
+                receipt: signed_receipt_with_call_id("gw-call-1", true, None),
+            },
+            // Mis-joined: claim's call_id ("gw-call-2") does not match the
+            // receipt's own call_id ("gw-call-99").
+            CorpusRecord {
+                call_id: "gw-call-2".to_string(),
+                claim: Claim::Succeeded,
+                receipt: signed_receipt_with_call_id("gw-call-99", true, None),
+            },
+        ];
+        let (report, mis_joined) = score_corpus(&records, &validator());
+        assert_eq!(mis_joined, 1, "exactly one mis-joined record");
+        assert_eq!(
+            report.total, 1,
+            "only the correctly-joined record is scored"
+        );
+        assert_eq!(report.supported, 1);
+        assert_eq!(
+            report.supported + report.unsupported + report.abstained + report.rejected,
+            report.total,
+            "mis-joined record must not appear in any bucket"
+        );
+    }
+
+    /// A record with no `call_id` on its receipt at all (e.g. a receipt from
+    /// a direct/untraced route) is also a mis-join under the same rule — it
+    /// cannot be proven to describe the claimed call, so it is excluded
+    /// rather than silently scored.
+    #[test]
+    fn score_corpus_treats_missing_receipt_call_id_as_mis_joined() {
+        let records = vec![CorpusRecord {
+            call_id: "gw-call-1".to_string(),
+            claim: Claim::Succeeded,
+            receipt: signed_receipt(true, None, CacheOutcome::Miss),
+        }];
+        let (report, mis_joined) = score_corpus(&records, &validator());
+        assert_eq!(mis_joined, 1);
+        assert_eq!(report.total, 0);
+    }
+
+    /// MIK-6908.RUNG3.2 — a correctly-joined record whose signature does not
+    /// verify is rejected by the underlying [`replay`], distinctly from a
+    /// mis-join: the join key matched, but the ground truth is untrusted.
+    #[test]
+    fn score_corpus_rejects_bad_signatures_via_replay() {
+        let mut receipt = signed_receipt_with_call_id("gw-call-1", true, None);
+        // Tamper after signing without re-signing — the HMAC no longer covers
+        // the mutated fact.
+        receipt.receipt.backend_ok = false;
+        let records = vec![CorpusRecord {
+            call_id: "gw-call-1".to_string(),
+            claim: Claim::Succeeded,
+            receipt,
+        }];
+        let (report, mis_joined) = score_corpus(&records, &validator());
+        assert_eq!(mis_joined, 0, "join key matched; this is not a mis-join");
+        assert_eq!(report.total, 1);
+        assert_eq!(report.rejected, 1);
+        assert_eq!(report.supported + report.unsupported + report.abstained, 0);
+    }
+
+    /// MIK-6908.RUNG3.2/RUNG3.3 — `unsupported_rate` on a `score_corpus`
+    /// report is computed exactly as it is on a direct [`replay`] report:
+    /// over adjudicated cases only, excluding mis-joins (never reach the
+    /// report), abstains, and rejections from the denominator.
+    #[test]
+    fn score_corpus_unsupported_rate_matches_expected() {
+        let records = vec![
+            CorpusRecord {
+                call_id: "gw-call-1".to_string(),
+                claim: Claim::FoundRows { count: 3 },
+                receipt: signed_receipt_with_call_id("gw-call-1", true, Some(3)),
+            },
+            CorpusRecord {
+                call_id: "gw-call-2".to_string(),
+                claim: Claim::FoundRows { count: 10 },
+                receipt: signed_receipt_with_call_id("gw-call-2", true, Some(3)),
+            },
+            CorpusRecord {
+                call_id: "gw-call-3".to_string(),
+                claim: Claim::AuthoritativeEmpty,
+                receipt: signed_receipt_with_call_id("gw-call-3", true, None),
+            },
+            // Mis-joined — must not shift the rate.
+            CorpusRecord {
+                call_id: "gw-call-4".to_string(),
+                claim: Claim::Succeeded,
+                receipt: signed_receipt_with_call_id("gw-call-mismatch", true, None),
+            },
+        ];
+        let (report, mis_joined) = score_corpus(&records, &validator());
+        assert_eq!(mis_joined, 1);
+        let rate = report.unsupported_rate().expect("adjudicated cases exist");
+        assert!((rate - 1.0 / 2.0).abs() < 1e-9, "rate was {rate}");
     }
 }
