@@ -120,7 +120,8 @@ use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use super::support::{
-    MetaMcpInvoker, augment_with_predictions, augment_with_trace, resolve_idempotency_key,
+    MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
+    resolve_idempotency_key,
 };
 
 async fn call_capability_tool_with_identity(
@@ -1137,6 +1138,28 @@ impl MetaMcp {
         // response body so consumers can detect any tampering.
         let mut final_result =
             augment_with_trace(augment_with_predictions(result, predictions), trace_id);
+        // Runtime provenance stamp (MIK-6905): off by default. Inserted BEFORE
+        // response signing so the message MAC also covers the receipt. This is
+        // the live-fetch (cache-miss) path — cache hits at the early returns
+        // above are not stamped.
+        // ponytail: cache-hit + direct-backend stamping deferred to a follow-up;
+        // stamp cache=Hit at invoke.rs:647/680 and wire backend_handlers.rs when
+        // provenance is needed on those paths.
+        if let Some(ref signer) = self.provenance_signer {
+            let backend_ok = !final_result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            final_result = augment_with_provenance(
+                final_result,
+                signer,
+                server,
+                tool,
+                api_key_name,
+                crate::trust::CacheOutcome::Miss,
+                backend_ok,
+            );
+        }
         if let Some(ref signer) = self.message_signer {
             final_result = signer.sign_response(final_result, request_nonce);
         }

@@ -369,6 +369,7 @@ impl ContextIntegrityConfig {
 /// Security configuration for the gateway.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // config surface: independent on/off feature flags
 pub struct SecurityConfig {
     /// Enable input sanitization (null byte rejection, control char stripping, NFC).
     pub sanitize_input: bool,
@@ -419,6 +420,11 @@ pub struct SecurityConfig {
     /// Remote MCP server provenance verification (OWASP ASI04). Default: disabled.
     #[serde(default)]
     pub remote_server_signing: RemoteServerSigningConfig,
+    /// Sign a runtime provenance receipt into `_meta.provenance` on every
+    /// aggregated tool result (MIK-6905). Reuses the attestation signing key.
+    /// Additive metadata only; off by default so payloads are unchanged.
+    #[serde(default)]
+    pub provenance_stamping: bool,
 }
 
 const fn default_trust_configured_backends() -> bool {
@@ -442,6 +448,7 @@ impl Default for SecurityConfig {
             identity_grants: IdentityGrantsConfig::default(),
             context_integrity: ContextIntegrityConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
+            provenance_stamping: false,
         }
     }
 }

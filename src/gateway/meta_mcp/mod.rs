@@ -21,6 +21,7 @@ use parking_lot::RwLock;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
+use crate::attestation::signer::BnautAttestationSigner;
 use crate::backend::BackendRegistry;
 use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
@@ -218,6 +219,13 @@ pub struct MetaMcp {
     /// Populated alongside `message_signer`; both are `Some` or both `None`.
     pub(super) nonce_store: Option<Arc<NonceStore>>,
 
+    /// Runtime provenance receipt signer (MIK-6905).
+    ///
+    /// `Some` when `security.provenance_stamping = true`; `None` otherwise.
+    /// When `None` the stamping block is skipped entirely, so result payloads
+    /// are byte-identical to the un-stamped path (rung 1.2 guarantee).
+    pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
+
     /// When `true`, requests without a `nonce` are rejected with JSON-RPC -32001.
     ///
     /// Corresponds to `security.message_signing.require_nonce` in config.
@@ -339,6 +347,7 @@ impl MetaMcp {
             session_state: SessionStateStore::new(),
             message_signer: None,
             nonce_store: None,
+            provenance_signer: None,
             require_nonce: false,
             transparency_logger: None,
             response_inspection_action_mode: false,
@@ -505,6 +514,16 @@ impl MetaMcp {
         self.message_signer = Some(Arc::new(signer));
         self.nonce_store = Some(nonce_store);
         self.require_nonce = require_nonce;
+    }
+
+    /// Enable signed runtime provenance stamping (MIK-6905, rung 1.2).
+    ///
+    /// When set, every aggregated tool result is stamped with a signed
+    /// `_meta.provenance` receipt. Off by default; the field is `None` unless
+    /// this is called, so the stamping branch never runs on the hot path
+    /// otherwise.
+    pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
+        self.provenance_signer = Some(Arc::new(signer));
     }
 
     /// Attach a transparency logger (issue #133, D3).

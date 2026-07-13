@@ -529,6 +529,29 @@ impl Gateway {
             }
         }
 
+        // ── Runtime provenance stamping (MIK-6905) ────────────────────────────
+        // Off by default. When enabled, sign a facts-only receipt into
+        // `_meta.provenance` on every aggregated tool result, reusing the
+        // gateway's attestation signing key (one signing identity, B4-PLATFORM).
+        if self.config.security.provenance_stamping {
+            let key =
+                std::env::var(crate::attestation::ATTESTATION_SIGNING_KEY_ENV).unwrap_or_default();
+            if key.is_empty() {
+                warn!(
+                    env = crate::attestation::ATTESTATION_SIGNING_KEY_ENV,
+                    "provenance_stamping enabled without a signing key; receipts will be \
+                     signed with an empty key and cannot be meaningfully verified"
+                );
+            }
+            let key_id = std::env::var(crate::attestation::ATTESTATION_KEY_ID_ENV)
+                .unwrap_or_else(|_| "gateway".to_string());
+            let signer = crate::attestation::BnautAttestationSigner::new(key.into_bytes(), key_id);
+            Arc::get_mut(&mut meta_mcp)
+                .expect("no other Arc references at this point")
+                .enable_provenance_stamping(signer);
+            info!("Runtime provenance stamping enabled — signed _meta.provenance on tool results");
+        }
+
         // ── Response inspection action mode (issue #133, D2) ──────────────────
         if self.config.security.response_inspection.enabled
             && self.config.security.response_inspection.action_mode

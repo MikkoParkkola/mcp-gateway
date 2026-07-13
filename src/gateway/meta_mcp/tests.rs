@@ -1971,4 +1971,111 @@ mod attestation_wiring {
                 .is_ok()
         );
     }
+
+    // ── Runtime provenance stamping (MIK-6905, rung 1.2/1.4/1.5) ──────────────
+
+    fn provenance_test_backend() -> Arc<BackendRegistry> {
+        use crate::backend::Backend;
+        use crate::config::{BackendConfig, FailsafeConfig};
+        use crate::transport::Transport;
+
+        let registry = Arc::new(BackendRegistry::new());
+        let backend = Arc::new(Backend::new(
+            "remote_docs",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+        ));
+        let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport {
+            result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        });
+        backend.set_transport_for_test(transport);
+        registry.register(backend);
+        registry
+    }
+
+    async fn invoke_docs_search(meta: &MetaMcp) -> serde_json::Value {
+        meta.invoke_tool(
+            &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
+            Some("session-1"),
+            Some("alice"),
+            Some("agent-1"),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn provenance_flag_off_emits_no_meta_provenance() {
+        // Default MetaMcp has no provenance signer → the stamping branch never
+        // runs and no `_meta.provenance` appears (rung 1.2 byte-identical path).
+        let meta = MetaMcp::new(provenance_test_backend());
+        let result = invoke_docs_search(&meta).await;
+        let provenance = result.get("_meta").and_then(|m| m.get("provenance"));
+        assert!(
+            provenance.is_none(),
+            "flag off must not emit _meta.provenance, got: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn provenance_flag_on_stamps_signed_verifiable_receipt() {
+        use crate::attestation::{AttestationValidator, BnautAttestationSigner};
+        use crate::trust::{SignedResultProvenance, TrustEvidenceKind};
+
+        let mut meta = MetaMcp::new(provenance_test_backend());
+        meta.enable_provenance_stamping(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+        let result = invoke_docs_search(&meta).await;
+
+        let provenance = result
+            .get("_meta")
+            .and_then(|m| m.get("provenance"))
+            .expect("flag on must emit _meta.provenance");
+        let signed: SignedResultProvenance =
+            serde_json::from_value(provenance.clone()).expect("provenance must deserialize");
+
+        // Facts recorded (rung 1.4: observed only).
+        assert_eq!(signed.receipt.backend_id, "remote_docs");
+        assert_eq!(signed.receipt.tool, "search");
+        assert!(signed.receipt.backend_ok);
+        assert_eq!(signed.receipt.evidence_kind, TrustEvidenceKind::Observed);
+
+        // Signature verifies under a twin validator sharing the key (rung 1.3).
+        let validator =
+            AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+        assert!(validator.verify_result_provenance(&signed));
+    }
+
+    #[tokio::test]
+    async fn provenance_receipt_leaks_no_secret_or_raw_identity() {
+        // Rung 1.5 (CWE-532): the raw api_key_name ("alice") and any key
+        // material must never appear in the stamped receipt — only an opaque
+        // sha256 auth-context reference.
+        use crate::attestation::BnautAttestationSigner;
+
+        let mut meta = MetaMcp::new(provenance_test_backend());
+        meta.enable_provenance_stamping(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+        let result = invoke_docs_search(&meta).await;
+
+        let provenance = result
+            .get("_meta")
+            .and_then(|m| m.get("provenance"))
+            .expect("flag on must emit _meta.provenance");
+        let serialized = serde_json::to_string(provenance).unwrap();
+
+        assert!(
+            !serialized.contains("alice"),
+            "raw api_key_name must be hashed, not emitted verbatim: {serialized}"
+        );
+        assert!(
+            !serialized.contains("prov-key"),
+            "signing key material must never appear in _meta"
+        );
+        assert!(
+            serialized.contains("sha256:"),
+            "auth-context reference should be an opaque sha256 handle"
+        );
+    }
 }
