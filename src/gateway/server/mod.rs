@@ -314,6 +314,31 @@ struct BuiltMetaMcp {
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
+/// Decide whether to install a provenance-receipt signer for runtime
+/// stamping (MIK-6905) — the unit-testable core of the bootstrap decision in
+/// [`Gateway::build_meta_mcp`], which performs no process-environment reads
+/// itself.
+///
+/// Fails closed: an empty signing key returns `None` (no signer installed,
+/// stamping stays disabled and output is byte-identical to stamping-off)
+/// rather than installing a signer whose signatures are publicly
+/// forgeable — an empty HMAC key is a known key, so anyone can compute a
+/// signature that a validator sharing the same (empty) key would accept.
+#[must_use]
+fn resolve_provenance_signer(
+    signing_key: &str,
+    key_id: &str,
+) -> Option<crate::attestation::BnautAttestationSigner> {
+    if signing_key.is_empty() {
+        None
+    } else {
+        Some(crate::attestation::BnautAttestationSigner::new(
+            signing_key.as_bytes().to_vec(),
+            key_id.to_string(),
+        ))
+    }
+}
+
 impl Gateway {
     /// Create a new gateway
     ///
@@ -536,20 +561,32 @@ impl Gateway {
         if self.config.security.provenance_stamping {
             let key =
                 std::env::var(crate::attestation::ATTESTATION_SIGNING_KEY_ENV).unwrap_or_default();
-            if key.is_empty() {
-                warn!(
-                    env = crate::attestation::ATTESTATION_SIGNING_KEY_ENV,
-                    "provenance_stamping enabled without a signing key; receipts will be \
-                     signed with an empty key and cannot be meaningfully verified"
-                );
-            }
             let key_id = std::env::var(crate::attestation::ATTESTATION_KEY_ID_ENV)
                 .unwrap_or_else(|_| "gateway".to_string());
-            let signer = crate::attestation::BnautAttestationSigner::new(key.into_bytes(), key_id);
-            Arc::get_mut(&mut meta_mcp)
-                .expect("no other Arc references at this point")
-                .enable_provenance_stamping(signer);
-            info!("Runtime provenance stamping enabled — signed _meta.provenance on tool results");
+            match resolve_provenance_signer(&key, &key_id) {
+                Some(signer) => {
+                    Arc::get_mut(&mut meta_mcp)
+                        .expect("no other Arc references at this point")
+                        .enable_provenance_stamping(signer);
+                    info!(
+                        "Runtime provenance stamping enabled — signed _meta.provenance on tool \
+                         results"
+                    );
+                }
+                None => {
+                    // Fail closed. An empty HMAC key yields publicly computable
+                    // signatures, and the eval harness trusts any receipt that
+                    // verifies — so an empty-key signer lets anyone forge "signed"
+                    // ground truth. Leaving the signer uninstalled keeps output
+                    // byte-identical to stamping-off, which is strictly safer
+                    // than emitting forgeable receipts.
+                    warn!(
+                        env = crate::attestation::ATTESTATION_SIGNING_KEY_ENV,
+                        "provenance_stamping enabled but no signing key is set; stamping stays \
+                         DISABLED (fail-closed) — set the signing key to emit verifiable receipts"
+                    );
+                }
+            }
         }
 
         // ── Response inspection action mode (issue #133, D2) ──────────────────
@@ -1675,7 +1712,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use serde_json::json;
 
-    use super::{Gateway, load_configured_identity_grants};
+    use super::{Gateway, load_configured_identity_grants, resolve_provenance_signer};
     use crate::{
         backend::BackendRegistry,
         config::{
@@ -2102,5 +2139,39 @@ mod tests {
         assert_eq!(context["policy"]["decision"], "deny");
         assert_eq!(context["policy"]["enforcement_applied"], true);
         assert_eq!(context["audit"]["monitor_only"], false);
+    }
+
+    // ── Provenance-stamping fail-closed bootstrap (MIK-6905) ───────────────
+    //
+    // These exercise `resolve_provenance_signer` directly rather than driving
+    // `Gateway::build_meta_mcp` end-to-end: the bootstrap path also reads
+    // `GATEWAY_ATTESTATION_SIGNING_KEY` for the unrelated attestation-validator
+    // wiring (`attestation_wiring_from_env`, above), so mutating that
+    // process-global env var here would race against every other test in
+    // this binary that constructs a `Gateway`. `resolve_provenance_signer`
+    // is the pure decision core with no process-environment reads, which
+    // makes it deterministic to test directly and is exactly the seam
+    // `resolve_attestation_wiring` (src/attestation/wiring.rs) already
+    // established for the same class of problem.
+
+    #[test]
+    fn resolve_provenance_signer_fails_closed_on_empty_key() {
+        // An empty HMAC key is a *known* key: anyone can forge a signature
+        // that a validator sharing the same empty key would accept. The
+        // fail-closed contract is that no signer gets installed, so
+        // `_meta.provenance` never appears — output stays byte-identical to
+        // stamping-off instead of emitting forgeable "signed" receipts.
+        assert!(
+            resolve_provenance_signer("", "gateway").is_none(),
+            "empty signing key must not yield a signer"
+        );
+    }
+
+    #[test]
+    fn resolve_provenance_signer_installs_signer_when_key_present() {
+        assert!(
+            resolve_provenance_signer("real-signing-key", "gateway").is_some(),
+            "non-empty signing key must yield a signer, matching pre-fix behavior"
+        );
     }
 }
