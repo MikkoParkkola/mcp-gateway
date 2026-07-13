@@ -1852,8 +1852,11 @@ mod tests {
         let sink: Arc<dyn ExportSink> = collecting.clone();
         let status = SourceExportStatus::default();
 
-        // Before the fix this panicked on `.expect(...)` over the poisoned lock;
-        // now it must recover the guard and complete the poll.
+        // A pre-recovery `.expect(...)` over the poisoned lock would panic inside
+        // `spawn_blocking`; tokio catches that as a `JoinError`, which the `Err(e)`
+        // arm here turns into a logged failure with nothing delivered — so the
+        // regression signal is `delivered().len() == 0`, not a panicking test.
+        // With recovery in place the guard is reclaimed and the poll completes.
         poll_export_source(&exporter, &sink, &status, "invocation").await;
 
         assert_eq!(
