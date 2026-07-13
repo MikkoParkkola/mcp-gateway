@@ -173,6 +173,59 @@ fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
     state
 }
 
+/// `AppState` whose shared Meta-MCP has provenance stamping enabled, for
+/// exercising the direct `/mcp/{name}` route's rung-3 stamping (MIK-6905).
+/// Uses a fixed signer key so a twin validator can verify the receipt.
+fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<AppState> {
+    let backends = Arc::new(BackendRegistry::new());
+    backends.register(backend);
+    let mut meta = MetaMcp::new(Arc::clone(&backends));
+    meta.enable_provenance_stamping(crate::attestation::BnautAttestationSigner::new(
+        b"prov-key".to_vec(),
+        "unit",
+    ));
+    let meta_mcp = Arc::new(meta);
+    let streaming_config = StreamingConfig::default();
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        streaming_config.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&AuthConfig::default()));
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
+
+    Arc::new(AppState {
+        backends,
+        meta_mcp,
+        meta_mcp_enabled: true,
+        multiplexer,
+        proxy_manager,
+        streaming_config,
+        auth_config,
+        key_server: None,
+        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+        sanitize_input: false,
+        ssrf_protection: false,
+        trust_configured_backends: false,
+        inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+        agent_auth,
+        gateway_key_pair,
+        capability_dirs: Vec::new(),
+        config_path: None,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        control_plane_store: None,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        export_status: None,
+        transparency_log: None,
+    })
+}
+
 /// `AppState` whose Meta-MCP has an identity-propagation strategy wired (so a
 /// `required` backend actually MINTS a per-user credential) AND a transparency
 /// log on the Meta-MCP side (so the shared mint chokepoint's own audit
@@ -1178,6 +1231,106 @@ async fn backend_handler_tools_call_enforces_api_key_tool_scope() {
             .is_some_and(|message| message.contains("allowlist"))
     );
     assert!(transport.request_methods.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn backend_handler_direct_route_stamps_bypass_provenance() {
+    // Rung 3: the direct /mcp/{name} passthrough must also carry a signed
+    // provenance receipt, tagged cache=Bypass (it never consults the meta
+    // cache). Without this a client routes around provenance by URL choice.
+    use crate::trust::{CacheOutcome, SignedResultProvenance};
+
+    let backend = Arc::new(Backend::new(
+        "demo",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
+    backend.set_transport_for_test(transport);
+
+    let state = test_router_app_state_with_provenance_backend(backend);
+    let router = create_router(state);
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": { "name": "search", "arguments": {} }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    let provenance = json
+        .pointer("/result/_meta/provenance")
+        .expect("direct route must stamp _meta.provenance on tools/call");
+    let signed: SignedResultProvenance =
+        serde_json::from_value(provenance.clone()).expect("provenance must deserialize");
+
+    assert_eq!(
+        signed.receipt.cache,
+        CacheOutcome::Bypass,
+        "direct route bypasses the meta cache → cache=Bypass"
+    );
+    assert_eq!(signed.receipt.backend_id, "demo");
+    assert_eq!(signed.receipt.tool, "search");
+
+    let validator = crate::attestation::AttestationValidator::new(
+        crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"),
+    );
+    assert!(
+        validator.verify_result_provenance(&signed),
+        "direct-route receipt must verify under a twin validator"
+    );
+}
+
+#[tokio::test]
+async fn backend_handler_direct_route_no_provenance_when_disabled() {
+    // Flag off (default MetaMcp, no signer): the direct route stays
+    // byte-identical — no _meta.provenance appears.
+    let backend = Arc::new(Backend::new(
+        "demo",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
+    backend.set_transport_for_test(transport);
+
+    let router = create_router(test_router_app_state_with_backend(backend));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": { "name": "search", "arguments": {} }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json.pointer("/result/_meta/provenance").is_none(),
+        "flag off must not stamp provenance, got: {json}"
+    );
 }
 
 #[tokio::test]

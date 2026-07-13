@@ -456,6 +456,29 @@ impl MetaMcp {
         }
     }
 
+    /// Stamp provenance onto a direct per-backend route result (the
+    /// `/mcp/{name}` passthrough, which bypasses the meta chokepoint — rung 3).
+    ///
+    /// Tagged [`CacheOutcome::Bypass`] because the direct route never consults
+    /// the meta response cache. No-op when stamping is disabled, so the
+    /// passthrough stays byte-identical with the feature off.
+    #[must_use]
+    pub fn stamp_direct_result(
+        &self,
+        result: Value,
+        backend_id: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+    ) -> Value {
+        self.maybe_stamp_provenance(
+            result,
+            backend_id,
+            tool,
+            api_key_name,
+            crate::trust::CacheOutcome::Bypass,
+        )
+    }
+
     /// Inner implementation executed within a trace-ID scope.
     ///
     /// Returns a [`GuardedValue`]: every success path must produce one, so the
