@@ -143,6 +143,17 @@ mod tests {
         BnautAttestationSigner::new(KEY.to_vec(), "unit")
     }
 
+    /// The receipt-domain subkey derived from the same raw key material as
+    /// [`signer`]. Provenance receipts are signed with the HKDF receipt-domain
+    /// subkey (`RESULT_PROVENANCE_DOMAIN_INFO`), not the raw key — mirroring
+    /// production `resolve_provenance_signer`, which the validator's internal
+    /// `receipt_signer` re-derives from the same base key when verifying
+    /// (MIK-6909 domain separation). Signing receipts with the raw key would
+    /// make them fail verification and score as `Rejected`.
+    fn receipt_signer() -> BnautAttestationSigner {
+        signer().derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO)
+    }
+
     fn signed_receipt(call_id: &str, backend_ok: bool) -> SignedResultProvenance {
         RuntimeProvenanceReceipt::observed(
             "demo",
@@ -152,7 +163,7 @@ mod tests {
             backend_ok,
         )
         .with_call_id(call_id)
-        .sign(&signer())
+        .sign(&receipt_signer())
     }
 
     fn read_lines(path: &std::path::Path) -> Vec<String> {
