@@ -256,6 +256,12 @@ pub(super) fn augment_with_provenance(
     if let Some(name) = api_key_name {
         receipt = receipt.with_auth_context_ref(auth_context_ref_hash(name));
     }
+    // Join key: the active call's trace_id (also returned to the client as
+    // `result.trace_id`), so the receipt is self-joinable to the agent's claim.
+    // Absent on paths with no trace scope (e.g. direct backend route).
+    if let Some(trace_id) = crate::gateway::trace::current() {
+        receipt = receipt.with_call_id(trace_id);
+    }
     let signed_receipt = receipt.sign(signer);
 
     if let Value::Object(ref mut map) = result {

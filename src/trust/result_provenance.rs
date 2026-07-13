@@ -69,6 +69,12 @@ pub struct RuntimeProvenanceReceipt {
     pub row_count: Option<u64>,
     /// Whether the backend reported success (`isError == false`).
     pub backend_ok: bool,
+    /// Opaque gateway call id (`gw-<uuid>`), equal to the result-level
+    /// `trace_id` this receipt describes. This is the join key that ties the
+    /// receipt to the agent's rendered claim about the same call. `None` when no
+    /// trace scope was active (e.g. the direct backend route).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
     /// Evidence quality. Always [`TrustEvidenceKind::Observed`].
     pub evidence_kind: TrustEvidenceKind,
 }
@@ -95,6 +101,7 @@ impl RuntimeProvenanceReceipt {
             cache,
             row_count: None,
             backend_ok,
+            call_id: None,
             evidence_kind: TrustEvidenceKind::Observed,
         }
     }
@@ -103,6 +110,14 @@ impl RuntimeProvenanceReceipt {
     #[must_use]
     pub fn with_auth_context_ref(mut self, auth_context_ref: impl Into<String>) -> Self {
         self.auth_context_ref = Some(auth_context_ref.into());
+        self
+    }
+
+    /// Attach the gateway call id (`trace_id`) that joins this receipt to the
+    /// agent's rendered claim about the same call.
+    #[must_use]
+    pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = Some(call_id.into());
         self
     }
 
@@ -228,5 +243,27 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: RuntimeProvenanceReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn call_id_is_the_join_key_and_optional() {
+        // Absent call_id → canonical bytes byte-identical to today, so existing
+        // signatures and the flag-off/direct-route paths are unaffected.
+        let plain = sample();
+        assert!(plain.call_id.is_none());
+        assert_eq!(plain.canonical_bytes(), sample().canonical_bytes());
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("call_id"));
+
+        // Present → carried in the signed canonical bytes and round-trips.
+        let joined = sample().with_call_id("gw-11112222-3333-4444-5555-666677778888");
+        assert_ne!(joined.canonical_bytes(), plain.canonical_bytes());
+        let back: RuntimeProvenanceReceipt =
+            serde_json::from_str(&serde_json::to_string(&joined).unwrap()).unwrap();
+        assert_eq!(joined, back);
+        assert_eq!(
+            back.call_id.as_deref(),
+            Some("gw-11112222-3333-4444-5555-666677778888")
+        );
     }
 }
