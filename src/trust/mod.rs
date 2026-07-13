@@ -22,6 +22,7 @@ use crate::{
 mod assistant;
 mod descriptor;
 mod inference;
+pub mod provenance_eval;
 mod result_provenance;
 
 pub use assistant::{
