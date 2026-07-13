@@ -504,6 +504,24 @@ impl AttestationValidator {
     pub fn rotations_total(&self) -> u64 {
         self.rotations_total.load(Ordering::Relaxed)
     }
+
+    /// Verify a signed runtime provenance receipt against this validator's key
+    /// material (MIK-6905, rung 1.3).
+    ///
+    /// Provenance receipts are not attestation tokens — they carry no expiry,
+    /// rotation, or capability semantics — so they do not flow through
+    /// [`Self::validate_boundary_call`]. This method is the validation authority
+    /// for the `_meta.provenance` channel: it re-derives the receipt's canonical
+    /// bytes and constant-time-compares the detached HMAC. Returns `true` only
+    /// when the signature is well-formed and matches.
+    #[must_use]
+    pub fn verify_result_provenance(&self, signed: &crate::trust::SignedResultProvenance) -> bool {
+        let Some(signature) = signed.signature_bytes() else {
+            return false;
+        };
+        self.signer
+            .verify_bytes(&signed.receipt.canonical_bytes(), &signature)
+    }
 }
 
 #[cfg(test)]
@@ -518,6 +536,54 @@ mod tests {
             8,
             TimeDelta::seconds(30),
         )
+    }
+
+    fn sample_receipt() -> crate::trust::RuntimeProvenanceReceipt {
+        crate::trust::RuntimeProvenanceReceipt::observed(
+            "github",
+            "search_issues",
+            "2026-07-13T10:15:30Z",
+            crate::trust::CacheOutcome::Miss,
+            true,
+        )
+    }
+
+    #[test]
+    fn result_provenance_round_trips_sign_then_verify() {
+        let v = validator();
+        // Twin signer sharing the validator's key material.
+        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let signed = sample_receipt().sign(&signer);
+        assert_eq!(signed.algorithm, crate::attestation::SIGNING_ALGORITHM);
+        assert_eq!(signed.key_id, "bnaut/unit");
+        assert!(v.verify_result_provenance(&signed));
+    }
+
+    #[test]
+    fn tampered_receipt_fails_verification() {
+        let v = validator();
+        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let mut signed = sample_receipt().sign(&signer);
+        // Flip a fact after signing — the HMAC must no longer match.
+        signed.receipt.backend_ok = false;
+        assert!(!v.verify_result_provenance(&signed));
+    }
+
+    #[test]
+    fn wrong_key_fails_verification() {
+        let v = validator();
+        let other = BnautAttestationSigner::new(b"a-different-key".to_vec(), "unit");
+        let signed = sample_receipt().sign(&other);
+        assert!(!v.verify_result_provenance(&signed));
+    }
+
+    #[test]
+    fn malformed_signature_encoding_fails_verification() {
+        let v = validator();
+        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let mut signed = sample_receipt().sign(&signer);
+        signed.signature = "not valid base64url!!".to_string();
+        assert!(!v.verify_result_provenance(&signed));
     }
 
     fn issue(now: DateTime<Utc>) -> AttestationToken {
