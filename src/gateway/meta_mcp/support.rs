@@ -239,6 +239,12 @@ fn auth_context_ref_hash(name: &str) -> String {
 /// content is touched. Facts observed at the gateway — backend, tool, auth-ref,
 /// cache outcome, backend success — are recorded and signed; nothing is
 /// inferred (rung 1.4).
+///
+/// Also returns the [`SignedResultProvenance`] alongside the stamped value —
+/// this is the same object embedded in `_meta.provenance`, returned again so
+/// the caller (`maybe_stamp_provenance`, MIK-6908 rung 3.1) can hand it to the
+/// shadow claim-capture sink without re-deriving or re-parsing it out of the
+/// JSON it was just serialized into.
 pub(super) fn augment_with_provenance(
     mut result: Value,
     signer: &crate::attestation::signer::BnautAttestationSigner,
@@ -247,7 +253,7 @@ pub(super) fn augment_with_provenance(
     api_key_name: Option<&str>,
     cache: crate::trust::CacheOutcome,
     backend_ok: bool,
-) -> Value {
+) -> (Value, crate::trust::SignedResultProvenance) {
     use crate::trust::RuntimeProvenanceReceipt;
 
     let observed_at = chrono::Utc::now().to_rfc3339();
@@ -271,11 +277,11 @@ pub(super) fn augment_with_provenance(
         if let Value::Object(meta_map) = meta {
             meta_map.insert(
                 "provenance".to_string(),
-                serde_json::to_value(signed_receipt).unwrap_or(Value::Null),
+                serde_json::to_value(signed_receipt.clone()).unwrap_or(Value::Null),
             );
         }
     }
-    result
+    (result, signed_receipt)
 }
 
 #[cfg(test)]

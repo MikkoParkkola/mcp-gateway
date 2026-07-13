@@ -605,6 +605,29 @@ impl Gateway {
             }
         }
 
+        // ── Shadow claim capture (MIK-6908, rung 3.1) ─────────────────────────
+        // Off by default. When enabled, shadow-captures the derived claim
+        // alongside each signed provenance receipt to an append-only NDJSON
+        // file, for offline scoring via `provenance-eval` (rung 3.4). Has no
+        // observable effect unless `provenance_stamping` is also enabled —
+        // capture piggybacks on that chokepoint rather than adding a new one.
+        if self.config.security.claim_capture.enabled {
+            let capture_path = expand_home_path(&self.config.security.claim_capture.path);
+            match crate::trust::ClaimCaptureSink::open(&capture_path) {
+                Ok(sink) => {
+                    Arc::get_mut(&mut meta_mcp)
+                        .expect("no other Arc references at this point")
+                        .enable_claim_capture(Arc::new(sink));
+                    info!(
+                        "Shadow claim capture enabled — capturing derived claims for offline scoring"
+                    );
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to open claim-capture sink — continuing without it");
+                }
+            }
+        }
+
         // ── Response inspection action mode (issue #133, D2) ──────────────────
         if self.config.security.response_inspection.enabled
             && self.config.security.response_inspection.action_mode

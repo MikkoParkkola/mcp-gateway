@@ -364,6 +364,37 @@ impl ContextIntegrityConfig {
     }
 }
 
+// ── ClaimCaptureConfig ───────────────────────────────────────────────────────
+
+/// Shadow claim-capture at the tool-result stamping chokepoint (MIK-6908,
+/// rung 3.1). Only takes effect when [`SecurityConfig::provenance_stamping`]
+/// is also `true` — capture has nothing to record without a signed receipt.
+///
+/// ```yaml
+/// security:
+///   provenance_stamping: true
+///   claim_capture:
+///     enabled: true
+///     path: "~/.mcp-gateway/claim-capture/claims.jsonl"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaimCaptureConfig {
+    /// Enable shadow claim capture. Default: `false` (opt-in).
+    pub enabled: bool,
+    /// Path to the append-only NDJSON capture file (`~` is expanded at startup).
+    pub path: String,
+}
+
+impl Default for ClaimCaptureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: "~/.mcp-gateway/claim-capture/claims.jsonl".to_string(),
+        }
+    }
+}
+
 // ── SecurityConfig ────────────────────────────────────────────────────────────
 
 /// Security configuration for the gateway.
@@ -425,6 +456,10 @@ pub struct SecurityConfig {
     /// Additive metadata only; off by default so payloads are unchanged.
     #[serde(default)]
     pub provenance_stamping: bool,
+    /// Shadow-capture derived claims alongside signed receipts for offline
+    /// scoring (MIK-6908, rung 3.1). Default: disabled.
+    #[serde(default)]
+    pub claim_capture: ClaimCaptureConfig,
 }
 
 const fn default_trust_configured_backends() -> bool {
@@ -449,6 +484,7 @@ impl Default for SecurityConfig {
             context_integrity: ContextIntegrityConfig::default(),
             remote_server_signing: RemoteServerSigningConfig::default(),
             provenance_stamping: false,
+            claim_capture: ClaimCaptureConfig::default(),
         }
     }
 }
