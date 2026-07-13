@@ -132,6 +132,31 @@ fn binary_exits_nonzero_when_signing_key_empty() {
     );
 }
 
+/// A whitespace-only signing key must be refused identically to an empty or
+/// unset one — it is exactly as low-entropy as the empty key. The fail-closed
+/// gate trims the value before use, so `"   "` normalizes to the empty-key
+/// posture rather than being consumed verbatim as HMAC key material
+/// (MIK-6909 item 1).
+#[test]
+fn binary_exits_nonzero_when_signing_key_whitespace_only() {
+    let output = binary()
+        .arg(FIXTURE_PATH)
+        .env(ATTESTATION_SIGNING_KEY_ENV, "   ")
+        .output()
+        .expect("failed to run provenance-eval binary");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for whitespace-only {ATTESTATION_SIGNING_KEY_ENV}, got success\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(ATTESTATION_SIGNING_KEY_ENV),
+        "expected stderr to mention the missing {ATTESTATION_SIGNING_KEY_ENV}, stderr was:\n{stderr}"
+    );
+}
+
 /// A missing corpus file is also a hard, reported failure (not a panic).
 #[test]
 fn binary_exits_nonzero_on_missing_file() {

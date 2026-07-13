@@ -81,10 +81,13 @@ pub fn resolve_attestation_wiring(
     // Whitespace-only key material is exactly as low-entropy as an empty
     // key (MIK-6909 item 1) — normalize both to the same "no key" posture
     // rather than using the whitespace bytes verbatim as the HMAC key.
-    // `u8::is_ascii_whitespace` mirrors `str::trim`'s default whitespace
-    // set; the empty slice satisfies `all()` vacuously, so this subsumes
-    // the pre-existing empty-key check without a separate branch.
-    let key = if key.iter().all(u8::is_ascii_whitespace) {
+    // Decode as UTF-8 and reuse `str::trim`, so this gate uses the exact
+    // Unicode-whitespace set as `resolve_provenance_signer` /
+    // `validator_from_env` (parity, MIK-6909 item 1). The empty slice trims
+    // to empty, subsuming the pre-existing empty-key check. Non-UTF-8 bytes
+    // are treated as *not* whitespace and used verbatim — the correct
+    // fail-open-to-use posture for an opaque binary key.
+    let key = if std::str::from_utf8(key).is_ok_and(|s| s.trim().is_empty()) {
         tracing::warn!(
             env = ATTESTATION_SIGNING_KEY_ENV,
             "attestation observe mode enabled without a signing key; presented tokens \
