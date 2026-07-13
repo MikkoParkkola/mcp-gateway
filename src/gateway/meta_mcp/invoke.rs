@@ -431,6 +431,31 @@ impl MetaMcp {
         .await
     }
 
+    /// Stamp a signed runtime-provenance receipt into `value._meta` when
+    /// provenance stamping is enabled (MIK-6905). No-op when the signer is
+    /// absent, so payloads stay byte-identical with the feature off.
+    ///
+    /// `backend_ok` is derived from the result's `isError` flag so cache hits
+    /// carrying a stored error are reported honestly.
+    fn maybe_stamp_provenance(
+        &self,
+        value: Value,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        cache: crate::trust::CacheOutcome,
+    ) -> Value {
+        if let Some(ref signer) = self.provenance_signer {
+            let backend_ok = !value
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            augment_with_provenance(value, signer, server, tool, api_key_name, cache, backend_ok)
+        } else {
+            value
+        }
+    }
+
     /// Inner implementation executed within a trace-ID scope.
     ///
     /// Returns a [`GuardedValue`]: every success path must produce one, so the
@@ -645,7 +670,15 @@ impl MetaMcp {
                     .increment(1);
                     let predictions = self.record_and_predict(session_id, &tool_key);
                     return Ok(GuardedValue::from_cache(cached).augment(|v| {
-                        augment_with_trace(augment_with_predictions(v, predictions), trace_id)
+                        let v =
+                            augment_with_trace(augment_with_predictions(v, predictions), trace_id);
+                        self.maybe_stamp_provenance(
+                            v,
+                            server,
+                            tool,
+                            api_key_name,
+                            crate::trust::CacheOutcome::Hit,
+                        )
                     }));
                 }
                 GuardOutcome::Proceed => {
@@ -678,7 +711,14 @@ impl MetaMcp {
                 }
                 let predictions = self.record_and_predict(session_id, &tool_key);
                 return Ok(GuardedValue::from_cache(cached).augment(|v| {
-                    augment_with_trace(augment_with_predictions(v, predictions), trace_id)
+                    let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
+                    self.maybe_stamp_provenance(
+                        v,
+                        server,
+                        tool,
+                        api_key_name,
+                        crate::trust::CacheOutcome::Hit,
+                    )
                 }));
             }
         }
@@ -1139,27 +1179,19 @@ impl MetaMcp {
         let mut final_result =
             augment_with_trace(augment_with_predictions(result, predictions), trace_id);
         // Runtime provenance stamp (MIK-6905): off by default. Inserted BEFORE
-        // response signing so the message MAC also covers the receipt. This is
-        // the live-fetch (cache-miss) path — cache hits at the early returns
-        // above are not stamped.
-        // ponytail: cache-hit + direct-backend stamping deferred to a follow-up;
-        // stamp cache=Hit at invoke.rs:647/680 and wire backend_handlers.rs when
-        // provenance is needed on those paths.
-        if let Some(ref signer) = self.provenance_signer {
-            let backend_ok = !final_result
-                .get("isError")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            final_result = augment_with_provenance(
-                final_result,
-                signer,
-                server,
-                tool,
-                api_key_name,
-                crate::trust::CacheOutcome::Miss,
-                backend_ok,
-            );
-        }
+        // response signing so the message MAC also covers the receipt. Cache
+        // hits at the early returns above are stamped with cache=Hit; this is
+        // the live-fetch (cache-miss) path.
+        // ponytail: direct-backend HTTP passthrough (router/backend_handlers.rs)
+        // is a separate surface — it has no MetaMcpInvoker/signer; wire when
+        // provenance is needed there (threads signer through GatewayState).
+        final_result = self.maybe_stamp_provenance(
+            final_result,
+            server,
+            tool,
+            api_key_name,
+            crate::trust::CacheOutcome::Miss,
+        );
         if let Some(ref signer) = self.message_signer {
             final_result = signer.sign_response(final_result, request_nonce);
         }

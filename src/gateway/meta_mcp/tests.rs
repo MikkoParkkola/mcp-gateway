@@ -2078,4 +2078,56 @@ mod attestation_wiring {
             "auth-context reference should be an opaque sha256 handle"
         );
     }
+
+    #[tokio::test]
+    async fn provenance_stamps_cache_hits_with_hit_outcome() {
+        // Rung 2: cache-served results must also carry a signed receipt, tagged
+        // cache=Hit. First invoke populates the response cache (un-stamped);
+        // the second is served from cache and stamped fresh with cache=Hit.
+        use crate::attestation::{AttestationValidator, BnautAttestationSigner};
+        use crate::cache::ResponseCache;
+        use crate::trust::{CacheOutcome, SignedResultProvenance};
+
+        let mut meta = MetaMcp::with_features(
+            provenance_test_backend(),
+            Some(Arc::new(ResponseCache::new())),
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+        meta.enable_provenance_stamping(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+
+        let first = invoke_docs_search(&meta).await;
+        assert_eq!(
+            first
+                .get("_meta")
+                .and_then(|m| m.get("provenance"))
+                .and_then(|p| p.get("receipt"))
+                .and_then(|r| r.get("cache"))
+                .and_then(serde_json::Value::as_str),
+            Some("miss"),
+            "first (live-fetch) call must stamp cache=miss"
+        );
+
+        let second = invoke_docs_search(&meta).await;
+        let provenance = second
+            .get("_meta")
+            .and_then(|m| m.get("provenance"))
+            .expect("cache hit must still emit _meta.provenance");
+        let signed: SignedResultProvenance =
+            serde_json::from_value(provenance.clone()).expect("provenance must deserialize");
+
+        assert_eq!(
+            signed.receipt.cache,
+            CacheOutcome::Hit,
+            "cache-served result must be tagged cache=Hit"
+        );
+        assert_eq!(signed.receipt.backend_id, "remote_docs");
+        assert!(signed.receipt.backend_ok);
+
+        // The cache-hit receipt is independently signed and verifies.
+        let validator =
+            AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+        assert!(validator.verify_result_provenance(&signed));
+    }
 }
