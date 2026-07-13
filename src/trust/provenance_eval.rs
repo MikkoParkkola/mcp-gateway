@@ -229,6 +229,7 @@ pub fn score_corpus(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO;
     use crate::attestation::signer::BnautAttestationSigner;
     use crate::trust::result_provenance::CacheOutcome;
 
@@ -236,6 +237,14 @@ mod tests {
 
     fn signer() -> BnautAttestationSigner {
         BnautAttestationSigner::new(KEY.to_vec(), "unit")
+    }
+
+    /// The receipt-domain subkey used to sign fixture receipts directly.
+    /// `AttestationValidator::new` derives this same subkey internally from
+    /// the raw `signer()` key, mirroring production `resolve_provenance_signer`
+    /// wiring — so any receipt signed here with the raw key would never verify.
+    fn receipt_signer() -> BnautAttestationSigner {
+        signer().derive_domain(RESULT_PROVENANCE_DOMAIN_INFO)
     }
 
     fn validator() -> AttestationValidator {
@@ -259,7 +268,7 @@ mod tests {
         if let Some(n) = row_count {
             r = r.with_row_count(n);
         }
-        r.sign(&signer())
+        r.sign(&receipt_signer())
     }
 
     /// Build a signed receipt carrying an explicit `call_id`, for
@@ -280,7 +289,7 @@ mod tests {
         if let Some(n) = row_count {
             r = r.with_row_count(n);
         }
-        r.sign(&signer())
+        r.sign(&receipt_signer())
     }
 
     /// The labelled ground-truth set. Every `expected` is a hand-authored

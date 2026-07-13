@@ -71,22 +71,24 @@ fn main() -> ExitCode {
 /// Build the attestation validator from the same env vars the gateway's live
 /// wiring reads.
 ///
-/// An unset or empty signing key is refused outright: HMAC-SHA256 accepts an
-/// empty key, so silently falling back to `b""` would let a corpus whose
-/// receipts were signed with the empty key verify as "trusted" and get
-/// scored as real evidence. Since this offline tool's entire output IS the
-/// trust metric, that would make a forged empty-key corpus indistinguishable
-/// from a genuine one. This binary hard-fails instead of continuing —
-/// unlike the gateway's live boundary-call path, which only warns in
-/// observe-mode; there is no equivalent availability constraint here that
-/// would justify scoring against a key nobody configured.
+/// An unset, empty, or whitespace-only signing key is refused outright:
+/// HMAC-SHA256 accepts any key including a low-entropy whitespace-only one,
+/// so silently accepting `" "` (or falling back to `b""`) would let a
+/// corpus whose receipts were signed with that guessable key verify as
+/// "trusted" and get scored as real evidence (MIK-6909 item 1). Since this
+/// offline tool's entire output IS the trust metric, that would make a
+/// forged corpus indistinguishable from a genuine one. This binary hard-fails
+/// instead of continuing — unlike the gateway's live boundary-call path,
+/// which only warns in observe-mode; there is no equivalent availability
+/// constraint here that would justify scoring against a key nobody
+/// deliberately configured.
 fn validator_from_env() -> Result<AttestationValidator, String> {
     let key = std::env::var(ATTESTATION_SIGNING_KEY_ENV).unwrap_or_default();
-    if key.is_empty() {
+    if key.trim().is_empty() {
         return Err(format!(
-            "refusing to score: {ATTESTATION_SIGNING_KEY_ENV} is unset or empty. \
-             Scoring against an empty HMAC key would trust any receipt signed with \
-             an empty key, silently defeating signature verification. Set \
+            "refusing to score: {ATTESTATION_SIGNING_KEY_ENV} is unset, empty, or \
+             whitespace-only. Scoring against such a low-entropy HMAC key would trust \
+             any receipt signed with it, silently defeating signature verification. Set \
              {ATTESTATION_SIGNING_KEY_ENV} to the signing key the corpus's receipts \
              were captured with and re-run."
         ));

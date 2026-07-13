@@ -167,11 +167,16 @@ fn binary_exits_nonzero_on_missing_file() {
 #[test]
 #[ignore = "fixture generator, not a check — run explicitly to regenerate the fixture"]
 fn regenerate_fixture() {
-    use mcp_gateway::attestation::BnautAttestationSigner;
+    use mcp_gateway::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
     use mcp_gateway::trust::provenance_eval::{Claim, CorpusRecord};
     use mcp_gateway::trust::{CacheOutcome, RuntimeProvenanceReceipt};
 
-    let signer = BnautAttestationSigner::new(FIXTURE_KEY.as_bytes().to_vec(), "gateway");
+    // Receipts are signed with the HKDF receipt-domain subkey — the same
+    // derivation `AttestationValidator::verify_result_provenance` applies
+    // internally (MIK-6909 item 2) — so this fixture matches what a live
+    // gateway configured with `FIXTURE_KEY` actually produces.
+    let signer = BnautAttestationSigner::new(FIXTURE_KEY.as_bytes().to_vec(), "gateway")
+        .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO);
 
     let receipt = |call_id: &str, backend_ok: bool, row_count: Option<u64>| {
         let mut r = RuntimeProvenanceReceipt::observed(

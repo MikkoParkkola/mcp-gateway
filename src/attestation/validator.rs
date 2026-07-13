@@ -250,6 +250,11 @@ fn capabilities_grant(capabilities: &[String], required: &str) -> bool {
 #[derive(Debug)]
 pub struct AttestationValidator {
     signer: BnautAttestationSigner,
+    /// HKDF-derived receipt-domain subkey signer, used only by
+    /// [`Self::verify_result_provenance`] (MIK-6909 item 2). Kept separate
+    /// from `signer` (the token domain, unmodified raw key) so a leak in
+    /// either domain cannot forge the other.
+    receipt_signer: BnautAttestationSigner,
     audit: AuditRingBuffer,
     /// `token_id` → instant after which the rotated-out token is rejected.
     retiring: Mutex<HashMap<String, DateTime<Utc>>>,
@@ -277,8 +282,10 @@ impl AttestationValidator {
         audit_capacity: usize,
         rotation_grace: TimeDelta,
     ) -> Self {
+        let receipt_signer = signer.derive_domain(super::signer::RESULT_PROVENANCE_DOMAIN_INFO);
         Self {
             signer,
+            receipt_signer,
             audit: AuditRingBuffer::new(audit_capacity),
             retiring: Mutex::new(HashMap::new()),
             rotation_grace,
@@ -505,15 +512,17 @@ impl AttestationValidator {
         self.rotations_total.load(Ordering::Relaxed)
     }
 
-    /// Verify a signed runtime provenance receipt against this validator's key
-    /// material (MIK-6905, rung 1.3).
+    /// Verify a signed runtime provenance receipt against this validator's
+    /// receipt-domain key material (MIK-6905, rung 1.3; domain-separated
+    /// from the token-domain key since MIK-6909 item 2).
     ///
     /// Provenance receipts are not attestation tokens — they carry no expiry,
     /// rotation, or capability semantics — so they do not flow through
     /// [`Self::validate_boundary_call`]. This method is the validation authority
     /// for the `_meta.provenance` channel: it re-derives the receipt's canonical
-    /// bytes and constant-time-compares the detached HMAC. Returns `true` only
-    /// when the signature is well-formed and matches.
+    /// bytes and constant-time-compares the detached HMAC against the HKDF
+    /// receipt-domain subkey. Returns `true` only when the signature is
+    /// well-formed and matches.
     #[must_use]
     pub fn verify_result_provenance(&self, signed: &crate::trust::SignedResultProvenance) -> bool {
         let Some(signature) = signed.signature_bytes() else {
@@ -523,7 +532,10 @@ impl AttestationValidator {
         // `canonical_bytes()` and so is not covered by this HMAC. Any future
         // multi-key/rotation-aware verification must not trust `key_id` to
         // select a key without additional signed binding.
-        self.signer
+        //
+        // Verified with `receipt_signer` (the HKDF receipt-domain subkey),
+        // NOT `signer` (the raw token-domain key) — MIK-6909 item 2.
+        self.receipt_signer
             .verify_bytes(&signed.receipt.canonical_bytes(), &signature)
     }
 }
@@ -552,12 +564,18 @@ mod tests {
         )
     }
 
+    /// A receipt-domain signer sharing the validator's raw key material —
+    /// mirrors how `resolve_provenance_signer` (gateway/server/mod.rs) derives
+    /// the live receipt signer from the same configured key (MIK-6909 item 2).
+    fn twin_receipt_signer() -> BnautAttestationSigner {
+        BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
+            .derive_domain(super::super::signer::RESULT_PROVENANCE_DOMAIN_INFO)
+    }
+
     #[test]
     fn result_provenance_round_trips_sign_then_verify() {
         let v = validator();
-        // Twin signer sharing the validator's key material.
-        let twin = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
-        let signed = sample_receipt().sign(&twin);
+        let signed = sample_receipt().sign(&twin_receipt_signer());
         assert_eq!(signed.algorithm, crate::attestation::SIGNING_ALGORITHM);
         assert_eq!(signed.key_id, "bnaut/unit");
         assert!(v.verify_result_provenance(&signed));
@@ -566,8 +584,7 @@ mod tests {
     #[test]
     fn tampered_receipt_fails_verification() {
         let v = validator();
-        let twin = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
-        let mut signed = sample_receipt().sign(&twin);
+        let mut signed = sample_receipt().sign(&twin_receipt_signer());
         // Flip a fact after signing — the HMAC must no longer match.
         signed.receipt.backend_ok = false;
         assert!(!v.verify_result_provenance(&signed));
@@ -576,8 +593,21 @@ mod tests {
     #[test]
     fn wrong_key_fails_verification() {
         let v = validator();
-        let other = BnautAttestationSigner::new(b"a-different-key".to_vec(), "unit");
+        let other = BnautAttestationSigner::new(b"a-different-key".to_vec(), "unit")
+            .derive_domain(super::super::signer::RESULT_PROVENANCE_DOMAIN_INFO);
         let signed = sample_receipt().sign(&other);
+        assert!(!v.verify_result_provenance(&signed));
+    }
+
+    #[test]
+    fn raw_key_signature_does_not_verify_as_a_receipt() {
+        // MIK-6909 item 2: signing with the raw (token-domain) key — the
+        // pre-hardening behavior — must NOT verify against the validator's
+        // HKDF-derived receipt domain. Proves the receipt channel no longer
+        // accepts token-domain signatures.
+        let v = validator();
+        let raw = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let signed = sample_receipt().sign(&raw);
         assert!(!v.verify_result_provenance(&signed));
     }
 

@@ -108,6 +108,7 @@ base64 = "0.22"
 rand = "0.10"
 dirs = "6.0"
 hmac = "0.13"
+hkdf = "0.13"
 hex = "0.4"
 ring = "0.17"
 # Key Server: OIDC JWT verification

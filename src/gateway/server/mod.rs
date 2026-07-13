@@ -243,7 +243,15 @@ async fn poll_export_source(
     // The exporter reads the on-disk log synchronously; run it on the blocking
     // pool so the async runtime is never stalled by a large tail read.
     let result = tokio::task::spawn_blocking(move || {
-        let mut e = exporter_arc.lock().expect("export mutex poisoned");
+        // Recover the guard on poison rather than panicking the blocking
+        // task (MIK-6909 item 3) — matches the established pattern in
+        // `crate::attestation::validator` (e.g. `AuditRingBuffer::push`).
+        // A prior panic while holding the lock invalidated no in-progress
+        // write here (the guard is dropped before any partial mutation is
+        // possible), so the recovered exporter state is safe to keep using.
+        let mut e = exporter_arc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         e.poll(sink_ref.as_ref())
     })
     .await;
@@ -319,23 +327,31 @@ struct BuiltMetaMcp {
 /// [`Gateway::build_meta_mcp`], which performs no process-environment reads
 /// itself.
 ///
-/// Fails closed: an empty signing key returns `None` (no signer installed,
-/// stamping stays disabled and output is byte-identical to stamping-off)
-/// rather than installing a signer whose signatures are publicly
-/// forgeable — an empty HMAC key is a known key, so anyone can compute a
-/// signature that a validator sharing the same (empty) key would accept.
+/// Fails closed: a key that is empty, or empty after trimming whitespace,
+/// returns `None` (no signer installed, stamping stays disabled and output
+/// is byte-identical to stamping-off) rather than installing a signer whose
+/// signatures are trivially forgeable — an empty or whitespace-only HMAC key
+/// is a known/low-entropy key, so anyone can compute a signature that a
+/// validator sharing the same key would accept (MIK-6909 item 1).
+///
+/// The returned signer's key material is the HKDF-SHA256 receipt-domain
+/// subkey ([`crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO`]) derived
+/// from `signing_key`, not `signing_key` itself — domain-separated from
+/// inbound attestation-token verification so a leak in one channel cannot
+/// forge the other (MIK-6909 item 2).
 #[must_use]
 fn resolve_provenance_signer(
     signing_key: &str,
     key_id: &str,
 ) -> Option<crate::attestation::BnautAttestationSigner> {
-    if signing_key.is_empty() {
+    if signing_key.trim().is_empty() {
         None
     } else {
-        Some(crate::attestation::BnautAttestationSigner::new(
+        let base = crate::attestation::BnautAttestationSigner::new(
             signing_key.as_bytes().to_vec(),
             key_id.to_string(),
-        ))
+        );
+        Some(base.derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO))
     }
 }
 
@@ -2168,10 +2184,35 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provenance_signer_fails_closed_on_whitespace_only_key() {
+        // MIK-6909 item 1: a key of only whitespace is just as low-entropy
+        // as an empty key — `is_empty()` alone would let it slip through and
+        // install a forgeable signer. Any all-whitespace key must be refused.
+        for whitespace_key in [" ", "   ", "\t", "\n", " \t\n "] {
+            assert!(
+                resolve_provenance_signer(whitespace_key, "gateway").is_none(),
+                "whitespace-only signing key {whitespace_key:?} must not yield a signer"
+            );
+        }
+    }
+
+    #[test]
     fn resolve_provenance_signer_installs_signer_when_key_present() {
         assert!(
             resolve_provenance_signer("real-signing-key", "gateway").is_some(),
             "non-empty signing key must yield a signer, matching pre-fix behavior"
+        );
+    }
+
+    #[test]
+    fn resolve_provenance_signer_accepts_key_with_internal_whitespace() {
+        // Only ALL-whitespace keys are rejected — a key with meaningful
+        // non-whitespace content (even surrounded by incidental whitespace)
+        // must still install a signer, and must NOT be silently trimmed
+        // before use as key material.
+        assert!(
+            resolve_provenance_signer("  real key with spaces  ", "gateway").is_some(),
+            "a key containing non-whitespace bytes must still yield a signer"
         );
     }
 }

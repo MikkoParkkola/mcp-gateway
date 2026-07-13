@@ -42,7 +42,7 @@ pub use launcher::{
     ATTESTATION_FLAG_ENV, AttestationEnforcement, AttestedSandboxLauncher, BootDenial,
     SandboxHandle, SandboxLaunchSpec, Substrate, TOKEN_ENV_VAR,
 };
-pub use signer::{BnautAttestationSigner, TokenRequest};
+pub use signer::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO, TokenRequest};
 pub use token::{AttestationToken, BNAUT_ISSUER, SIGNING_ALGORITHM, TokenClaims};
 pub use validator::{
     AttestationAuditRecord, AttestationMode, AttestationRejection, AttestationValidator,

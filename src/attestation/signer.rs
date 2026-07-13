@@ -10,6 +10,7 @@
 //! bespoke crypto is introduced.
 
 use chrono::{DateTime, TimeDelta, Utc};
+use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use uuid::Uuid;
@@ -17,6 +18,16 @@ use uuid::Uuid;
 use super::token::{AttestationToken, BNAUT_ISSUER, SIGNING_ALGORITHM, TokenClaims};
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// HKDF-SHA256 `info` label that derives the outbound runtime-provenance
+/// receipt signing subkey from the operator-configured
+/// `GATEWAY_ATTESTATION_SIGNING_KEY` (MIK-6909 item 2).
+///
+/// Domain-separated from inbound attestation-TOKEN signing/verification,
+/// which — as of this constant's introduction — still uses the raw
+/// configured key directly (see [`BnautAttestationSigner::derive_domain`]
+/// docs for why the token domain is intentionally NOT migrated here).
+pub const RESULT_PROVENANCE_DOMAIN_INFO: &[u8] = b"mcp-gateway/result-provenance/v1";
 
 /// What a sandbox boot requests a token for.
 #[derive(Debug, Clone)]
@@ -56,6 +67,47 @@ impl BnautAttestationSigner {
     #[must_use]
     pub fn key_id(&self) -> &str {
         &self.key_id
+    }
+
+    /// Derive a domain-separated subkey signer from this signer's key
+    /// material via HKDF-SHA256, keeping the same `key_id` (MIK-6909 item 2).
+    ///
+    /// The operator-configured `GATEWAY_ATTESTATION_SIGNING_KEY` bytes were
+    /// previously used verbatim as the HMAC key for two unrelated trust
+    /// domains — inbound attestation tokens and outbound runtime-provenance
+    /// receipts — so a leak or signing oracle in one domain could forge the
+    /// other. `derive_domain` expands the configured key with HKDF-SHA256
+    /// under a domain-specific `info` label, producing an unrelated 32-byte
+    /// subkey per domain.
+    ///
+    /// Salt is fixed/empty (`None`): the input key material is already an
+    /// operator-provisioned high-entropy secret, not a low-entropy password,
+    /// so a random salt adds no meaningful extraction security margin here
+    /// (RFC 5869 §3.1 explicitly permits omitting it) — and every process
+    /// deriving this subkey independently must land on the identical value,
+    /// which a random salt would prevent.
+    ///
+    /// Only the receipt domain ([`RESULT_PROVENANCE_DOMAIN_INFO`]) is wired
+    /// through this derivation today. The token domain intentionally still
+    /// signs/verifies with the raw configured key: attestation tokens are
+    /// issued by the external bnaut-attestation platform component (see
+    /// [`crate::attestation`] module docs) and presented to this gateway
+    /// long after issuance (sandbox boot, cross-boundary calls), so
+    /// unilaterally re-deriving the token-domain key here would silently
+    /// break verification of every already-issued, in-flight token without
+    /// bnaut-attestation also adopting the same derivation. That migration
+    /// needs its own cross-service ticket and coordinated rollout, not a
+    /// gateway-only change.
+    #[must_use]
+    pub fn derive_domain(&self, domain_info: &[u8]) -> Self {
+        let hk = Hkdf::<Sha256>::new(None, &self.key);
+        let mut subkey = [0u8; 32];
+        hk.expand(domain_info, &mut subkey)
+            .expect("32 bytes is well within HKDF-SHA256's 8160-byte max output");
+        Self {
+            key: subkey.to_vec(),
+            key_id: self.key_id.clone(),
+        }
     }
 
     /// Issue a signed token for `request`, valid from `now` for `ttl`.
@@ -168,6 +220,41 @@ mod tests {
         let other = BnautAttestationSigner::new(b"different-key".to_vec(), "other");
         let (payload, sig) = AttestationToken::split_unverified(token.encoded()).unwrap();
         assert!(!other.verify_bytes(&payload, &sig));
+    }
+
+    #[test]
+    fn receipt_domain_subkey_does_not_cross_verify_with_token_domain() {
+        // MIK-6909 item 2: the receipt-domain subkey (derived) and the
+        // token-domain key (raw, unmodified) must be unrelated HMAC keys —
+        // a signature valid under one must never verify under the other.
+        let token_domain = signer(); // raw configured key, unchanged
+        let receipt_domain = token_domain.derive_domain(RESULT_PROVENANCE_DOMAIN_INFO);
+        assert_ne!(
+            receipt_domain.sign_bytes(b"same-bytes"),
+            token_domain.sign_bytes(b"same-bytes"),
+            "domains must not share a signature for identical input"
+        );
+
+        let payload = b"runtime-provenance-receipt-bytes";
+        let receipt_sig = receipt_domain.sign_bytes(payload);
+        let token_sig = token_domain.sign_bytes(payload);
+
+        // A receipt signed in the receipt domain fails under the token key...
+        assert!(!token_domain.verify_bytes(payload, &receipt_sig));
+        // ...and a token-domain signature fails under the receipt key.
+        assert!(!receipt_domain.verify_bytes(payload, &token_sig));
+    }
+
+    #[test]
+    fn derive_domain_is_deterministic_and_label_sensitive() {
+        let base = signer();
+        let a = base.derive_domain(b"domain-a");
+        let a_again = base.derive_domain(b"domain-a");
+        let b = base.derive_domain(b"domain-b");
+        assert_eq!(a.sign_bytes(b"x"), a_again.sign_bytes(b"x"));
+        assert_ne!(a.sign_bytes(b"x"), b.sign_bytes(b"x"));
+        // key_id is preserved unchanged across derivation.
+        assert_eq!(a.key_id(), base.key_id());
     }
 
     #[test]

@@ -34,9 +34,11 @@ pub const ATTESTATION_MODE_ENV: &str = "GATEWAY_ATTESTATION_MODE";
 
 /// Env var carrying the HMAC-SHA256 signing key shared with bnaut-attestation.
 ///
-/// When unset/empty the validator still initialises; in observe mode every
-/// presented token simply fails signature verification and is audit-logged
-/// (the call is never blocked).
+/// When unset/empty/whitespace-only the validator still initialises; in
+/// observe mode every presented token simply fails signature verification
+/// and is audit-logged (the call is never blocked). A whitespace-only value
+/// is normalized to the same empty-key posture rather than used verbatim as
+/// low-entropy HMAC key material (MIK-6909 item 1).
 pub const ATTESTATION_SIGNING_KEY_ENV: &str = "GATEWAY_ATTESTATION_SIGNING_KEY";
 
 /// Env var for the signing key id (namespaced under `bnaut/` by the signer).
@@ -75,14 +77,23 @@ pub fn resolve_attestation_wiring(
         }
     };
 
-    let key = signing_key.unwrap_or_default().to_vec();
-    if key.is_empty() {
+    let key = signing_key.unwrap_or_default();
+    // Whitespace-only key material is exactly as low-entropy as an empty
+    // key (MIK-6909 item 1) — normalize both to the same "no key" posture
+    // rather than using the whitespace bytes verbatim as the HMAC key.
+    // `u8::is_ascii_whitespace` mirrors `str::trim`'s default whitespace
+    // set; the empty slice satisfies `all()` vacuously, so this subsumes
+    // the pre-existing empty-key check without a separate branch.
+    let key = if key.iter().all(u8::is_ascii_whitespace) {
         tracing::warn!(
             env = ATTESTATION_SIGNING_KEY_ENV,
             "attestation observe mode enabled without a signing key; presented tokens \
              will fail verification and be audit-logged only (never blocked)"
         );
-    }
+        Vec::new()
+    } else {
+        key.to_vec()
+    };
     let key_id = key_id
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -163,5 +174,45 @@ mod tests {
         // A token cannot verify against the empty key, so observe would audit it;
         // assert the validator is live and starts with an empty audit buffer.
         assert!(validator.audit().is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_signing_key_normalizes_to_empty_not_used_verbatim() {
+        // MIK-6909 item 1: a whitespace-only key must not be used verbatim as
+        // HMAC key material (that would install a low-entropy signer). It is
+        // normalized to the same "no signing key" posture as an absent key —
+        // the validator still initialises (observe mode audits, never
+        // blocks), matching `missing_signing_key_still_initialises_validator`
+        // above.
+        use super::super::signer::TokenRequest;
+        use super::super::validator::AttestationRejection;
+        use chrono::{TimeDelta, Utc};
+
+        let (validator, _) = resolve_attestation_wiring(Some("observe"), Some(b"   "), Some("kid"))
+            .expect("whitespace-only key must still attach an observe validator");
+
+        let request = TokenRequest {
+            agent_identity: "agent".to_string(),
+            task_uuid: uuid::Uuid::new_v4(),
+            capabilities: vec![],
+        };
+        let now = Utc::now();
+
+        // A token signed with the literal whitespace bytes must NOT verify —
+        // proving the wired validator did not use those bytes as key material.
+        let literal_signer = BnautAttestationSigner::new(b"   ".to_vec(), "kid");
+        let literal_token = literal_signer.issue(&request, now, TimeDelta::minutes(5));
+        let err = validator
+            .validate_boundary_call(Some(literal_token.encoded()), "test", None, now)
+            .expect_err("token signed with the literal whitespace key must be rejected");
+        assert_eq!(err, AttestationRejection::BadSignature);
+
+        // A token signed with a truly empty key DOES verify — the posture
+        // whitespace-only normalizes to.
+        let empty_signer = BnautAttestationSigner::new(Vec::new(), "kid");
+        let empty_token = empty_signer.issue(&request, now, TimeDelta::minutes(5));
+        validator
+            .validate_boundary_call(Some(empty_token.encoded()), "test", None, now)
+            .expect("whitespace-only key normalizes to empty key material");
     }
 }
