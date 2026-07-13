@@ -293,10 +293,97 @@ pub(super) fn augment_with_provenance(
     (result, signed_receipt)
 }
 
+/// Remove a backend-supplied `_meta.provenance` receipt from `result`.
+///
+/// The gateway authors provenance receipts only when stamping is enabled. With
+/// stamping OFF, any `_meta.provenance` present was injected by the backend, and
+/// a naive reader could mistake a backend-forged receipt for a gateway-signed
+/// one (MIK-6909). Stripping it on the off path closes that spoofing surface so
+/// the `_meta.provenance` channel means "gateway-authored" or nothing.
+///
+/// Honest backends never set this key, so the common case is a no-op and the
+/// "byte-identical with the feature off" guarantee still holds. Only the
+/// `provenance` key is removed — other `_meta` entries (e.g. cache keys) are
+/// preserved — and an `_meta` object left empty by the removal is dropped so no
+/// stray `{}` appears where the backend sent none.
+pub(super) fn strip_backend_provenance(mut result: Value) -> Value {
+    if let Value::Object(ref mut map) = result
+        && let Some(Value::Object(meta_map)) = map.get_mut("_meta")
+        && meta_map.remove("provenance").is_some()
+        && meta_map.is_empty()
+    {
+        map.remove("_meta");
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::internal_invoke_args;
+    use super::strip_backend_provenance;
     use serde_json::json;
+
+    /// A backend-forged `_meta.provenance` block MUST be removed on the
+    /// stamping-off path so a naive reader cannot trust a receipt the gateway
+    /// never signed (MIK-6909, AC.4). Sibling `_meta` keys survive.
+    #[test]
+    fn strip_backend_provenance_removes_forged_receipt_keeps_siblings() {
+        let forged = json!({
+            "content": [{"type": "text", "text": "ok"}],
+            "_meta": {
+                "provenance": {"backend": "evil", "sig": "forged"},
+                "prompt_cache_key": "keep-me"
+            }
+        });
+
+        let cleaned = strip_backend_provenance(forged);
+
+        assert!(
+            cleaned.pointer("/_meta/provenance").is_none(),
+            "forged provenance must be stripped, got: {cleaned}"
+        );
+        assert_eq!(
+            cleaned.pointer("/_meta/prompt_cache_key"),
+            Some(&json!("keep-me")),
+            "unrelated _meta siblings must be preserved"
+        );
+        assert_eq!(
+            cleaned.pointer("/content/0/text"),
+            Some(&json!("ok")),
+            "tool content must be untouched"
+        );
+    }
+
+    /// When `provenance` was the only `_meta` entry, the now-empty `_meta`
+    /// object is dropped so the result stays clean rather than carrying `{}`.
+    #[test]
+    fn strip_backend_provenance_drops_emptied_meta() {
+        let forged = json!({
+            "content": [],
+            "_meta": {"provenance": {"sig": "forged"}}
+        });
+
+        let cleaned = strip_backend_provenance(forged);
+
+        assert!(
+            cleaned.get("_meta").is_none(),
+            "emptied _meta must be removed entirely, got: {cleaned}"
+        );
+    }
+
+    /// An honest backend that sends no provenance is left byte-identical: the
+    /// strip is a pure no-op, preserving the feature-off guarantee.
+    #[test]
+    fn strip_backend_provenance_is_noop_for_honest_result() {
+        let honest = json!({
+            "content": [{"type": "text", "text": "hi"}],
+            "_meta": {"prompt_cache_key": "k"}
+        });
+
+        let cleaned = strip_backend_provenance(honest.clone());
+
+        assert_eq!(cleaned, honest, "no provenance key means no change");
+    }
 
     /// The projection opt-out (`_full`) for internal chain/playbook invocations
     /// MUST live INSIDE `arguments` — that is where `invoke_tool_traced` reads

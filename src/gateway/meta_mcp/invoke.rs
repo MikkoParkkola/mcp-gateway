@@ -121,7 +121,7 @@ use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    resolve_idempotency_key,
+    resolve_idempotency_key, strip_backend_provenance,
 };
 
 async fn call_capability_tool_with_identity(
@@ -476,7 +476,12 @@ impl MetaMcp {
         client_claim: Option<&crate::trust::ClientClaim>,
     ) -> Value {
         let Some(ref signer) = self.provenance_signer else {
-            return value;
+            // Stamping disabled: the gateway authors no receipt, so any
+            // `_meta.provenance` here was injected by the backend. Strip it so a
+            // naive reader cannot mistake a backend-forged receipt for a
+            // gateway-signed one (MIK-6909). Honest backends set no such key, so
+            // this stays a no-op and the off path remains byte-identical.
+            return strip_backend_provenance(value);
         };
         let backend_ok = !value
             .get("isError")

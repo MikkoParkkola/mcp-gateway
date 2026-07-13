@@ -1798,6 +1798,74 @@ mod tests {
         }
     }
 
+    // ── SIEM export poison recovery (MIK-6909, AC.2) ─────────────────────────
+    // A panic elsewhere while the export mutex is held must not crash the export
+    // path: `poll_export_source` recovers the guard via `PoisonError::into_inner`
+    // and keeps forwarding. This proves the recovery both survives the poison
+    // AND still does useful work (forwards the pending log entry).
+    #[tokio::test]
+    async fn export_poll_recovers_from_a_poisoned_exporter_mutex() {
+        use std::sync::Mutex;
+
+        use super::poll_export_source;
+        use crate::control_plane::{
+            CollectingSink, ExportSink, ExportSource, LogExporter, SourceExportStatus,
+        };
+        use crate::security::TransparencyLogger;
+        use crate::security::transparency_log::TransparencyLogConfig;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("inv.jsonl");
+        let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: log_path.to_string_lossy().into_owned(),
+            key_id: "test".to_string(),
+            shared_secret: String::new(),
+        }))
+        .expect("open transparency log");
+        logger
+            .log_invocation("s1", "caller", "srv", "tool", "req:1", "resp:1")
+            .expect("append one entry");
+
+        let exporter = Arc::new(Mutex::new(
+            LogExporter::open(
+                ExportSource::Invocation,
+                log_path.clone(),
+                dir.path().join("cursor.json"),
+            )
+            .expect("open exporter"),
+        ));
+
+        // Poison the mutex: a separate thread panics while holding the guard.
+        let poison_target = Arc::clone(&exporter);
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_target.lock().expect("acquire lock before poisoning");
+            panic!("intentional poison for the test");
+        })
+        .join();
+        assert!(
+            exporter.is_poisoned(),
+            "precondition: the export mutex must be poisoned"
+        );
+
+        let collecting = Arc::new(CollectingSink::new());
+        let sink: Arc<dyn ExportSink> = collecting.clone();
+        let status = SourceExportStatus::default();
+
+        // A pre-recovery `.expect(...)` over the poisoned lock would panic inside
+        // `spawn_blocking`; tokio catches that as a `JoinError`, which the `Err(e)`
+        // arm here turns into a logged failure with nothing delivered — so the
+        // regression signal is `delivered().len() == 0`, not a panicking test.
+        // With recovery in place the guard is reclaimed and the poll completes.
+        poll_export_source(&exporter, &sink, &status, "invocation").await;
+
+        assert_eq!(
+            collecting.delivered().len(),
+            1,
+            "recovered poll must forward the pending log entry"
+        );
+    }
+
     #[test]
     fn passthrough_only_deployment_installs_no_minting_strategy() {
         use crate::identity_propagation::PropagationStrategyKind;
