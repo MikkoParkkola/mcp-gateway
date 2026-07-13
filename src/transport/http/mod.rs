@@ -193,6 +193,19 @@ enum HeaderMode<'a> {
     Close,
 }
 
+/// Build the `Authorization: Bearer …` header value for `token`.
+///
+/// Returns a clean [`Error::OAuth`] instead of panicking when the token carries
+/// bytes illegal in an HTTP header value — control characters or bytes outside
+/// visible ASCII (MIK-6909). A backend credential is attacker-influenceable in
+/// federated/token-exchange deployments, so a malformed token must fail the
+/// request as an auth error, never abort the process. The token is never echoed
+/// into the error, keeping the credential out of logs (CWE-532).
+fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
+    header::HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
+}
+
 impl HttpTransport {
     /// Create a new HTTP transport
     ///
@@ -500,10 +513,9 @@ impl HttpTransport {
         // isolation decision has already been made. `insert` replaces (never
         // appends) Authorization, so no caller-supplied header is duplicated.
         if let Some(token) = self.get_oauth_token().await? {
-            headers.insert(
-                header::AUTHORIZATION,
-                format!("Bearer {token}").parse().unwrap(),
-            );
+            // A token carrying bytes illegal in an HTTP header value must fail as
+            // a clean auth error, never panic the request path (MIK-6909).
+            headers.insert(header::AUTHORIZATION, bearer_header_value(&token)?);
             if matches!(mode, HeaderMode::Sse) {
                 debug!(url = %self.base_url, "SSE connection with OAuth token");
             }

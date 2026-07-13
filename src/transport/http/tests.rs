@@ -1476,3 +1476,35 @@ async fn stateful_backend_partitions_sessions_across_identities() {
 
     server.abort();
 }
+
+// =========================================================================
+// bearer_header_value — invalid-byte token must not panic (MIK-6909, AC.5)
+// =========================================================================
+
+#[test]
+fn bearer_header_value_accepts_a_well_formed_token() {
+    // GIVEN a token containing only header-legal bytes
+    // WHEN we build the Authorization value
+    // THEN it succeeds and carries the Bearer prefix.
+    let value = bearer_header_value("abc123.DEF-456").expect("valid token must produce a header");
+    assert_eq!(value.to_str().unwrap(), "Bearer abc123.DEF-456");
+}
+
+#[test]
+fn bearer_header_value_rejects_invalid_bytes_without_panicking() {
+    // GIVEN a token with bytes illegal in an HTTP header value (newline, NUL, CR)
+    // WHEN we build the Authorization value
+    // THEN it returns a clean OAuth error rather than panicking, and the error
+    //      never echoes the token (credential hygiene, CWE-532).
+    for bad in ["tok\nen", "tok\0en", "tok\ren"] {
+        let err = bearer_header_value(bad).expect_err("invalid token must be rejected");
+        assert!(
+            matches!(err, Error::OAuth(_)),
+            "expected a clean OAuth error, got {err:?}"
+        );
+        assert!(
+            !format!("{err}").contains(bad),
+            "error must not leak the raw token"
+        );
+    }
+}
