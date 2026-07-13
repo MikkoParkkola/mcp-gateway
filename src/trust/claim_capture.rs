@@ -15,27 +15,31 @@
 //! feeding a captured file through the existing scorer (`provenance-eval
 //! <captured-file.jsonl>`, RUNG3.4) requires no format translation.
 //!
-//! ## Why only `Claim::Succeeded` is captured
+//! ## Ground truth vs claim-under-test (MIK-6914)
 //!
-//! The claim has to be *derived*, not asserted by the client — the MCP
-//! protocol carries no "here is what I'm claiming about this result" channel,
-//! so the gateway is the only party positioned to record it, and it can only
-//! record what it can honestly observe at the stamping chokepoint
-//! ([`crate::gateway::meta_mcp::support::augment_with_provenance`]).
+//! RUNG3.1 could only capture [`Claim::Succeeded`], because the generic
+//! stamping chokepoint has no per-tool result schema and guessing a row count
+//! from whatever shape a backend's JSON happens to have would fabricate ground
+//! truth — the MIK-5854 failure mode. MIK-6914 keeps that stop-line and splits
+//! the two legs instead of collapsing them:
 //!
-//! `backend_ok` (`!isError`) is observed directly there and needs no
-//! interpretation, so [`Claim::Succeeded`] is always sound to derive.
-//! [`Claim::AuthoritativeEmpty`] and [`Claim::FoundRows`] would require a
-//! `row_count` — but the chokepoint is generic across 30+ heterogeneous
-//! backends with no per-tool result schema. Guessing a row count from
-//! whatever shape a given backend's JSON happens to have (a top-level array
-//! length, a `"results"`/`"items"`/`"rows"` field, ...) is exactly the kind of
-//! inferred-not-observed judgment [`super::result_provenance`]'s module
-//! contract forbids: "facts, not judgments... an absent row count means 'not
-//! observed', never zero". A wrong guess here would poison the eval corpus
-//! with fabricated ground truth — the same failure mode the RUNG2 design
-//! note (MIK-5854) already burned once. See `derive_claim` for the single
-//! narrow point where this decision is made.
+//! - **Ground truth** is an *observed* authoritative count, produced only by a
+//!   per-backend Option A extractor ([`super::extract_row_count`]) for a
+//!   backend whose result shape genuinely carries one, and recorded in the
+//!   signed receipt's
+//!   [`row_count`](super::result_provenance::RuntimeProvenanceReceipt::row_count).
+//!   Absent such an extractor the count stays `None` — "not observed", never
+//!   zero.
+//! - **Claim-under-test** is what the client said it rendered — an untrusted
+//!   [`ClientClaim`] (Option B), captured verbatim by [`derive_claim`] and
+//!   never used as the ground-truth leg. Absent a client claim, [`derive_claim`]
+//!   still falls back to [`Claim::Succeeded`], the honest floor.
+//!
+//! Because the two legs are sourced independently, a client over-claim
+//! (`FoundRows` over an authoritatively empty source) scores `Unsupported`, and
+//! a claim the gateway could not check (`AuthoritativeEmpty` over a backend that
+//! exposes no count) scores `Abstain` — the distinction this whole line of work
+//! exists to make.
 //!
 //! ## Deployment
 //!
@@ -51,8 +55,6 @@ use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::sync::Mutex;
-
-use serde_json::Value;
 
 use super::SignedResultProvenance;
 use super::provenance_eval::{Claim, CorpusRecord};
@@ -111,21 +113,68 @@ impl ClaimCaptureSink {
     }
 }
 
-/// Derive the claim a shadow-capture record should carry for one observed
-/// tool call, from exactly the facts already available at the provenance
-/// stamping chokepoint.
+/// A claim about a tool result supplied by the client (the agent), joined to
+/// the gateway's ground-truth receipt by `call_id`.
 ///
-/// Deliberately ignores the tool result body (`_result` is unused): see the
-/// module doc for why a generic, backend-agnostic chokepoint cannot soundly
-/// infer a row/item count, and therefore always derives [`Claim::Succeeded`]
-/// — the one claim `backend_ok` alone supports without guessing at
-/// domain-specific result shape. `Claim::Succeeded` is deliberately captured
-/// even when `backend_ok` is `false`: scoring it `Unsupported` against a
-/// failed receipt is the exact silent-failure signal RUNG2 exists to catch,
-/// so suppressing capture on failure would hide the highest-value case.
+/// This is the *claim-under-test* — MIK-6914 Option B. It is **untrusted
+/// input**: the client asserts what it intends to render about a result ("no
+/// results", "found N rows"), and the offline eval scores that assertion
+/// against the gateway-observed receipt. It is *never* the ground-truth leg.
+/// The newtype exists precisely so a client-supplied claim cannot be mistaken
+/// for an observed gateway fact at a call site — the ground truth is the
+/// receipt's [`RuntimeProvenanceReceipt::row_count`](super::result_provenance::RuntimeProvenanceReceipt::row_count),
+/// populated only by the gateway's Option A extractor
+/// ([`super::extract_row_count`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientClaim {
+    call_id: String,
+    claim: Claim,
+}
+
+impl ClientClaim {
+    /// Wrap a client-supplied claim as the untrusted claim-under-test for
+    /// `call_id`. The name makes the trust boundary unmissable at the call site.
+    #[must_use]
+    pub fn untrusted(call_id: impl Into<String>, claim: Claim) -> Self {
+        Self {
+            call_id: call_id.into(),
+            claim,
+        }
+    }
+
+    /// The call this claim is about — the join key to the ground-truth receipt.
+    #[must_use]
+    pub fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    /// The untrusted claim itself.
+    #[must_use]
+    pub fn claim(&self) -> &Claim {
+        &self.claim
+    }
+}
+
+/// Derive the *claim-under-test* to capture for one observed tool call.
+///
+/// MIK-6914 splits the ground truth from the claim under test, and this
+/// function supplies only the latter. The ground truth — an authoritative row
+/// count — is observed independently by the gateway's Option A extractor and
+/// lives in the signed receipt ([`super::extract_row_count`] →
+/// [`RuntimeProvenanceReceipt::row_count`](super::result_provenance::RuntimeProvenanceReceipt::row_count)).
+///
+/// When the client supplied a typed [`ClientClaim`] for this call (Option B),
+/// that untrusted claim is captured verbatim as the claim-under-test. Absent a
+/// client claim, the derivation falls back to [`Claim::Succeeded`] — the honest
+/// floor that `backend_ok` alone supports without inspecting result shape, and
+/// the same value the RUNG3.1 sink captured before richer claims existed.
+///
+/// The claim is never derived from the ground-truth count, so the two legs stay
+/// independent — the property MIK-6914.AC.2 requires and the reason a client
+/// over-claim can be scored `Unsupported` at all.
 #[must_use]
-pub fn derive_claim(_result: &Value, _backend_ok: bool) -> Claim {
-    Claim::Succeeded
+pub fn derive_claim(client_claim: Option<&ClientClaim>) -> Claim {
+    client_claim.map_or(Claim::Succeeded, |c| c.claim().clone())
 }
 
 #[cfg(test)]
@@ -175,24 +224,20 @@ mod tests {
             .collect()
     }
 
-    /// `derive_claim` always returns `Succeeded` regardless of the result
-    /// body shape — proving structurally (not just by doc comment) that this
-    /// chokepoint never parses tool-result content to guess a row count.
+    /// With no client claim, `derive_claim` falls back to the honest floor
+    /// [`Claim::Succeeded`] — it never inspects a result body to guess a count.
     #[test]
-    fn derive_claim_ignores_result_body_shape() {
-        let array_like = json!({"content": [{"type": "text", "text": "[1,2,3]"}]});
-        let object_like = json!({"content": [{"type": "text", "text": "{}"}]});
-        assert_eq!(derive_claim(&array_like, true), Claim::Succeeded);
-        assert_eq!(derive_claim(&object_like, true), Claim::Succeeded);
+    fn derive_claim_without_client_claim_is_succeeded_floor() {
+        assert_eq!(derive_claim(None), Claim::Succeeded);
     }
 
-    /// `derive_claim` still returns `Succeeded` on a failed backend call — the
-    /// claim under scrutiny is "the call succeeded", and capturing it here is
-    /// exactly what lets `score_corpus` later flag it `Unsupported`.
+    /// A client-supplied claim (Option B) is captured verbatim as the
+    /// claim-under-test — this is the untrusted leg, not the ground truth.
     #[test]
-    fn derive_claim_on_failed_backend_is_still_succeeded_for_scoring() {
-        let claim = derive_claim(&json!({"isError": true}), false);
-        assert_eq!(claim, Claim::Succeeded);
+    fn derive_claim_uses_client_claim_when_present() {
+        let cc = ClientClaim::untrusted("gw-call-1", Claim::FoundRows { count: 5 });
+        assert_eq!(derive_claim(Some(&cc)), Claim::FoundRows { count: 5 });
+        assert_eq!(cc.call_id(), "gw-call-1");
     }
 
     /// A captured record is valid NDJSON and round-trips into the exact
@@ -242,14 +287,14 @@ mod tests {
         // A genuinely successful call.
         sink.capture(
             "gw-call-ok".to_string(),
-            derive_claim(&json!({"isError": false}), true),
+            derive_claim(None),
             signed_receipt("gw-call-ok", true),
         );
         // A genuinely failed call — the claim is still `Succeeded` (that's
         // what "the call succeeded" asserts), and the receipt says otherwise.
         sink.capture(
             "gw-call-fail".to_string(),
-            derive_claim(&json!({"isError": true}), false),
+            derive_claim(None),
             signed_receipt("gw-call-fail", false),
         );
 
@@ -270,5 +315,155 @@ mod tests {
             "the failed call whose claim was still 'succeeded'"
         );
         assert_eq!(report.rejected, 0, "both receipts were validly signed");
+    }
+
+    // === MIK-6914 AC.2: ground-truth (Option A) vs claim-under-test (Option B) ===
+
+    const GH_TOOL: &str = "github_search_repos";
+
+    /// A GitHub search result envelope carrying the backend's server-computed
+    /// `total_count` and `incomplete_results` flag.
+    fn github_result(total_count: u64, incomplete: bool) -> serde_json::Value {
+        json!({
+            "isError": false,
+            "structuredContent": {
+                "total_count": total_count,
+                "incomplete_results": incomplete,
+                "items": []
+            }
+        })
+    }
+
+    /// Build the *ground-truth* receipt exactly as the gateway does: run the
+    /// Option A extractor ([`crate::trust::extract_row_count`]) over the real
+    /// backend result and stamp the observed count onto the receipt. The
+    /// claim-under-test never participates — proving the two legs are sourced
+    /// independently.
+    fn ground_truth_receipt(
+        call_id: &str,
+        backend_ok: bool,
+        result: &serde_json::Value,
+    ) -> SignedResultProvenance {
+        let mut receipt = RuntimeProvenanceReceipt::observed(
+            "caps",
+            GH_TOOL,
+            "2026-07-13T10:15:30Z",
+            CacheOutcome::Miss,
+            backend_ok,
+        )
+        .with_call_id(call_id);
+        if let Some(n) = crate::trust::extract_row_count("caps", GH_TOOL, result, backend_ok) {
+            receipt = receipt.with_row_count(n);
+        }
+        receipt.sign(&receipt_signer())
+    }
+
+    /// Capture one `(claim, receipt)` pair through the real sink and score it
+    /// through the real `score_corpus` — the full RUNG3 path, no fixtures.
+    fn capture_and_score(
+        call_id: &str,
+        claim: Claim,
+        receipt: SignedResultProvenance,
+    ) -> (crate::trust::provenance_eval::EvalReport, usize) {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let sink = ClaimCaptureSink::open(tmp.path()).unwrap();
+        sink.capture(call_id.to_string(), claim, receipt);
+        let records: Vec<CorpusRecord> = read_lines(tmp.path())
+            .iter()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let validator = crate::attestation::validator::AttestationValidator::new(signer());
+        score_corpus(&records, &validator)
+    }
+
+    /// MIK-6914.AC.2 (the rejected case) — a genuine unsupported claim: the
+    /// client claims it found rows, but the gateway-observed ground truth is an
+    /// authoritative empty (`total_count == 0`). The claim is scored
+    /// `Unsupported` — the claim-rejection outcome the metric exists to count.
+    #[test]
+    fn client_overclaim_over_authoritative_empty_scores_unsupported() {
+        let result = github_result(0, false);
+        let receipt = ground_truth_receipt("gw-oc", true, &result);
+        // Ground truth read from the RESULT, not the claim: authoritative zero.
+        assert_eq!(receipt.receipt.row_count, Some(0));
+
+        let claim = derive_claim(Some(&ClientClaim::untrusted(
+            "gw-oc",
+            Claim::FoundRows { count: 5 },
+        )));
+
+        let (report, mis_joined) = capture_and_score("gw-oc", claim, receipt);
+        assert_eq!(mis_joined, 0);
+        assert_eq!(
+            report.unsupported, 1,
+            "found-rows over-claim rejected against authoritative-empty ground truth"
+        );
+        assert_eq!(report.supported + report.abstained + report.rejected, 0);
+    }
+
+    /// MIK-6914.AC.2 (the abstain case) — a genuine could-not-check: the client
+    /// claims the source was authoritatively empty, but GitHub reported its
+    /// search did not complete (`incomplete_results == true`), so the gateway
+    /// observed no authoritative count. The claim is scored `Abstain`, kept
+    /// distinct from an authoritative negative.
+    #[test]
+    fn client_empty_claim_over_uncheckable_search_scores_abstain() {
+        let result = github_result(3, true);
+        let receipt = ground_truth_receipt("gw-ab", true, &result);
+        // Incomplete search → could-not-check → no observed count.
+        assert_eq!(receipt.receipt.row_count, None);
+
+        let claim = derive_claim(Some(&ClientClaim::untrusted(
+            "gw-ab",
+            Claim::AuthoritativeEmpty,
+        )));
+
+        let (report, mis_joined) = capture_and_score("gw-ab", claim, receipt);
+        assert_eq!(mis_joined, 0);
+        assert_eq!(report.abstained, 1, "no authoritative count → abstain");
+        assert_eq!(report.supported + report.unsupported + report.rejected, 0);
+    }
+
+    /// MIK-6914.AC.2 (independence) — the gateway-observed ground-truth count is
+    /// derived from the result and is invariant to whatever the client claims.
+    /// The same authoritatively-empty result yields `row_count == Some(0)` under
+    /// three contradictory client claims.
+    #[test]
+    fn ground_truth_is_independent_of_the_client_claim() {
+        let result = github_result(0, false);
+        for claim in [
+            Claim::Succeeded,
+            Claim::AuthoritativeEmpty,
+            Claim::FoundRows { count: 99 },
+        ] {
+            let receipt = ground_truth_receipt("gw-ind", true, &result);
+            // The claim-under-test is derived separately and cannot move the
+            // observed ground truth.
+            let _under_test = derive_claim(Some(&ClientClaim::untrusted("gw-ind", claim)));
+            assert_eq!(
+                receipt.receipt.row_count,
+                Some(0),
+                "ground truth must not depend on the client claim"
+            );
+        }
+    }
+
+    /// An honest client count matching the observed ground truth scores
+    /// `Supported` — the positive control for the two negative-path tests above.
+    #[test]
+    fn honest_client_count_over_matching_ground_truth_scores_supported() {
+        let result = github_result(2, false);
+        let receipt = ground_truth_receipt("gw-ok", true, &result);
+        assert_eq!(receipt.receipt.row_count, Some(2));
+
+        let claim = derive_claim(Some(&ClientClaim::untrusted(
+            "gw-ok",
+            Claim::FoundRows { count: 2 },
+        )));
+
+        let (report, mis_joined) = capture_and_score("gw-ok", claim, receipt);
+        assert_eq!(mis_joined, 0);
+        assert_eq!(report.supported, 1);
+        assert_eq!(report.unsupported + report.abstained + report.rejected, 0);
     }
 }
