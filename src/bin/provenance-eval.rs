@@ -56,21 +56,47 @@ fn main() -> ExitCode {
         }
     };
 
-    let validator = validator_from_env();
+    let validator = match validator_from_env() {
+        Ok(validator) => validator,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+    };
     let (report, mis_joined) = score_corpus(&records, &validator);
     print_report(&report, mis_joined);
     ExitCode::SUCCESS
 }
 
 /// Build the attestation validator from the same env vars the gateway's live
-/// wiring reads. An unset/empty signing key still produces a live validator —
-/// every receipt then simply fails verification and is counted `rejected`,
-/// the same fail-closed behaviour the gateway itself exhibits.
-fn validator_from_env() -> AttestationValidator {
+/// wiring reads.
+///
+/// An unset or empty signing key is refused outright: HMAC-SHA256 accepts an
+/// empty key, so silently falling back to `b""` would let a corpus whose
+/// receipts were signed with the empty key verify as "trusted" and get
+/// scored as real evidence. Since this offline tool's entire output IS the
+/// trust metric, that would make a forged empty-key corpus indistinguishable
+/// from a genuine one. This binary hard-fails instead of continuing —
+/// unlike the gateway's live boundary-call path, which only warns in
+/// observe-mode; there is no equivalent availability constraint here that
+/// would justify scoring against a key nobody configured.
+fn validator_from_env() -> Result<AttestationValidator, String> {
     let key = std::env::var(ATTESTATION_SIGNING_KEY_ENV).unwrap_or_default();
+    if key.is_empty() {
+        return Err(format!(
+            "refusing to score: {ATTESTATION_SIGNING_KEY_ENV} is unset or empty. \
+             Scoring against an empty HMAC key would trust any receipt signed with \
+             an empty key, silently defeating signature verification. Set \
+             {ATTESTATION_SIGNING_KEY_ENV} to the signing key the corpus's receipts \
+             were captured with and re-run."
+        ));
+    }
     let key_id =
         std::env::var(ATTESTATION_KEY_ID_ENV).unwrap_or_else(|_| DEFAULT_KEY_ID.to_string());
-    AttestationValidator::new(BnautAttestationSigner::new(key.into_bytes(), key_id))
+    Ok(AttestationValidator::new(BnautAttestationSigner::new(
+        key.into_bytes(),
+        key_id,
+    )))
 }
 
 /// Parse a JSONL corpus file into [`CorpusRecord`]s.

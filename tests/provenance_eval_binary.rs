@@ -85,6 +85,53 @@ fn binary_exits_nonzero_on_malformed_line() {
     );
 }
 
+/// An unset (or empty) signing key must be a hard, reported failure — never
+/// a silent fall-through to an empty HMAC key, which would let a corpus
+/// signed with the empty key verify as "trusted" (cross-family review
+/// finding, HIGH: signature-verification bypass). `env_remove` guarantees
+/// the key is actually absent regardless of the ambient shell environment.
+#[test]
+fn binary_exits_nonzero_when_signing_key_unset() {
+    let output = binary()
+        .arg(FIXTURE_PATH)
+        .env_remove(ATTESTATION_SIGNING_KEY_ENV)
+        .output()
+        .expect("failed to run provenance-eval binary");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit when {ATTESTATION_SIGNING_KEY_ENV} is unset, got success\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(ATTESTATION_SIGNING_KEY_ENV),
+        "expected stderr to mention the missing {ATTESTATION_SIGNING_KEY_ENV}, stderr was:\n{stderr}"
+    );
+}
+
+/// An empty (but set) signing key must be refused identically to an unset
+/// one — `env("...", "")` still resolves to an empty HMAC key.
+#[test]
+fn binary_exits_nonzero_when_signing_key_empty() {
+    let output = binary()
+        .arg(FIXTURE_PATH)
+        .env(ATTESTATION_SIGNING_KEY_ENV, "")
+        .output()
+        .expect("failed to run provenance-eval binary");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for empty {ATTESTATION_SIGNING_KEY_ENV}, got success\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(ATTESTATION_SIGNING_KEY_ENV),
+        "expected stderr to mention the missing {ATTESTATION_SIGNING_KEY_ENV}, stderr was:\n{stderr}"
+    );
+}
+
 /// A missing corpus file is also a hard, reported failure (not a panic).
 #[test]
 fn binary_exits_nonzero_on_missing_file() {

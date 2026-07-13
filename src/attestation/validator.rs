@@ -519,6 +519,10 @@ impl AttestationValidator {
         let Some(signature) = signed.signature_bytes() else {
             return false;
         };
+        // `signed.key_id` is unauthenticated metadata: it is not part of
+        // `canonical_bytes()` and so is not covered by this HMAC. Any future
+        // multi-key/rotation-aware verification must not trust `key_id` to
+        // select a key without additional signed binding.
         self.signer
             .verify_bytes(&signed.receipt.canonical_bytes(), &signature)
     }
