@@ -24,18 +24,20 @@ pub mod claim_capture;
 mod descriptor;
 mod inference;
 pub mod provenance_eval;
+pub mod result_extractor;
 mod result_provenance;
 
 pub use assistant::{
     TrustAssistantAutomationAction, TrustAssistantAutomationStatus, TrustAssistantPrompt,
     TrustAssistantPromptKind, TrustCardAssistant, TrustCardAssistantPlan,
 };
-pub use claim_capture::{ClaimCaptureSink, derive_claim};
+pub use claim_capture::{ClaimCaptureSink, ClientClaim, derive_claim};
 pub use descriptor::{
     TOOL_DESCRIPTOR_TRUST_CARD_KEY, ToolDescriptorTrustCard, cbom_digest_sha256,
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
     tools_list_result_with_trust_cards, trust_card_digest_sha256,
 };
+pub use result_extractor::extract_row_count;
 pub use result_provenance::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};
 
 use inference::{

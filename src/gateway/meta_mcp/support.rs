@@ -262,6 +262,15 @@ pub(super) fn augment_with_provenance(
     if let Some(name) = api_key_name {
         receipt = receipt.with_auth_context_ref(auth_context_ref_hash(name));
     }
+    // Option A ground truth (MIK-6914): when a per-backend extractor recognises
+    // this `(backend, tool)` and can read a genuine authoritative count from the
+    // result, record it as the observed `row_count`. Every unrecognised backend
+    // returns `None`, so the receipt keeps the honest "not observed" floor and
+    // no count is ever fabricated (the MIK-5854 stop-line).
+    if let Some(row_count) = crate::trust::extract_row_count(backend_id, tool, &result, backend_ok)
+    {
+        receipt = receipt.with_row_count(row_count);
+    }
     // Join key: the active call's trace_id (also returned to the client as
     // `result.trace_id`), so the receipt is self-joinable to the agent's claim.
     // Absent on paths with no trace scope (e.g. direct backend route).

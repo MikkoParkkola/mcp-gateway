@@ -184,6 +184,20 @@ fn enforce_output_schema(
     }
 }
 
+/// Strip and parse the MIK-6914 Option B claim-under-test (`_claim`) directive
+/// from an invocation's arguments, binding it to this call's `call_id`.
+///
+/// The directive is a gateway directive, not an upstream parameter, so it is
+/// removed from `arguments` (like `_full`) and never forwarded to a backend. A
+/// malformed or absent directive yields `None`, and capture then falls back to
+/// the honest `Claim::Succeeded` floor. The parsed claim is untrusted client
+/// input: it is only ever the claim-under-test, never the ground-truth leg.
+fn extract_client_claim(arguments: &mut Value, call_id: &str) -> Option<crate::trust::ClientClaim> {
+    let raw = arguments.as_object_mut()?.remove("_claim")?;
+    let claim = serde_json::from_value::<crate::trust::provenance_eval::Claim>(raw).ok()?;
+    Some(crate::trust::ClientClaim::untrusted(call_id, claim))
+}
+
 fn extract_output_validation_target(result: &Value) -> Option<Value> {
     if let Some(structured) = result.get("structuredContent") {
         return Some(structured.clone());
@@ -445,6 +459,13 @@ impl MetaMcp {
     /// receipt (no trace scope active) is skipped rather than captured
     /// un-joinable — consistent with `score_corpus`'s mis-join contract,
     /// which treats a missing join key as unscoreable, not as evidence.
+    ///
+    /// `client_claim` is the MIK-6914 Option B claim-under-test — an untrusted
+    /// typed claim the caller supplied for this call. When present it is
+    /// captured verbatim as the claim under scrutiny; when absent, capture
+    /// falls back to the honest `Claim::Succeeded` floor. It is never used as
+    /// the ground-truth leg (that is the receipt's extractor-observed
+    /// `row_count`).
     fn maybe_stamp_provenance(
         &self,
         value: Value,
@@ -452,6 +473,7 @@ impl MetaMcp {
         tool: &str,
         api_key_name: Option<&str>,
         cache: crate::trust::CacheOutcome,
+        client_claim: Option<&crate::trust::ClientClaim>,
     ) -> Value {
         let Some(ref signer) = self.provenance_signer else {
             return value;
@@ -465,7 +487,7 @@ impl MetaMcp {
         if let Some(sink) = &self.claim_capture
             && let Some(call_id) = signed_receipt.receipt.call_id.clone()
         {
-            let claim = crate::trust::derive_claim(&stamped, backend_ok);
+            let claim = crate::trust::derive_claim(client_claim);
             sink.capture(call_id, claim, signed_receipt);
         }
         stamped
@@ -491,6 +513,9 @@ impl MetaMcp {
             tool,
             api_key_name,
             crate::trust::CacheOutcome::Bypass,
+            // The direct passthrough carries no gateway-parsed `_claim`
+            // directive, so there is no client claim-under-test here.
+            None,
         )
     }
 
@@ -525,6 +550,15 @@ impl MetaMcp {
         if let Some(obj) = arguments.as_object_mut() {
             obj.remove("_full");
         }
+
+        // MIK-6914 Option B: the caller may attach an untrusted claim-under-test
+        // (`_claim`) about the result it will render. Like `_full` it is a
+        // gateway directive, stripped here — before the argument hash and cache
+        // key are computed — so it never reaches a backend and never fragments
+        // the cache. Bound to this call's `trace_id`, it is threaded to the
+        // provenance chokepoint and (with capture enabled) recorded as the claim
+        // under scrutiny. It is never the ground-truth leg.
+        let client_claim = extract_client_claim(&mut arguments, trace_id);
 
         // MIK-5877: in `experimental` mode the projected (treatment) and raw
         // (control) arms must NOT share response-cache / idempotency entries, or
@@ -716,6 +750,7 @@ impl MetaMcp {
                             tool,
                             api_key_name,
                             crate::trust::CacheOutcome::Hit,
+                            client_claim.as_ref(),
                         )
                     }));
                 }
@@ -756,6 +791,7 @@ impl MetaMcp {
                         tool,
                         api_key_name,
                         crate::trust::CacheOutcome::Hit,
+                        client_claim.as_ref(),
                     )
                 }));
             }
@@ -1229,6 +1265,7 @@ impl MetaMcp {
             tool,
             api_key_name,
             crate::trust::CacheOutcome::Miss,
+            client_claim.as_ref(),
         );
         if let Some(ref signer) = self.message_signer {
             final_result = signer.sign_response(final_result, request_nonce);
