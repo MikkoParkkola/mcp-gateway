@@ -78,13 +78,9 @@ pub enum ClaimVerdict {
 pub fn score(claim: &Claim, receipt: &RuntimeProvenanceReceipt) -> ClaimVerdict {
     // A call the backend reported as failed cannot support any claim about what
     // the source "said" — this is could-not-check, never an authoritative fact.
+    // Every claim (success, empty, count) is unsupported by a failure.
     if !receipt.backend_ok {
-        return match claim {
-            // "It succeeded" against a failed call is a direct contradiction.
-            Claim::Succeeded => ClaimVerdict::Unsupported,
-            // Any positive/negative content claim is unsupported by a failure.
-            Claim::AuthoritativeEmpty | Claim::FoundRows { .. } => ClaimVerdict::Unsupported,
-        };
+        return ClaimVerdict::Unsupported;
     }
 
     match claim {
