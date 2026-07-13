@@ -226,6 +226,13 @@ pub struct MetaMcp {
     /// are byte-identical to the un-stamped path (rung 1.2 guarantee).
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
 
+    /// Shadow claim-capture sink (MIK-6908, rung 3.1).
+    ///
+    /// `Some` when `security.claim_capture.enabled = true`; `None` otherwise.
+    /// Only ever consulted alongside `provenance_signer` — capture has
+    /// nothing to record without a signed receipt.
+    pub(super) claim_capture: Option<Arc<crate::trust::ClaimCaptureSink>>,
+
     /// When `true`, requests without a `nonce` are rejected with JSON-RPC -32001.
     ///
     /// Corresponds to `security.message_signing.require_nonce` in config.
@@ -348,6 +355,7 @@ impl MetaMcp {
             message_signer: None,
             nonce_store: None,
             provenance_signer: None,
+            claim_capture: None,
             require_nonce: false,
             transparency_logger: None,
             response_inspection_action_mode: false,
@@ -524,6 +532,15 @@ impl MetaMcp {
     /// otherwise.
     pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
         self.provenance_signer = Some(Arc::new(signer));
+    }
+
+    /// Enable shadow claim capture (MIK-6908, rung 3.1).
+    ///
+    /// Only has an observable effect once `provenance_signer` is also
+    /// `Some` — capture runs alongside stamping at the same chokepoint, not
+    /// independently of it.
+    pub fn enable_claim_capture(&mut self, sink: Arc<crate::trust::ClaimCaptureSink>) {
+        self.claim_capture = Some(sink);
     }
 
     /// Attach a transparency logger (issue #133, D3).

@@ -437,6 +437,14 @@ impl MetaMcp {
     ///
     /// `backend_ok` is derived from the result's `isError` flag so cache hits
     /// carrying a stored error are reported honestly.
+    ///
+    /// When shadow claim capture is also enabled (MIK-6908, rung 3.1), this
+    /// is the single chokepoint both the meta and direct-route call paths
+    /// funnel through, so a call whose receipt carries a `call_id` is
+    /// shadow-captured here alongside the derived claim. A `call_id`-less
+    /// receipt (no trace scope active) is skipped rather than captured
+    /// un-joinable — consistent with `score_corpus`'s mis-join contract,
+    /// which treats a missing join key as unscoreable, not as evidence.
     fn maybe_stamp_provenance(
         &self,
         value: Value,
@@ -445,15 +453,22 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         cache: crate::trust::CacheOutcome,
     ) -> Value {
-        if let Some(ref signer) = self.provenance_signer {
-            let backend_ok = !value
-                .get("isError")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            augment_with_provenance(value, signer, server, tool, api_key_name, cache, backend_ok)
-        } else {
-            value
+        let Some(ref signer) = self.provenance_signer else {
+            return value;
+        };
+        let backend_ok = !value
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let (stamped, signed_receipt) =
+            augment_with_provenance(value, signer, server, tool, api_key_name, cache, backend_ok);
+        if let Some(sink) = &self.claim_capture
+            && let Some(call_id) = signed_receipt.receipt.call_id.clone()
+        {
+            let claim = crate::trust::derive_claim(&stamped, backend_ok);
+            sink.capture(call_id, claim, signed_receipt);
         }
+        stamped
     }
 
     /// Stamp provenance onto a direct per-backend route result (the

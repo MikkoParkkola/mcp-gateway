@@ -20,6 +20,7 @@ use crate::{
 };
 
 mod assistant;
+pub mod claim_capture;
 mod descriptor;
 mod inference;
 pub mod provenance_eval;
@@ -29,6 +30,7 @@ pub use assistant::{
     TrustAssistantAutomationAction, TrustAssistantAutomationStatus, TrustAssistantPrompt,
     TrustAssistantPromptKind, TrustCardAssistant, TrustCardAssistantPlan,
 };
+pub use claim_capture::{ClaimCaptureSink, derive_claim};
 pub use descriptor::{
     TOOL_DESCRIPTOR_TRUST_CARD_KEY, ToolDescriptorTrustCard, cbom_digest_sha256,
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
