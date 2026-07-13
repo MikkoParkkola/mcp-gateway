@@ -552,8 +552,8 @@ mod tests {
     fn result_provenance_round_trips_sign_then_verify() {
         let v = validator();
         // Twin signer sharing the validator's key material.
-        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
-        let signed = sample_receipt().sign(&signer);
+        let twin = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let signed = sample_receipt().sign(&twin);
         assert_eq!(signed.algorithm, crate::attestation::SIGNING_ALGORITHM);
         assert_eq!(signed.key_id, "bnaut/unit");
         assert!(v.verify_result_provenance(&signed));
@@ -562,8 +562,8 @@ mod tests {
     #[test]
     fn tampered_receipt_fails_verification() {
         let v = validator();
-        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
-        let mut signed = sample_receipt().sign(&signer);
+        let twin = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let mut signed = sample_receipt().sign(&twin);
         // Flip a fact after signing — the HMAC must no longer match.
         signed.receipt.backend_ok = false;
         assert!(!v.verify_result_provenance(&signed));
@@ -580,8 +580,8 @@ mod tests {
     #[test]
     fn malformed_signature_encoding_fails_verification() {
         let v = validator();
-        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
-        let mut signed = sample_receipt().sign(&signer);
+        let twin = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let mut signed = sample_receipt().sign(&twin);
         signed.signature = "not valid base64url!!".to_string();
         assert!(!v.verify_result_provenance(&signed));
     }
