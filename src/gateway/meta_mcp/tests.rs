@@ -2022,11 +2022,16 @@ mod attestation_wiring {
 
     #[tokio::test]
     async fn provenance_flag_on_stamps_signed_verifiable_receipt() {
-        use crate::attestation::{AttestationValidator, BnautAttestationSigner};
+        use crate::attestation::{
+            AttestationValidator, BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO,
+        };
         use crate::trust::{SignedResultProvenance, TrustEvidenceKind};
 
         let mut meta = MetaMcp::new(provenance_test_backend());
-        meta.enable_provenance_stamping(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+        meta.enable_provenance_stamping(
+            BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+        );
         let result = invoke_docs_search(&meta).await;
 
         let provenance = result
@@ -2043,6 +2048,10 @@ mod attestation_wiring {
         assert_eq!(signed.receipt.evidence_kind, TrustEvidenceKind::Observed);
 
         // Signature verifies under a twin validator sharing the key (rung 1.3).
+        // `AttestationValidator::new` derives its own receipt-domain subkey from
+        // the raw key internally, mirroring the production
+        // `resolve_provenance_signer` wiring in `gateway::server`, which is why
+        // the stamping side above must derive the same domain before signing.
         let validator =
             AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
         assert!(validator.verify_result_provenance(&signed));
@@ -2053,10 +2062,13 @@ mod attestation_wiring {
         // Rung 1.5 (CWE-532): the raw api_key_name ("alice") and any key
         // material must never appear in the stamped receipt — only an opaque
         // sha256 auth-context reference.
-        use crate::attestation::BnautAttestationSigner;
+        use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
 
         let mut meta = MetaMcp::new(provenance_test_backend());
-        meta.enable_provenance_stamping(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+        meta.enable_provenance_stamping(
+            BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+        );
         let result = invoke_docs_search(&meta).await;
 
         let provenance = result
@@ -2084,7 +2096,9 @@ mod attestation_wiring {
         // Rung 2: cache-served results must also carry a signed receipt, tagged
         // cache=Hit. First invoke populates the response cache (un-stamped);
         // the second is served from cache and stamped fresh with cache=Hit.
-        use crate::attestation::{AttestationValidator, BnautAttestationSigner};
+        use crate::attestation::{
+            AttestationValidator, BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO,
+        };
         use crate::cache::ResponseCache;
         use crate::trust::{CacheOutcome, SignedResultProvenance};
 
@@ -2095,7 +2109,10 @@ mod attestation_wiring {
             None,
             Duration::from_secs(300),
         );
-        meta.enable_provenance_stamping(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+        meta.enable_provenance_stamping(
+            BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+        );
 
         let first = invoke_docs_search(&meta).await;
         assert_eq!(

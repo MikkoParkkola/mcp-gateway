@@ -180,10 +180,14 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
     let backends = Arc::new(BackendRegistry::new());
     backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
-    meta.enable_provenance_stamping(crate::attestation::BnautAttestationSigner::new(
-        b"prov-key".to_vec(),
-        "unit",
-    ));
+    // Derive the receipt-domain subkey before stamping, mirroring the
+    // production `resolve_provenance_signer` wiring in `gateway::server`
+    // (MIK-6909): the validator below derives the same subkey internally, so
+    // the stamping side must derive it too or signatures won't cross-verify.
+    meta.enable_provenance_stamping(
+        crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
+    );
     let meta_mcp = Arc::new(meta);
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
