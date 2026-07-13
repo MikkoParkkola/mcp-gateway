@@ -750,6 +750,13 @@ pub(super) async fn backend_handler(
                             client.as_ref(),
                             &mut response,
                         );
+                        stamp_direct_provenance(
+                            &state,
+                            &name,
+                            params.as_ref(),
+                            client.as_ref(),
+                            &mut response,
+                        );
                         build_http_response(&response, StatusCode::OK)
                     }
                     Err(e) => {
@@ -793,6 +800,13 @@ pub(super) async fn backend_handler(
                     client.as_ref(),
                     &mut response,
                 );
+                stamp_direct_provenance(
+                    &state,
+                    &name,
+                    params.as_ref(),
+                    client.as_ref(),
+                    &mut response,
+                );
             }
             build_http_response(&response, StatusCode::OK)
         }
@@ -809,6 +823,37 @@ fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>)
     if let Some(client) = client {
         state.auth_config.record_client_success(&client.name);
     }
+}
+
+/// Stamp a signed runtime-provenance receipt onto a direct-route `tools/call`
+/// result (MIK-6905 rung 3). The `/mcp/{name}` passthrough bypasses the meta
+/// chokepoint, so without this a client could route around provenance simply
+/// by choosing the direct URL. No-op unless the tool name is present (a
+/// `tools/call`) and stamping is enabled on the shared `MetaMcp`.
+fn stamp_direct_provenance(
+    state: &AppState,
+    backend_name: &str,
+    params: Option<&Value>,
+    client: Option<&AuthenticatedClient>,
+    response: &mut JsonRpcResponse,
+) {
+    let tool = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if tool.is_empty() {
+        return;
+    }
+    let Some(result) = response.result.take() else {
+        return;
+    };
+    let api_key_name = client.map(|c| c.name.as_str());
+    response.result = Some(state.meta_mcp.stamp_direct_result(
+        result,
+        backend_name,
+        tool,
+        api_key_name,
+    ));
 }
 
 fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {

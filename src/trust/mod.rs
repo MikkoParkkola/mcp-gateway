@@ -22,6 +22,8 @@ use crate::{
 mod assistant;
 mod descriptor;
 mod inference;
+pub mod provenance_eval;
+mod result_provenance;
 
 pub use assistant::{
     TrustAssistantAutomationAction, TrustAssistantAutomationStatus, TrustAssistantPrompt,
@@ -32,6 +34,7 @@ pub use descriptor::{
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
     tools_list_result_with_trust_cards, trust_card_digest_sha256,
 };
+pub use result_provenance::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};
 
 use inference::{
     infer_data_classes, infer_permissions, infer_risk_class, source_uri_from_capability,

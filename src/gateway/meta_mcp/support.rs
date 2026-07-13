@@ -221,6 +221,63 @@ pub(super) fn augment_with_trace(mut result: Value, trace_id: &str) -> Value {
     result
 }
 
+/// Opaque, non-reversible reference to an auth-context label.
+///
+/// The gateway's `api_key_name` is a config-chosen label, not a credential, but
+/// the receipt contract stores only a *reference* — never a raw identifier — so
+/// nothing sensitive can ever reach the `_meta` channel (CWE-532, rung 1.5).
+fn auth_context_ref_hash(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(name.as_bytes());
+    format!("sha256:{}", hex::encode(&digest[..8]))
+}
+
+/// Stamp a signed runtime provenance receipt into `result._meta.provenance`
+/// (MIK-6905, rung 1.2/1.4).
+///
+/// Additive only: the receipt lands under the MCP `_meta` channel and no tool
+/// content is touched. Facts observed at the gateway — backend, tool, auth-ref,
+/// cache outcome, backend success — are recorded and signed; nothing is
+/// inferred (rung 1.4).
+pub(super) fn augment_with_provenance(
+    mut result: Value,
+    signer: &crate::attestation::signer::BnautAttestationSigner,
+    backend_id: &str,
+    tool: &str,
+    api_key_name: Option<&str>,
+    cache: crate::trust::CacheOutcome,
+    backend_ok: bool,
+) -> Value {
+    use crate::trust::RuntimeProvenanceReceipt;
+
+    let observed_at = chrono::Utc::now().to_rfc3339();
+    let mut receipt =
+        RuntimeProvenanceReceipt::observed(backend_id, tool, observed_at, cache, backend_ok);
+    if let Some(name) = api_key_name {
+        receipt = receipt.with_auth_context_ref(auth_context_ref_hash(name));
+    }
+    // Join key: the active call's trace_id (also returned to the client as
+    // `result.trace_id`), so the receipt is self-joinable to the agent's claim.
+    // Absent on paths with no trace scope (e.g. direct backend route).
+    if let Some(trace_id) = crate::gateway::trace::current() {
+        receipt = receipt.with_call_id(trace_id);
+    }
+    let signed_receipt = receipt.sign(signer);
+
+    if let Value::Object(ref mut map) = result {
+        let meta = map
+            .entry("_meta")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Value::Object(meta_map) = meta {
+            meta_map.insert(
+                "provenance".to_string(),
+                serde_json::to_value(signed_receipt).unwrap_or(Value::Null),
+            );
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::internal_invoke_args;
