@@ -3,8 +3,8 @@ name: mcp-gateway
 description: Universal MCP Gateway — compact Meta-MCP tool router with security posture.
 type: application
 # Chart version tracks the packaging; appVersion tracks the gateway release.
-version: 0.1.0
-appVersion: "2.19.0"
+version: 0.1.1
+appVersion: "3.3.2"
 home: https://github.com/MikkoParkkola/mcp-gateway
 sources:
   - https://github.com/MikkoParkkola/mcp-gateway
