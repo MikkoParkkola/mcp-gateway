@@ -15,7 +15,7 @@ image:
   repository: mikkoparkkola/mcp-gateway
   # Prefer a digest for immutable, supply-chain-safe deploys (set by A5/6684).
   # When `digest` is set it takes precedence over `tag`.
-  tag: "2.19.0"
+  tag: "3.3.2"
   digest: ""
   pullPolicy: IfNotPresent
 
