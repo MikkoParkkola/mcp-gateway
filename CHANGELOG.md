@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the authorization URL, the `authorization_code` exchange, `refresh_token`,
   and `client_credentials`. Reported by @crepererum.
 
+### Changed
+
+- **Helm charts track the gateway release.** `deploy/helm/mcp-gateway` and
+  `deploy/helm/mcp-gateway-crds` `appVersion` and the default image `tag` now
+  point at `3.3.2` (were stale at `2.19.0`); both chart `version`s bumped to
+  `0.1.1`.
+
 ## [3.2.1] - 2026-07-07
 
 ### Changed
