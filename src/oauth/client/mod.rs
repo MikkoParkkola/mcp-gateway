@@ -4,7 +4,6 @@
 //!
 //! Main OAuth client implementation with PKCE support.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -399,13 +398,7 @@ impl OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID for client_credentials".to_string()))?;
 
-        let scope_str = self.scopes.join(" ");
-        let mut params = HashMap::new();
-        params.insert("grant_type", "client_credentials");
-        params.insert("client_id", client_id.as_str());
-        if !scope_str.is_empty() {
-            params.insert("scope", scope_str.as_str());
-        }
+        let params = self.client_credentials_params(&client_id);
 
         let response = self
             .http_client
@@ -530,6 +523,127 @@ impl OAuthClient {
         })
     }
 
+    /// RFC 8707 resource indicator for this backend.
+    ///
+    /// MCP's authorization spec (rev 2025-06-18) mandates Resource Indicators
+    /// (RFC 8707): the `resource` parameter MUST be sent on both the
+    /// authorization request and every token request so the authorization
+    /// server can audience-bind the issued token to this specific MCP server.
+    /// Omitting it makes strict providers reject the flow with `server_error`
+    /// (see issue #369).
+    ///
+    /// Prefers the canonical identifier advertised by discovered
+    /// protected-resource metadata (RFC 9728 `resource` field); falls back to
+    /// the configured MCP endpoint URL when metadata discovery did not run or
+    /// omitted it.
+    fn resource_indicator(&self) -> &str {
+        self.resource_metadata
+            .as_ref()
+            .map_or(self.resource_url.as_str(), |m| m.resource.as_str())
+    }
+
+    /// Build the OAuth 2.0 authorization-request URL (RFC 6749 §4.1.1 + PKCE
+    /// RFC 7636 + Resource Indicators RFC 8707).
+    ///
+    /// Pure and side-effect free so the query parameters — critically the
+    /// `resource` indicator required by the MCP auth spec (issue #369) — are
+    /// unit-testable without standing up a browser or callback server.
+    fn build_authorize_url(
+        &self,
+        authorization_endpoint: &str,
+        client_id: &str,
+        callback_url: &str,
+        state: &str,
+        code_challenge: &str,
+    ) -> Result<Url> {
+        let mut auth_url = Url::parse(authorization_endpoint)
+            .map_err(|e| Error::OAuth(format!("Invalid auth endpoint: {e}")))?;
+
+        {
+            let mut params = auth_url.query_pairs_mut();
+            params.append_pair("response_type", "code");
+            params.append_pair("client_id", client_id);
+            params.append_pair("redirect_uri", callback_url);
+            params.append_pair("state", state);
+            params.append_pair("code_challenge", code_challenge);
+            params.append_pair("code_challenge_method", "S256");
+
+            if !self.scopes.is_empty() {
+                params.append_pair("scope", &self.scopes.join(" "));
+            }
+
+            // RFC 8707 Resource Indicator (mandated by the MCP authorization
+            // spec). Audience-binds the issued token to this MCP server; strict
+            // providers reject the flow without it (issue #369).
+            params.append_pair("resource", self.resource_indicator());
+        }
+
+        Ok(auth_url)
+    }
+
+    /// Form parameters for the `authorization_code` → token exchange
+    /// (RFC 6749 §4.1.3 + PKCE RFC 7636 + Resource Indicators RFC 8707).
+    ///
+    /// Pure builder so the request body — including the `resource` indicator
+    /// (issue #369) — is unit-testable without a live token endpoint.
+    fn token_exchange_params(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        client_id: &str,
+        code_verifier: &str,
+    ) -> Vec<(&'static str, String)> {
+        let mut params = vec![
+            ("grant_type", "authorization_code".to_string()),
+            ("code", code.to_string()),
+            ("redirect_uri", redirect_uri.to_string()),
+            ("client_id", client_id.to_string()),
+            ("code_verifier", code_verifier.to_string()),
+        ];
+        // Include client_secret when the provider requires it (Slack, Figma, …).
+        if let Some(ref secret) = self.client_secret {
+            params.push(("client_secret", secret.clone()));
+        }
+        // RFC 8707 Resource Indicator — must match the authorization request so
+        // the AS issues an audience-bound token (issue #369).
+        params.push(("resource", self.resource_indicator().to_string()));
+        params
+    }
+
+    /// Form parameters for the `refresh_token` grant (RFC 6749 §6 + RFC 8707).
+    fn refresh_params(&self, refresh_token: &str, client_id: &str) -> Vec<(&'static str, String)> {
+        let mut params = vec![
+            ("grant_type", "refresh_token".to_string()),
+            ("refresh_token", refresh_token.to_string()),
+            ("client_id", client_id.to_string()),
+        ];
+        if let Some(ref secret) = self.client_secret {
+            params.push(("client_secret", secret.clone()));
+        }
+        // RFC 8707 Resource Indicator — keep the refreshed token audience-bound
+        // to this MCP server, matching the original grant (issue #369).
+        params.push(("resource", self.resource_indicator().to_string()));
+        params
+    }
+
+    /// Form parameters for the `client_credentials` grant (RFC 6749 §4.4 +
+    /// RFC 8707). No `client_secret` is added here: this path historically
+    /// authenticates public/dynamically-registered clients without one.
+    fn client_credentials_params(&self, client_id: &str) -> Vec<(&'static str, String)> {
+        let mut params = vec![
+            ("grant_type", "client_credentials".to_string()),
+            ("client_id", client_id.to_string()),
+        ];
+        let scope_str = self.scopes.join(" ");
+        if !scope_str.is_empty() {
+            params.push(("scope", scope_str));
+        }
+        // RFC 8707 Resource Indicator — audience-bind the client_credentials
+        // token to this MCP server, matching the other grants (issue #369).
+        params.push(("resource", self.resource_indicator().to_string()));
+        params
+    }
+
     /// Perform the authorization flow
     ///
     /// # Errors
@@ -563,22 +677,13 @@ impl OAuthClient {
         let client_id = self.ensure_client_id_with_redirect(&callback_url).await?;
 
         // Build authorization URL with the ACTUAL callback URL
-        let mut auth_url = Url::parse(&auth_meta.authorization_endpoint)
-            .map_err(|e| Error::OAuth(format!("Invalid auth endpoint: {e}")))?;
-
-        {
-            let mut params = auth_url.query_pairs_mut();
-            params.append_pair("response_type", "code");
-            params.append_pair("client_id", &client_id);
-            params.append_pair("redirect_uri", &callback_url);
-            params.append_pair("state", &state);
-            params.append_pair("code_challenge", &code_challenge);
-            params.append_pair("code_challenge_method", "S256");
-
-            if !self.scopes.is_empty() {
-                params.append_pair("scope", &self.scopes.join(" "));
-            }
-        }
+        let auth_url = self.build_authorize_url(
+            &auth_meta.authorization_endpoint,
+            &client_id,
+            &callback_url,
+            &state,
+            &code_challenge,
+        )?;
 
         // Open browser
         let auth_url_str = auth_url.to_string();
@@ -625,17 +730,7 @@ impl OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
 
-        let mut params = HashMap::new();
-        params.insert("grant_type", "authorization_code");
-        params.insert("code", code);
-        params.insert("redirect_uri", redirect_uri);
-        params.insert("client_id", &client_id);
-        params.insert("code_verifier", code_verifier);
-        // Include client_secret when the provider requires it (Slack, Figma, etc.)
-        let secret_ref: Option<String> = self.client_secret.clone();
-        if let Some(ref secret) = secret_ref {
-            params.insert("client_secret", secret.as_str());
-        }
+        let params = self.token_exchange_params(code, redirect_uri, &client_id, code_verifier);
 
         let response = self
             .http_client
@@ -697,14 +792,7 @@ impl OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
 
-        let mut params = HashMap::new();
-        params.insert("grant_type", "refresh_token");
-        params.insert("refresh_token", refresh_token);
-        params.insert("client_id", &client_id);
-        let secret_ref: Option<String> = self.client_secret.clone();
-        if let Some(ref secret) = secret_ref {
-            params.insert("client_secret", secret.as_str());
-        }
+        let params = self.refresh_params(refresh_token, &client_id);
 
         let response = self
             .http_client
