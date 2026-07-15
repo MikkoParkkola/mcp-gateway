@@ -302,7 +302,11 @@ mod tests {
 
     #[test]
     fn detects_openai_project_key() {
-        let key = "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJ1234567890";
+        // Synthetic, self-labelling non-secret that still matches the
+        // `sk-proj-[A-Za-z0-9_-]{40,}` detector. Kept obviously fake so naive
+        // external secret scanners stop filing false-positive "leaked key"
+        // reports against this redaction test (see closed issues #376/#377).
+        let key = "sk-proj-FAKE_EXAMPLE_KEY_FOR_REDACTION_UNIT_TEST_000000";
         let mut v = serde_json::json!({ "key": key });
         let findings = redactor().scan_and_redact(&mut v);
         assert!(

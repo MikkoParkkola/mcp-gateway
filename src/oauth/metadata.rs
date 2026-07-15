@@ -3,7 +3,8 @@
 //! OAuth Metadata Discovery
 //!
 //! Implements RFC 8414 (OAuth Authorization Server Metadata) and
-//! RFC 8707 (OAuth Protected Resource Metadata).
+//! RFC 9728 (OAuth Protected Resource Metadata). The related resource
+//! indicator this metadata feeds (RFC 8707) is applied in the OAuth client.
 
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
