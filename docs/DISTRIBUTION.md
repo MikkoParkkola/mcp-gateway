@@ -90,7 +90,7 @@ The draft submission text below is ready to copy into the submission form.
 >
 > **Tags:** gateway, proxy, meta-mcp, tool-aggregation, context-optimization, circuit-breaker, security
 >
-> **License:** MIT
+> **License:** PolyForm-Noncommercial-1.0.0
 >
 > **Language:** Rust
 
