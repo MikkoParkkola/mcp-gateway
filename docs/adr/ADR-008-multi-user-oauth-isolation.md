@@ -22,6 +22,10 @@ This is a pre-existing defect, not a v3.0.0 regression — but it makes a
 multi-user v3.0.0 unsafe to ship, so it holds the release (version walked back to
 `3.0.0-dev`; no `v3.0.0` tag exists).
 
+> **Update (2026-07-17):** that parenthetical records the state at the decision
+> date. The isolation below landed and the release shipped: `v3.0.0` is tagged
+> and the current release is `v3.3.2`.
+
 The operator's design steer (2026-07-03): make the user experience smooth and
 automate consent; and reconsider whether the **gateway** should hold tokens at
 all — authentication/authorization may be better handled **out of band** from the
