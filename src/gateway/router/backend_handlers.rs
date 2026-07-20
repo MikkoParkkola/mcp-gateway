@@ -743,6 +743,11 @@ pub(super) async fn backend_handler(
                 return match forward {
                     Ok(mut response) => {
                         record_client_success(&state, client.as_ref());
+                        // The transport uses its own request IDs to correlate
+                        // concurrent upstream calls. Restore the caller's ID at
+                        // the HTTP boundary so the client can correlate this
+                        // response with its original JSON-RPC request.
+                        response.id = Some(id.clone());
                         scan_direct_backend_response(
                             &state,
                             &name,
@@ -789,6 +794,9 @@ pub(super) async fn backend_handler(
     match forward {
         Ok(mut response) => {
             record_client_success(&state, client.as_ref());
+            // Upstream transport IDs are private gateway correlation state;
+            // direct-route clients must receive the ID they supplied.
+            response.id = Some(id.clone());
             if method == "tools/list" {
                 normalize_tools_list_response(&name, &mut response);
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
