@@ -968,6 +968,47 @@ async fn backend_handler_missing_backend_returns_jsonrpc_not_found() {
 }
 
 #[tokio::test]
+async fn backend_handler_preserves_callers_jsonrpc_id_on_success() {
+    let backend = Arc::new(Backend::new(
+        "demo",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
+    backend.set_transport_for_test(transport);
+
+    let router = create_router(test_router_app_state_with_backend(backend));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/demo")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": "caller-initialize-41",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "test-client", "version": "1.0" }
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], "caller-initialize-41");
+    assert_eq!(json["result"], json!({"ok": true}));
+}
+
+#[tokio::test]
 async fn backend_handler_discovery_method_fails_closed_for_required_propagation() {
     // ADR-007 IDP.2/IDP.3 regression guard: a discovery method (resources/list)
     // on a propagation-`required` backend must fail closed (403) when the
@@ -1331,6 +1372,7 @@ async fn backend_handler_direct_route_no_provenance_when_disabled() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["id"], 8);
     assert!(
         json.pointer("/result/_meta/provenance").is_none(),
         "flag off must not stamp provenance, got: {json}"
