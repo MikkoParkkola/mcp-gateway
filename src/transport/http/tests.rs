@@ -2,7 +2,61 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
 use std::collections::HashMap;
+use std::future::Future;
+use std::io::{self, Write};
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
+use tracing::instrument::WithSubscriber as _;
+use tracing_subscriber::fmt::MakeWriter;
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<StdMutex<Vec<u8>>>);
+
+struct CapturedLogWriter(Arc<StdMutex<Vec<u8>>>);
+
+impl Write for CapturedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("capture log lock")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for CapturedLogs {
+    type Writer = CapturedLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        CapturedLogWriter(Arc::clone(&self.0))
+    }
+}
+
+impl CapturedLogs {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().expect("capture log lock").clone())
+            .expect("captured logs are UTF-8")
+    }
+}
+
+async fn capture_debug_logs<F, T>(future: F) -> (T, String)
+where
+    F: Future<Output = T>,
+{
+    let captured = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(captured.clone())
+        .finish();
+    let result = future.with_subscriber(subscriber).await;
+    (result, captured.text())
+}
 
 /// Helper: create an `HttpTransport` for testing (streamable HTTP mode, no OAuth)
 fn make_transport(url: &str) -> Arc<HttpTransport> {
@@ -26,6 +80,126 @@ fn set_default_session(t: &HttpTransport, id: &str) {
 /// Read the shared default-bucket session id, if any.
 fn default_session(t: &HttpTransport) -> Option<String> {
     t.sessions.read().get("").cloned()
+}
+
+// =========================================================================
+// Secret-safe diagnostics
+// =========================================================================
+
+#[tokio::test]
+async fn http_diagnostics_redact_raw_session_ids() {
+    const SESSION_SECRET: &str = "SENTINEL_HTTP_SESSION_4b9a";
+    let transport = make_transport("http://localhost:8080/mcp");
+    set_default_session(&transport, SESSION_SECRET);
+
+    let (headers, logs) = capture_debug_logs(
+        transport.build_mcp_headers(HeaderMode::Request { method: "ping" }, None),
+    )
+    .await;
+
+    assert_eq!(
+        headers.expect("build headers")["mcp-session-id"],
+        SESSION_SECRET
+    );
+    assert!(
+        !logs.contains(SESSION_SECRET),
+        "session leaked into logs: {logs}"
+    );
+    assert!(logs.contains("Sending request with session ID"));
+    assert!(logs.contains("session_present=true"));
+}
+
+#[tokio::test]
+async fn http_diagnostics_redact_sse_endpoint_and_configured_url_secrets() {
+    use axum::{Router, http::header, response::IntoResponse, routing::get};
+
+    const URL_USER_SECRET: &str = "SENTINEL_HTTP_URL_USER_be31";
+    const URL_QUERY_SECRET: &str = "SENTINEL_HTTP_URL_QUERY_04ca";
+    const URL_FRAGMENT_SECRET: &str = "SENTINEL_HTTP_URL_FRAGMENT_69f2";
+    const ENDPOINT_SECRET: &str = "SENTINEL_HTTP_ENDPOINT_a3d8";
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/sse",
+        get(|| async {
+            (
+                [(header::CONTENT_TYPE, "text/event-stream")],
+                format!("event: endpoint\ndata: /messages?session_id={ENDPOINT_SECRET}\n\n"),
+            )
+                .into_response()
+        }),
+    );
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport_sse(&format!(
+        "http://user:{URL_USER_SECRET}@{addr}/sse?token={URL_QUERY_SECRET}#{URL_FRAGMENT_SECRET}"
+    ));
+    let (endpoint, logs) = capture_debug_logs(transport.establish_sse_connection()).await;
+
+    assert!(endpoint.expect("SSE endpoint").contains(ENDPOINT_SECRET));
+    for sentinel in [
+        URL_USER_SECRET,
+        URL_QUERY_SECRET,
+        URL_FRAGMENT_SECRET,
+        ENDPOINT_SECRET,
+    ] {
+        assert!(
+            !logs.contains(sentinel),
+            "URL/SSE secret leaked into logs: {logs}"
+        );
+    }
+    assert!(logs.contains("Received message endpoint"));
+    assert!(logs.contains("endpoint_received=true"));
+    server.abort();
+}
+
+#[tokio::test]
+async fn http_diagnostics_redact_response_headers_bodies_and_error_urls() {
+    use axum::{Router, http::StatusCode, response::IntoResponse, routing::post};
+
+    const HEADER_SECRET: &str = "SENTINEL_HTTP_HEADER_e51c";
+    const BODY_SECRET: &str = "SENTINEL_HTTP_BODY_1f7d";
+    const URL_QUERY_SECRET: &str = "SENTINEL_HTTP_REQUEST_URL_78a0";
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/mcp",
+        post(|| async {
+            let mut response = (StatusCode::BAD_REQUEST, BODY_SECRET).into_response();
+            response.headers_mut().insert(
+                "x-api-key",
+                axum::http::HeaderValue::from_static(HEADER_SECRET),
+            );
+            response
+        }),
+    );
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let request_url = format!("http://{addr}/mcp?token={URL_QUERY_SECRET}");
+    let transport = make_transport(&request_url);
+    *transport.message_url.write() = Some(request_url);
+    let (result, logs) = capture_debug_logs(transport.request("tools/list", None)).await;
+    let error = result.expect_err("backend must reject request").to_string();
+
+    for sentinel in [HEADER_SECRET, BODY_SECRET, URL_QUERY_SECRET] {
+        assert!(
+            !logs.contains(sentinel),
+            "response secret leaked into logs: {logs}"
+        );
+        assert!(
+            !error.contains(sentinel),
+            "response secret leaked into error: {error}"
+        );
+    }
+    assert!(error.contains("HTTP 400"));
+    assert!(logs.contains("header_count"));
+    server.abort();
 }
 
 // =========================================================================
@@ -1115,16 +1289,16 @@ async fn request_does_not_reinitialize_without_a_session() {
     // surface as a plain error (nothing to re-initialize).
 
     let err = transport.request("tools/list", None).await.unwrap_err();
-    assert!(err.to_string().contains("Session not found"));
+    assert!(err.to_string().contains("session expired"));
 
     server.abort();
 }
 
 #[test]
 fn session_expired_detection_matches_known_signatures() {
-    // rust-mcp-sdk shape (hebb-serve, observed live 2026-06-11)
+    // Raw upstream body is reduced to a safe marker at the HTTP boundary.
     assert!(is_session_expired_error(&Error::Transport(
-        "HTTP 400 Bad Request: {\"code\":-32015,\"data\":null,\"message\":\"Bad Request: Session not found\"}".to_string()
+        "HTTP 400 Bad Request: session expired".to_string()
     )));
     // MCP spec: 404 = session terminated/expired
     assert!(is_session_expired_error(&Error::Transport(
