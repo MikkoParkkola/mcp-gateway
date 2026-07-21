@@ -341,6 +341,104 @@ fn next_id_increments() {
     assert_eq!(id3, RequestId::Number(3));
 }
 
+#[tokio::test]
+async fn request_rejects_mismatched_json_rpc_response_id() {
+    use axum::{Json, Router, routing::post};
+    use serde_json::json;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/mcp",
+        post(|| async {
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": 999_999,
+                "result": {}
+            }))
+        }),
+    );
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+    let result = transport.request("ping", None).await;
+
+    assert!(
+        matches!(&result, Err(Error::Protocol(message)) if message.contains("response id")),
+        "a response for another request must not prove this request alive: {result:?}"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn request_rejects_non_json_rpc_2_response() {
+    use axum::{Json, Router, extract::Json as ExtractJson, routing::post};
+    use serde_json::json;
+
+    async fn wrong_version(ExtractJson(body): ExtractJson<Value>) -> Json<Value> {
+        Json(json!({
+            "jsonrpc": "1.0",
+            "id": body["id"],
+            "result": {}
+        }))
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/mcp", post(wrong_version));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+    let result = transport.request("ping", None).await;
+
+    assert!(
+        matches!(&result, Err(Error::Protocol(message)) if message.contains("JSON-RPC version")),
+        "a non-2.0 response must not prove transport health: {result:?}"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn request_accepts_correlated_explicit_null_result() {
+    use axum::{Json, Router, extract::Json as ExtractJson, routing::post};
+    use serde_json::json;
+
+    async fn null_result(ExtractJson(body): ExtractJson<Value>) -> Json<Value> {
+        Json(json!({
+            "jsonrpc": "2.0",
+            "id": body["id"],
+            "result": null
+        }))
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/mcp", post(null_result));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+
+    let response = transport
+        .request("ping", None)
+        .await
+        .expect("explicit null is a valid correlated JSON-RPC result");
+
+    assert_eq!(response.result, Some(Value::Null));
+    assert!(response.error.is_none());
+    server.abort();
+}
+
 // =========================================================================
 // is_connected / connected state
 // =========================================================================

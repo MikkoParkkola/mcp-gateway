@@ -13,7 +13,36 @@ pub use self::websocket::McpFrame;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::{Result, protocol::JsonRpcResponse};
+use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::{Error, Result};
+
+/// Validate the JSON-RPC envelope and correlation id for a completed request.
+///
+/// A TCP/stdio/WebSocket peer producing bytes is not enough to prove that the
+/// response belongs to this request. Every transport calls this at the point
+/// where it still knows the exact outbound id, before the response can be used
+/// as application data or as a liveness signal.
+pub(crate) fn validate_json_rpc_response(
+    response: JsonRpcResponse,
+    expected_id: &RequestId,
+) -> Result<JsonRpcResponse> {
+    if response.jsonrpc != "2.0" {
+        return Err(Error::Protocol(
+            "response has an invalid JSON-RPC version".to_string(),
+        ));
+    }
+    if response.id.as_ref() != Some(expected_id) {
+        return Err(Error::Protocol(
+            "response id does not match the request id".to_string(),
+        ));
+    }
+    if response.result.is_some() == response.error.is_some() {
+        return Err(Error::Protocol(
+            "response must contain exactly one of result or error".to_string(),
+        ));
+    }
+    Ok(response)
+}
 
 /// Transport trait for MCP communication
 #[async_trait]

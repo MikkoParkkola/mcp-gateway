@@ -14,6 +14,15 @@ use super::{
     ResourceContents, ResourceTemplate, ServerCapabilities, Tool,
 };
 
+fn deserialize_present_json_value<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// JSON-RPC request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -48,7 +57,11 @@ pub struct JsonRpcResponse {
     /// Request ID (`null` when the response cannot be correlated to a request)
     pub id: Option<RequestId>,
     /// Result (on success)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_json_value"
+    )]
     pub result: Option<Value>,
     /// Error (on failure)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -823,6 +836,31 @@ mod tests {
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32601);
         assert_eq!(err.message, "Method not found");
+    }
+
+    #[test]
+    fn json_rpc_response_preserves_explicit_null_result_presence() {
+        let response: JsonRpcResponse = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        }))
+        .unwrap();
+
+        assert_eq!(response.result, Some(Value::Null));
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn json_rpc_response_missing_result_remains_absent() {
+        let response: JsonRpcResponse = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 1
+        }))
+        .unwrap();
+
+        assert!(response.result.is_none());
+        assert!(response.error.is_none());
     }
 
     #[test]

@@ -65,30 +65,54 @@ impl Transport for MockTransport {
 struct RecoveryMock {
     connected: AtomicBool,
     fail: AtomicBool,
+    eof: AtomicBool,
     pings: AtomicUsize,
+    closes: AtomicUsize,
+    response: JsonRpcResponse,
+    delay: Duration,
 }
 
 impl RecoveryMock {
     fn connected() -> Self {
+        Self::responding(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    fn responding(response: JsonRpcResponse) -> Self {
         Self {
             connected: AtomicBool::new(true),
             fail: AtomicBool::new(false),
+            eof: AtomicBool::new(false),
             pings: AtomicUsize::new(0),
+            closes: AtomicUsize::new(0),
+            response,
+            delay: Duration::ZERO,
+        }
+    }
+
+    fn delayed(delay: Duration) -> Self {
+        Self {
+            delay,
+            ..Self::connected()
         }
     }
 }
 
 #[async_trait]
 impl Transport for RecoveryMock {
-    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+    async fn request(&self, method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        assert_eq!(method, "ping");
         self.pings.fetch_add(1, Ordering::SeqCst);
+        sleep(self.delay).await;
         if self.fail.load(Ordering::Relaxed) {
             return Err(Error::BackendUnavailable("probe failed".to_string()));
         }
-        Ok(JsonRpcResponse::success_serialized(
-            RequestId::Number(1),
-            json!({}),
-        ))
+        if self.eof.load(Ordering::Relaxed) {
+            return Err(Error::Transport("Response channel closed".to_string()));
+        }
+        Ok(self.response.clone())
     }
 
     async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
@@ -100,6 +124,7 @@ impl Transport for RecoveryMock {
     }
 
     async fn close(&self) -> Result<()> {
+        self.closes.fetch_add(1, Ordering::SeqCst);
         self.connected.store(false, Ordering::Relaxed);
         Ok(())
     }
@@ -169,6 +194,223 @@ async fn health_probe_failure_leaves_breaker_tripped() {
     assert!(
         backend.is_circuit_tripped(),
         "a failed probe must leave the breaker tripped"
+    );
+    assert_eq!(
+        mock.closes.load(Ordering::SeqCst),
+        1,
+        "a dead transport must be closed before restart"
+    );
+}
+
+#[tokio::test]
+async fn health_probe_accepts_method_not_found_without_restart() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let mock = Arc::new(RecoveryMock::responding(JsonRpcResponse::error(
+        Some(RequestId::Number(1)),
+        -32601,
+        "Method not found",
+    )));
+    backend.set_transport_for_test(mock.clone() as Arc<dyn Transport>);
+
+    backend
+        .health_probe(Duration::from_secs(5))
+        .await
+        .expect("an exact -32601 response proves the transport is alive");
+
+    assert_eq!(mock.pings.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        mock.closes.load(Ordering::SeqCst),
+        0,
+        "unsupported ping must not restart a live MCP server"
+    );
+}
+
+#[tokio::test]
+async fn health_probe_restarts_on_other_json_rpc_error() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let mock = Arc::new(RecoveryMock::responding(JsonRpcResponse::error(
+        Some(RequestId::Number(1)),
+        -32603,
+        "Internal error",
+    )));
+    backend.set_transport_for_test(mock.clone() as Arc<dyn Transport>);
+
+    let result = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(
+        result.is_err(),
+        "a real JSON-RPC failure is not a healthy probe"
+    );
+    assert_eq!(mock.pings.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        mock.closes.load(Ordering::SeqCst),
+        1,
+        "a failed probe must close the old transport before restart"
+    );
+}
+
+#[tokio::test]
+async fn health_probe_restarts_on_malformed_json_rpc_response() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let mock = Arc::new(RecoveryMock::responding(JsonRpcResponse {
+        jsonrpc: "1.0".to_string(),
+        id: Some(RequestId::Number(1)),
+        result: Some(json!({})),
+        error: None,
+    }));
+    backend.set_transport_for_test(mock.clone() as Arc<dyn Transport>);
+
+    let result = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(
+        result.is_err(),
+        "a malformed response cannot prove liveness"
+    );
+    assert_eq!(mock.closes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn health_probe_restarts_a_wedged_transport_after_timeout() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let mock = Arc::new(RecoveryMock::delayed(Duration::from_secs(5)));
+    backend.set_transport_for_test(mock.clone() as Arc<dyn Transport>);
+
+    let result = backend.health_probe(Duration::from_millis(10)).await;
+
+    assert!(result.is_err(), "a wedged transport must time out");
+    assert_eq!(mock.pings.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        mock.closes.load(Ordering::SeqCst),
+        1,
+        "a timed-out transport must be closed before restart"
+    );
+}
+
+#[tokio::test]
+async fn health_probe_restarts_when_backend_closes_response_channel() {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let mock = Arc::new(RecoveryMock::connected());
+    mock.eof.store(true, Ordering::Relaxed);
+    backend.set_transport_for_test(mock.clone() as Arc<dyn Transport>);
+
+    let result = backend.health_probe(Duration::from_secs(5)).await;
+
+    assert!(result.is_err(), "EOF must not be mistaken for liveness");
+    assert_eq!(mock.pings.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        mock.closes.load(Ordering::SeqCst),
+        1,
+        "EOF must close the old transport before restart"
+    );
+}
+
+#[cfg(unix)]
+async fn run_health_probe_process(ping_error_code: i32) -> (Result<()>, Vec<String>) {
+    let workspace = tempfile::tempdir().expect("create health-probe child workspace");
+    let server = workspace.path().join("server.sh");
+    std::fs::write(
+        &server,
+        r#"while IFS= read -r request; do
+    id=$(printf '%s\n' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' initialize >> events.log
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25"}}\n' "$id"
+            ;;
+        *'"method":"notifications/initialized"'*)
+            printf '%s\n' initialized >> events.log
+            ;;
+        *'"method":"ping"'*)
+            printf '%s\n' ping >> events.log
+            printf '{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":"probe response"}}\n' "$id" "$PROBE_ERROR_CODE"
+            ;;
+    esac
+done
+"#,
+    )
+    .expect("write health-probe child server");
+
+    let backend = Backend::new(
+        "process-probe",
+        BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "sh server.sh".to_string(),
+                cwd: Some(workspace.path().to_string_lossy().into_owned()),
+                protocol_version: None,
+            },
+            timeout: Duration::from_secs(2),
+            env: HashMap::from([("PROBE_ERROR_CODE".to_string(), ping_error_code.to_string())]),
+            ..BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+
+    let result = backend.health_probe(Duration::from_secs(2)).await;
+    backend.stop().await.expect("stop health-probe child");
+
+    let events = std::fs::read_to_string(workspace.path().join("events.log"))
+        .expect("read health-probe child events");
+    (result, events.lines().map(str::to_string).collect())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn health_probe_initializes_process_before_unsupported_ping_without_restart() {
+    let (result, events) = run_health_probe_process(-32601).await;
+
+    result.expect("a correlated method-not-found response proves process liveness");
+    assert_eq!(
+        events,
+        ["initialize", "initialized", "ping"],
+        "unsupported ping must not restart the initialized child process"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn health_probe_initializes_process_before_ping_and_restarts_real_errors() {
+    let (result, events) = run_health_probe_process(-32603).await;
+
+    assert!(
+        result.is_err(),
+        "a non--32601 ping error must fail the probe"
+    );
+    assert_eq!(
+        events,
+        [
+            "initialize",
+            "initialized",
+            "ping",
+            "initialize",
+            "initialized"
+        ],
+        "probe must initialize before ping and restart exactly once after a real error"
     );
 }
 

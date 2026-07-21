@@ -22,7 +22,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
-use super::Transport;
+use super::{Transport, validate_json_rpc_response};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
     is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
@@ -456,7 +456,7 @@ impl Transport for StdioTransport {
 
         // Wait for response with timeout
         match tokio::time::timeout(self.request_timeout, rx).await {
-            Ok(Ok(response)) => Ok(response),
+            Ok(Ok(response)) => validate_json_rpc_response(response, &id),
             Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
             Err(_) => {
                 self.pending.remove(&id.to_string());

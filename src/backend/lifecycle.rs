@@ -598,7 +598,12 @@ impl Backend {
         };
 
         match tokio::time::timeout(timeout, transport.request("ping", None)).await {
-            Ok(Ok(_)) => {
+            Ok(Ok(response)) => {
+                if let Err(error) = validate_health_probe_response(response) {
+                    warn!(backend = %self.name, error = %error, "Health probe failed; rebuilding transport");
+                    let _ = self.force_restart().await;
+                    return Err(error);
+                }
                 if self.is_circuit_tripped() {
                     info!(
                         backend = %self.name,
@@ -623,5 +628,28 @@ impl Backend {
                 Err(Error::BackendTimeout(self.name.clone()))
             }
         }
+    }
+}
+
+/// Accept a successful ping or the standard `-32601 Method not found` response.
+///
+/// MCP servers predating `ping` still prove that their initialized JSON-RPC
+/// transport is alive by returning a correlated method-not-found response. Any
+/// other JSON-RPC error or malformed envelope remains a failed health probe.
+fn validate_health_probe_response(response: crate::protocol::JsonRpcResponse) -> Result<()> {
+    let Some(id) = response.id.clone() else {
+        return Err(Error::Protocol(
+            "health probe response is missing its request id".to_string(),
+        ));
+    };
+    let response = crate::transport::validate_json_rpc_response(response, &id)?;
+    match response.error {
+        None => Ok(()),
+        Some(error) if error.code == -32601 => Ok(()),
+        Some(error) => Err(Error::JsonRpc {
+            code: error.code,
+            message: error.message,
+            data: error.data,
+        }),
     }
 }

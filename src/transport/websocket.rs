@@ -36,7 +36,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use super::Transport;
+use super::{Transport, validate_json_rpc_response};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
 };
@@ -517,7 +517,7 @@ impl Transport for WebSocketTransport {
         }
 
         match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(response)) => Ok(response),
+            Ok(Ok(response)) => validate_json_rpc_response(response, &id),
             Ok(Err(_)) => Err(Error::Transport(
                 "WebSocket response channel closed".to_string(),
             )),

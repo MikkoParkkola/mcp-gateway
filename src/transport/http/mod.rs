@@ -23,7 +23,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use super::Transport;
+use super::{Transport, validate_json_rpc_response};
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::{
@@ -400,7 +400,7 @@ impl HttpTransport {
             })),
         };
 
-        let response = self.send_request(&request).await?;
+        let response = validate_json_rpc_response(self.send_request(&request).await?, &request.id)?;
 
         // Check for protocol version mismatch error
         if let Some(ref error) = response.error {
@@ -435,7 +435,10 @@ impl HttpTransport {
                         })),
                     };
 
-                    let retry_response = self.send_request(&retry_request).await?;
+                    let retry_response = validate_json_rpc_response(
+                        self.send_request(&retry_request).await?,
+                        &retry_request.id,
+                    )?;
 
                     if retry_response.error.is_some() {
                         return Err(Error::Protocol(format!(
@@ -944,7 +947,7 @@ impl Transport for HttpTransport {
             Err(err) => is_session_expired_error(err),
             Ok(resp) => is_session_expired_response(resp),
         };
-        if had_session && session_expired {
+        let response = if had_session && session_expired {
             warn!(
                 url = %self.base_url,
                 method = %method,
@@ -952,12 +955,13 @@ impl Transport for HttpTransport {
             );
             self.sessions.write().remove(bucket);
             self.initialize().await?;
-            return self
-                .send_request_with_headers(&request, extra_headers, identity_key)
-                .await;
-        }
+            self.send_request_with_headers(&request, extra_headers, identity_key)
+                .await?
+        } else {
+            result?
+        };
 
-        result
+        validate_json_rpc_response(response, &request.id)
     }
 
     // MIK-6710: HTTP is the only transport whose `request_with_headers`
