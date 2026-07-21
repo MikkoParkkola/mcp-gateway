@@ -287,7 +287,7 @@ Use `node:test` and temporary directories to assert:
 - a direct SRI/version/bin mismatch is rejected;
 - a symlink escaping the staged root is rejected;
 - canonical tree hashing ignores timestamps but changes on bytes, mode, path, or symlink target;
-- publishing refuses an existing digest directory and uses same-filesystem rename for a new one;
+- publishing refuses an existing digest path and atomically creates a no-clobber digest alias to a same-filesystem verified object;
 - rendering rejects relative Node/install paths and emits only literal digest-root commands;
 - a failed verification leaves its staging/evidence paths present.
 
@@ -299,7 +299,7 @@ Create a private `package.json` with exact dependency strings `3.2.4`, `2026.7.4
 
 - [ ] **Step 3: Implement minimal reusable verifier primitives**
 
-In `lib/runtime.mjs`, implement exact-version checks, SHA-256 file verification, lockfile-v3 traversal requiring integrity for resolved registry packages, safe realpath containment, canonical directory hashing, exclusive directory creation, atomic same-filesystem publish, and digest-root command rendering. Do not implement recursive cleanup.
+In `lib/runtime.mjs`, implement exact-version checks, SHA-256 file verification, lockfile-v3 traversal requiring integrity for resolved registry packages, safe realpath containment, canonical directory hashing, exclusive directory creation, atomic exclusive digest-alias publication for a pre-positioned same-filesystem object, and digest-root command rendering. Do not implement recursive cleanup.
 
 - [ ] **Step 4: Run Node unit tests and verify GREEN**
 
@@ -325,15 +325,15 @@ The cache path is a newly created evidence path, never the shared npm cache. Ins
 
 - [ ] **Step 6: Implement verifier, bootstrap, smoke, and renderer CLIs**
 
-`verify-runtime.mjs` verifies toolchain hashes, manifest/lock/pins, installed package metadata, bin targets, symlink containment, and canonical digest. `bootstrap-runtime.mjs` exclusively creates two install roots and two empty cache roots, runs `npm ci --ignore-scripts --no-audit --no-fund`, verifies both trees, requires equal digests, runs npm audit without fixing, runs smoke, and preserves all evidence on failure or success. `smoke-runtime.mjs` speaks newline-delimited JSON-RPC initialize/initialized/tools-list to all four child processes. `render-config.mjs` emits the four approved absolute commands under the computed digest directory below `/Users/mikko/.local/libexec/mcp-gateway/npm-runtime`.
+`verify-runtime.mjs` verifies toolchain hashes (including the full npm module tree), manifest/lock/pins, installed package metadata, bin targets, symlink containment, and canonical digest. `bootstrap-runtime.mjs` exclusively creates two install roots and two empty cache/home/temp/config roots, invokes npm through pinned Node with no inherited credentials or npm configuration, verifies both trees, requires equal digests, runs npm audit without fixing, runs bounded smoke, and preserves all evidence on failure or success. `smoke-runtime.mjs` speaks newline-delimited JSON-RPC initialize/initialized/tools-list to all four child processes and validates Morph's platform ripgrep. `render-config.mjs` accepts only a verified evidence root and emits the four approved absolute command-only overrides under the internally derived digest directory below `/Users/mikko/.local/libexec/mcp-gateway/npm-runtime`.
 
 - [ ] **Step 7: Run two-install determinism and stdio smoke**
 
-Run bootstrap with the new absolute evidence root `/Users/mikko/github/.worktrees/mcp-gateway-recovery-upstream/target/npm-runtime-evidence/final-20260721`; bootstrap must create it exclusively and fail rather than reuse it. Expected evidence includes distinct cache/install paths, identical canonical tree digests, exact toolchain hashes, four successful initialize/tools-list transcripts without secret values, and an npm audit report plus exit status.
+Run bootstrap with a new absolute evidence root under `/Users/mikko/github/.worktrees/mcp-gateway-recovery-upstream/target/npm-runtime-evidence/`; bootstrap must create it exclusively and fail rather than reuse it. Every retry uses a fresh attempt suffix and retains earlier failed evidence. Expected evidence includes distinct cache/install paths, identical canonical tree digests, exact toolchain hashes, four successful initialize/tools-list transcripts without secret values, and an npm audit report plus exit status.
 
 - [ ] **Step 8: Verify the reviewed config snippet**
 
-Read `tree_digest` from `/Users/mikko/github/.worktrees/mcp-gateway-recovery-upstream/target/npm-runtime-evidence/final-20260721/verification.json`, pass that exact value to `render-config.mjs`, and write the snippet into the same evidence root. Verify all command strings begin with `/opt/homebrew/bin/node`, reference the literal immutable digest root, contain no `npx`, and preserve only filesystem roots `/Users/mikko/github` and `/Users/mikko/Documents`.
+Pass the successful evidence root—not a caller-supplied digest—to `render-config.mjs` and write the snippet into that same evidence root. The renderer must replay verification and derive the digest internally. Verify all command strings begin with `/opt/homebrew/bin/node`, reference the literal immutable digest root, contain no `npx`, preserve only filesystem roots `/Users/mikko/github` and `/Users/mikko/Documents`, and emit no environment/header/enabled/description fields that could overwrite private configuration state.
 
 - [ ] **Step 9: Commit manifests and tooling only**
 

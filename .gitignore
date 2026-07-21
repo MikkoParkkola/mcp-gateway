@@ -32,6 +32,8 @@ history.txt
 .ruff_cache/
 .tiers/
 /dist/
+/recovery/npm-runtime/node_modules/
+/recovery/npm-runtime/.npm/
 
 # Local cargo config
 .cargo/

@@ -1,0 +1,16 @@
+{
+  "name": "mcp-gateway-recovery-npm-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "26.5.0",
+    "npm": "11.17.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "2026.7.10",
+    "@modelcontextprotocol/server-sequential-thinking": "2026.7.4",
+    "@morphllm/morphmcp": "0.8.206",
+    "@upstash/context7-mcp": "3.2.4"
+  }
+}

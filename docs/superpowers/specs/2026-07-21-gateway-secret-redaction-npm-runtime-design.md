@@ -57,10 +57,10 @@ The committed recovery directory will contain:
 - `package.json` with exact dependency versions and no ranges.
 - npm lockfile v3 with resolved tarballs and SRI for the full dependency graph.
 - `pins.json` with expected direct versions, SRI values, package bin names, and relative JavaScript entrypoints.
-- `pins.json` also records Node `v26.5.0`, npm `11.17.0`, `/opt/homebrew/bin/node`, `/opt/homebrew/bin/npm`, and SHA-256 expectations for their resolved runtime files: Node `19fa44ac565968cd4dbf38277854c829e441598f0872223881002efb471b40e9`; npm CLI `8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7`.
+- `pins.json` also records darwin/arm64, Node `v26.5.0`, npm `11.17.0`, `/opt/homebrew/bin/node`, `/opt/homebrew/bin/npm`, SHA-256 expectations for their resolved runtime files, and a canonical digest for the complete npm module tree. npm is invoked through the pinned Node binary, never through `env node`.
 - A verifier that rejects ranges, missing lock integrity, unexpected versions, escaping symlinks, missing bin targets, non-absolute Node/entrypoint commands, and a mismatch between two independently installed content trees.
 - A bootstrap that runs `npm ci --ignore-scripts --no-audit --no-fund` with an explicitly supplied empty staging cache. It never reads or writes the user's shared npm cache and never deletes an existing directory.
-- A stdio smoke client that runs each entrypoint with `/opt/homebrew/bin/node`, performs MCP `initialize`, sends `notifications/initialized`, and requires a successful `tools/list` response. The filesystem server receives only the currently configured safe roots `/Users/mikko/github` and `/Users/mikko/Documents`.
+- A stdio smoke client that runs each entrypoint with `/opt/homebrew/bin/node`, performs MCP `initialize`, sends `notifications/initialized`, and requires a successful `tools/list` response. The filesystem server receives only the currently configured safe roots `/Users/mikko/github` and `/Users/mikko/Documents`. Morph receives a fixed non-secret placeholder solely because it hides all tool definitions when the API-key variable is absent; this smoke does not validate live credentials.
 - An audit step runs `npm audit --json` against the locked graph, records the report and exit status as staging evidence, and never invokes `npm audit fix` or rewrites a pin.
 
 ## Immutable installation and activation
@@ -71,7 +71,7 @@ The production publish location is:
 
 `/Users/mikko/.local/libexec/mcp-gateway/npm-runtime/<tree-digest>`
 
-Publishing is an atomic same-filesystem rename from a verified staging directory to the absent digest directory. An existing digest directory is never overwritten. A `current` symlink may be switched with a temporary sibling symlink plus atomic rename for operator tooling, but generated gateway commands pin the literal digest directory and therefore cannot drift when `current` changes.
+For a future publish, the verified object must first be staged at a unique retained path under the production publish root. Publication is one atomic, exclusive `symlink(2)` creation from `<tree-digest>` to that pre-positioned object. Unlike ordinary `rename(2)`, symlink creation fails with `EEXIST` even if another process races to create an empty destination, so an existing digest path is never overwritten. Generated gateway commands pin the literal digest alias and no mutable `current` link is required. This recovery task does not pre-position an object or create the alias.
 
 Rollback retains the previous immutable directory and reviewed snippet. It consists of selecting the earlier snippet during a separately authorized gateway configuration deployment; this recovery task performs neither activation nor configuration replacement.
 
@@ -82,7 +82,7 @@ The generated reviewed snippet uses these command shapes:
 - `/opt/homebrew/bin/node /Users/mikko/.local/libexec/mcp-gateway/npm-runtime/<tree-digest>/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js /Users/mikko/github /Users/mikko/Documents`
 - `/opt/homebrew/bin/node /Users/mikko/.local/libexec/mcp-gateway/npm-runtime/<tree-digest>/node_modules/@morphllm/morphmcp/dist/index.js`
 
-Here `<tree-digest>` is not a user-supplied placeholder: the generator substitutes the verified canonical digest and fails if any resulting executable or argument path is not absolute.
+Here `<tree-digest>` is not a user-supplied placeholder: the generator accepts only a retained evidence root, replays toolchain/tree/smoke/audit verification, derives the canonical digest internally, and fails if any resulting executable or argument path is not absolute. Its output is a command-only merge fragment with no environment, header, enabled-state, description, or timeout values; applying it later must preserve the complete private configuration and recovered process environment.
 
 ## Test and commit boundaries
 

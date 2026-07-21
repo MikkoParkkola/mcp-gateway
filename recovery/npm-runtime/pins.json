@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "publish_root": "/Users/mikko/.local/libexec/mcp-gateway/npm-runtime",
+  "platform": {
+    "os": "darwin",
+    "arch": "arm64"
+  },
+  "toolchain": {
+    "node": {
+      "path": "/opt/homebrew/bin/node",
+      "resolved_path": "/opt/homebrew/Cellar/node/26.5.0/bin/node",
+      "version": "v26.5.0",
+      "sha256": "19fa44ac565968cd4dbf38277854c829e441598f0872223881002efb471b40e9"
+    },
+    "npm": {
+      "path": "/opt/homebrew/bin/npm",
+      "resolved_path": "/opt/homebrew/lib/node_modules/npm/bin/npm-cli.js",
+      "module_root": "/opt/homebrew/lib/node_modules/npm",
+      "version": "11.17.0",
+      "sha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+      "tree_sha256": "04e1581f490510c6272f30749bf961c4cb14603d32a464ed71bbc355ca063125"
+    }
+  },
+  "runtime_checks": [
+    {
+      "name": "morph-ripgrep",
+      "package": "@vscode/ripgrep-darwin-arm64",
+      "version": "1.18.0",
+      "path": "bin/rg",
+      "args": [
+        "--version"
+      ],
+      "stdout_contains": "ripgrep"
+    }
+  ],
+  "packages": {
+    "context7": {
+      "package": "@upstash/context7-mcp",
+      "version": "3.2.4",
+      "integrity": "sha512-w2Vg6MkF4Qojp8X1fdmJ6NrjZ8Ip/9lflybtqfDKaqOsUV9iVaXeRbyGTqARdn1O8teIPm7Bt+nfVqFiUcZvjQ==",
+      "bin": "context7-mcp",
+      "entrypoint": "dist/index.js",
+      "args": [],
+      "description": "Documentation and context lookup"
+    },
+    "sequential-thinking": {
+      "package": "@modelcontextprotocol/server-sequential-thinking",
+      "version": "2026.7.4",
+      "integrity": "sha512-tmR/ieGaeweffLNBrDp1H1w4sn4M6TN5yWSbMS+YMfS+0GDyPjnNKzqCl2uqfdRiX3D44PJUhwiDGqtJp6tFhw==",
+      "bin": "mcp-server-sequential-thinking",
+      "entrypoint": "dist/index.js",
+      "args": [],
+      "description": "Structured sequential reasoning"
+    },
+    "filesystem": {
+      "package": "@modelcontextprotocol/server-filesystem",
+      "version": "2026.7.10",
+      "integrity": "sha512-Mmjg4anFBD5OzbPnGJOA0jPPN8645ERhQk38HQLpSenx1ox9bfdPkmAzUnNjeQtqQGFLtKe13J20RtLBmUKMZA==",
+      "bin": "mcp-server-filesystem",
+      "entrypoint": "dist/index.js",
+      "args": [
+        "/Users/mikko/github",
+        "/Users/mikko/Documents"
+      ],
+      "description": "Filesystem access for approved roots"
+    },
+    "morphllm": {
+      "package": "@morphllm/morphmcp",
+      "version": "0.8.206",
+      "integrity": "sha512-2yVRtx7NLeTlN6WqQb25UA4dobeZtZ2jQMLSNyeR367VHRP4n6vV4bfNjtfQKyHQiG/6refu12923Rkinf3bpw==",
+      "bin": "morph-mcp",
+      "entrypoint": "dist/index.js",
+      "args": [],
+      "description": "Morph fast-edit MCP tools"
+    }
+  }
+}
