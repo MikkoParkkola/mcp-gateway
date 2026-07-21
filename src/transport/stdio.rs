@@ -95,6 +95,13 @@ pub struct StdioTransport {
     writer: Mutex<Option<tokio::process::ChildStdin>>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
+    /// Exact result returned by the backend's successful initialize handshake.
+    ///
+    /// The gateway owns the one stdio protocol session and initializes it when
+    /// the child starts. Direct-route clients still perform their own logical
+    /// handshake with the gateway; replaying this result keeps that handshake
+    /// faithful without sending an invalid second initialize to the child.
+    initialize_result: RwLock<Option<Value>>,
 }
 
 impl StdioTransport {
@@ -122,6 +129,7 @@ impl StdioTransport {
             request_timeout,
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
+            initialize_result: RwLock::new(None),
         })
     }
 
@@ -300,6 +308,8 @@ impl StdioTransport {
             }
         }
 
+        *self.initialize_result.write() = response.result;
+
         self.finish_initialization().await
     }
 
@@ -339,6 +349,7 @@ impl StdioTransport {
         }
 
         *self.protocol_version.write() = Some(negotiated.to_string());
+        *self.initialize_result.write() = retry_response.result;
 
         info!(
             command = %self.command,
@@ -438,6 +449,19 @@ impl StdioTransport {
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let id = self.next_id();
+
+        // One stdio child is one MCP protocol session. `start()` already sent
+        // initialize and retained the exact negotiated result, so a logical
+        // client handshake on `/mcp/{backend}` must be answered locally rather
+        // than forwarding an invalid second initialize to the same child.
+        if method == "initialize" && self.connected.load(Ordering::Relaxed) {
+            let cached_result = self.initialize_result.read().clone();
+            if let Some(result) = cached_result {
+                debug!("Replaying cached stdio initialize result");
+                return Ok(JsonRpcResponse::success(id, result));
+            }
+        }
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: id.clone(),
@@ -466,6 +490,14 @@ impl Transport for StdioTransport {
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
+        // The child received this notification during `finish_initialization`.
+        // Consume a direct client's matching logical-session notification once
+        // the transport is connected instead of delivering it twice.
+        if method == "notifications/initialized" && self.connected.load(Ordering::Relaxed) {
+            debug!("Consuming duplicate stdio initialized notification");
+            return Ok(());
+        }
+
         let notification = JsonRpcNotification {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
@@ -697,6 +729,53 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Transport(message)) if message == "Not connected"));
         assert!(t.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn connected_transport_replays_cached_initialize_without_writing() {
+        let t = make_transport("echo");
+        let expected = serde_json::json!({
+            "protocolVersion": "2025-11-25",
+            "serverInfo": { "name": "strict-fake", "version": "1.0" }
+        });
+        *t.initialize_result.write() = Some(expected.clone());
+        t.connected.store(true, Ordering::Relaxed);
+
+        let response = t
+            .request(
+                "initialize",
+                Some(serde_json::json!({"protocolVersion": "2025-11-25"})),
+            )
+            .await
+            .expect("cached initialize response");
+
+        assert_eq!(response.id, Some(RequestId::Number(1)));
+        assert_eq!(response.result, Some(expected));
+        assert!(response.error.is_none());
+        assert!(t.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unconnected_transport_never_replays_cached_initialize() {
+        let t = make_transport("echo");
+        *t.initialize_result.write() = Some(serde_json::json!({
+            "protocolVersion": "2025-11-25"
+        }));
+
+        let result = t.request("initialize", None).await;
+
+        assert!(matches!(result, Err(Error::Transport(message)) if message == "Not connected"));
+        assert!(t.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn connected_transport_consumes_duplicate_initialized_without_writing() {
+        let t = make_transport("echo");
+        t.connected.store(true, Ordering::Relaxed);
+
+        t.notify("notifications/initialized", None)
+            .await
+            .expect("duplicate initialized notification is consumed");
     }
 
     #[test]

@@ -1008,6 +1008,316 @@ async fn backend_handler_preserves_callers_jsonrpc_id_on_success() {
     assert_eq!(json["result"], json!({"ok": true}));
 }
 
+#[cfg(unix)]
+const STRICT_SLOW_STDIO_FIXTURE: &str = r#"#!/bin/sh
+events=$1
+initialized=0
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' initialize >> "$events"
+            if [ "$initialized" -eq 0 ]; then
+                initialized=1
+                sleep 0.20
+                printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"strict-slow-screenpipe-fake","version":"9.9.9"},"instructions":"cached-handshake-sentinel"}}'
+            else
+                printf '%s\n' '{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"initialize called more than once"}}'
+                exit 0
+            fi
+            ;;
+        *'"method":"notifications/initialized"'*)
+            printf '%s\n' notifications/initialized >> "$events"
+            ;;
+        *'"method":"tools/list"'*)
+            printf '%s\n' tools/list >> "$events"
+            printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"screenpipe_status","description":"deterministic fake","inputSchema":{"type":"object"}}]}}'
+            exit 0
+            ;;
+    esac
+done
+"#;
+
+#[cfg(unix)]
+const SINGLETON_SLOW_STDIO_FIXTURE: &str = r#"#!/bin/sh
+events=$1
+singleton=$2
+printf '%s\n' spawn >> "$events"
+if ! mkdir "$singleton" 2>/dev/null; then
+    printf '%s\n' duplicate-spawn >> "$events"
+    exit 70
+fi
+trap 'rmdir "$singleton" 2>/dev/null || true' EXIT HUP INT TERM
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' initialize >> "$events"
+            sleep 0.20
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"singleton-slow-screenpipe-fake","version":"1.0"}}}'
+            ;;
+        *'"method":"notifications/initialized"'*)
+            printf '%s\n' notifications/initialized >> "$events"
+            ;;
+    esac
+done
+"#;
+
+#[cfg(unix)]
+fn write_stdio_fixture(
+    workspace: &tempfile::TempDir,
+    name: &str,
+    source: &str,
+) -> std::path::PathBuf {
+    let path = workspace.path().join(name);
+    std::fs::write(&path, source).expect("write fake stdio MCP server");
+    path
+}
+
+#[cfg(unix)]
+fn quote_stdio_fixture_path(path: &std::path::Path) -> String {
+    let rendered = path.to_string_lossy();
+    assert!(
+        !rendered.contains('\''),
+        "temporary fixture paths must be safely single-quotable"
+    );
+    format!("'{rendered}'")
+}
+
+#[cfg(unix)]
+fn stdio_fixture_backend(
+    name: &str,
+    server: &std::path::Path,
+    arguments: &[&std::path::Path],
+    timeout: Duration,
+) -> Arc<Backend> {
+    let command_args = std::iter::once(server)
+        .chain(arguments.iter().copied())
+        .map(quote_stdio_fixture_path)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Arc::new(Backend::new(
+        name,
+        BackendConfig {
+            transport: crate::config::TransportConfig::Stdio {
+                command: format!("/bin/sh {command_args}"),
+                cwd: None,
+                protocol_version: None,
+            },
+            timeout,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+#[cfg(unix)]
+fn direct_route_request(backend: &str, message: &Value) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/mcp/{backend}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(message.to_string()))
+        .expect("build direct-route request")
+}
+
+#[cfg(unix)]
+async fn direct_route_response_json(response: axum::response::Response) -> (StatusCode, Value) {
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read direct-route response");
+    let json = serde_json::from_slice(&body).expect("parse direct-route response");
+    (status, json)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backend_handler_reuses_slow_stdio_handshake_for_direct_client() {
+    // A strict stdio MCP server owns one protocol session. The gateway warms
+    // that session itself, so a client reaching the direct route must receive
+    // the original negotiated handshake without sending a second initialize
+    // to the same child. The delay models slow-starting local servers such as
+    // Screenpipe and must remain inside the backend's configured timeout.
+    let workspace = tempfile::tempdir().expect("create fake stdio workspace");
+    let events = workspace.path().join("events.log");
+    let server = write_stdio_fixture(&workspace, "strict-slow-mcp.sh", STRICT_SLOW_STDIO_FIXTURE);
+    let configured_timeout = Duration::from_secs(1);
+    let backend = stdio_fixture_backend(
+        "strict-slow",
+        &server,
+        &[events.as_path()],
+        configured_timeout,
+    );
+    let router = create_router(test_router_app_state_with_backend(Arc::clone(&backend)));
+
+    let client_init = direct_route_request(
+        "strict-slow",
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "direct-client-init",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "direct-test-client", "version": "1.0" }
+            }
+        }),
+    );
+    let client_init_response =
+        tokio::time::timeout(configured_timeout, router.clone().oneshot(client_init))
+            .await
+            .expect("slow backend must become ready inside its configured timeout")
+            .expect("route initialize response");
+    let (client_init_status, client_init_json) =
+        direct_route_response_json(client_init_response).await;
+    assert_eq!(client_init_status, StatusCode::OK);
+    assert_eq!(client_init_json["id"], "direct-client-init");
+    assert_eq!(
+        client_init_json["result"]["protocolVersion"], "2025-11-25",
+        "initialize response: {client_init_json}"
+    );
+    assert_eq!(
+        client_init_json["result"]["serverInfo"]["name"],
+        "strict-slow-screenpipe-fake"
+    );
+    assert_eq!(
+        client_init_json["result"]["instructions"],
+        "cached-handshake-sentinel"
+    );
+    assert!(
+        client_init_json.get("error").is_none(),
+        "direct client initialize must not expose a duplicate-handshake error: {client_init_json}"
+    );
+
+    let ready_notice = direct_route_request(
+        "strict-slow",
+        &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    );
+    let ready_notice_response = router
+        .clone()
+        .oneshot(ready_notice)
+        .await
+        .expect("route initialized notification");
+    assert_eq!(ready_notice_response.status(), StatusCode::ACCEPTED);
+
+    let tool_list = direct_route_request(
+        "strict-slow",
+        &json!({"jsonrpc": "2.0", "id": "direct-client-tools", "method": "tools/list"}),
+    );
+    let tool_list_response = router
+        .oneshot(tool_list)
+        .await
+        .expect("route tools/list request");
+    let (tool_list_status, tool_list_json) = direct_route_response_json(tool_list_response).await;
+    assert_eq!(tool_list_status, StatusCode::OK);
+    assert_eq!(tool_list_json["id"], "direct-client-tools");
+    assert_eq!(
+        tool_list_json["result"]["tools"][0]["name"],
+        "screenpipe_status"
+    );
+
+    let observed = std::fs::read_to_string(&events).expect("read fake backend event log");
+    assert_eq!(
+        observed.lines().collect::<Vec<_>>(),
+        ["initialize", "notifications/initialized", "tools/list"],
+        "the direct client must reuse the gateway-owned stdio handshake"
+    );
+
+    backend.stop().await.expect("stop fake stdio backend");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backend_handler_waits_for_inflight_slow_stdio_warm_start() {
+    // Background warm-start and route-triggered startup must share the same
+    // single-flight lock. This fixture models a slow singleton backend: a
+    // second process cannot acquire its runtime directory and exits, which
+    // would make the route falsely report failure while the first process is
+    // still becoming ready inside the configured timeout.
+    let workspace = tempfile::tempdir().expect("create singleton fake workspace");
+    let events = workspace.path().join("events.log");
+    let singleton = workspace.path().join("singleton.lock");
+    let server = write_stdio_fixture(
+        &workspace,
+        "singleton-slow-mcp.sh",
+        SINGLETON_SLOW_STDIO_FIXTURE,
+    );
+    let configured_timeout = Duration::from_secs(1);
+    let backend = stdio_fixture_backend(
+        "singleton-slow",
+        &server,
+        &[events.as_path(), singleton.as_path()],
+        configured_timeout,
+    );
+    let router = create_router(test_router_app_state_with_backend(Arc::clone(&backend)));
+
+    let warm_backend = Arc::clone(&backend);
+    let warm_start = tokio::spawn(async move { warm_backend.start().await });
+
+    tokio::time::timeout(configured_timeout, async {
+        loop {
+            let observed = std::fs::read_to_string(&events).unwrap_or_default();
+            if observed.lines().any(|line| line == "initialize") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background warm-start must reach its deterministic delay");
+
+    let warm_overlap_request = direct_route_request(
+        "singleton-slow",
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "client-during-warm-start",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "readiness-test", "version": "1.0" }
+            }
+        }),
+    );
+
+    let route_outcome = match tokio::time::timeout(
+        configured_timeout,
+        router.oneshot(warm_overlap_request),
+    )
+    .await
+    {
+        Ok(Ok(response)) => Ok(direct_route_response_json(response).await),
+        Ok(Err(error)) => Err(format!("route service failed: {error:?}")),
+        Err(_) => Err("route did not become ready inside configured timeout".to_string()),
+    };
+
+    let warm_result = warm_start
+        .await
+        .map_err(|error| format!("warm-start task failed: {error}"))
+        .and_then(|result| result.map_err(|error| format!("warm-start failed: {error}")));
+    let stop_result = backend.stop().await;
+    let observed = std::fs::read_to_string(&events).expect("read singleton event log");
+
+    assert!(warm_result.is_ok(), "{warm_result:?}");
+    assert!(stop_result.is_ok(), "failed to stop fake singleton backend");
+    let (status, warm_route_json) = route_outcome.expect("direct route must wait for warm-start");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "route response during warm-start: {warm_route_json}"
+    );
+    assert_eq!(warm_route_json["id"], "client-during-warm-start");
+    assert_eq!(
+        warm_route_json["result"]["serverInfo"]["name"],
+        "singleton-slow-screenpipe-fake"
+    );
+    assert_eq!(
+        observed.lines().collect::<Vec<_>>(),
+        ["spawn", "initialize", "notifications/initialized"],
+        "warm-start and route traffic must share one stdio process"
+    );
+}
+
 #[tokio::test]
 async fn backend_handler_discovery_method_fails_closed_for_required_propagation() {
     // ADR-007 IDP.2/IDP.3 regression guard: a discovery method (resources/list)

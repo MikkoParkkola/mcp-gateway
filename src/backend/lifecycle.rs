@@ -277,8 +277,11 @@ impl Backend {
     ///
     /// Returns an error if the transport fails to connect or initialize.
     pub async fn start(&self) -> Result<()> {
-        let entry = self.pooled_entry(&PoolKey::Shared);
-        self.start_entry(&PoolKey::Shared, &entry).await?;
+        // Explicit/background warm-start must enter through the same
+        // single-flight lock as request-triggered startup. Calling
+        // `start_entry` directly here lets a slow warm-start race a request and
+        // launch two copies of a singleton stdio backend.
+        self.ensure_entry_started(&PoolKey::Shared).await?;
         Ok(())
     }
 
