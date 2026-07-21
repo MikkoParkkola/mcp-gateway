@@ -274,9 +274,12 @@ async function main() {
       publish_plan: {
         destination,
         method:
-          "atomic exclusive digest symlink to a pre-positioned verified object on the same filesystem",
+          "permission-sealed object, atomic exclusive digest symlink, and post-publication verification on the same filesystem",
         refuse_existing_destination: true,
         requires_object_inside_publish_root: true,
+        removes_write_bits_before_publication: true,
+        reverifies_alias_seal_symlinks_and_digest_after_publication: true,
+        trust_boundary: "no hostile or uncoordinated writers running as the object owner",
         publish_performed: false,
       },
       activation_plan: {

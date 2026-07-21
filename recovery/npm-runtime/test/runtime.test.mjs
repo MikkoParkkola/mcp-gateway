@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  ftruncateSync,
+  openSync,
+  writeSync,
+} from "node:fs";
 import {
   chmod,
   mkdir,
@@ -193,6 +199,12 @@ test("atomic publish refuses existing destinations and creates an exclusive dige
   assert.equal((await lstat(destination)).isSymbolicLink(), true);
   assert.equal(await readFile(path.join(destination, "server.js"), "utf8"), "verified\n");
   assert.equal(await readFile(path.join(stage, "server.js"), "utf8"), "verified\n");
+  assert.equal((await lstat(stage)).mode & 0o222, 0, "published root must be sealed");
+  assert.equal(
+    (await lstat(path.join(stage, "server.js"))).mode & 0o222,
+    0,
+    "published files must be sealed",
+  );
 
   const racingStage = path.join(parent, "racing-stage");
   await mkdir(racingStage);
@@ -206,6 +218,93 @@ test("atomic publish refuses existing destinations and creates an exclusive dige
   assert.equal(outcomes.filter(({ status }) => status === "rejected").length, 1);
   assert.equal((await lstat(racingDestination)).isSymbolicLink(), true);
   assert.equal(await readFile(path.join(racingStage, "server.js"), "utf8"), "race-safe\n");
+});
+
+test("atomic publish rejects mutation through a file descriptor opened before sealing", async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "npm-runtime-publish-mutation-"));
+  const stage = path.join(parent, "stage");
+  const file = path.join(stage, "server.js");
+  await mkdir(stage);
+  await writeFile(file, "verified-before-publication\n");
+  const destination = path.join(parent, await canonicalTreeDigest(stage));
+
+  const descriptor = openSync(file, "r+");
+  let mutated = false;
+  let stopPolling = false;
+  const mutateAfterAlias = (async () => {
+    while (!stopPolling) {
+      try {
+        if ((await lstat(destination)).isSymbolicLink()) {
+          mutated = true;
+          const replacement = Buffer.from("mutated-after-alias-creation\n");
+          ftruncateSync(descriptor, 0);
+          writeSync(descriptor, replacement, 0, replacement.length, 0);
+          return;
+        }
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  })();
+
+  try {
+    await assert.rejects(
+      () => atomicPublish(stage, destination),
+      /changed during publication/i,
+    );
+    await mutateAfterAlias;
+    assert.equal(mutated, true, "test must mutate only after the digest alias appears");
+    await assert.rejects(() => lstat(destination), { code: "ENOENT" });
+  } finally {
+    stopPolling = true;
+    await mutateAfterAlias;
+    closeSync(descriptor);
+  }
+});
+
+test("atomic publish rejects replacement of its digest alias with the same target", async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "npm-runtime-publish-alias-race-"));
+  const stage = path.join(parent, "stage");
+  await mkdir(stage);
+  for (let index = 0; index < 64; index += 1) {
+    await writeFile(path.join(stage, `verified-${index}.js`), `verified-${index}\n`);
+  }
+  const destination = path.join(parent, await canonicalTreeDigest(stage));
+  const relativeTarget = path.relative(parent, stage);
+  const fixture = path.join(RUNTIME_ROOT, "test", "replace-alias-race-fixture.mjs");
+  const mutator = spawn(process.execPath, [fixture, destination, relativeTarget], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  mutator.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const closed = new Promise((resolve, reject) => {
+    mutator.once("error", reject);
+    mutator.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  let readyTimer;
+  await new Promise((resolve, reject) => {
+    readyTimer = setTimeout(() => reject(new Error("alias mutator did not become ready")), 3_000);
+    mutator.stdout.on("data", (chunk) => {
+      if (chunk.toString("utf8").includes("ready")) resolve();
+    });
+    mutator.once("error", reject);
+  }).finally(() => clearTimeout(readyTimer));
+
+  try {
+    await assert.rejects(
+      () => atomicPublish(stage, destination),
+      /digest alias changed during publication/i,
+    );
+    const outcome = await closed;
+    assert.equal(outcome.code, 0, stderr || `alias mutator exited via ${outcome.signal}`);
+    assert.equal((await lstat(destination)).isSymbolicLink(), true);
+  } finally {
+    if (mutator.exitCode === null && mutator.signalCode === null) mutator.kill("SIGKILL");
+    await closed.catch(() => {});
+  }
 });
 
 test("config rendering requires absolute paths and emits literal digest-root commands", () => {
@@ -285,4 +384,18 @@ test("smoke process spawn failures terminate without hanging", async () => {
   } finally {
     clearTimeout(timer);
   }
+});
+
+test("smoke cleanup does not retain losing shutdown timers", () => {
+  const fixture = path.join(RUNTIME_ROOT, "test", "smoke-spawn-failure-fixture.mjs");
+  const started = process.hrtime.bigint();
+  const result = spawnSync(process.execPath, [fixture], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    timeout: 3_000,
+  });
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  assert.ok(elapsedMs < 1_500, `smoke child retained a timer for ${elapsedMs.toFixed(0)}ms`);
 });

@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
+  chmod,
   lstat,
   mkdir,
   readFile,
@@ -13,6 +14,7 @@ import {
   realpath,
   stat,
   symlink,
+  unlink,
 } from "node:fs/promises";
 import path from "node:path";
 
@@ -207,6 +209,112 @@ async function pathExists(candidate) {
   }
 }
 
+async function assertTreeSealed(root) {
+  const rootReal = await realpath(root);
+  const rootMetadata = await lstat(rootReal);
+  if (!rootMetadata.isDirectory()) throw new Error("published runtime root must be a directory");
+  if ((rootMetadata.mode & 0o222) !== 0) {
+    throw new Error("published runtime root is not sealed against writes");
+  }
+  await walkTree(rootReal, async (_absolute, relative, metadata) => {
+    if (metadata.isSymbolicLink()) return;
+    if (!metadata.isDirectory() && !metadata.isFile()) {
+      throw new Error(`unsupported filesystem object in runtime tree: ${relative}`);
+    }
+    if ((metadata.mode & 0o222) !== 0) {
+      throw new Error(`published runtime object is not sealed against writes: ${relative}`);
+    }
+  });
+}
+
+async function sealTree(root) {
+  const rootReal = await realpath(root);
+  await assertContainedSymlinks(rootReal);
+  const objects = [];
+  await walkTree(rootReal, async (absolute, relative, metadata) => {
+    if (metadata.isSymbolicLink()) return;
+    if (!metadata.isDirectory() && !metadata.isFile()) {
+      throw new Error(`unsupported filesystem object in runtime tree: ${relative}`);
+    }
+    objects.push({ absolute, metadata });
+  });
+  for (const { absolute, metadata } of objects) {
+    const sealedMode = (metadata.mode & 0o7777) & ~0o222;
+    if ((metadata.mode & 0o222) !== 0) await chmod(absolute, sealedMode);
+  }
+  const rootMetadata = await lstat(rootReal);
+  if ((rootMetadata.mode & 0o222) !== 0) {
+    await chmod(rootReal, (rootMetadata.mode & 0o7777) & ~0o222);
+  }
+  await assertTreeSealed(rootReal);
+  return rootReal;
+}
+
+function sameFilesystemIdentity(left, right) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.birthtimeNs === right.birthtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+async function verifyPublishedAlias({
+  destinationRoot,
+  stagingReal,
+  relativeTarget,
+  treeDigest,
+  aliasIdentity,
+}) {
+  const assertAliasUnchanged = async () => {
+    try {
+      const alias = await lstat(destinationRoot, { bigint: true });
+      if (
+        !alias.isSymbolicLink() ||
+        !sameFilesystemIdentity(alias, aliasIdentity) ||
+        (await readlink(destinationRoot)) !== relativeTarget ||
+        (await realpath(destinationRoot)) !== stagingReal
+      ) {
+        throw new Error("alias identity or target mismatch");
+      }
+    } catch (error) {
+      throw new Error("published digest alias changed during publication", { cause: error });
+    }
+  };
+
+  await assertAliasUnchanged();
+  try {
+    await assertContainedSymlinks(destinationRoot);
+    await assertTreeSealed(destinationRoot);
+    if ((await canonicalTreeDigest(destinationRoot)) !== treeDigest) {
+      throw new Error("published runtime changed during publication");
+    }
+  } catch (error) {
+    await assertAliasUnchanged();
+    throw error;
+  }
+  await assertAliasUnchanged();
+}
+
+async function removeCreatedAlias(destinationRoot, relativeTarget, identity) {
+  let current;
+  try {
+    current = await lstat(destinationRoot, { bigint: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  if (
+    !current.isSymbolicLink() ||
+    current.dev !== identity.dev ||
+    current.ino !== identity.ino ||
+    (await readlink(destinationRoot)) !== relativeTarget
+  ) {
+    throw new Error("refusing to remove a digest alias changed by another process");
+  }
+  await unlink(destinationRoot);
+}
+
 export async function atomicPublish(stagingRoot, destinationRoot) {
   if (!path.isAbsolute(stagingRoot) || !path.isAbsolute(destinationRoot)) {
     throw new Error("publish paths must be absolute");
@@ -215,8 +323,7 @@ export async function atomicPublish(stagingRoot, destinationRoot) {
     throw new Error(`publish destination already exists: ${destinationRoot}`);
   }
 
-  await assertContainedSymlinks(stagingRoot);
-  const stagingReal = await realpath(stagingRoot);
+  const stagingReal = await sealTree(stagingRoot);
   const destinationParentReal = await realpath(path.dirname(destinationRoot));
   const staging = await stat(stagingReal);
   const destinationParent = await stat(destinationParentReal);
@@ -237,12 +344,38 @@ export async function atomicPublish(stagingRoot, destinationRoot) {
   // unlike rename(2), symlink(2) fails with EEXIST even when another process
   // races to create an empty destination. The verified object is pre-positioned
   // under the same publish root and remains retained for rollback/forensics.
+  // Permission sealing prevents accidental writes, but an equally privileged
+  // owner can restore write bits or retain a writable descriptor. Post-publish
+  // verification detects mutation in this operation; the caller must exclude
+  // hostile or uncoordinated same-owner writers during and after it returns.
   const relativeTarget = path.relative(destinationParentReal, stagingReal);
+  let aliasIdentity;
   try {
     await symlink(relativeTarget, destinationRoot, "dir");
   } catch (error) {
     if (error?.code === "EEXIST") {
       throw new Error(`publish destination already exists: ${destinationRoot}`);
+    }
+    throw error;
+  }
+  try {
+    aliasIdentity = await lstat(destinationRoot, { bigint: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    await verifyPublishedAlias({
+      destinationRoot,
+      stagingReal,
+      relativeTarget,
+      treeDigest,
+      aliasIdentity,
+    });
+  } catch (error) {
+    try {
+      if (aliasIdentity) await removeCreatedAlias(destinationRoot, relativeTarget, aliasIdentity);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `${error.message}; the failed digest alias could not be removed safely`,
+      );
     }
     throw error;
   }

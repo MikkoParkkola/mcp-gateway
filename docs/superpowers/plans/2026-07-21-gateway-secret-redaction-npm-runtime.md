@@ -287,7 +287,8 @@ Use `node:test` and temporary directories to assert:
 - a direct SRI/version/bin mismatch is rejected;
 - a symlink escaping the staged root is rejected;
 - canonical tree hashing ignores timestamps but changes on bytes, mode, path, or symlink target;
-- publishing refuses an existing digest path and atomically creates a no-clobber digest alias to a same-filesystem verified object;
+- publishing refuses an existing digest path, seals every object against ordinary writes, and atomically creates a no-clobber digest alias to a same-filesystem verified object;
+- publication reverifies alias identity, symlink containment, sealed modes, and content digest through the alias, rejecting both same-target alias replacement and a concurrent write through a descriptor opened before sealing;
 - rendering rejects relative Node/install paths and emits only literal digest-root commands;
 - a failed verification leaves its staging/evidence paths present.
 
@@ -299,7 +300,7 @@ Create a private `package.json` with exact dependency strings `3.2.4`, `2026.7.4
 
 - [ ] **Step 3: Implement minimal reusable verifier primitives**
 
-In `lib/runtime.mjs`, implement exact-version checks, SHA-256 file verification, lockfile-v3 traversal requiring integrity for resolved registry packages, safe realpath containment, canonical directory hashing, exclusive directory creation, atomic exclusive digest-alias publication for a pre-positioned same-filesystem object, and digest-root command rendering. Do not implement recursive cleanup.
+In `lib/runtime.mjs`, implement exact-version checks, SHA-256 file verification, lockfile-v3 traversal requiring integrity for resolved registry packages, safe realpath containment, canonical directory hashing, exclusive directory creation, write-bit sealing plus atomic exclusive digest-alias publication and post-publication re-verification for a pre-positioned same-filesystem object, and digest-root command rendering. Document that mode sealing cannot defend against hostile same-owner processes that restore modes or retain writable descriptors. Do not implement recursive cleanup.
 
 - [ ] **Step 4: Run Node unit tests and verify GREEN**
 

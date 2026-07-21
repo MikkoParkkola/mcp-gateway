@@ -22,19 +22,26 @@ function safeKillGroup(child, signal) {
   }
 }
 
+async function exitsWithin(exited, timeoutMs) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([exited.then(() => true), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function stopChild(child, exited) {
   if (!child.stdin.destroyed) child.stdin.end();
   safeKillGroup(child, "SIGTERM");
-  const stopped = await Promise.race([
-    exited.then(() => true),
-    new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
-  ]);
+  const stopped = await exitsWithin(exited, 2_000);
   if (!stopped) {
     safeKillGroup(child, "SIGKILL");
-    const killed = await Promise.race([
-      exited.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
-    ]);
+    const killed = await exitsWithin(exited, 2_000);
     if (!killed) throw new Error("server process did not close after SIGKILL");
   }
 }
