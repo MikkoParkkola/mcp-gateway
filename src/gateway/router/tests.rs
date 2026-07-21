@@ -17,7 +17,7 @@ use crate::gateway::{
 };
 use crate::mtls::{MtlsConfig, MtlsPolicy};
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::transport::Transport;
+use crate::transport::{StdioRaceTestGate, Transport};
 use async_trait::async_trait;
 use axum::{
     body::to_bytes,
@@ -1062,6 +1062,41 @@ done
 "#;
 
 #[cfg(unix)]
+const EXIT_AFTER_INITIALIZED_STDIO_FIXTURE: &str = r#"#!/bin/sh
+events=$1
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' initialize >> "$events"
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"already-dead-fake","version":"1.0"},"instructions":"must-never-be-replayed"}}'
+            ;;
+        *'"method":"notifications/initialized"'*)
+            printf '%s\n' notifications/initialized >> "$events"
+            printf '%s\n' exit-after-initialized >> "$events"
+            exit 0
+            ;;
+    esac
+done
+"#;
+
+#[cfg(unix)]
+const RESTARTABLE_STDIO_FIXTURE: &str = r#"#!/bin/sh
+events=$1
+printf '%s\n' spawn >> "$events"
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' initialize >> "$events"
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"restartable-fake","version":"1.0"}}}'
+            ;;
+        *'"method":"notifications/initialized"'*)
+            printf '%s\n' notifications/initialized >> "$events"
+            ;;
+    esac
+done
+"#;
+
+#[cfg(unix)]
 fn write_stdio_fixture(
     workspace: &tempfile::TempDir,
     name: &str,
@@ -1224,6 +1259,170 @@ async fn backend_handler_reuses_slow_stdio_handshake_for_direct_client() {
     );
 
     backend.stop().await.expect("stop fake stdio backend");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backend_handler_never_replays_initialize_from_child_that_exited_during_startup() {
+    // The child exits immediately after receiving the gateway-owned initialized
+    // notification, while `finish_initialization` is still in its readiness
+    // delay. The direct request that triggered this cold start must fail instead
+    // of receiving a cached handshake from a process that is already gone.
+    let workspace = tempfile::tempdir().expect("create exiting fake workspace");
+    let events = workspace.path().join("events.log");
+    let server = write_stdio_fixture(
+        &workspace,
+        "exit-after-initialized-mcp.sh",
+        EXIT_AFTER_INITIALIZED_STDIO_FIXTURE,
+    );
+    let configured_timeout = Duration::from_secs(1);
+    let backend = stdio_fixture_backend(
+        "exit-after-initialized",
+        &server,
+        &[events.as_path()],
+        configured_timeout,
+    );
+    let router = create_router(test_router_app_state_with_backend(Arc::clone(&backend)));
+
+    let client_init = direct_route_request(
+        "exit-after-initialized",
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "must-not-use-dead-generation",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "dead-generation-test", "version": "1.0" }
+            }
+        }),
+    );
+    let response = tokio::time::timeout(configured_timeout, router.oneshot(client_init))
+        .await
+        .expect("dead backend must be rejected inside the configured timeout")
+        .expect("direct route response");
+    let (status, body) = direct_route_response_json(response).await;
+
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "response: {body}"
+    );
+    assert_eq!(body["id"], "must-not-use-dead-generation");
+    assert!(
+        body.get("result").is_none(),
+        "dead generation handshake leaked to client: {body}"
+    );
+    assert!(body.get("error").is_some(), "error response: {body}");
+
+    let observed = std::fs::read_to_string(&events).expect("read exiting backend event log");
+    assert_eq!(
+        observed.lines().collect::<Vec<_>>(),
+        [
+            "initialize",
+            "notifications/initialized",
+            "exit-after-initialized"
+        ]
+    );
+    backend.stop().await.expect("stop exiting fake backend");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backend_handler_old_generation_cannot_replay_while_force_restart_replaces_it() {
+    // Pause an initialize after it selected generation A but before it reads
+    // the cached handshake. `force_restart` must invalidate and close A before
+    // publishing generation B. Once released, the old in-flight Arc must fail;
+    // only a new request through the backend pool may observe B's handshake.
+    let workspace = tempfile::tempdir().expect("create restart-race workspace");
+    let events = workspace.path().join("events.log");
+    let server = write_stdio_fixture(&workspace, "restart-race-mcp.sh", RESTARTABLE_STDIO_FIXTURE);
+    let configured_timeout = Duration::from_secs(1);
+    let backend = stdio_fixture_backend(
+        "restart-race",
+        &server,
+        &[events.as_path()],
+        configured_timeout,
+    );
+    backend.start().await.expect("start generation A");
+
+    let gate = StdioRaceTestGate::new();
+    backend.set_shared_initialize_replay_gate_for_test(Some(Arc::clone(&gate)));
+    let router = create_router(test_router_app_state_with_backend(Arc::clone(&backend)));
+    let old_generation_request = direct_route_request(
+        "restart-race",
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "old-generation-request",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "restart-race-test", "version": "1.0" }
+            }
+        }),
+    );
+    let old_route = tokio::spawn(router.clone().oneshot(old_generation_request));
+
+    tokio::time::timeout(configured_timeout, gate.wait_until_entered())
+        .await
+        .expect("old generation request must reach replay gate");
+    backend.force_restart().await.expect("publish generation B");
+    gate.release();
+
+    let old_response = tokio::time::timeout(Duration::from_secs(3), old_route)
+        .await
+        .expect("old generation request must finish")
+        .expect("old route task")
+        .expect("old route response");
+    let (old_status, old_body) = direct_route_response_json(old_response).await;
+    assert_eq!(
+        old_status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "old generation replayed after force_restart: {old_body}"
+    );
+    assert_eq!(old_body["id"], "old-generation-request");
+    assert!(old_body.get("result").is_none(), "old response: {old_body}");
+
+    let fresh_request = direct_route_request(
+        "restart-race",
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "new-generation-request",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "restart-race-test", "version": "1.0" }
+            }
+        }),
+    );
+    let fresh_response = router
+        .oneshot(fresh_request)
+        .await
+        .expect("new generation route response");
+    let (fresh_status, fresh_body) = direct_route_response_json(fresh_response).await;
+    assert_eq!(fresh_status, StatusCode::OK, "new response: {fresh_body}");
+    assert_eq!(fresh_body["id"], "new-generation-request");
+    assert_eq!(
+        fresh_body["result"]["serverInfo"]["name"],
+        "restartable-fake"
+    );
+
+    let observed = std::fs::read_to_string(&events).expect("read restart event log");
+    assert_eq!(
+        observed.lines().collect::<Vec<_>>(),
+        [
+            "spawn",
+            "initialize",
+            "notifications/initialized",
+            "spawn",
+            "initialize",
+            "notifications/initialized"
+        ],
+        "force_restart must replace generation A exactly once"
+    );
+    backend.stop().await.expect("stop generation B");
 }
 
 #[cfg(unix)]

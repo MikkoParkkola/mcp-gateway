@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -22,12 +22,36 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
+#[cfg(test)]
+use super::StdioRaceTestGate;
 use super::{Transport, validate_json_rpc_response};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
     is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
 };
 use crate::{Error, Result};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum StdioSessionPhase {
+    #[default]
+    Idle,
+    Starting,
+    Connected,
+    Closed,
+}
+
+#[derive(Default)]
+struct StdioSessionState {
+    generation: u64,
+    phase: StdioSessionPhase,
+    initialize_result: Option<Value>,
+}
+
+#[derive(Clone, Copy)]
+enum WireAccess {
+    Starting(u64),
+    Connected,
+}
 
 #[cfg(unix)]
 const FALLBACK_EXEC_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
@@ -81,8 +105,10 @@ pub struct StdioTransport {
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Request ID counter
     request_id: AtomicU64,
-    /// Connected flag
-    connected: AtomicBool,
+    /// Generation-tagged connection state and cached initialize handshake.
+    session: RwLock<StdioSessionState>,
+    /// Serializes public writes/replays with generation invalidation and close.
+    session_gate: Mutex<()>,
     /// Command to execute
     command: String,
     /// Environment variables
@@ -95,13 +121,12 @@ pub struct StdioTransport {
     writer: Mutex<Option<tokio::process::ChildStdin>>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
-    /// Exact result returned by the backend's successful initialize handshake.
-    ///
-    /// The gateway owns the one stdio protocol session and initializes it when
-    /// the child starts. Direct-route clients still perform their own logical
-    /// handshake with the gateway; replaying this result keeps that handshake
-    /// faithful without sending an invalid second initialize to the child.
-    initialize_result: RwLock<Option<Value>>,
+    #[cfg(test)]
+    initialize_replay_test_gate: RwLock<Option<Arc<StdioRaceTestGate>>>,
+    #[cfg(test)]
+    initialize_request_entry_test_gate: RwLock<Option<Arc<StdioRaceTestGate>>>,
+    #[cfg(test)]
+    close_after_invalidation_test_gate: RwLock<Option<Arc<StdioRaceTestGate>>>,
 }
 
 impl StdioTransport {
@@ -122,14 +147,20 @@ impl StdioTransport {
             child: Mutex::new(None),
             pending: dashmap::DashMap::new(),
             request_id: AtomicU64::new(1),
-            connected: AtomicBool::new(false),
+            session: RwLock::new(StdioSessionState::default()),
+            session_gate: Mutex::new(()),
             command: command.to_string(),
             env,
             cwd,
             request_timeout,
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
-            initialize_result: RwLock::new(None),
+            #[cfg(test)]
+            initialize_replay_test_gate: RwLock::new(None),
+            #[cfg(test)]
+            initialize_request_entry_test_gate: RwLock::new(None),
+            #[cfg(test)]
+            close_after_invalidation_test_gate: RwLock::new(None),
         })
     }
 
@@ -184,6 +215,11 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
+        let generation = {
+            let _session_guard = self.lock_session_gate().await?;
+            self.begin_generation()
+        };
+
         *self.writer.lock().await = Some(stdin);
         *self.child.lock().await = Some(child);
 
@@ -212,7 +248,8 @@ impl StdioTransport {
                 }
             }
 
-            transport.connected.store(false, Ordering::Relaxed);
+            let _session_guard = transport.session_gate.lock().await;
+            transport.invalidate_generation(generation);
             debug!("Stdio reader task ended");
         });
 
@@ -227,7 +264,7 @@ impl StdioTransport {
         // Initialize with protocol version negotiation. If initialization
         // fails, tear down the spawned process now; otherwise reader tasks keep
         // the transport Arc alive and failed starts leak orphan MCP servers.
-        if let Err(error) = self.initialize().await {
+        if let Err(error) = self.initialize(generation).await {
             if let Err(close_error) = self.close().await {
                 warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
             }
@@ -256,7 +293,7 @@ impl StdioTransport {
     ///    (spec-compliant negotiation) and records it.
     /// 3. On error containing version info, parses supported versions and
     ///    retries with the highest mutually supported version.
-    async fn initialize(&self) -> Result<()> {
+    async fn initialize(&self, generation: u64) -> Result<()> {
         let version = self
             .protocol_version
             .read()
@@ -270,7 +307,11 @@ impl StdioTransport {
         );
 
         let response = self
-            .request("initialize", Some(Self::build_init_params(&version)))
+            .request_on_wire(
+                "initialize",
+                Some(Self::build_init_params(&version)),
+                WireAccess::Starting(generation),
+            )
             .await?;
 
         if let Some(ref error) = response.error {
@@ -278,7 +319,9 @@ impl StdioTransport {
 
             // Protocol version mismatch — attempt negotiation
             if is_version_mismatch_error(error_msg) {
-                return self.negotiate_and_retry(&version, error_msg).await;
+                return self
+                    .negotiate_and_retry(generation, &version, error_msg)
+                    .await;
             }
 
             return Err(Error::Protocol(format!(
@@ -308,13 +351,23 @@ impl StdioTransport {
             }
         }
 
-        *self.initialize_result.write() = response.result;
+        let result = response.result.ok_or_else(|| {
+            Error::Protocol(format!(
+                "Initialize response from '{}' omitted its result",
+                self.command
+            ))
+        })?;
 
-        self.finish_initialization().await
+        self.finish_initialization(generation, result).await
     }
 
     /// Parse the error for supported versions, find a match, and retry.
-    async fn negotiate_and_retry(&self, rejected_version: &str, error_msg: &str) -> Result<()> {
+    async fn negotiate_and_retry(
+        &self,
+        generation: u64,
+        rejected_version: &str,
+        error_msg: &str,
+    ) -> Result<()> {
         let server_versions = parse_supported_versions_from_error(error_msg);
 
         let negotiated = server_versions
@@ -338,7 +391,11 @@ impl StdioTransport {
 
         // Retry with negotiated version
         let retry_response = self
-            .request("initialize", Some(Self::build_init_params(negotiated)))
+            .request_on_wire(
+                "initialize",
+                Some(Self::build_init_params(negotiated)),
+                WireAccess::Starting(generation),
+            )
             .await?;
 
         if let Some(ref error) = retry_response.error {
@@ -349,7 +406,12 @@ impl StdioTransport {
         }
 
         *self.protocol_version.write() = Some(negotiated.to_string());
-        *self.initialize_result.write() = retry_response.result;
+        let result = retry_response.result.ok_or_else(|| {
+            Error::Protocol(format!(
+                "Initialize response from '{}' omitted its result",
+                self.command
+            ))
+        })?;
 
         info!(
             command = %self.command,
@@ -357,16 +419,21 @@ impl StdioTransport {
             "Successfully negotiated protocol version"
         );
 
-        self.finish_initialization().await
+        self.finish_initialization(generation, result).await
     }
 
     /// Complete the initialization handshake (send `initialized` notification).
-    async fn finish_initialization(&self) -> Result<()> {
+    async fn finish_initialization(&self, generation: u64, initialize_result: Value) -> Result<()> {
         // Yield to ensure I/O is processed before sending notification
         tokio::task::yield_now().await;
 
         // Send initialized notification
-        self.notify("notifications/initialized", None).await?;
+        self.notify_on_wire(
+            "notifications/initialized",
+            None,
+            WireAccess::Starting(generation),
+        )
+        .await?;
 
         // Yield again to ensure notification reaches the server
         tokio::task::yield_now().await;
@@ -377,7 +444,53 @@ impl StdioTransport {
         debug!("Waiting for server to complete initialization");
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
-        self.connected.store(true, Ordering::Relaxed);
+        let _session_guard = self.lock_session_gate().await?;
+        {
+            let session = self.session.read();
+            if session.generation != generation || session.phase != StdioSessionPhase::Starting {
+                return Err(Error::Transport(format!(
+                    "Stdio child '{}' was invalidated during initialization",
+                    self.command
+                )));
+            }
+        }
+
+        let child_is_alive = {
+            let mut child = self.lock_child().await?;
+            match child.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(None) => true,
+                    Ok(Some(status)) => {
+                        debug!(?status, "Stdio child exited during initialization");
+                        false
+                    }
+                    Err(error) => {
+                        warn!(%error, "Failed to verify stdio child after initialization");
+                        false
+                    }
+                },
+                None => false,
+            }
+        };
+        if !child_is_alive {
+            self.invalidate_generation(generation);
+            return Err(Error::Transport(format!(
+                "Stdio child '{}' exited during initialization",
+                self.command
+            )));
+        }
+
+        {
+            let mut session = self.session.write();
+            if session.generation != generation || session.phase != StdioSessionPhase::Starting {
+                return Err(Error::Transport(format!(
+                    "Stdio child '{}' was invalidated during initialization",
+                    self.command
+                )));
+            }
+            session.initialize_result = Some(initialize_result);
+            session.phase = StdioSessionPhase::Connected;
+        }
 
         let negotiated = self.protocol_version.read().clone();
         info!(
@@ -387,6 +500,174 @@ impl StdioTransport {
         );
 
         Ok(())
+    }
+
+    fn next_generation(generation: u64) -> u64 {
+        generation.wrapping_add(1)
+    }
+
+    fn begin_generation(&self) -> u64 {
+        let mut session = self.session.write();
+        session.generation = Self::next_generation(session.generation);
+        session.phase = StdioSessionPhase::Starting;
+        session.initialize_result = None;
+        session.generation
+    }
+
+    fn invalidate_generation(&self, generation: u64) {
+        let mut session = self.session.write();
+        if session.generation == generation {
+            session.generation = Self::next_generation(session.generation);
+            session.phase = StdioSessionPhase::Closed;
+            session.initialize_result = None;
+        }
+    }
+
+    fn invalidate_current_generation(&self) {
+        let mut session = self.session.write();
+        session.generation = Self::next_generation(session.generation);
+        session.phase = StdioSessionPhase::Closed;
+        session.initialize_result = None;
+    }
+
+    fn has_cached_initialize(&self) -> bool {
+        let session = self.session.read();
+        session.phase == StdioSessionPhase::Connected && session.initialize_result.is_some()
+    }
+
+    async fn lock_session_gate(&self) -> Result<tokio::sync::MutexGuard<'_, ()>> {
+        tokio::time::timeout(self.request_timeout, self.session_gate.lock())
+            .await
+            .map_err(|_| {
+                Error::BackendTimeout("Timed out waiting for stdio session state".to_string())
+            })
+    }
+
+    async fn lock_child(&self) -> Result<tokio::sync::MutexGuard<'_, Option<Child>>> {
+        tokio::time::timeout(self.request_timeout, self.child.lock())
+            .await
+            .map_err(|_| {
+                Error::BackendTimeout("Timed out checking stdio child liveness".to_string())
+            })
+    }
+
+    fn ensure_wire_access(&self, access: WireAccess) -> Result<()> {
+        let session = self.session.read();
+        let allowed = match access {
+            WireAccess::Starting(generation) => {
+                session.generation == generation && session.phase == StdioSessionPhase::Starting
+            }
+            WireAccess::Connected => session.phase == StdioSessionPhase::Connected,
+        };
+        if allowed {
+            Ok(())
+        } else {
+            Err(Error::Transport("Not connected".to_string()))
+        }
+    }
+
+    async fn cached_initialize_if_live(&self) -> Result<Value> {
+        let _session_guard = self.lock_session_gate().await?;
+        let (candidate_generation, initialize_result) = {
+            let session = self.session.read();
+            if session.phase != StdioSessionPhase::Connected {
+                return Err(Error::Transport(
+                    "Stdio session was invalidated before initialize replay".to_string(),
+                ));
+            }
+            let result = session.initialize_result.clone().ok_or_else(|| {
+                Error::Protocol("Connected stdio session has no initialize result".to_string())
+            })?;
+            (session.generation, result)
+        };
+
+        let mut child = self.lock_child().await?;
+        let Some(child) = child.as_mut() else {
+            self.invalidate_generation(candidate_generation);
+            return Err(Error::Transport(
+                "Stdio initialize cache has no live child process".to_string(),
+            ));
+        };
+        match child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                self.invalidate_generation(candidate_generation);
+                return Err(Error::Transport(format!(
+                    "Stdio child '{}' exited before initialize replay ({status})",
+                    self.command
+                )));
+            }
+            Err(error) => {
+                self.invalidate_generation(candidate_generation);
+                return Err(Error::Transport(format!(
+                    "Failed to verify stdio child '{}' before initialize replay: {error}",
+                    self.command
+                )));
+            }
+        }
+
+        let session = self.session.read();
+        if session.generation != candidate_generation
+            || session.phase != StdioSessionPhase::Connected
+        {
+            return Err(Error::Transport(
+                "Stdio session was invalidated before initialize replay".to_string(),
+            ));
+        }
+        Ok(initialize_result)
+    }
+
+    async fn request_on_wire(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        access: WireAccess,
+    ) -> Result<JsonRpcResponse> {
+        let session_guard = self.lock_session_gate().await?;
+        self.ensure_wire_access(access)?;
+
+        let id = self.next_id();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: id.clone(),
+            method: method.to_string(),
+            params,
+        };
+        let message = serde_json::to_string(&request)?;
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(id.to_string(), tx);
+
+        if let Err(error) = self.write_message(&message).await {
+            self.pending.remove(&id.to_string());
+            return Err(error);
+        }
+        drop(session_guard);
+
+        match tokio::time::timeout(self.request_timeout, rx).await {
+            Ok(Ok(response)) => validate_json_rpc_response(response, &id),
+            Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
+            Err(_) => {
+                self.pending.remove(&id.to_string());
+                Err(Error::BackendTimeout("Request timed out".to_string()))
+            }
+        }
+    }
+
+    async fn notify_on_wire(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        access: WireAccess,
+    ) -> Result<()> {
+        let _session_guard = self.lock_session_gate().await?;
+        self.ensure_wire_access(access)?;
+        let notification = JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+        };
+        self.write_message(&serde_json::to_string(&notification)?)
+            .await
     }
 
     /// Handle a response line from stdout
@@ -448,91 +729,98 @@ impl StdioTransport {
 #[async_trait]
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let id = self.next_id();
+        #[cfg(test)]
+        if method == "initialize" {
+            let entry_gate = self.initialize_request_entry_test_gate.read().clone();
+            if let Some(gate) = entry_gate {
+                gate.pause().await;
+            }
+        }
 
         // One stdio child is one MCP protocol session. `start()` already sent
         // initialize and retained the exact negotiated result, so a logical
         // client handshake on `/mcp/{backend}` must be answered locally rather
-        // than forwarding an invalid second initialize to the same child.
-        if method == "initialize" && self.connected.load(Ordering::Relaxed) {
-            let cached_result = self.initialize_result.read().clone();
-            if let Some(result) = cached_result {
-                debug!("Replaying cached stdio initialize result");
-                return Ok(JsonRpcResponse::success(id, result));
+        // than forwarding an invalid second initialize to the same child. An
+        // initialize from any non-connected phase is always external/stale;
+        // only the private startup path may write while `Starting`.
+        if method == "initialize" {
+            if !self.has_cached_initialize() {
+                return Err(Error::Transport("Not connected".to_string()));
             }
-        }
-
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: id.clone(),
-            method: method.to_string(),
-            params,
-        };
-
-        let message = serde_json::to_string(&request)?;
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert(id.to_string(), tx);
-
-        if let Err(e) = self.write_message(&message).await {
-            self.pending.remove(&id.to_string());
-            return Err(e);
-        }
-
-        // Wait for response with timeout
-        match tokio::time::timeout(self.request_timeout, rx).await {
-            Ok(Ok(response)) => validate_json_rpc_response(response, &id),
-            Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-            Err(_) => {
-                self.pending.remove(&id.to_string());
-                Err(Error::BackendTimeout("Request timed out".to_string()))
+            #[cfg(test)]
+            let replay_gate = self.initialize_replay_test_gate.read().clone();
+            #[cfg(test)]
+            if let Some(gate) = replay_gate {
+                gate.pause().await;
             }
+            let result = self.cached_initialize_if_live().await?;
+            debug!("Replaying cached stdio initialize result");
+            return Ok(JsonRpcResponse::success(self.next_id(), result));
         }
+
+        self.request_on_wire(method, params, WireAccess::Connected)
+            .await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         // The child received this notification during `finish_initialization`.
         // Consume a direct client's matching logical-session notification once
         // the transport is connected instead of delivering it twice.
-        if method == "notifications/initialized" && self.connected.load(Ordering::Relaxed) {
-            debug!("Consuming duplicate stdio initialized notification");
+        if method == "notifications/initialized" {
+            if !self.has_cached_initialize() {
+                return Err(Error::Transport("Not connected".to_string()));
+            }
+            self.cached_initialize_if_live().await?;
+            debug!("Consuming duplicate stdio initialized notification for live generation");
             return Ok(());
         }
 
-        let notification = JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
-            method: method.to_string(),
-            params,
-        };
-
-        let message = serde_json::to_string(&notification)?;
-        self.write_message(&message).await
+        self.notify_on_wire(method, params, WireAccess::Connected)
+            .await
     }
 
     fn is_connected(&self) -> bool {
-        if !self.connected.load(Ordering::Relaxed) {
-            return false;
-        }
-        // Defense in depth (Fix C): the reader task flips `connected=false` on
+        let generation = {
+            let session = self.session.read();
+            if session.phase != StdioSessionPhase::Connected {
+                return false;
+            }
+            session.generation
+        };
+        // Defense in depth (Fix C): the reader task closes the session on
         // stdout EOF, but a zombie child or a not-yet-scheduled reader task can
-        // leave the cached flag stale-true. A stale-true flag makes
+        // leave the cached phase as Connected. A stale Connected phase makes
         // `Backend::ensure_started` a no-op and dispatches requests into a dead
         // pipe — the core reason a tripped breaker never recovered. Confirm real
         // liveness with a non-blocking waitpid. `try_lock` keeps this sync
         // method from blocking; on lock contention we trust the flag.
-        if let Ok(mut guard) = self.child.try_lock()
-            && let Some(child) = guard.as_mut()
-            && let Ok(Some(_status)) = child.try_wait()
-        {
-            // Child has exited; reconcile the cached flag so callers and future
-            // checks see the truth.
-            self.connected.store(false, Ordering::Relaxed);
-            return false;
+        if let Ok(mut guard) = self.child.try_lock() {
+            let Some(child) = guard.as_mut() else {
+                self.invalidate_generation(generation);
+                return false;
+            };
+            if !matches!(child.try_wait(), Ok(None)) {
+                self.invalidate_generation(generation);
+                return false;
+            }
         }
         true
     }
 
     async fn close(&self) -> Result<()> {
-        self.connected.store(false, Ordering::Relaxed);
+        // The gate is the close/replay/write linearization point. A request
+        // already holding it completes its wire write or replay first; after
+        // close acquires it, the old generation is invalidated before either
+        // writer or child can be observed again.
+        let _session_guard = self.session_gate.lock().await;
+        self.invalidate_current_generation();
+        #[cfg(test)]
+        {
+            let close_gate = self.close_after_invalidation_test_gate.read().clone();
+            if let Some(gate) = close_gate {
+                gate.pause().await;
+            }
+        }
 
         // Close stdin
         *self.writer.lock().await = None;
@@ -543,6 +831,11 @@ impl Transport for StdioTransport {
         }
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn set_initialize_replay_test_gate(&self, gate: Option<Arc<StdioRaceTestGate>>) {
+        *self.initialize_replay_test_gate.write() = gate;
     }
 }
 
@@ -557,6 +850,28 @@ mod tests {
     const PARENT_SECRET_ENV: &str = "MCP_GATEWAY_TEST_PARENT_SECRET";
     #[cfg(unix)]
     const EXPLICIT_BACKEND_ENV: &str = "MCP_GATEWAY_TEST_EXPLICIT_BACKEND";
+    #[cfg(unix)]
+    const DUPLICATE_REJECTING_STDIO_FIXTURE: &str = r#"#!/bin/sh
+events=$1
+initialized=0
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            if [ "$initialized" -eq 0 ]; then
+                initialized=1
+                printf '%s\n' initialize >> "$events"
+                printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"close-race-fake","version":"1.0"}}}'
+            else
+                printf '%s\n' duplicate-initialize >> "$events"
+                printf '%s\n' '{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"duplicate initialize"}}'
+            fi
+            ;;
+        *'"method":"notifications/initialized"'*)
+            printf '%s\n' notifications/initialized >> "$events"
+            ;;
+    esac
+done
+"#;
 
     fn make_transport(cmd: &str) -> Arc<StdioTransport> {
         StdioTransport::new(
@@ -566,6 +881,19 @@ mod tests {
             std::time::Duration::from_secs(30),
             None,
         )
+    }
+
+    #[cfg(unix)]
+    async fn attach_live_test_child(transport: &Arc<StdioTransport>) {
+        let child = Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn live test child");
+        *transport.child.lock().await = Some(child);
     }
 
     // =========================================================================
@@ -713,12 +1041,11 @@ mod tests {
     }
 
     #[test]
-    fn connected_flag_toggles() {
+    fn connected_phase_without_child_is_not_live() {
         let t = make_transport("echo");
-        t.connected.store(true, Ordering::Relaxed);
-        assert!(t.is_connected());
-        t.connected.store(false, Ordering::Relaxed);
+        t.session.write().phase = StdioSessionPhase::Connected;
         assert!(!t.is_connected());
+        assert_eq!(t.session.read().phase, StdioSessionPhase::Closed);
     }
 
     #[tokio::test]
@@ -731,15 +1058,20 @@ mod tests {
         assert!(t.pending.is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn connected_transport_replays_cached_initialize_without_writing() {
         let t = make_transport("echo");
+        attach_live_test_child(&t).await;
         let expected = serde_json::json!({
             "protocolVersion": "2025-11-25",
             "serverInfo": { "name": "strict-fake", "version": "1.0" }
         });
-        *t.initialize_result.write() = Some(expected.clone());
-        t.connected.store(true, Ordering::Relaxed);
+        {
+            let mut session = t.session.write();
+            session.initialize_result = Some(expected.clone());
+            session.phase = StdioSessionPhase::Connected;
+        }
 
         let response = t
             .request(
@@ -753,12 +1085,106 @@ mod tests {
         assert_eq!(response.result, Some(expected));
         assert!(response.error.is_none());
         assert!(t.pending.is_empty());
+        t.close().await.expect("close live test child");
+    }
+
+    #[tokio::test]
+    async fn cached_initialize_liveness_check_honors_configured_timeout() {
+        let configured_timeout = std::time::Duration::from_millis(25);
+        let t = StdioTransport::new("echo", HashMap::new(), None, configured_timeout, None);
+        {
+            let mut session = t.session.write();
+            session.initialize_result = Some(serde_json::json!({
+                "protocolVersion": "2025-11-25"
+            }));
+            session.phase = StdioSessionPhase::Connected;
+        }
+        let _held_child_lock = t.child.lock().await;
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            t.request("initialize", None),
+        )
+        .await
+        .expect("liveness validation must use the configured timeout");
+
+        assert!(matches!(result, Err(Error::BackendTimeout(_))));
+    }
+
+    #[tokio::test]
+    async fn connected_initialize_cache_without_child_is_rejected() {
+        let t = make_transport("echo");
+        {
+            let mut session = t.session.write();
+            session.initialize_result = Some(serde_json::json!({
+                "protocolVersion": "2025-11-25"
+            }));
+            session.phase = StdioSessionPhase::Connected;
+        }
+
+        let result = t.request("initialize", None).await;
+
+        assert!(matches!(result, Err(Error::Transport(_))));
+        assert!(!t.is_connected());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn close_invalidation_before_initialize_precheck_never_falls_through_to_writer() {
+        let workspace = tempfile::tempdir().expect("create close-race workspace");
+        let server = workspace.path().join("duplicate-rejecting-mcp.sh");
+        let events = workspace.path().join("events.log");
+        std::fs::write(&server, DUPLICATE_REJECTING_STDIO_FIXTURE)
+            .expect("write duplicate-rejecting fixture");
+        let server = server.to_string_lossy();
+        let events_arg = events.to_string_lossy();
+        assert!(!server.contains('\''));
+        assert!(!events_arg.contains('\''));
+        let transport = StdioTransport::new(
+            &format!("/bin/sh '{server}' '{events_arg}'"),
+            HashMap::new(),
+            None,
+            std::time::Duration::from_secs(1),
+            None,
+        );
+        transport.start().await.expect("start close-race fixture");
+
+        let entry_gate = StdioRaceTestGate::new();
+        let close_gate = StdioRaceTestGate::new();
+        *transport.initialize_request_entry_test_gate.write() = Some(Arc::clone(&entry_gate));
+        *transport.close_after_invalidation_test_gate.write() = Some(Arc::clone(&close_gate));
+
+        let request_transport = Arc::clone(&transport);
+        let request =
+            tokio::spawn(async move { request_transport.request("initialize", None).await });
+        entry_gate.wait_until_entered().await;
+
+        let close_transport = Arc::clone(&transport);
+        let close = tokio::spawn(async move { close_transport.close().await });
+        close_gate.wait_until_entered().await;
+
+        entry_gate.release();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), request)
+            .await
+            .expect("invalidated initialize request must finish")
+            .expect("initialize task");
+        let observed = std::fs::read_to_string(&events).expect("read close-race event log");
+
+        close_gate.release();
+        close.await.expect("close task").expect("close transport");
+
+        assert!(matches!(result, Err(Error::Transport(_))), "{result:?}");
+        assert_eq!(
+            observed.lines().collect::<Vec<_>>(),
+            ["initialize", "notifications/initialized"],
+            "invalidated request wrote a duplicate initialize"
+        );
     }
 
     #[tokio::test]
     async fn unconnected_transport_never_replays_cached_initialize() {
         let t = make_transport("echo");
-        *t.initialize_result.write() = Some(serde_json::json!({
+        t.session.write().initialize_result = Some(serde_json::json!({
             "protocolVersion": "2025-11-25"
         }));
 
@@ -768,14 +1194,23 @@ mod tests {
         assert!(t.pending.is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn connected_transport_consumes_duplicate_initialized_without_writing() {
         let t = make_transport("echo");
-        t.connected.store(true, Ordering::Relaxed);
+        attach_live_test_child(&t).await;
+        {
+            let mut session = t.session.write();
+            session.initialize_result = Some(serde_json::json!({
+                "protocolVersion": "2025-11-25"
+            }));
+            session.phase = StdioSessionPhase::Connected;
+        }
 
         t.notify("notifications/initialized", None)
             .await
             .expect("duplicate initialized notification is consumed");
+        t.close().await.expect("close live test child");
     }
 
     #[test]

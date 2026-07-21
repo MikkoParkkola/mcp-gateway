@@ -311,6 +311,13 @@ impl Backend {
                     protocol_version.clone(),
                 );
                 transport.start().await?;
+                if !transport.is_connected() {
+                    let _ = transport.close().await;
+                    return Err(Error::Transport(format!(
+                        "Stdio backend '{}' exited before startup completed",
+                        self.name
+                    )));
+                }
                 transport
             }
             TransportConfig::Http {

@@ -13,6 +13,8 @@ use tokio::sync::Mutex;
 
 use super::Backend;
 use crate::failsafe::Failsafe;
+#[cfg(test)]
+use crate::transport::StdioRaceTestGate;
 use crate::transport::Transport;
 
 /// Seconds since the Unix epoch, saturating to 0 on a pre-epoch clock.
@@ -214,6 +216,16 @@ impl Backend {
     pub(crate) fn set_transport_for_test(&self, transport: Arc<dyn Transport>) {
         let entry = self.pooled_entry(&PoolKey::Shared);
         *entry.transport.write() = Some(transport);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_shared_initialize_replay_gate_for_test(
+        &self,
+        gate: Option<Arc<StdioRaceTestGate>>,
+    ) {
+        self.shared_transport()
+            .expect("shared transport must be started before installing replay gate")
+            .set_initialize_replay_test_gate(gate);
     }
 
     /// Test-only: inject a transport into a specific pool slot so isolation

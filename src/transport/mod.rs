@@ -13,8 +13,42 @@ pub use self::websocket::McpFrame;
 use async_trait::async_trait;
 use serde_json::Value;
 
+#[cfg(test)]
+use std::sync::Arc;
+
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
+
+/// Deterministic test-only rendezvous for stdio lifecycle race tests.
+#[cfg(test)]
+#[doc(hidden)]
+pub struct StdioRaceTestGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl StdioRaceTestGate {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        })
+    }
+
+    pub(crate) async fn pause(&self) {
+        self.entered.notify_one();
+        self.release.notified().await;
+    }
+
+    pub(crate) async fn wait_until_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.notify_one();
+    }
+}
 
 /// Validate the JSON-RPC envelope and correlation id for a completed request.
 ///
@@ -122,4 +156,8 @@ pub trait Transport: Send + Sync {
 
     /// Close the transport
     async fn close(&self) -> Result<()>;
+
+    /// Install a deterministic cached-initialize replay gate for unit tests.
+    #[cfg(test)]
+    fn set_initialize_replay_test_gate(&self, _gate: Option<Arc<StdioRaceTestGate>>) {}
 }
