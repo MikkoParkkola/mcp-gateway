@@ -613,6 +613,39 @@ fn backend_status_surfaces_ready_runtime_profile_lifecycle() {
 }
 
 #[test]
+fn status_serialization_omits_backend_config_secrets() {
+    let env_secret = "SENTINEL_STATUS_ENV_7e19";
+    let header_secret = "SENTINEL_STATUS_HEADER_2c51";
+    let url_secret = "SENTINEL_STATUS_URL_90d3";
+    let backend = Backend::new(
+        "status-secret",
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: format!("https://svc.example.com/mcp?token={url_secret}"),
+                streamable_http: true,
+                protocol_version: None,
+            },
+            env: HashMap::from([("STATUS_ENV".to_string(), env_secret.to_string())]),
+            headers: HashMap::from([("Authorization".to_string(), header_secret.to_string())]),
+            ..BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+
+    let json = serde_json::to_string(&backend.status()).expect("serialize backend status");
+    assert!(json.contains("status-secret"));
+    for sentinel in [env_secret, header_secret, url_secret] {
+        assert!(
+            !json.contains(sentinel),
+            "secret escaped BackendStatus: {json}"
+        );
+    }
+    assert!(!json.contains("\"env\""));
+    assert!(!json.contains("\"headers\""));
+}
+
+#[test]
 fn backend_status_surfaces_confirmation_required_runtime_profile() {
     let cfg = BackendConfig {
         transport: TransportConfig::Stdio {

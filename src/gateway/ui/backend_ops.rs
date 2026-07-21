@@ -30,14 +30,25 @@ pub struct BackendInfo {
     pub transport: String,
     /// Whether the backend is enabled.
     pub enabled: bool,
-    /// Command (stdio only).
+    /// Presence-only command summary (stdio only); arguments are never exposed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// URL (http only).
+    pub command: Option<BackendCommandInfo>,
+    /// URL (http only), stripped of userinfo, query, and fragment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Environment variables.
-    pub env: HashMap<String, String>,
+    /// Sorted environment-variable names; values are never exposed.
+    pub env: Vec<String>,
+    /// Sorted configured-header names; values are never exposed.
+    pub headers: Vec<String>,
+}
+
+/// Secret-safe summary of a configured stdio command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackendCommandInfo {
+    /// Parsed executable token.
+    pub executable: String,
+    /// Number of configured arguments, whose values are redacted.
+    pub argument_count: usize,
 }
 
 /// Partial update applied by [`update_backend`].
@@ -286,14 +297,23 @@ pub fn import_openapi_from_file(
 fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
     let (transport_kind, command, url) = match &backend.transport {
         TransportConfig::Stdio { command, .. } => {
-            ("stdio".to_string(), Some(command.clone()), None)
+            ("stdio".to_string(), Some(summarize_command(command)), None)
         }
-        TransportConfig::Http { http_url, .. } => {
-            ("http".to_string(), None, Some(http_url.clone()))
-        }
+        TransportConfig::Http { http_url, .. } => (
+            "http".to_string(),
+            None,
+            Some(sanitize_backend_url(http_url)),
+        ),
         #[cfg(feature = "a2a")]
-        TransportConfig::A2a { a2a_url, .. } => ("a2a".to_string(), None, Some(a2a_url.clone())),
+        TransportConfig::A2a { a2a_url, .. } => {
+            ("a2a".to_string(), None, Some(sanitize_backend_url(a2a_url)))
+        }
     };
+
+    let mut env: Vec<String> = backend.env.keys().cloned().collect();
+    env.sort();
+    let mut headers: Vec<String> = backend.headers.keys().cloned().collect();
+    headers.sort();
 
     BackendInfo {
         name: name.to_string(),
@@ -302,8 +322,33 @@ fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
         enabled: backend.enabled,
         command,
         url,
-        env: backend.env.clone(),
+        env,
+        headers,
     }
+}
+
+fn summarize_command(command: &str) -> BackendCommandInfo {
+    match shlex::split(command) {
+        Some(parts) if !parts.is_empty() => BackendCommandInfo {
+            executable: parts[0].clone(),
+            argument_count: parts.len().saturating_sub(1),
+        },
+        _ => BackendCommandInfo {
+            executable: "<invalid-command>".to_string(),
+            argument_count: 0,
+        },
+    }
+}
+
+fn sanitize_backend_url(raw: &str) -> String {
+    let Ok(mut url) = url::Url::parse(raw) else {
+        return "<invalid-url>".to_string();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -578,7 +623,16 @@ mod tests {
 
         let info = &list_backends(&cfg)[0];
         assert_eq!(info.transport, "stdio");
-        assert_eq!(info.command.as_deref(), Some("npx my-server"));
+        assert_eq!(
+            info.command
+                .as_ref()
+                .map(|command| command.executable.as_str()),
+            Some("npx")
+        );
+        assert_eq!(
+            info.command.as_ref().map(|command| command.argument_count),
+            Some(1)
+        );
         assert!(info.url.is_none());
     }
 
@@ -709,8 +763,66 @@ mod tests {
         assert!(json.contains("\"name\":\"svc\""));
         assert!(json.contains("\"transport\":\"http\""));
         assert!(json.contains("\"enabled\":true"));
-        assert!(json.contains("\"TOKEN\":\"abc\""));
+        assert!(json.contains("\"env\":[\"TOKEN\"]"));
+        assert!(!json.contains("abc"));
         // command should not appear for http transport
         assert!(!json.contains("\"command\""));
+    }
+
+    #[test]
+    fn backend_info_serialization_exposes_only_safe_presence_metadata() {
+        let env_secret = "SENTINEL_ENV_VALUE_91d0";
+        let header_secret = "SENTINEL_HEADER_VALUE_5a41";
+        let arg_secret = "SENTINEL_COMMAND_ARG_72bc";
+        let mut cfg = empty_config();
+        cfg.backends.insert(
+            "stdio-secret".to_string(),
+            BackendConfig {
+                transport: stdio_transport(&format!(
+                    "/usr/bin/example --token '{arg_secret}' --mode safe"
+                )),
+                env: HashMap::from([("SAFE_ENV_NAME".to_string(), env_secret.to_string())]),
+                headers: HashMap::from([("Authorization".to_string(), header_secret.to_string())]),
+                ..Default::default()
+            },
+        );
+
+        let json = serde_json::to_string(&get_backend(&cfg, "stdio-secret").unwrap()).unwrap();
+        for sentinel in [env_secret, header_secret, arg_secret] {
+            assert!(
+                !json.contains(sentinel),
+                "secret escaped BackendInfo: {json}"
+            );
+        }
+        assert!(json.contains("SAFE_ENV_NAME"));
+        assert!(json.contains("Authorization"));
+        assert!(json.contains("/usr/bin/example"));
+        assert!(json.contains("argument_count"));
+    }
+
+    #[test]
+    fn backend_info_url_removes_userinfo_query_and_fragment() {
+        let user_secret = "SENTINEL_URL_USER_44af";
+        let query_secret = "SENTINEL_URL_QUERY_63c2";
+        let fragment_secret = "SENTINEL_URL_FRAGMENT_11ea";
+        let mut cfg = empty_config();
+        cfg.backends.insert(
+            "http-secret".to_string(),
+            BackendConfig {
+                transport: http_transport(&format!(
+                    "https://user:{user_secret}@svc.example.com/mcp?token={query_secret}#{fragment_secret}"
+                )),
+                ..Default::default()
+            },
+        );
+
+        let json = serde_json::to_string(&get_backend(&cfg, "http-secret").unwrap()).unwrap();
+        for sentinel in [user_secret, query_secret, fragment_secret] {
+            assert!(
+                !json.contains(sentinel),
+                "URL secret escaped BackendInfo: {json}"
+            );
+        }
+        assert!(json.contains("https://svc.example.com/mcp"));
     }
 }
