@@ -45,14 +45,10 @@ providers:
   primary:
     service: cli
     config:
-      command: "/Users/mikko/github/metacognition-rs/target/release/metacog"
+      command: "metacognition"
       args:
-        - "verify"
+        - "--json"
         - "{text}"
-        - "--model"
-        - "/Users/mikko/github/metacognition-rs/models/nli-deberta-v3-xsmall"
-        - "--format"
-        - "json"
       timeout_ms: 5000
 
 examples:

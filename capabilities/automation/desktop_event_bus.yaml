@@ -80,10 +80,10 @@ providers:
     cost_per_call: 0
     timeout: 30
     config:
-      command: /Users/mikko/.cargo/bin/axterminator
+      command: axterminator
       args:
-        - "--mode"
-        - "event-bus"
+        - "mcp"
+        - "serve"
       transport: stdio
 
 auth:
