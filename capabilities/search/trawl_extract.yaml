@@ -39,18 +39,22 @@ schema:
       - url
       - fields
 
-handler:
-  type: command
-  command: "/Users/mikko/go/bin/trawl"
-  args_template: |
-    {{ url }}
-    --fields "{{ fields }}"
-    {% if query %}--query "{{ query }}"{% endif %}
-    --format {{ format | default: "json" }}
-    {% if js %}--js{% endif %}
-    {% if plan_only %}--plan{% endif %}
-    {% if no_cache %}--no-cache{% endif %}
-    {% if wait %}--wait {{ wait }}{% endif %}
+providers:
+  primary:
+    service: cli
+    cost_per_call: 1
+    timeout: 60
+    config:
+      command: "trawl"
+      args_template: |
+        {{ url }}
+        --fields "{{ fields }}"
+        {% if query %}--query "{{ query }}"{% endif %}
+        --format {{ format | default: "json" }}
+        {% if js %}--js{% endif %}
+        {% if plan_only %}--plan{% endif %}
+        {% if no_cache %}--no-cache{% endif %}
+        {% if wait %}--wait {{ wait }}{% endif %}
 
 metadata:
   cost_tier: 1
