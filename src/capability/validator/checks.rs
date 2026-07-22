@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::capability::{CapabilityDefinition, RestConfig};
+use crate::capability::{CapabilityDefinition, PathSelectorConfig, RestConfig};
 use crate::validator::schema_helpers;
 
 use super::Issue;
@@ -159,6 +159,7 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
             &provider.service,
             &ctx,
             &schema_props,
+            &cap.schema.input,
             issues,
         );
     }
@@ -170,6 +171,7 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
             &provider.service,
             &ctx,
             &schema_props,
+            &cap.schema.input,
             issues,
         );
     }
@@ -193,6 +195,7 @@ fn check_rest_config(
     service: &str,
     context: &str,
     schema_props: &HashSet<String>,
+    input_schema: &serde_json::Value,
     issues: &mut Vec<Issue>,
 ) {
     let has_base_url = !config.base_url.is_empty();
@@ -252,6 +255,18 @@ fn check_rest_config(
     check_placeholders_in_text(&config.base_url, context, "base_url", schema_props, issues);
     check_placeholders_in_text(&config.endpoint, context, "endpoint", schema_props, issues);
 
+    if let Some(selector) = &config.path_selector {
+        check_path_selector(
+            selector,
+            config,
+            service,
+            context,
+            schema_props,
+            input_schema,
+            issues,
+        );
+    }
+
     for (key, value) in &config.params {
         check_placeholders_in_text(
             value,
@@ -279,6 +294,160 @@ fn check_rest_config(
         issues.push(Issue::warning(
             "CAP-007",
             format!("{context}: key '{overlap}' appears in both 'static_params' and 'params'; static_params will be overridden by caller"),
+        ));
+    }
+}
+
+fn check_path_selector(
+    selector: &PathSelectorConfig,
+    config: &RestConfig,
+    service: &str,
+    context: &str,
+    schema_props: &HashSet<String>,
+    input_schema: &serde_json::Value,
+    issues: &mut Vec<Issue>,
+) {
+    let selector_context = format!("{context}.path_selector");
+
+    if service != "rest" {
+        issues.push(Issue::error(
+            "CAP-005",
+            format!("{selector_context} is only supported for service 'rest'"),
+        ));
+    }
+
+    let default_path = selector.paths.get(&selector.default);
+    let selector_placeholder = format!("{{{}}}", selector.parameter);
+    let normalized_default_path =
+        default_path.map(|path| path.replace(&selector_placeholder, &selector.default));
+    let has_conflicting_path =
+        !config.path.is_empty() && normalized_default_path.as_deref() != Some(config.path.as_str());
+    if has_conflicting_path || !config.endpoint.is_empty() {
+        issues.push(Issue::error(
+            "CAP-005",
+            format!(
+                "{selector_context} cannot be combined with config.endpoint or a config.path that differs from its default path"
+            ),
+        ));
+    }
+
+    if selector.parameter.is_empty() || !schema_props.contains(&selector.parameter) {
+        issues.push(Issue::error(
+            "CAP-006",
+            format!(
+                "{selector_context}.parameter '{}' has no matching entry in schema.input.properties",
+                selector.parameter
+            ),
+        ));
+    }
+
+    let property_schema = input_schema
+        .get("properties")
+        .and_then(|properties| properties.get(&selector.parameter));
+
+    if property_schema
+        .and_then(|property| property.get("type"))
+        .and_then(serde_json::Value::as_str)
+        != Some("string")
+    {
+        issues.push(Issue::error(
+            "CAP-006",
+            format!(
+                "{selector_context}.parameter '{}' must reference a schema property with type 'string'",
+                selector.parameter
+            ),
+        ));
+    }
+
+    if selector.default.is_empty() || !selector.paths.contains_key(&selector.default) {
+        issues.push(Issue::error(
+            "CAP-005",
+            format!(
+                "{selector_context}.default '{}' has no matching entry in path_selector.paths",
+                selector.default
+            ),
+        ));
+    }
+
+    for (value, path) in &selector.paths {
+        if !path.starts_with('/') {
+            issues.push(Issue::error(
+                "CAP-008",
+                format!("{selector_context}.paths.{value} '{path}' should start with '/'"),
+            ));
+        }
+        check_placeholders_in_text(
+            path,
+            &selector_context,
+            &format!("paths.{value}"),
+            schema_props,
+            issues,
+        );
+    }
+
+    check_path_selector_schema(selector, &selector_context, property_schema, issues);
+}
+
+fn check_path_selector_schema(
+    selector: &PathSelectorConfig,
+    selector_context: &str,
+    property_schema: Option<&serde_json::Value>,
+    issues: &mut Vec<Issue>,
+) {
+    let enum_values = property_schema
+        .and_then(|property| property.get("enum"))
+        .and_then(serde_json::Value::as_array);
+    let enum_strings = enum_values.and_then(|values| {
+        let strings: Option<HashSet<&str>> = values.iter().map(serde_json::Value::as_str).collect();
+        strings.filter(|items| !items.is_empty())
+    });
+
+    if let Some(enum_strings) = enum_strings {
+        let path_keys: HashSet<&str> = selector.paths.keys().map(String::as_str).collect();
+        for missing in enum_strings.difference(&path_keys) {
+            issues.push(Issue::error(
+                "CAP-006",
+                format!("{selector_context}.paths has no entry for schema enum value '{missing}'"),
+            ));
+        }
+        for extra in path_keys.difference(&enum_strings) {
+            issues.push(Issue::error(
+                "CAP-006",
+                format!(
+                    "{selector_context}.paths entry '{extra}' is not declared in the schema enum"
+                ),
+            ));
+        }
+
+        if !enum_strings.contains(selector.default.as_str()) {
+            issues.push(Issue::error(
+                "CAP-006",
+                format!(
+                    "{selector_context}.default '{}' is not declared in the schema enum",
+                    selector.default
+                ),
+            ));
+        }
+    } else {
+        issues.push(Issue::error(
+            "CAP-006",
+            format!(
+                "{selector_context}.parameter '{}' must declare a non-empty string enum",
+                selector.parameter
+            ),
+        ));
+    }
+
+    let schema_default = property_schema
+        .and_then(|property| property.get("default"))
+        .and_then(serde_json::Value::as_str);
+    if schema_default != Some(selector.default.as_str()) {
+        issues.push(Issue::error(
+            "CAP-006",
+            format!(
+                "{selector_context}.default '{}' must match the schema default",
+                selector.default
+            ),
         ));
     }
 }

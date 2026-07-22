@@ -338,9 +338,25 @@ pub struct RestConfig {
     #[serde(default)]
     pub base_url: String,
 
-    /// Path template (supports {param} substitution)
+    /// Path template (supports {param} substitution).
+    ///
+    /// When [`Self::path_selector`] is configured, this may repeat the
+    /// selector's default path as a compatibility fallback for older gateway
+    /// binaries that do not understand `path_selector`.
     #[serde(default)]
     pub path: String,
+
+    /// Select one of several path templates from a caller parameter.
+    ///
+    /// This is a safe, declarative alternative to executable request-transform
+    /// snippets for APIs whose route shape changes with an enum-like input.
+    /// The selected template receives the same `{param}` substitution as
+    /// [`Self::path`]. When the selector parameter is absent, `default` is
+    /// used; unknown values fail closed instead of becoming URL fragments.
+    /// `path`, when also present, must exactly match the selected default path
+    /// and is retained only as a rolling-upgrade fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_selector: Option<PathSelectorConfig>,
 
     /// Full endpoint URL (alternative to `base_url` + path)
     /// Takes precedence if set
@@ -428,6 +444,22 @@ pub struct RestConfig {
     /// ```
     #[serde(default)]
     pub body_content_type: String,
+}
+
+/// Declarative selection of a REST path template from an input parameter.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PathSelectorConfig {
+    /// Input property whose string value selects a path.
+    #[serde(default)]
+    pub parameter: String,
+
+    /// Selector value to use when the caller omits `parameter`.
+    #[serde(default)]
+    pub default: String,
+
+    /// Selector value to path-template mapping.
+    #[serde(default)]
+    pub paths: HashMap<String, String>,
 }
 
 impl RestConfig {

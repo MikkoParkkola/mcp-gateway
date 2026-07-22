@@ -462,12 +462,35 @@ impl CapabilityExecutor {
     }
 
     /// Build URL with path parameter substitution.
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    #[allow(clippy::unused_self)]
     fn build_url(&self, config: &RestConfig, params: &Value) -> Result<String> {
         let mut url = if config.uses_endpoint() {
             config.endpoint.clone()
         } else {
-            format!("{}{}", config.base_url, config.path)
+            let path = if let Some(selector) = &config.path_selector {
+                let selected = match params.get(&selector.parameter) {
+                    None | Some(Value::Null) => selector.default.as_str(),
+                    Some(Value::String(value)) => value.as_str(),
+                    Some(_) => {
+                        return Err(Error::Config(format!(
+                            "REST path selector parameter '{}' must be a string",
+                            selector.parameter
+                        )));
+                    }
+                };
+
+                let path = selector.paths.get(selected).ok_or_else(|| {
+                    Error::Config(format!(
+                        "No path is configured for REST path selector parameter '{}'",
+                        selector.parameter
+                    ))
+                })?;
+                path.replace(&format!("{{{}}}", selector.parameter), selected)
+            } else {
+                config.path.clone()
+            };
+
+            format!("{}{path}", config.base_url)
         };
 
         if let Value::Object(map) = params {
