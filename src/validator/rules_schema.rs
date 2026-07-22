@@ -468,7 +468,7 @@ mod tests {
 
         let result = rule.check(&tool).unwrap();
         assert!(!result.passed);
-        assert!(result.severity == Severity::Fail);
+        assert_eq!(result.severity, Severity::Fail);
     }
 
     // ── AX-008: Conflict Detection ──────────────────────────────
@@ -498,7 +498,7 @@ mod tests {
 
         let result = rule.check(&tool).unwrap();
         assert!(!result.passed);
-        assert!(result.severity == Severity::Warn);
+        assert_eq!(result.severity, Severity::Warn);
     }
 
     #[test]
@@ -572,7 +572,7 @@ mod tests {
 
         let result = rule.check(&tool).unwrap();
         assert!(!result.passed);
-        assert!(result.severity == Severity::Info);
+        assert_eq!(result.severity, Severity::Info);
     }
 
     #[test]
@@ -586,7 +586,7 @@ mod tests {
 
         let result = rule.check(&tool).unwrap();
         assert!(!result.passed);
-        assert!(result.severity == Severity::Warn);
+        assert_eq!(result.severity, Severity::Warn);
     }
 
     #[test]
