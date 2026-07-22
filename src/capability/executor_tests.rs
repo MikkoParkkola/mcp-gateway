@@ -33,6 +33,103 @@ fn test_build_url() {
     assert_eq!(url, "https://api.example.com/users/123/posts/456");
 }
 
+fn socialdeal_path_selector_config() -> RestConfig {
+    serde_yaml::from_str(
+        r"
+base_url: https://www.socialdeal.nl
+path: /sitemap/deals/lmd/{city}/deals.xml
+path_selector:
+  parameter: category
+  default: deals
+  paths:
+    deals: /sitemap/deals/lmd/{city}/deals.xml
+    all: /sitemap/deals/{city}/deals-and-companies.xml
+    expired: /sitemap/deals/lmd/{city}/expired-deals.xml
+",
+    )
+    .unwrap()
+}
+
+#[test]
+fn path_selector_routes_each_declared_value_to_its_path_template() {
+    let executor = CapabilityExecutor::new();
+    let config = socialdeal_path_selector_config();
+
+    let cases = [
+        (
+            "deals",
+            "https://www.socialdeal.nl/sitemap/deals/lmd/amsterdam/deals.xml",
+        ),
+        (
+            "all",
+            "https://www.socialdeal.nl/sitemap/deals/amsterdam/deals-and-companies.xml",
+        ),
+        (
+            "expired",
+            "https://www.socialdeal.nl/sitemap/deals/lmd/amsterdam/expired-deals.xml",
+        ),
+    ];
+
+    for (category, expected) in cases {
+        let params = serde_json::json!({"city": "amsterdam", "category": category});
+        assert_eq!(executor.build_url(&config, &params).unwrap(), expected);
+    }
+}
+
+#[test]
+fn path_selector_uses_declared_default_when_parameter_is_absent() {
+    let executor = CapabilityExecutor::new();
+    let config = socialdeal_path_selector_config();
+    let params = serde_json::json!({"city": "haarlem"});
+
+    assert_eq!(
+        executor.build_url(&config, &params).unwrap(),
+        "https://www.socialdeal.nl/sitemap/deals/lmd/haarlem/deals.xml"
+    );
+}
+
+#[test]
+fn path_selector_substitutes_selected_default_into_its_own_placeholder() {
+    let executor = CapabilityExecutor::new();
+    let config: RestConfig = serde_yaml::from_str(
+        r"
+base_url: https://api.example.com
+path: /feeds/current/{city}
+path_selector:
+  parameter: category
+  default: current
+  paths:
+    current: /feeds/{category}/{city}
+    archive: /feeds/{category}/{city}
+",
+    )
+    .unwrap();
+
+    for params in [
+        serde_json::json!({"city": "amsterdam"}),
+        serde_json::json!({"city": "amsterdam", "category": null}),
+    ] {
+        assert_eq!(
+            executor.build_url(&config, &params).unwrap(),
+            "https://api.example.com/feeds/current/amsterdam"
+        );
+    }
+}
+
+#[test]
+fn path_selector_rejects_values_without_a_declared_path() {
+    let executor = CapabilityExecutor::new();
+    let config = socialdeal_path_selector_config();
+    let params = serde_json::json!({"city": "utrecht", "category": "restaurants"});
+
+    let error = executor
+        .build_url(&config, &params)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("category"), "{error}");
+    assert!(error.contains("path selector"), "{error}");
+}
+
 #[test]
 fn test_substitute_string() {
     let executor = CapabilityExecutor::new();

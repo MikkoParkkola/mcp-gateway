@@ -70,6 +70,391 @@ providers:
 }
 
 #[test]
+fn path_selector_paths_are_checked_for_dangling_placeholders() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: /feeds/{missing_input}
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| { issue.code == "CAP-006" && issue.message.contains("{missing_input}") }),
+        "expected dangling path-selector placeholder to fail: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_parameter_must_be_declared_in_input_schema() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      city:
+        type: string
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: /feeds/{city}
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues.iter().any(|issue| {
+            issue.code == "CAP-006" && issue.message.contains("no matching entry")
+        }),
+        "expected undeclared path-selector parameter to fail: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_default_must_have_a_declared_path() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          archive: /feeds/archive
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| { issue.code == "CAP-005" && issue.message.contains(".default") }),
+        "expected missing default path to fail: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_paths_must_start_with_a_slash() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: feeds/current
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues.iter().any(|issue| {
+            issue.severity == IssueSeverity::Error
+                && issue.code == "CAP-008"
+                && issue.message.contains("should start with '/'")
+        }),
+        "expected path-selector slash error: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_must_cover_declared_schema_enum_values() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current, archive]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: /feeds/current
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues.iter().any(|issue| {
+            issue.code == "CAP-006" && issue.message.contains("schema enum value 'archive'")
+        }),
+        "expected uncovered enum value to fail: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_requires_a_string_enum_input_property() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: integer
+        enum: [1, 2]
+        default: 1
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: one
+        paths:
+          one: /feeds/one
+          two: /feeds/two
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| { issue.code == "CAP-006" && issue.message.contains("type 'string'") }),
+        "expected non-string selector schema to fail: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_paths_must_exactly_match_schema_enum_values() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: /feeds/current
+          hidden: /feeds/hidden
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| { issue.code == "CAP-006" && issue.message.contains("'hidden'") }),
+        "expected extra selector path to fail: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_default_must_match_schema_default() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current, archive]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: archive
+        paths:
+          current: /feeds/current
+          archive: /feeds/archive
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues.iter().any(|issue| {
+            issue.code == "CAP-006" && issue.message.contains("must match the schema default")
+        }),
+        "expected mismatched selector default to fail: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_rejects_a_conflicting_path_or_any_endpoint() {
+    for conflicting_field in [
+        "path: /different",
+        "endpoint: https://api.example.com/fixed",
+    ] {
+        let yaml = format!(
+            r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      {conflicting_field}
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: /feeds/current
+"
+        );
+        let cap: CapabilityDefinition = serde_yaml::from_str(&yaml).unwrap();
+        let issues = validate_capability_definition(&cap, None);
+        assert!(
+            issues.iter().any(|issue| {
+                issue.code == "CAP-005" && issue.message.contains("cannot be combined")
+            }),
+            "expected {conflicting_field} conflict to fail: {issues:?}"
+        );
+    }
+}
+
+#[test]
+fn path_selector_allows_its_default_path_as_a_legacy_fallback() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current, archive]
+        default: current
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path: /feeds/current
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: /feeds/{category}
+          archive: /archive/{category}
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        errors_of(&issues).is_empty(),
+        "matching legacy fallback should be valid: {issues:?}"
+    );
+}
+
+#[test]
+fn path_selector_is_only_valid_for_rest_providers() {
+    let yaml = r"
+name: category_feed
+description: Fetch a category-specific feed.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: [current]
+        default: current
+providers:
+  primary:
+    service: graphql
+    config:
+      base_url: https://api.example.com
+      path_selector:
+        parameter: category
+        default: current
+        paths:
+          current: /feeds/current
+";
+    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let issues = validate_capability_definition(&cap, None);
+    assert!(
+        issues.iter().any(|issue| {
+            issue.code == "CAP-005" && issue.message.contains("only supported for service 'rest'")
+        }),
+        "expected non-REST path selector to fail: {issues:?}"
+    );
+}
+
+#[test]
 fn local_ml_service_without_url_passes() {
     // GIVEN: provider with service=local_ml and no base_url/endpoint
     // WHEN: validating

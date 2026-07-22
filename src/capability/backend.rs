@@ -406,6 +406,13 @@ impl CapabilityBackend {
             self.multi_user.load(std::sync::atomic::Ordering::Relaxed),
         )?;
 
+        // Selector values choose an outbound URL path, so preserve their
+        // declared string type instead of allowing generic schema coercion
+        // (for example, JSON `1` becoming the string `"1"`).
+        if let Some(error_result) = path_selector_type_error(&capability, &arguments) {
+            return Ok(error_result);
+        }
+
         // Validate arguments against the YAML schema before making any HTTP call.
         let input_schema = &capability.schema.input;
         let validation = validate_arguments(&arguments, input_schema);
@@ -504,6 +511,33 @@ impl CapabilityBackend {
 
         detected
     }
+}
+
+fn path_selector_type_error(
+    capability: &CapabilityDefinition,
+    arguments: &Value,
+) -> Option<ToolsCallResult> {
+    let selector = capability
+        .primary_provider()?
+        .config
+        .path_selector
+        .as_ref()?;
+    let value = arguments.get(&selector.parameter)?;
+    if value.is_null() || value.is_string() {
+        return None;
+    }
+
+    Some(ToolsCallResult {
+        content: vec![Content::Text {
+            text: format!(
+                "Tool call validation failed:\n- Parameter '{}' must be a string.",
+                selector.parameter
+            ),
+            annotations: None,
+        }],
+        structured_content: None,
+        is_error: true,
+    })
 }
 
 fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -> ToolsCallResult {
@@ -812,6 +846,53 @@ providers:
 
         assert!(err.contains("caller identity is required"), "{err}");
         assert!(!err.contains("required_value"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn capability_backend_rejects_non_string_path_selector_before_coercion() {
+        let yaml = r"
+name: strict_selector
+description: Reject non-string selector values before schema coercion.
+schema:
+  input:
+    type: object
+    properties:
+      category:
+        type: string
+        enum: ['1']
+        default: '1'
+auth:
+  required: true
+  type: api_key
+  key: env:PATH_SELECTOR_STRICT_TYPE_TEST_MISSING_20260718
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /feeds/1
+      path_selector:
+        parameter: category
+        default: '1'
+        paths:
+          '1': /feeds/{category}
+";
+        let capability = crate::capability::parse_capability(yaml).unwrap();
+        let backend = make_backend();
+        backend.capabilities.write().upsert(capability);
+
+        let result = backend
+            .call_tool("strict_selector", json!({ "category": 1 }))
+            .await
+            .unwrap();
+
+        assert!(result.is_error);
+        let Content::Text { text, .. } = &result.content[0] else {
+            panic!("expected a text validation error");
+        };
+        assert!(text.contains("category"), "{text}");
+        assert!(text.contains("must be a string"), "{text}");
+        assert!(!text.contains("PATH_SELECTOR_STRICT_TYPE_TEST"), "{text}");
     }
 
     #[tokio::test]
