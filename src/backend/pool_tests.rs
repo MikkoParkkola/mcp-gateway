@@ -405,3 +405,240 @@ async fn reconcile_after_start_keeps_transport_when_still_registered() {
         "the winning side's live transport must never be closed"
     );
 }
+
+// idle_timeout: the shared slot's transport is released once idle, while the
+// PooledEntry itself survives (shared_entry() must never panic, and the slot
+// owns the circuit breaker + health metrics). Before this existed the
+// per-backend `idle_timeout` was parsed and then read only by a Debug impl, so
+// an idle stdio child ran until gateway shutdown.
+#[tokio::test]
+async fn hibernate_shared_if_idle_closes_transport_but_keeps_entry() {
+    let backend = per_user_backend();
+    let transport = Arc::new(SessionMock::new("shared"));
+    backend.set_transport_for_test(transport.clone());
+
+    // Age the shared slot into the deep past.
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    let hibernated = backend
+        .hibernate_shared_if_idle(Duration::from_secs(1))
+        .await;
+
+    assert!(hibernated, "an idle shared transport must hibernate");
+    assert!(
+        transport.closed.load(Ordering::SeqCst),
+        "the hibernated transport must actually be closed (this is what kills the stdio child)"
+    );
+    assert!(
+        backend.pooled_transport_for_test(&PoolKey::Shared).is_none(),
+        "hibernated slot holds no transport"
+    );
+    assert!(
+        backend.pool.contains_key(&PoolKey::Shared),
+        "the PooledEntry must SURVIVE: shared_entry() expects it and panics otherwise"
+    );
+    // The load-bearing assertion: the invariant shared_entry() relies on holds
+    // after hibernation, so status/health/circuit-breaker accessors still work.
+    let _ = backend.shared_entry();
+}
+
+// The respawn half of the round-trip. A test that only asserts the transport
+// was closed passes against an implementation that can never restart.
+#[tokio::test]
+async fn hibernated_shared_slot_accepts_a_fresh_transport() {
+    let backend = per_user_backend();
+    backend.set_transport_for_test(Arc::new(SessionMock::new("first")));
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    assert!(
+        backend
+            .hibernate_shared_if_idle(Duration::from_secs(1))
+            .await
+    );
+    assert!(backend.pooled_transport_for_test(&PoolKey::Shared).is_none());
+
+    // ensure_entry_started treats None-or-disconnected as "start it"; stand in
+    // for the real spawn so this stays a unit test with no child process.
+    backend.set_transport_for_test(Arc::new(SessionMock::new("second")));
+
+    let revived = backend
+        .pooled_transport_for_test(&PoolKey::Shared)
+        .expect("shared slot takes a fresh transport after hibernation");
+    assert!(
+        revived.is_connected(),
+        "respawned transport must be live, not a closed husk"
+    );
+}
+
+// Hibernating an already-hibernated slot is a no-op, not a double close.
+#[tokio::test]
+async fn hibernate_shared_if_idle_is_idempotent() {
+    let backend = per_user_backend();
+    backend.set_transport_for_test(Arc::new(SessionMock::new("once")));
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    assert!(
+        backend
+            .hibernate_shared_if_idle(Duration::from_secs(1))
+            .await,
+        "first call hibernates"
+    );
+    assert!(
+        !backend
+            .hibernate_shared_if_idle(Duration::from_secs(1))
+            .await,
+        "second call is a no-op, not a double close"
+    );
+}
+
+// THE regression test for the critical defect. `ensure_entry_started` used to
+// call `entry.touch()` unconditionally, and `health_probe` -> `ensure_started`
+// goes straight through it. With a 10s default health interval against a 300s
+// idle_timeout, `last_used` was refreshed forever and hibernation could never
+// fire — the change shipped as a no-op. The idle clock must track CLIENT
+// traffic only.
+#[tokio::test]
+async fn internal_ensure_started_does_not_defer_hibernation() {
+    let backend = per_user_backend();
+    backend.set_transport_for_test(Arc::new(SessionMock::new("warm")));
+
+    // Slot is stale: no client has touched it.
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    // Exactly what the health loop does, every 10s by default.
+    backend
+        .ensure_started()
+        .await
+        .expect("connected transport short-circuits the start path");
+
+    assert_eq!(
+        backend
+            .pool
+            .get(&PoolKey::Shared)
+            .unwrap()
+            .value()
+            .last_used
+            .load(Ordering::Relaxed),
+        0,
+        "internal health/metadata traffic must NOT refresh the client idle clock"
+    );
+    assert!(
+        backend
+            .hibernate_shared_if_idle(Duration::from_secs(1))
+            .await,
+        "a backend seeing only health probes must still hibernate"
+    );
+}
+
+// The converse: real client traffic DOES defer hibernation.
+#[tokio::test]
+async fn client_activity_defers_hibernation() {
+    let backend = per_user_backend();
+    backend.set_transport_for_test(Arc::new(SessionMock::new("live")));
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    // A client request marks activity; the guard drops at end of scope.
+    drop(backend.begin_activity(&PoolKey::Shared));
+
+    assert!(
+        !backend
+            .hibernate_shared_if_idle(Duration::from_secs(3600))
+            .await,
+        "a slot a client just used must not hibernate"
+    );
+}
+
+// Defect 3: `last_used` records when a request STARTED. A call outliving
+// idle_timeout must not have its transport closed underneath it.
+#[tokio::test]
+async fn in_flight_request_is_never_hibernated() {
+    let backend = per_user_backend();
+    let transport = Arc::new(SessionMock::new("busy"));
+    backend.set_transport_for_test(transport.clone());
+
+    // Request starts now and is still running...
+    let activity = backend.begin_activity(&PoolKey::Shared);
+    // ...but the clock says it began long ago (a slow upstream call).
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    assert!(
+        !backend
+            .hibernate_shared_if_idle(Duration::from_secs(1))
+            .await,
+        "an in-flight request must block hibernation regardless of the clock"
+    );
+    assert!(
+        !transport.closed.load(Ordering::SeqCst),
+        "a live request's transport must never be closed mid-flight"
+    );
+
+    // Once it finishes, the slot becomes eligible again.
+    drop(activity);
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+    assert!(
+        backend
+            .hibernate_shared_if_idle(Duration::from_secs(1))
+            .await,
+        "hibernation resumes once the request completes"
+    );
+}
+
+// Defect 6: `as_secs()` truncation made any sub-second timeout a 0 cutoff, so
+// every slot was eligible on every scan including one touched this second.
+#[tokio::test]
+async fn subsecond_idle_timeout_does_not_expire_a_fresh_slot() {
+    let backend = per_user_backend();
+    let transport = Arc::new(SessionMock::new("fresh"));
+    backend.set_transport_for_test(transport.clone());
+    drop(backend.begin_activity(&PoolKey::Shared));
+
+    assert!(
+        !backend
+            .hibernate_shared_if_idle(Duration::from_millis(1))
+            .await,
+        "a sub-second timeout must clamp to >=1s, not expire everything instantly"
+    );
+    assert!(!transport.closed.load(Ordering::SeqCst));
+}

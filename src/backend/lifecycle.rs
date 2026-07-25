@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -16,7 +15,7 @@ use tracing::{info, warn};
 
 use super::Backend;
 use super::cached_metadata::CachedMetadata;
-use super::pool::{PoolKey, PooledEntry, now_unix_secs};
+use super::pool::{PoolKey, PooledEntry};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
@@ -185,9 +184,13 @@ impl Backend {
         for _attempt in 0..MAX_RACE_RETRIES {
             let entry = self.pooled_entry(key);
 
-            // Update last-used clocks (backend-wide + per-slot for idle eviction).
-            self.last_used.store(now_unix_secs(), Ordering::Relaxed);
-            entry.touch();
+            // NOTE: this deliberately does NOT touch the idle clocks. `last_used`
+            // means "when did a CLIENT last use this backend", and it is written
+            // only by the request/notify paths in `ops.rs`. Touching it here made
+            // idle hibernation unreachable: `health_probe` -> `ensure_started` ->
+            // here, on a 10s default health interval against a 300s idle_timeout,
+            // refreshed the clock forever. The health loop kept every backend
+            // permanently warm and an idle stdio child ran until shutdown.
 
             {
                 let transport = entry.transport.read();

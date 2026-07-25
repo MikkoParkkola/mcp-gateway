@@ -149,6 +149,10 @@ impl Backend {
 
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
+        // Mark CLIENT activity for the idle clock, and keep this slot safe from
+        // idle hibernation for the whole request. Held until the guard drops.
+        let _activity = self.begin_activity(&key);
+
         // Ensure this slot's transport is live.
         let transport = self.ensure_entry_started(&key).await?;
 
@@ -289,6 +293,9 @@ impl Backend {
         })?;
 
         self.request_count.fetch_add(1, Ordering::Relaxed);
+
+        // See `request_with_headers`: client activity marking + hibernation guard.
+        let _activity = self.begin_activity(&key);
 
         let transport = self.ensure_entry_started(&key).await?;
 

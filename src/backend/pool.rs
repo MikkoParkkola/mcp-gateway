@@ -5,7 +5,7 @@
 //! pool slots.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use parking_lot::RwLock;
@@ -61,7 +61,47 @@ pub(crate) struct PooledEntry {
     pub(crate) transport: RwLock<Option<Arc<dyn Transport>>>,
     pub(crate) start_lock: Mutex<()>,
     pub(crate) last_used: AtomicU64,
+    /// Client requests currently executing against this slot. Hibernation
+    /// refuses to close a transport while this is non-zero, so a call that
+    /// outlives `idle_timeout` is never torn down mid-flight. `last_used`
+    /// alone cannot express this: it records when a request *started*.
+    pub(crate) in_flight: AtomicUsize,
     pub(crate) failsafe: Failsafe,
+}
+
+/// RAII marker for one in-flight client request against a pool slot.
+///
+/// Construction is the single place that writes the idle clock: `last_used`
+/// means "when did a CLIENT last use this backend", deliberately excluding
+/// internal health probes and metadata refreshes. `ensure_entry_started` used
+/// to touch the clock itself, which made hibernation unreachable — the 10s
+/// default health loop refreshed it forever against a 300s `idle_timeout`.
+///
+/// Ordering matters: the count is incremented *before* the caller acquires the
+/// transport read guard, and [`Backend::hibernate_shared_if_idle`] reads it
+/// while holding the transport *write* guard. Either the increment lands first
+/// and hibernation backs off, or hibernation wins and the caller then observes
+/// `None` and respawns. There is no interleaving that hands a caller a
+/// transport being closed.
+pub(crate) struct ActivityGuard {
+    entry: Arc<PooledEntry>,
+}
+
+impl ActivityGuard {
+    fn new(entry: Arc<PooledEntry>) -> Self {
+        entry.in_flight.fetch_add(1, Ordering::SeqCst);
+        entry.touch();
+        Self { entry }
+    }
+}
+
+impl Drop for ActivityGuard {
+    fn drop(&mut self) {
+        // Touch on the way out too: a long request should leave the slot
+        // looking used as of its COMPLETION, not its start.
+        self.entry.touch();
+        self.entry.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl PooledEntry {
@@ -70,6 +110,7 @@ impl PooledEntry {
             transport: RwLock::new(None),
             start_lock: Mutex::new(()),
             last_used: AtomicU64::new(now_unix_secs()),
+            in_flight: AtomicUsize::new(0),
             failsafe: Failsafe::new(name, failsafe_config),
         }
     }
@@ -81,6 +122,12 @@ impl PooledEntry {
 }
 
 impl Backend {
+    /// This backend's configured idle timeout, after which an unused transport
+    /// is released: per-user slots are evicted and the shared slot hibernates.
+    pub fn idle_timeout(&self) -> Duration {
+        self.config.idle_timeout
+    }
+
     /// The backend's configured session mode, if identity propagation is set.
     pub(super) fn session_mode(&self) -> Option<crate::identity_propagation::SessionMode> {
         self.config
@@ -208,6 +255,75 @@ impl Backend {
             );
         }
         closed
+    }
+
+    /// Mark the start of a client request against `key`, returning a guard that
+    /// keeps the slot safe from hibernation until dropped. This is the only
+    /// caller-facing way to write the idle clock.
+    pub(super) fn begin_activity(&self, key: &PoolKey) -> ActivityGuard {
+        self.last_used.store(now_unix_secs(), Ordering::Relaxed);
+        ActivityGuard::new(self.pooled_entry(key))
+    }
+
+    /// Hibernate the canonical [`PoolKey::Shared`] slot when it has been idle
+    /// past `idle_ttl`: close its transport (terminating a stdio child) while
+    /// leaving the [`PooledEntry`] in the pool. Returns `true` when a live
+    /// transport was closed.
+    ///
+    /// This is what makes the per-backend `idle_timeout` config real. Before
+    /// this existed the field was parsed, documented in `examples/gateway-full.yaml`
+    /// as "Hibernate after 5 min idle", and then read only by a `Debug` impl —
+    /// so a stdio backend spawned at startup ran until gateway shutdown. An
+    /// idle `trvl mcp` child was observed alive for 3d7h having burned 10.4
+    /// CPU-hours.
+    ///
+    /// The entry deliberately stays in the pool rather than being evicted:
+    /// [`Backend::shared_entry`] expects it to always be present (and panics
+    /// otherwise), and the slot owns the circuit breaker and health metrics,
+    /// which must survive hibernation. Only the transport is released.
+    /// [`Backend::ensure_entry_started`] treats a `None`-or-disconnected
+    /// transport as "start it", so the next request transparently respawns.
+    ///
+    /// Synchronisation is the transport `RwLock`, NOT `start_lock`.
+    /// `ensure_entry_started` clones a connected transport under a *read* guard
+    /// on its fast path, before it ever awaits `start_lock` — so `start_lock`
+    /// cannot exclude that clone, and a reaper holding only `start_lock` could
+    /// close a transport a caller had just been handed. `Arc` would keep the
+    /// Rust object alive but not the child process or its pipes, so the caller
+    /// would fail spuriously. Taking the *write* guard here excludes the
+    /// fast-path read outright. Both the idle check and the in-flight check
+    /// happen under that guard; the guard is released before `close().await`
+    /// (it is `!Send`, so holding it across the await would not compile inside
+    /// the reaper's `tokio::spawn`).
+    pub async fn hibernate_shared_if_idle(&self, idle_ttl: Duration) -> bool {
+        // Sub-second timeouts would truncate to a 0 cutoff, making every slot
+        // eligible on every scan including one touched this same second.
+        let cutoff = idle_ttl.as_secs().max(1);
+        let entry = self.shared_entry();
+
+        let taken = {
+            let mut guard = entry.transport.write();
+
+            if entry.in_flight.load(Ordering::SeqCst) > 0 {
+                return false;
+            }
+            if now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed)) < cutoff {
+                return false;
+            }
+            guard.take()
+        };
+
+        let Some(transport) = taken else {
+            return false;
+        };
+        let _ = transport.close().await;
+
+        tracing::debug!(
+            backend = %self.name,
+            idle_ttl_secs = cutoff,
+            "Hibernated idle shared transport; next request will respawn it"
+        );
+        true
     }
 
     #[cfg(test)]
