@@ -1,8 +1,42 @@
 # Idle backend hibernation: making `idle_timeout` real
 
-Status: in progress
+Status: **BLOCKED on design.** Two attempts, two DO-NOT-SHIP verdicts. Do not
+deploy either. The branch is kept for its analysis, not as a candidate fix.
 Branch: `fix/idle-timeout-shared-hibernation`
 Date: 2026-07-26
+
+## The central tension (read this first)
+
+**Periodic health probing and idle hibernation are fundamentally opposed, and
+no amount of reaper or clock tuning reconciles them.**
+
+`health_probe` exists to guarantee a backend is up. It calls `ensure_started()`,
+which starts a transport that is not running. Hibernation exists to let an idle
+backend's transport die. Run both and the health loop simply restarts whatever
+the reaper stopped.
+
+Attempt 2 fixed the *clock* (health probes no longer refresh `last_used`) but
+not the *respawn*. The result is worse than the original bug:
+
+1. Reaper hibernates an idle stdio child (60s sweep).
+2. Within ~10s the health loop calls `ensure_started()`.
+3. The child is respawned and re-initialised.
+4. Repeat forever.
+
+That trades one idle long-lived child for **continuous spawn/kill churn every
+~10 seconds**. Strictly worse than doing nothing.
+
+Any correct design must first answer: *what does health-checking a
+deliberately-hibernated backend mean?* Plausible answers, none yet chosen:
+
+- Health probes skip hibernated backends, and status reports them as
+  `hibernated` rather than unhealthy or unknown.
+- Health probes become non-starting: observe liveness only if a transport is
+  already up, otherwise report "asleep" without starting one.
+- Hibernation is opt-in per backend and mutually exclusive with health checks
+  for that backend.
+
+Until that question is answered deliberately, this feature cannot ship.
 
 ## The bug
 
@@ -180,3 +214,71 @@ hangs indefinitely when invoked with arguments from a non-interactive context.
 The with-args branch calls `codex_exec ... "$prompt"` without redirecting
 stdin, so codex inherits a stdin that never reaches EOF. The piped branch
 (`< "$INPUT_FILE"`) is unaffected. Fix: add `< /dev/null` to the else branch.
+
+## Round 2 review: still DO-NOT-SHIP
+
+Adversarial review of the second attempt (`gpt-review`, codex/gpt-5.6-sol,
+2026-07-26). Round-1 defect status: 2, 5, 6 fixed; 4 partially fixed; 1 and 3
+not fixed.
+
+1. **Critical — health probes immediately undo hibernation.** The tension
+   described above. Attempt 2's regression test only probes *before*
+   hibernating; it never runs the decisive hibernate-then-probe sequence, which
+   is why it passed. Same class of mistake as attempt 1: a test that cannot
+   observe the failure it claims to cover.
+
+2. **High — per-user eviction still ignores `in_flight`.** `ActivityGuard`'s
+   counter is consulted only by `hibernate_shared_if_idle`.
+   `evict_idle_per_user_entries` checks `last_used` alone, so a per-user request
+   outliving the 5m TTL still gets its transport closed mid-flight. The
+   in-flight guard needs to apply to both reapers, not just the new one.
+
+   Related: `request_with_headers` resolves `entry`, may wait on the backend
+   semaphore, and only then calls `begin_activity`. If the original entry is
+   evicted in that window, the guard attaches to a replacement entry while
+   failsafe accounting stays on the old one.
+
+3. **Medium — metadata fetches race hibernation.** `metadata.rs` calls
+   `ensure_started()` and then `request_internal()`, which independently calls
+   `shared_transport()`. Neither takes an `ActivityGuard`. The reaper can take
+   the transport between those two steps, producing a spurious
+   `BackendUnavailable`. Metadata rightly does not refresh the *client* clock,
+   but it still needs in-flight protection — the two concerns are separate and
+   attempt 2 conflated them.
+
+4. **Medium — the stdio reaper never terminates.** `spawn_idle_reaper(.., None)`
+   is an endless task holding the backend registry. On EOF `run_stdio` calls
+   `stop_all()` and returns, but nothing cancels or joins the reaper, so it can
+   sweep concurrently with or after shutdown and race `stop_all()`. Needs a
+   shutdown path even in stdio mode.
+
+5. **Low — the respawn test does not test respawn.** It installs a second mock
+   by hand rather than driving `ensure_entry_started` against an empty slot.
+   The production path *was* separately confirmed to re-initialise correctly
+   (`StdioTransport::start` runs the `initialize` handshake inline,
+   `stdio.rs:222`), so there is no defect behind it — but the test's claim is
+   overstated.
+
+Concurrency work from attempt 2 that reviewed clean and is worth keeping:
+
+- Increment-before-lookup with a `SeqCst` counter plus the transport write lock
+  is sufficient for the shared path. Either the reaper observes `in_flight > 0`,
+  or it takes the transport first and the caller then observes `None` and
+  starts a new one. The write lock excludes a concurrent fast-path clone.
+- `ActivityGuard::drop` touches before decrementing; the `SeqCst` decrement
+  supplies the release ordering for the preceding relaxed timestamp store.
+  Ordinary future cancellation runs `Drop`, so the counter does not leak.
+- An error or cancellation inside `ensure_entry_started` drops the guard
+  correctly.
+
+## Lesson
+
+Both attempts produced tests that passed against a broken implementation.
+Attempt 1's tests passed against a no-op; attempt 2's regression test passed
+against a version that respawns the child every 10 seconds. The failure mode is
+identical: the test exercised the mechanism in isolation and never reproduced
+the *deployed configuration* — reaper and health loop running together against
+a real backend.
+
+Whatever ships next needs a test that runs both loops concurrently and asserts
+the child process count over time, not one that calls the reaper by hand.
