@@ -1,11 +1,85 @@
 # Idle backend hibernation: making `idle_timeout` real
 
-Status: **BLOCKED on design.** Two attempts, two DO-NOT-SHIP verdicts. Do not
-deploy either. The branch is kept for its analysis, not as a candidate fix.
+Status: **ABANDONED as designed.** Do not ship attempt 1 or 2. The recommended
+resolution is to remove `idle_timeout` rather than implement it — see
+"Verdict" below.
 Branch: `fix/idle-timeout-shared-hibernation`
 Date: 2026-07-26
 
-## The central tension (read this first)
+## CORRECTION (read before the round-2 section)
+
+**The round-2 review's CRITICAL finding, recorded below, is FALSE.** It is left
+in place for the audit trail, but it is wrong and this correction supersedes it.
+
+Round 2 claimed health probes respawn every hibernated backend within ~10s,
+turning hibernation into spawn/kill churn. It traced `health_probe -> 
+ensure_started` but never read the loop's gate (`gateway/server/mod.rs`):
+
+```rust
+// "Cleanly-idle backends (closed breaker, not running) are left alone
+//  so the idle reaper can shut them down."
+if backend.is_running() || backend.is_circuit_tripped() { health_probe(...) }
+```
+
+A hibernated slot has no transport, so `is_running()` is false. Hibernation
+records no failure, so the breaker stays closed. The health loop skips it. The
+reviewer later conceded this independently.
+
+Verified, not merely re-read: `health_loop_gate_does_not_resurrect_a_hibernated_backend`
+and `health_loop_gate_still_probes_a_tripped_backend` in `pool_tests.rs` are
+the co-simulation tests both attempts lacked, and they pass.
+
+So attempt 2 does not cause churn. It is still not shippable — per-user
+eviction ignores `in_flight`, metadata fetches race hibernation, the stdio
+reaper has no shutdown path — but the stated blocking reason was wrong.
+
+## Verdict: remove `idle_timeout`, do not implement it
+
+Two-model adversarial panel (grok, codex/gpt-5.6-sol), 2026-07-26. Both reached
+the same conclusion by different routes.
+
+**The field's semantics are incoherent across transports.** One name is doing
+four unrelated jobs: stdio child process lifetime, per-user session TTL, HTTP
+connection pooling, and managed-service scale-to-zero. Closing an HTTP client
+transport does not scale down the remote service, so `idle_timeout` cannot mean
+the same thing for an HTTP backend and a subprocess backend. Implementing it
+generically guarantees a wrong contract for at least one transport.
+
+**The workload that motivated it was never the gateway's.** The 10.4 CPU-hours
+came from `trvl mcp` starting an unconditional background price-check scheduler
+(`trvl mcp/server_stdio.go:171`, `internal/watch/scheduler.go:58,108`): a live
+round immediately on start, then every 30 minutes, forever, whether or not any
+client calls a tool. Measurements: idle between rounds is 0.02% of one core
+with flat RSS; the process blocks correctly once started; MCP ping traffic at
+0.5Hz does not move CPU. So it is neither a busy-wait nor health-probe-driven.
+Hibernation would have masked a backend bug.
+
+This also links the two incidents that were filed as independent: 14 leaked
+`trvl` children were 14 independent schedulers, not 14 idle pipes.
+
+**If stdio child lifetime is wanted later**, it should be a stdio-specific
+control with an explicit lifecycle state machine (running / hibernated /
+failed), not a generic per-backend `idle_timeout`. A hibernated backend's
+health is *unknown* — neither healthy nor failed — and circuit breakers key off
+that signal.
+
+## What to keep from this branch
+
+- The two health-gate co-simulation tests. They belong in the repo regardless
+  of whether hibernation ever ships; they are the sensor whose absence let two
+  broken attempts go green.
+- The concurrency analysis (transport-write-guard synchronisation, the
+  in-flight lease, the `!Send` guard proof). It reviewed clean twice.
+- This document.
+
+## The central tension (SUPERSEDED — see CORRECTION above)
+
+The framing below overstated the conflict. The health loop already gates on
+`is_running() || is_circuit_tripped()`, so it does not resurrect a cleanly
+hibernated backend. Retained because the underlying question — what does
+health-checking a deliberately-asleep backend mean — is still the right
+question for any future stdio-lifetime work.
+
 
 **Periodic health probing and idle hibernation are fundamentally opposed, and
 no amount of reaper or clock tuning reconciles them.**
