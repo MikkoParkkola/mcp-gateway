@@ -18,7 +18,6 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
             cwd: None,
             protocol_version: None,
         },
-        idle_timeout: Duration::from_secs(60),
         timeout: Duration::from_secs(30),
         env: HashMap::default(),
         headers: HashMap::default(),

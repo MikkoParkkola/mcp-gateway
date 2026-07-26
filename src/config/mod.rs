@@ -202,8 +202,62 @@ impl Config {
             .map_err(|e| Error::Config(e.to_string()))?;
         config.expand_env_vars();
         config.validate()?;
+        Self::warn_on_retired_keys(resolved.as_deref());
 
         Ok(config)
+    }
+
+    /// Configuration keys that were removed. Left loadable on purpose: parsing
+    /// tolerates extra keys, so an old file keeps working.
+    const RETIRED_KEYS: &'static [(&'static str, &'static str)] = &[(
+        "idle_timeout",
+        "backend idle hibernation was never implemented; this key is now removed \
+         and has no effect. Delete it from your config — a command that rewrites \
+         the config will drop it silently along with any surrounding comments.",
+    )];
+
+    /// Retired keys present in the config file at `path`, as (key, explanation).
+    ///
+    /// Returns findings rather than logging directly so the detector is testable.
+    /// Parsing is tolerant of extra keys, which is exactly what let `idle_timeout`
+    /// sit in real configs looking effective: accepted, documented as
+    /// "hibernate after N idle", and read by nothing but a `Debug` impl. Ignoring
+    /// it silently now would repeat that mistake more quietly.
+    pub(crate) fn retired_keys_in_file(path: &Path) -> Vec<(&'static str, &'static str)> {
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        Self::retired_keys_in_str(&raw)
+    }
+
+    /// Text-level scan, split out so tests exercise the shipped logic.
+    pub(crate) fn retired_keys_in_str(raw: &str) -> Vec<(&'static str, &'static str)> {
+        Self::RETIRED_KEYS
+            .iter()
+            .filter(|(key, _)| {
+                // Match a YAML mapping key, quoted or bare, so a comment or an
+                // unrelated value mentioning the word does not trip the warning.
+                raw.lines().any(|line| {
+                    let t = line.trim_start();
+                    if t.starts_with('#') {
+                        return false;
+                    }
+                    let t = t.trim_start_matches(['"', '\'']);
+                    t.strip_prefix(*key).is_some_and(|rest| {
+                        let rest = rest.trim_start_matches(['"', '\'']);
+                        rest.starts_with(':')
+                    })
+                })
+            })
+            .copied()
+            .collect()
+    }
+
+    fn warn_on_retired_keys(path: Option<&Path>) {
+        let Some(path) = path else { return };
+        for (key, why) in Self::retired_keys_in_file(path) {
+            tracing::warn!(config = %path.display(), key = %key, "retired config key: {}", why);
+        }
     }
 
     /// Load environment files into the process environment.
@@ -718,9 +772,6 @@ pub struct BackendConfig {
     /// Transport type.
     #[serde(flatten)]
     pub transport: TransportConfig,
-    /// Idle timeout before hibernation.
-    #[serde(with = "humantime_serde")]
-    pub idle_timeout: Duration,
     /// Request timeout for this backend.
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
@@ -762,7 +813,6 @@ impl std::fmt::Debug for BackendConfig {
             .field("description", &self.description)
             .field("enabled", &self.enabled)
             .field("transport", &self.transport)
-            .field("idle_timeout", &self.idle_timeout)
             .field("timeout", &self.timeout)
             // `env` and `headers` values routinely carry credentials
             // (Authorization bearers, API keys, env-injected secrets). The
@@ -785,7 +835,6 @@ impl Default for BackendConfig {
             description: String::new(),
             enabled: true,
             transport: TransportConfig::default(),
-            idle_timeout: Duration::from_secs(300),
             timeout: Duration::from_secs(30),
             env: HashMap::new(),
             headers: HashMap::new(),

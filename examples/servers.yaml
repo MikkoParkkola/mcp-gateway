@@ -42,7 +42,6 @@ backends:
     command: "npx -y @anthropic/mcp-server-tavily"
     description: "Web search via Tavily API"
     timeout: "30s"
-    idle_timeout: "5m"
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
 

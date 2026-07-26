@@ -472,6 +472,23 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 **Tools not appearing?** Verify the backend is running (`gateway_list_servers`). Tool lists are cached for 5 minutes.
 
+## Versioning and stability
+
+This project follows [Semantic Versioning](https://semver.org/) over its
+**product surface**: the CLI, and the configuration file format. Changes to
+either are versioned accordingly — a config key that stops being accepted, or a
+command that changes behaviour, is a breaking change.
+
+**The Rust library API is not part of that surface.** Types are `pub` for
+modularity and testing, not as a supported embedding API, and they may change
+in any release. The crate ships a binary; at the time of writing crates.io
+reports zero reverse dependencies. If you embed the library, pin an exact
+version (`=4.0.0`) rather than a caret range.
+
+This is stated explicitly because "removing a `pub` field" and "breaking a
+supported API" are only the same thing when the API is supported. Here it is
+not, and that needs to be published rather than assumed.
+
 ## Contributing
 
 1. Fork and branch (`git checkout -b feature/your-feature`)
