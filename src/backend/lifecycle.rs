@@ -580,7 +580,7 @@ impl Backend {
                 // Closing it here kills a stdio child and tears down an HTTP
                 // session underneath a live caller, which is a worse failure
                 // than the one recovery is trying to fix.
-                Self::close_when_drained(self.name.clone(), old);
+                Self::close_when_drained(self.name.clone(), old, self.max_legitimate_hold(&entry));
             } else {
                 let _ = old.close().await;
             }
@@ -607,24 +607,69 @@ impl Backend {
     /// Dropping it instead of closing is not sufficient for both transports:
     /// stdio reaps its child via `kill_on_drop`, but `HttpTransport`'s `Drop`
     /// only aborts the token-refresh task and never tears down the session.
-    fn close_when_drained(name: String, old: Arc<dyn Transport>) {
+    ///
+    /// `cap` bounds the wait so a genuinely hung holder cannot leak the
+    /// transport forever. It must come from [`Backend::max_legitimate_hold`]:
+    /// a constant here would close the transport underneath requests that are
+    /// merely slower than the constant, which is the same correctness defect
+    /// with a delay in front of it.
+    fn close_when_drained(name: String, old: Arc<dyn Transport>, cap: Duration) {
         const POLL: Duration = Duration::from_millis(50);
-        const DRAIN_CAP: Duration = Duration::from_secs(30);
 
         tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + DRAIN_CAP;
+            let deadline = tokio::time::Instant::now() + cap;
             while Arc::strong_count(&old) > 1 && tokio::time::Instant::now() < deadline {
                 tokio::time::sleep(POLL).await;
             }
             if Arc::strong_count(&old) > 1 {
+                // Past this point no request can still be running legitimately,
+                // so a holder here is hung rather than slow.
                 warn!(
                     backend = %name,
-                    cap_secs = DRAIN_CAP.as_secs(),
-                    "Replaced transport still held after the drain cap; closing anyway"
+                    cap_ms = cap.as_millis(),
+                    "Replaced transport still held past the longest request this \
+                     backend permits; closing it and treating the holder as hung"
                 );
             }
             let _ = old.close().await;
         });
+    }
+
+    /// The longest a caller can legitimately hold this backend's transport.
+    ///
+    /// Derived, not chosen. One `ActivityGuard` can span an entire retry
+    /// sequence: `with_retry` re-invokes its closure per attempt against the
+    /// SAME transport `Arc` (`src/backend/ops.rs`), so the bound is every
+    /// attempt's request timeout plus the backoff between them, not a single
+    /// timeout. A fixed constant cannot express that - `timeout`,
+    /// `max_attempts` and `max_backoff` are all per-backend configuration, so
+    /// any constant is either wrong for a slow backend or needlessly long for
+    /// a fast one.
+    ///
+    /// `max_backoff` upper-bounds each individual backoff, so using it for all
+    /// of them is conservative in the safe direction: the cap can only be too
+    /// generous, never too tight. `GRACE` covers the gap between a transport's
+    /// own timeout firing and the caller actually dropping its `Arc`.
+    fn max_legitimate_hold(&self, entry: &PooledEntry) -> Duration {
+        /// Slack for teardown and scheduling after the last attempt's deadline.
+        const GRACE: Duration = Duration::from_secs(1);
+
+        let policy = &entry.failsafe.retry_policy;
+        let attempts = if policy.enabled {
+            policy.max_attempts.max(1)
+        } else {
+            1
+        };
+
+        self.config
+            .timeout
+            .saturating_mul(attempts)
+            .saturating_add(
+                policy
+                    .max_backoff
+                    .saturating_mul(attempts.saturating_sub(1)),
+            )
+            .saturating_add(GRACE)
     }
 
     /// Active health/recovery probe driven by the background health loop.

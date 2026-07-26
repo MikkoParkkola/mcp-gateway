@@ -1361,3 +1361,85 @@ async fn health_recovery_does_not_close_a_transport_a_request_is_using() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
+
+/// A backend whose longest legitimate request is short, so a test can wait out
+/// the derived drain cap without waiting out a production-sized timeout.
+/// Retry is disabled so the cap is one timeout plus the grace, rather than
+/// `max_attempts` timeouts plus backoff.
+fn quick_timeout_backend(timeout: Duration) -> Arc<Backend> {
+    let cfg = BackendConfig {
+        transport: TransportConfig::Stdio {
+            command: "/nonexistent-mcp-binary".to_string(),
+            cwd: None,
+            protocol_version: None,
+        },
+        stop_when_idle_for: Some(Duration::from_secs(60)),
+        timeout,
+        ..BackendConfig::default()
+    };
+    let mut failsafe = crate::config::FailsafeConfig::default();
+    failsafe.retry.enabled = false;
+    Arc::new(Backend::new(
+        "ownedtool",
+        cfg,
+        &failsafe,
+        Duration::from_secs(60),
+    ))
+}
+
+// GW.IDLE.RACE.5 - the drain cap must be derived from the backend's own
+// deadline, not a constant.
+//
+// Companion to health_recovery_does_not_close_a_transport_a_request_is_using,
+// which releases its holder promptly and so only ever exercises the drain path.
+// This one drives the CAP path: the holder never lets go, which is what a hung
+// request looks like. Both halves matter, and asserting only the first is what
+// the previous review round rejected.
+//
+// The cap must sit beyond the longest request this backend permits (so a merely
+// slow caller is never killed) and still be finite (so a hung one cannot leak
+// the transport). With a 50ms timeout and retry disabled the derived cap is
+// ~1.05s, which is why this test can bound both sides tightly.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hung_holder_is_closed_only_after_the_backends_own_deadline() {
+    let timeout = Duration::from_millis(50);
+    let backend = quick_timeout_backend(timeout);
+    let closed = Arc::new(AtomicBool::new(false));
+    backend.set_transport_for_test(Arc::new(ClosedFlagMock {
+        closed: Arc::clone(&closed),
+    }));
+
+    let lease = backend.begin_activity(&PoolKey::Shared);
+    // Never released for the rest of the test: a hung request.
+    let held = backend
+        .shared_entry()
+        .transport
+        .read()
+        .clone()
+        .expect("transport installed above");
+
+    let _ = backend.force_restart().await;
+
+    // Well inside the backend's own deadline: a slow request must survive.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !closed.load(Ordering::SeqCst),
+        "the replaced transport was closed while still within the longest \
+         request this backend permits; a merely slow caller would be killed"
+    );
+
+    // Past it: the transport must not be leaked waiting on a holder that is
+    // never coming back.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !closed.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the replaced transport was never closed despite its holder being \
+             hung well past the backend's own deadline; it is leaked"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    drop(held);
+    drop(lease);
+}
