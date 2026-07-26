@@ -174,10 +174,17 @@ impl BackendRegistry {
             return false;
         }
 
+        let ours = Arc::clone(&backend);
         self.backends.insert(name.clone(), backend);
 
         if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
-            self.backends.remove(&name);
+            // Withdraw only OUR entry. A concurrent registration under the same
+            // name may have replaced it between the insert and this check, and
+            // removing that one would leave its caller believing a backend is
+            // registered when it is not - the same class of lie this method
+            // exists to prevent.
+            self.backends
+                .remove_if(&name, |_, current| Arc::ptr_eq(current, &ours));
             warn!(
                 backend = %name,
                 "Withdrawing a backend registered as shutdown began; it would never be stopped"
@@ -300,6 +307,39 @@ mod tests {
         assert!(
             registry.get("after").is_none(),
             "a backend refused during shutdown must not be in the registry"
+        );
+    }
+
+    // A refused registration must not disturb an entry someone else registered
+    // successfully under the same name. The withdraw path is identity-checked
+    // for the same reason: `register` may only ever remove the entry IT
+    // inserted.
+    //
+    // Scope, stated honestly: this covers the refusal path. The insert-then-
+    // withdraw window - where a registration is replaced by a concurrent one
+    // before its own second check - is not deterministically reachable through
+    // the public API, since nothing can pause `register` mid-call from outside.
+    // `Arc::ptr_eq` in `remove_if` is what makes that case safe, by
+    // construction rather than by this test.
+    #[tokio::test]
+    async fn a_refused_registration_does_not_evict_an_existing_one() {
+        let registry = BackendRegistry::new();
+        let original = stdio_backend("shared-name");
+        assert!(registry.register(Arc::clone(&original)));
+
+        registry.stop_all().await;
+
+        assert!(
+            !registry.register(stdio_backend("shared-name")),
+            "a registration during shutdown must be refused"
+        );
+        let still_there = registry.get("shared-name").expect(
+            "the refused registration evicted a backend it did not register; its \
+             owner believes it is registered and shutdown will never see it",
+        );
+        assert!(
+            Arc::ptr_eq(&still_there, &original),
+            "the entry under this name is not the one that was registered"
         );
     }
 }

@@ -441,6 +441,14 @@ fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
 /// is shutting down. The patch is then only partly applied, so the caller must
 /// NOT publish the new config as live: doing so would describe backends that
 /// are not registered and report a reload that did not happen.
+///
+/// Not transactional, and deliberately not: additions and removals already
+/// applied stay applied, and a modified backend's old instance may already be
+/// stopped. Keeping the previous `LiveConfig` therefore does not describe the
+/// registry exactly either. That is acceptable only because a refusal happens
+/// solely after the permanent shutdown latch, so the inconsistency is bounded
+/// to a gateway that is terminating anyway. If registration ever becomes
+/// refusable for another reason, this needs a rollback rather than a flag.
 #[must_use = "a partly applied patch must not be published as the live config"]
 pub async fn apply_patch(
     patch: &ConfigPatch,
@@ -504,10 +512,12 @@ pub async fn apply_patch(
         if registry.register(Arc::clone(&backend)) {
             info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend updated");
         } else {
-            // The old instance was already stopped above, so this backend is now
-            // registered but dead. Shutdown is in progress and about to remove
-            // it anyway; what matters is that the caller does not treat this
-            // reload as applied.
+            // The old instance was stopped above and the replacement refused,
+            // so depending on timing the map now holds a stopped backend or no
+            // entry at all under this name. Neither is worth repairing:
+            // refusal only happens after the permanent shutdown latch, so the
+            // gateway is going away regardless. What matters is that the caller
+            // does not treat this reload as applied.
             warn!(backend = %name, "Config reload: backend not updated, gateway is shutting down");
             fully_applied = false;
         }
