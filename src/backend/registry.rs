@@ -172,13 +172,29 @@ impl BackendRegistry {
         self.backends.remove(name).is_some()
     }
 
-    /// Stop all backends
+    /// Stop all backends, concurrently.
+    ///
+    /// Concurrent rather than sequential because `Backend::stop` is bounded but
+    /// not instant - it waits for in-flight starts to resolve and for replaced
+    /// transports to be closed. Stopping N backends one after another
+    /// multiplies that bound by N, so a gateway with a couple of dozen backends
+    /// could spend minutes shutting down in the worst case. Backends own
+    /// independent processes, sessions and locks, so there is nothing to
+    /// serialise: total shutdown is now bounded by the slowest single backend
+    /// rather than the sum of all of them.
     pub async fn stop_all(&self) {
-        for backend in &self.backends {
+        let backends: Vec<std::sync::Arc<Backend>> = self
+            .backends
+            .iter()
+            .map(|entry| std::sync::Arc::clone(entry.value()))
+            .collect();
+
+        futures::future::join_all(backends.into_iter().map(|backend| async move {
             if let Err(e) = backend.stop().await {
                 warn!(backend = %backend.name, error = %e, "Failed to stop backend");
             }
-        }
+        }))
+        .await;
     }
 }
 

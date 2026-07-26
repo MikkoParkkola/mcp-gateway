@@ -624,14 +624,6 @@ impl Backend {
 
         // One deadline covers both waits below: in-flight starts, then the
         // cleanup drain. Shutdown must be bounded overall, not per stage.
-        // Each wait below gets its own budget rather than sharing one. A shared
-        // deadline lets whatever runs first consume all of it: slow transport
-        // closes, or a stuck start, would leave the cleanup drain with nothing
-        // and silently skip the HTTP session DELETEs it exists to send.
-        // Shutdown is bounded by the sum, deliberately - both stages matter and
-        // neither may starve the other.
-        let starts_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
-
         for transport in transports {
             if let Err(e) = transport.close().await {
                 warn!(backend = %self.name, error = %e, "Failed to close pooled transport");
@@ -646,16 +638,29 @@ impl Backend {
         // the handshake takes. Once the counter reaches zero every such start
         // has resolved - published into a pool this call already emptied, or
         // refused and closed.
+        // Each wait gets its own budget, started when that wait begins. Sharing
+        // one deadline - or starting this one before the closes above - lets
+        // whichever runs first consume it, so a slow close would leave the
+        // start wait, and then the cleanup drain, with nothing. That would
+        // silently skip the HTTP session DELETEs the drain exists to send.
+        // Shutdown is bounded by the sum, deliberately: every stage matters and
+        // none may starve another.
+        let starts_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
         while self
             .starts_in_flight
             .load(std::sync::atomic::Ordering::SeqCst)
             > 0
         {
             if tokio::time::Instant::now() >= starts_until {
+                // The one case where shutdown's guarantee does not hold: it
+                // is bounded, so a start that never resolves is abandoned
+                // rather than allowed to wedge the gateway. The process is
+                // still closed when that start finally finishes - late, and
+                // said out loud here rather than quietly.
                 warn!(
                     backend = %self.name,
                     "Backend start still in flight at the end of shutdown; its \
-                     process may briefly outlive this call"
+                     process will outlive this call until that start resolves"
                 );
                 break;
             }
