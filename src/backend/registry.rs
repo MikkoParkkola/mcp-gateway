@@ -127,13 +127,34 @@ pub enum BackendRuntimeState {
 pub struct BackendRegistry {
     /// Backends by name
     backends: DashMap<String, Arc<Backend>>,
-    /// Set once [`BackendRegistry::stop_all`] begins, and never cleared.
+    /// Whether shutdown has begun. Set once by [`BackendRegistry::stop_all`] and
+    /// never cleared.
     ///
-    /// Without it, `stop_all` snapshots the map and a backend registered after
-    /// that snapshot - by a config reload racing shutdown - is simply never
-    /// stopped, and its process outlives the gateway. Refusing late
-    /// registrations makes the snapshot complete rather than merely current.
-    stopping: std::sync::atomic::AtomicBool,
+    /// A LOCK, not an atomic, and that distinction is the whole point.
+    /// `register` holds it across its check AND its insert; `stop_all` holds it
+    /// across setting the flag AND taking its snapshot. Those are the two
+    /// operations that must not interleave, so making each of them atomic
+    /// individually - which two `SeqCst` checks around an insert do NOT achieve
+    /// - is not enough.
+    ///
+    /// The earlier check-then-insert version failed on same-name registrations:
+    /// A inserts, B replaces it and returns success, A's second check passes,
+    /// shutdown snapshots B, and B's own check then removes it. Shutdown stops
+    /// B, the map is empty, and A - which its caller was told was registered,
+    /// and may have started - was never in the snapshot at all. No amount of
+    /// re-checking fixes that; only mutual exclusion does.
+    ///
+    /// Held only across map operations, never across an `.await`.
+    ///
+    /// NOT covered by a behavioural test, and the attempt is instructive: a
+    /// test that holds this lock and asserts `stop_all` blocks passes whether
+    /// or not the latch and the snapshot share one hold, because `stop_all`
+    /// blocks on the latch either way. It looked like a window-positioned test
+    /// and was not. Driving the real interleaving needs a registration paused
+    /// between its check and its insert, which nothing outside `register` can
+    /// arrange. The guarantee here is by construction - one critical section on
+    /// each side - not by demonstration.
+    stopping: parking_lot::Mutex<bool>,
 }
 
 impl BackendRegistry {
@@ -142,55 +163,32 @@ impl BackendRegistry {
     pub fn new() -> Self {
         Self {
             backends: DashMap::new(),
-            stopping: std::sync::atomic::AtomicBool::new(false),
+            stopping: parking_lot::Mutex::new(false),
         }
     }
 
     /// Register a backend
     ///
     /// Refused once shutdown has begun: a backend registered after `stop_all`
-    /// has taken its snapshot would never be stopped. Returns `false` when the
-    /// registration was refused for that reason.
+    /// has taken its snapshot would never be stopped, and its process would
+    /// outlive the gateway. Returns `false` when the registration was refused
+    /// for that reason.
     ///
-    /// Checked twice, and the second check is the one that matters. A single
-    /// check before the insert is not atomic with `stop_all`'s snapshot: the
-    /// check can pass, shutdown can then latch AND snapshot, and only then does
-    /// the insert land - into a map nothing will look at again. Re-checking
-    /// after the insert closes that window without a second lock. Either
-    /// shutdown latched before this check, in which case the entry is withdrawn
-    /// here, or it latched afterwards, in which case its snapshot is taken
-    /// after the insert and includes it.
-    ///
-    /// Withdrawing is safe: a backend that has only just been registered has
-    /// not been started, so there is nothing to stop.
+    /// The check and the insert happen under one hold of the shutdown lock, so
+    /// a registration that returns `true` has completed its insert before any
+    /// snapshot `stop_all` takes afterwards. That is the guarantee callers need
+    /// and it cannot be built from separate atomic operations.
     #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
-        let name = backend.name.clone();
-        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+        let stopping = self.stopping.lock();
+        if *stopping {
             warn!(
-                backend = %name,
+                backend = %backend.name,
                 "Refusing to register a backend during shutdown; it would never be stopped"
             );
             return false;
         }
-
-        let ours = Arc::clone(&backend);
-        self.backends.insert(name.clone(), backend);
-
-        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
-            // Withdraw only OUR entry. A concurrent registration under the same
-            // name may have replaced it between the insert and this check, and
-            // removing that one would leave its caller believing a backend is
-            // registered when it is not - the same class of lie this method
-            // exists to prevent.
-            self.backends
-                .remove_if(&name, |_, current| Arc::ptr_eq(current, &ours));
-            warn!(
-                backend = %name,
-                "Withdrawing a backend registered as shutdown began; it would never be stopped"
-            );
-            return false;
-        }
+        self.backends.insert(backend.name.clone(), backend);
         true
     }
 
@@ -234,17 +232,22 @@ impl BackendRegistry {
     /// serialise: total shutdown is now bounded by the slowest single backend
     /// rather than the sum of all of them.
     pub async fn stop_all(&self) {
-        // Latched BEFORE the snapshot, so a registration either lands in it or
-        // is refused. Taken afterwards, the snapshot would be a photograph of a
-        // moving target.
-        self.stopping
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-
-        let backends: Vec<std::sync::Arc<Backend>> = self
-            .backends
-            .iter()
-            .map(|entry| std::sync::Arc::clone(entry.value()))
-            .collect();
+        // The latch and the snapshot are taken under ONE hold of the shutdown
+        // lock, which `register` also holds across its check and insert. So a
+        // registration either completes entirely before this snapshot and is in
+        // it, or finds the latch already set and is refused. There is no
+        // interleaving in which a caller is told its backend was registered and
+        // shutdown never sees it.
+        //
+        // No await inside: the stops happen after the guard is dropped.
+        let backends: Vec<std::sync::Arc<Backend>> = {
+            let mut stopping = self.stopping.lock();
+            *stopping = true;
+            self.backends
+                .iter()
+                .map(|entry| std::sync::Arc::clone(entry.value()))
+                .collect()
+        };
 
         futures::future::join_all(backends.into_iter().map(|backend| async move {
             if let Err(e) = backend.stop().await {
@@ -311,16 +314,7 @@ mod tests {
     }
 
     // A refused registration must not disturb an entry someone else registered
-    // successfully under the same name. The withdraw path is identity-checked
-    // for the same reason: `register` may only ever remove the entry IT
-    // inserted.
-    //
-    // Scope, stated honestly: this covers the refusal path. The insert-then-
-    // withdraw window - where a registration is replaced by a concurrent one
-    // before its own second check - is not deterministically reachable through
-    // the public API, since nothing can pause `register` mid-call from outside.
-    // `Arc::ptr_eq` in `remove_if` is what makes that case safe, by
-    // construction rather than by this test.
+    // successfully under the same name.
     #[tokio::test]
     async fn a_refused_registration_does_not_evict_an_existing_one() {
         let registry = BackendRegistry::new();
@@ -333,10 +327,9 @@ mod tests {
             !registry.register(stdio_backend("shared-name")),
             "a registration during shutdown must be refused"
         );
-        let still_there = registry.get("shared-name").expect(
-            "the refused registration evicted a backend it did not register; its \
-             owner believes it is registered and shutdown will never see it",
-        );
+        let still_there = registry
+            .get("shared-name")
+            .expect("the refused registration evicted an entry it did not create");
         assert!(
             Arc::ptr_eq(&still_there, &original),
             "the entry under this name is not the one that was registered"
