@@ -580,96 +580,33 @@ impl Backend {
                 // Closing it here kills a stdio child and tears down an HTTP
                 // session underneath a live caller, which is a worse failure
                 // than the one recovery is trying to fix.
-                Self::close_when_drained(self.name.clone(), old, self.max_legitimate_hold(&entry));
+                //
+                // So hand it to its own users and let ownership finish the job:
+                // dropping this reference means the transport goes away when the
+                // LAST in-flight caller drops theirs, exactly then. A stdio child
+                // is reaped by `kill_on_drop` at that moment - the reader task
+                // holds only a `Weak`, so it cannot pin the transport open (see
+                // src/transport/stdio.rs).
+                //
+                // Two earlier attempts answered "when is it safe to close?" with
+                // a timer instead, and both were rejected: a fixed cap is
+                // arbitrary, and a cap derived from config is unsound because one
+                // logical attempt can re-handshake and retry in ways no formula
+                // sees. Ownership already knows the answer, so nothing has to
+                // predict it.
+                //
+                // The trade, stated plainly: on this path an HTTP backend's
+                // upstream session is not explicitly DELETEd and is reclaimed by
+                // its own expiry instead, because that DELETE is an async network
+                // call and `Drop` cannot await. Letting a remote session time out
+                // is strictly better than cutting off a live request.
+                drop(old);
             } else {
                 let _ = old.close().await;
             }
         }
         self.start_entry(&PoolKey::Shared, &entry).await?;
         Ok(())
-    }
-
-    /// Close a replaced transport once the requests still holding it finish.
-    ///
-    /// [`Backend::force_restart`] cannot await the drain inline. It is the health
-    /// loop's recovery path, and the case it exists for is a WEDGED backend whose
-    /// in-flight request may never return; blocking recovery on that request
-    /// converts an interruption bug into a never-recovers bug. So the fresh
-    /// transport is installed immediately and the old one is closed behind it,
-    /// bounded so a hung holder cannot leak it forever.
-    ///
-    /// The `Arc` strong count, not `in_flight`, is the drain signal. `in_flight`
-    /// counts requests against the SLOT, which new traffic keeps non-zero, so
-    /// waiting on it could defer the close indefinitely under load. The strong
-    /// count tracks holders of THIS transport specifically, and drops to one
-    /// (ours) exactly when the last in-flight caller is done with it.
-    ///
-    /// Dropping it instead of closing is not sufficient for both transports:
-    /// stdio reaps its child via `kill_on_drop`, but `HttpTransport`'s `Drop`
-    /// only aborts the token-refresh task and never tears down the session.
-    ///
-    /// `cap` bounds the wait so a genuinely hung holder cannot leak the
-    /// transport forever. It must come from [`Backend::max_legitimate_hold`]:
-    /// a constant here would close the transport underneath requests that are
-    /// merely slower than the constant, which is the same correctness defect
-    /// with a delay in front of it.
-    fn close_when_drained(name: String, old: Arc<dyn Transport>, cap: Duration) {
-        const POLL: Duration = Duration::from_millis(50);
-
-        tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + cap;
-            while Arc::strong_count(&old) > 1 && tokio::time::Instant::now() < deadline {
-                tokio::time::sleep(POLL).await;
-            }
-            if Arc::strong_count(&old) > 1 {
-                // Past this point no request can still be running legitimately,
-                // so a holder here is hung rather than slow.
-                warn!(
-                    backend = %name,
-                    cap_ms = cap.as_millis(),
-                    "Replaced transport still held past the longest request this \
-                     backend permits; closing it and treating the holder as hung"
-                );
-            }
-            let _ = old.close().await;
-        });
-    }
-
-    /// The longest a caller can legitimately hold this backend's transport.
-    ///
-    /// Derived, not chosen. One `ActivityGuard` can span an entire retry
-    /// sequence: `with_retry` re-invokes its closure per attempt against the
-    /// SAME transport `Arc` (`src/backend/ops.rs`), so the bound is every
-    /// attempt's request timeout plus the backoff between them, not a single
-    /// timeout. A fixed constant cannot express that - `timeout`,
-    /// `max_attempts` and `max_backoff` are all per-backend configuration, so
-    /// any constant is either wrong for a slow backend or needlessly long for
-    /// a fast one.
-    ///
-    /// `max_backoff` upper-bounds each individual backoff, so using it for all
-    /// of them is conservative in the safe direction: the cap can only be too
-    /// generous, never too tight. `GRACE` covers the gap between a transport's
-    /// own timeout firing and the caller actually dropping its `Arc`.
-    fn max_legitimate_hold(&self, entry: &PooledEntry) -> Duration {
-        /// Slack for teardown and scheduling after the last attempt's deadline.
-        const GRACE: Duration = Duration::from_secs(1);
-
-        let policy = &entry.failsafe.retry_policy;
-        let attempts = if policy.enabled {
-            policy.max_attempts.max(1)
-        } else {
-            1
-        };
-
-        self.config
-            .timeout
-            .saturating_mul(attempts)
-            .saturating_add(
-                policy
-                    .max_backoff
-                    .saturating_mul(attempts.saturating_sub(1)),
-            )
-            .saturating_add(GRACE)
     }
 
     /// Active health/recovery probe driven by the background health loop.
