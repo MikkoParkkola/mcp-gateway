@@ -141,6 +141,9 @@ impl Backend {
             request_count: std::sync::atomic::AtomicU64::new(0),
             replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
             lifecycle: tokio::sync::RwLock::new(()),
+            stop_once: tokio::sync::Mutex::new(()),
+            stopped: std::sync::atomic::AtomicBool::new(false),
+            budgets: super::ShutdownBudgets::default(),
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
         }
     }
@@ -560,22 +563,38 @@ impl Backend {
     /// Never returns `Err` today: individual slot-close failures are logged and
     /// the remaining slots are still drained. The `Result` is retained for
     /// forward compatibility and to match the registry's stop contract.
-    /// Concurrency contract: `stop()` is idempotent but NOT single-flight. Two
-    /// concurrent calls both latch `stopping` and both drain, and whichever
-    /// takes the handle list first is the one that waits - the other can return
-    /// while cleanup is still running. Callers wanting "everything is closed"
-    /// must not race their own shutdown calls. Sequential calls are harmless:
-    /// the second finds nothing left to do.
+    /// Concurrency contract: single-flight AND idempotent. Concurrent callers
+    /// all wait for the SAME teardown and every one of them returns only after
+    /// it has completed; a later call is a no-op. That matters because "stop
+    /// returned" has to mean "everything is closed" - otherwise one caller can
+    /// let the runtime exit while another's cleanup is still running, and the
+    /// child processes this feature exists to reclaim survive anyway.
     pub async fn stop(&self) -> Result<()> {
-        /// How long shutdown waits for replaced transports whose callers have
-        /// not finished. Bounds SHUTDOWN, not a request: exceeding it detaches
-        /// the remaining cleanups rather than closing anything under a live
-        /// caller, so it cannot cut a request short.
-        const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
-        /// How long shutdown waits to exclude a restart already in flight.
-        /// Sized above a typical backend start so an ordinary in-flight restart
-        /// finishes first, and finite so a hung one cannot hang shutdown.
-        const LIFECYCLE_WAIT: Duration = Duration::from_secs(15);
+        // Single-flight gate. A second caller blocks here rather than running a
+        // parallel teardown, then sees `stopped` and returns - having waited for
+        // the first caller's completion.
+        //
+        // What this buys, precisely: in the ordinary case the `lifecycle` write
+        // guard below ALREADY serialises concurrent callers, so this gate is
+        // not what makes them wait there. It matters where that guard does not
+        // hold - its acquisition is bounded, so a caller that times out proceeds
+        // WITHOUT exclusion, and two such callers would otherwise tear down in
+        // parallel and each return on its own partial view. This makes the
+        // guarantee unconditional rather than a side effect of a lock that is
+        // allowed to give up.
+        //
+        // With the SHIPPED budgets this changes no observable behaviour: the
+        // close stage is bounded at 10s and the lifecycle wait at 15s, so a
+        // second caller's own timeout always outlasts the first's teardown.
+        // That is an accident of two unrelated constants, not a guarantee -
+        // shortening the lifecycle wait, or lengthening the close budget, would
+        // silently reintroduce the defect. Hence both the gate and
+        // `concurrent_stops_wait_for_one_teardown`, which sets its own budgets
+        // so the window is reachable and the gate's absence is detectable.
+        let _once = self.stop_once.lock().await;
+        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
 
         // Exclusive: waits for any restart already in progress to finish, and
         // blocks any that has not yet started until the latch below is set.
@@ -586,17 +605,18 @@ impl Backend {
         // gives up the exclusion and reopens the narrow race it prevents, which
         // is the better of two bad outcomes at that point, so it is logged
         // loudly rather than passed over.
-        let lifecycle_guard = tokio::time::timeout(LIFECYCLE_WAIT, self.lifecycle.write())
-            .await
-            .inspect_err(|_| {
-                warn!(
-                    backend = %self.name,
-                    wait_secs = LIFECYCLE_WAIT.as_secs(),
-                    "Restart still in flight after the shutdown wait; proceeding \
-                     without exclusion"
-                );
-            })
-            .ok();
+        let lifecycle_guard =
+            tokio::time::timeout(self.budgets.lifecycle_wait, self.lifecycle.write())
+                .await
+                .inspect_err(|_| {
+                    warn!(
+                        backend = %self.name,
+                        wait_secs = self.budgets.lifecycle_wait.as_secs(),
+                        "Restart still in flight after the shutdown wait; proceeding \
+                         without exclusion"
+                    );
+                })
+                .ok();
 
         // Latched BEFORE anything is torn down. Setting it later - after the
         // pool has been walked - leaves a gap in which a restart finishing its
@@ -622,10 +642,10 @@ impl Backend {
                 .collect()
         };
 
-        self.close_pooled_transports(transports, DRAIN_DEADLINE)
+        self.close_pooled_transports(transports, self.budgets.close_stage)
             .await;
 
-        self.await_starts_in_flight(DRAIN_DEADLINE).await;
+        self.await_starts_in_flight(self.budgets.drain).await;
 
         // Transports that `force_restart` replaced while they were in use are
         // NOT in `pool`, so the loop above cannot see them. Their cleanup tasks
@@ -640,7 +660,7 @@ impl Backend {
         // handles are dropped, which detaches those tasks rather than killing
         // them - they may still finish if the runtime outlives this call - and
         // the situation is logged either way.
-        let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
+        let drain_until = tokio::time::Instant::now() + self.budgets.drain;
         loop {
             // Re-taken each pass on purpose. The health loop only checks its
             // shutdown signal between ticks, so a `health_probe` already in
@@ -685,13 +705,19 @@ impl Backend {
             if timed_out {
                 warn!(
                     backend = %self.name,
-                    deadline_secs = DRAIN_DEADLINE.as_secs(),
+                    deadline_secs = self.budgets.drain.as_secs(),
                     "Replaced transports still had live callers at shutdown; \
                      abandoning their cleanup"
                 );
                 break;
             }
         }
+
+        // Recorded only here, at the end: a later caller may return immediately
+        // on the strength of this flag, so it must not be set until the teardown
+        // it stands for has actually finished.
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
 
         Ok(())
     }

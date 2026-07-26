@@ -98,6 +98,30 @@ pub struct Backend {
     /// because concurrent restarts are already serialised by the slot's
     /// `start_lock`; this is only about excluding shutdown.
     lifecycle: tokio::sync::RwLock<()>,
+    /// Makes [`Backend::stop`] single-flight.
+    ///
+    /// Without it, two concurrent callers both run the teardown and whichever
+    /// takes the cleanup list first is the only one that waits - the other
+    /// returns while transports are still closing. For a shutdown API that is
+    /// the wrong contract: "stop returned" has to mean "everything is closed",
+    /// or a caller can let the runtime exit with children still alive. The
+    /// repository exposes several concurrent reload and shutdown entry points,
+    /// so "callers must not race" was not a contract anyone could honour.
+    ///
+    /// A second caller blocks here, then observes `stopped` and returns - so it
+    /// waits for the SAME completion the first caller produced.
+    stop_once: tokio::sync::Mutex<()>,
+    /// Set when a `stop()` has run to completion.
+    stopped: std::sync::atomic::AtomicBool,
+    /// Shutdown stage budgets, overridable so tests can reach windows that the
+    /// production values close by accident.
+    ///
+    /// The single-flight contract is a case in point: with the shipped budgets
+    /// a second caller's lifecycle wait (15s) always outlasts the first
+    /// caller's close stage (10s), so the difference between having the gate
+    /// and not having it is unobservable. That is a coincidence of two
+    /// unrelated constants, not a guarantee, and a test that cannot see the
+    /// difference cannot stop someone reordering them later.
     /// Starts that have spawned a process (or opened a session) but have not yet
     /// either published it or been refused.
     ///
@@ -111,6 +135,34 @@ pub struct Backend {
     /// handshake owns a live process, and shutdown returning before that
     /// resolves leaves the process running for as long as the handshake takes.
     starts_in_flight: std::sync::atomic::AtomicUsize,
+    pub(crate) budgets: ShutdownBudgets,
+}
+
+/// How long each stage of [`Backend::stop`] may take before it gives up.
+///
+/// Bounds SHUTDOWN, never a request: exceeding any of these abandons cleanup
+/// rather than closing anything under a live caller, so none of them can cut a
+/// request short.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ShutdownBudgets {
+    /// How long to wait to exclude a restart already in flight. Sized above a
+    /// typical backend start, and finite so a hung one cannot hang shutdown.
+    pub(crate) lifecycle_wait: Duration,
+    /// How long the whole pooled-transport close stage may take.
+    pub(crate) close_stage: Duration,
+    /// How long to wait for in-flight starts, and then for replaced-transport
+    /// cleanups. Each gets this much, starting when that wait begins.
+    pub(crate) drain: Duration,
+}
+
+impl Default for ShutdownBudgets {
+    fn default() -> Self {
+        Self {
+            lifecycle_wait: Duration::from_secs(15),
+            close_stage: Duration::from_secs(10),
+            drain: Duration::from_secs(10),
+        }
+    }
 }
 
 /// Decrements [`Backend::starts_in_flight`] however its start ends - published,

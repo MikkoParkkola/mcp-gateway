@@ -1770,3 +1770,97 @@ async fn a_start_after_shutdown_never_spawns_a_child() {
         "a stopped backend was given a live transport"
     );
 }
+
+/// Closes slowly, so a caller that returns without waiting is visible.
+struct SlowCloseMock {
+    closed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Transport for SlowCloseMock {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        self.closed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+// GW.IDLE.RACE.12 - stop() must be single-flight, not merely idempotent.
+//
+// "stop returned" has to mean "everything is closed". Otherwise one caller can
+// let the runtime exit while another's cleanup is still running, and the child
+// processes this feature exists to reclaim survive anyway. The gateway exposes
+// several concurrent reload and shutdown entry points, so "callers must not
+// race" was never a contract anyone could honour.
+//
+// Reaching that window takes work, and three earlier attempts each failed for a
+// DIFFERENT reason - worth listing, because each looked like a working test:
+//
+//   1. Two concurrent stops, slow close: passes without the gate, because the
+//      lifecycle write guard serialises them anyway.
+//   2. Same with a reader held so both lose that guard: still passes, because
+//      the second caller waits out its OWN lifecycle timeout, which with the
+//      shipped budgets outlasts the first caller's close.
+//   3. Close made longer than that timeout: the close-stage budget aborts it
+//      first, so the test measures that instead.
+//
+// The window is closed by an accident of the shipped budgets, not by design.
+// So this test sets its own: a short lifecycle wait and a long close stage, so
+// the second caller's timeout expires while the first is still closing. Paused
+// time keeps it free.
+#[tokio::test(start_paused = true)]
+async fn concurrent_stops_wait_for_one_teardown() {
+    let mut backend =
+        stoppable_backend_with_command("/nonexistent-mcp-binary", Duration::from_secs(60));
+    {
+        let b = Arc::get_mut(&mut backend).expect("sole owner before the test starts");
+        b.budgets.lifecycle_wait = Duration::from_secs(1);
+        b.budgets.close_stage = Duration::from_secs(120);
+        b.budgets.drain = Duration::from_secs(1);
+    }
+
+    let closed = Arc::new(AtomicBool::new(false));
+    backend.set_transport_for_test(Arc::new(SlowCloseMock {
+        closed: Arc::clone(&closed),
+    }));
+
+    // Deny lifecycle exclusion to BOTH callers so each times out and proceeds
+    // without it - the state in which nothing but the single-flight gate makes
+    // the second one wait.
+    let _restart_in_flight = backend.lifecycle.read().await;
+
+    let second = {
+        let backend = Arc::clone(&backend);
+        let closed = Arc::clone(&closed);
+        tokio::spawn(async move {
+            backend.stop().await.expect("second stop");
+            closed.load(Ordering::SeqCst)
+        })
+    };
+
+    backend.stop().await.expect("first stop");
+    assert!(
+        closed.load(Ordering::SeqCst),
+        "stop() returned before the transport was closed"
+    );
+    assert!(
+        second.await.expect("second stop task panicked"),
+        "a concurrent stop() returned while the transport was still closing; \
+         that caller can now let the runtime exit with children alive"
+    );
+}
