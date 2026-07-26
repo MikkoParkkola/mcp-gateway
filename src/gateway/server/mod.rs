@@ -1437,8 +1437,9 @@ impl Gateway {
 
         // Reap what warm-start and lazy starts spawn. Without this the setting
         // is accepted and validated in stdio mode and then never acted on.
-        // No shutdown channel here: the process exits with the read loop below.
-        spawn_idle_reaper(Arc::clone(&self.backends), None);
+        // There is no broadcast shutdown channel in stdio mode, so the handle is
+        // kept and aborted explicitly at EOF below.
+        let idle_reaper = spawn_idle_reaper(Arc::clone(&self.backends), None);
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
@@ -1500,6 +1501,12 @@ impl Gateway {
         }
 
         info!("stdio: EOF reached, shutting down");
+        // Stop sweeping before tearing the backends down. The reaper holds an
+        // Arc on the registry and has no shutdown channel in this mode, so
+        // leaving it running keeps both alive after run_stdio returns. Harmless
+        // when the process exits immediately after; a leak that keeps sweeping
+        // forever when the gateway is embedded or driven from a test.
+        idle_reaper.abort();
         self.backends.stop_all().await;
         Ok(())
     }
