@@ -179,8 +179,21 @@ impl StdioTransport {
         *self.writer.lock().await = Some(stdin);
         *self.child.lock().await = Some(child);
 
-        // Spawn reader task
-        let transport = Arc::clone(self);
+        // Spawn reader task.
+        //
+        // WEAK on purpose. A strong `Arc` here is an ownership cycle: the task
+        // holds the transport, the transport holds the `Child`, the child only
+        // dies when it is killed or dropped, the transport only drops when this
+        // task ends, and this task only ends at stdout EOF - which needs the
+        // child to die. Nothing breaks that loop except an explicit `close()`,
+        // so a transport that is merely dropped leaks its MCP server process
+        // forever, and `kill_on_drop(true)` above never fires.
+        //
+        // With a `Weak`, dropping the last real handle drops the transport,
+        // which drops the `Child`, which kills the process, which closes stdout,
+        // which ends this task. Ownership does the cleanup; nothing has to
+        // decide when it is safe.
+        let transport = Arc::downgrade(self);
         tokio::spawn(async move {
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout).lines();
@@ -189,6 +202,10 @@ impl StdioTransport {
                 match reader.next_line().await {
                     Ok(Some(line)) => {
                         debug!(line_len = line.len(), "Received line from stdout");
+                        let Some(transport) = transport.upgrade() else {
+                            debug!("Transport dropped while reading; stopping reader task");
+                            return;
+                        };
                         if let Err(e) = transport.handle_response(&line) {
                             error!(error = %e, line = %line, "Failed to handle response");
                         }
@@ -204,7 +221,9 @@ impl StdioTransport {
                 }
             }
 
-            transport.connected.store(false, Ordering::Relaxed);
+            if let Some(transport) = transport.upgrade() {
+                transport.connected.store(false, Ordering::Relaxed);
+            }
             debug!("Stdio reader task ended");
         });
 
@@ -794,5 +813,67 @@ done
         assert_eq!(report["home_present"], true);
         assert_eq!(report["tmpdir_present"], true);
         assert_eq!(report["cwd_preserved"], true);
+    }
+
+    /// Is dropping every handle enough to reap the child, or does the reader
+    /// task's strong `Arc` keep the whole thing alive?
+    #[tokio::test]
+    async fn dropping_the_last_handle_reaps_the_child() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let server = workspace.path().join("server.sh");
+        let pidfile = workspace.path().join("child.pid");
+        std::fs::write(
+            &server,
+            format!(
+                r#"echo $$ > "{}"
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-11-25"}}}}'
+            ;;
+    esac
+done
+"#,
+                pidfile.display()
+            ),
+        )
+        .expect("write server");
+
+        let transport = StdioTransport::new(
+            "sh server.sh",
+            HashMap::new(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+            std::time::Duration::from_secs(5),
+            None,
+        );
+        transport.start().await.expect("start");
+
+        let pid = std::fs::read_to_string(&pidfile)
+            .expect("child wrote its pid")
+            .trim()
+            .to_string();
+        let alive = || {
+            std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        assert!(alive(), "precondition: child is running");
+
+        drop(transport);
+
+        for _ in 0..40 {
+            if !alive() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid])
+            .status();
+        panic!(
+            "child survived dropping every handle to its transport: pid {pid} still alive after 2s"
+        );
     }
 }
