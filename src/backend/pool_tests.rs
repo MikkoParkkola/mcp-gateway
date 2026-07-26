@@ -1207,3 +1207,64 @@ async fn the_health_probe_does_not_restart_a_backend_mid_stop() {
         "stop_if_idle should report that it closed a live transport"
     );
 }
+
+// GW.IDLE.RACE.3 - the evictor must never remove a slot a request is using.
+//
+// Scope, stated honestly: this covers the eviction PREDICATE, not the
+// acquisition window. That a lease is claimed under the same shard guard the
+// predicate runs under is atomicity by construction - `pooled_entry_with` runs
+// its callback before releasing the guard and is the only path to an
+// incremented entry - and is not what this test proves. What it proves is the
+// invariant that construction exists to protect: an evictor that can see a
+// live lease must decline, and must not close a transport out from under it.
+#[tokio::test]
+async fn a_leased_slot_is_never_evicted() {
+    let backend = per_user_backend();
+    let key = per_user_key("userA");
+    let mock = Arc::new(SessionMock::new("A"));
+    backend.set_pooled_transport_for_test(&key, Arc::clone(&mock) as Arc<dyn Transport>);
+
+    let lease = backend.begin_activity(&key);
+    // begin_activity touches the idle clock, so re-stale it: the lease must be
+    // the ONLY thing keeping this slot alive, or the test proves nothing.
+    backend
+        .pooled_entry(&key)
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    assert_eq!(
+        backend
+            .evict_idle_per_user_entries(Duration::from_secs(1))
+            .await,
+        0,
+        "the evictor removed a slot with a live lease on it"
+    );
+    assert!(
+        backend.pool.contains_key(&key),
+        "the leased slot is gone from the pool; its holder is now an orphan"
+    );
+    assert!(
+        !mock.closed.load(Ordering::SeqCst),
+        "the evictor closed a transport a live request is holding"
+    );
+
+    drop(lease);
+    // Dropping the guard touches the clock too.
+    backend
+        .pooled_entry(&key)
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    assert_eq!(
+        backend
+            .evict_idle_per_user_entries(Duration::from_secs(1))
+            .await,
+        1,
+        "once the lease is released the slot must become evictable again, \
+         or in_flight leaks and the slot is immortal"
+    );
+    assert!(
+        mock.closed.load(Ordering::SeqCst),
+        "the evicted slot's transport was never closed"
+    );
+}
