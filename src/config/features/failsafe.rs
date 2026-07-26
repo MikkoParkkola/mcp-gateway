@@ -76,7 +76,15 @@ impl Default for CircuitBreakerConfig {
 pub struct RetryConfig {
     /// Enable retries.
     pub enabled: bool,
-    /// Maximum retry attempts.
+    /// Maximum number of ATTEMPTS, counting the first one.
+    ///
+    /// `3` means three calls: the original plus two retries. This is what
+    /// `examples/gateway-full.yaml` has always documented and what the name
+    /// says; the implementation used to pass the value straight to `backon`,
+    /// which counts RETRIES, so a configured 3 produced four calls.
+    ///
+    /// `0` clamps to a single attempt rather than none — a backend that never
+    /// sends the request at all is not what a retry setting is asking for.
     pub max_attempts: u32,
     /// Initial backoff duration.
     #[serde(with = "crate::config::humantime_serde")]
