@@ -265,13 +265,17 @@ async fn revive_backend(
 
     let breaker_was_open = backend.is_circuit_tripped();
     backend.reset_circuit_breaker();
-    let rebuilt = backend.force_restart().await.is_ok();
+    // A backend that is shutting down reports Ok without rebuilding anything;
+    // saying "revived" there would misreport it to the operator.
+    let outcome = backend.force_restart().await;
+    let rebuilt = matches!(outcome, Ok(crate::backend::RestartOutcome::Rebuilt));
+    let status = if rebuilt { "revived" } else { "not_revived" };
 
     (
         StatusCode::OK,
         Json(json!({
             "backend": name,
-            "status": "revived",
+            "status": status,
             "breaker_was_open": breaker_was_open,
             "transport_rebuilt": rebuilt,
         })),

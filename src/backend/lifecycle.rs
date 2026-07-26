@@ -13,9 +13,9 @@ use reqwest::Client;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
-use super::Backend;
 use super::cached_metadata::CachedMetadata;
 use super::pool::{PoolKey, PooledEntry};
+use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
@@ -140,6 +140,7 @@ impl Backend {
             semaphore: Semaphore::new(100), // Max concurrent requests
             request_count: std::sync::atomic::AtomicU64::new(0),
             replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
+            lifecycle: tokio::sync::RwLock::new(()),
         }
     }
 
@@ -526,6 +527,10 @@ impl Backend {
         /// caller, so it cannot cut a request short.
         const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
 
+        // Exclusive: waits for any restart already in progress to finish, and
+        // blocks any that has not yet started until the latch below is set.
+        let _lifecycle = self.lifecycle.write().await;
+
         info!(backend = %self.name, "Stopping backend");
 
         // Take every slot's transport out first (dropping the parking_lot write
@@ -622,10 +627,19 @@ impl Backend {
     /// # Errors
     ///
     /// Returns an error if the fresh transport fails to start or initialize.
-    pub async fn force_restart(&self) -> Result<()> {
+    /// Returns [`RestartOutcome::SkippedStopping`] - NOT an error - when the
+    /// backend is shutting down: nothing was rebuilt, and a caller reporting
+    /// "revived" on the strength of an `Ok` would be lying to its operator.
+    pub async fn force_restart(&self) -> Result<RestartOutcome> {
         // Rebuild only the canonical shared slot; per-user sessions are left
         // intact so one caller's health recovery cannot tear down another's
         // in-flight session (MIK-6735). The idle reaper reclaims per-user slots.
+        // Held for the whole restart so shutdown cannot interleave with it. See
+        // `Backend::lifecycle`: without this, the check below can pass before
+        // stop() latches, and the restart then registers a cleanup after the
+        // final drain or starts a child after teardown.
+        let _lifecycle = self.lifecycle.read().await;
+
         // Refuse once shutdown has begun. `stop()` has already taken every
         // transport out of the pool; restarting here would spawn a fresh child
         // process (or a new upstream session) that nothing left alive will ever
@@ -634,7 +648,7 @@ impl Backend {
         // reach this point during teardown.
         if self.replaced_transport_cleanups.lock().stopping {
             debug!(backend = %self.name, "Skipping force_restart: backend is stopping");
-            return Ok(());
+            return Ok(RestartOutcome::SkippedStopping);
         }
 
         let entry = self.pooled_entry(&PoolKey::Shared);
@@ -667,7 +681,7 @@ impl Backend {
             }
         }
         self.start_entry(&PoolKey::Shared, &entry).await?;
-        Ok(())
+        Ok(RestartOutcome::Rebuilt)
     }
 
     /// Close a replaced transport the moment its last user releases it.

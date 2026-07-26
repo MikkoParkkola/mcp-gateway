@@ -84,6 +84,33 @@ pub struct Backend {
     /// drain — or worse, start a whole new child process after `stop()` has
     /// torn the backend down, leaving an orphan nothing will ever close.
     replaced_transport_cleanups: parking_lot::Mutex<CleanupState>,
+    /// Serialises whole lifecycle transitions against each other.
+    ///
+    /// The `stopping` latch alone is not enough: `force_restart` reads it, then
+    /// does async work, so it can pass the check BEFORE `stop()` latches and
+    /// then register a cleanup - or start a whole new child - AFTER shutdown's
+    /// final drain. A flag cannot close that window because the check and the
+    /// work it guards are not one operation.
+    ///
+    /// So restarts take this shared, and `stop()` takes it exclusively: a
+    /// restart either finishes entirely before shutdown begins, or starts
+    /// afterwards and sees the latch. Shared rather than exclusive for restarts
+    /// because concurrent restarts are already serialised by the slot's
+    /// `start_lock`; this is only about excluding shutdown.
+    lifecycle: tokio::sync::RwLock<()>,
+}
+
+/// What [`Backend::force_restart`] actually did.
+///
+/// Distinguishing "rebuilt" from "skipped" matters because the admin revive
+/// endpoint reports it to a human: an `Ok` that meant "did nothing because we
+/// are shutting down" was being rendered as `transport_rebuilt: true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartOutcome {
+    /// The transport was replaced with a freshly started one.
+    Rebuilt,
+    /// Nothing was done: the backend is shutting down.
+    SkippedStopping,
 }
 
 /// Deferred-cleanup bookkeeping for [`Backend`], behind a single lock.

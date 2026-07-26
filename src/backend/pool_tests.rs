@@ -1447,8 +1447,10 @@ async fn shutdown_waits_for_a_replaced_transports_cleanup() {
 // close: an orphan MCP server outliving the gateway. It also registers a
 // cleanup after shutdown's final drain, which is how this was found.
 //
-// The witness is on disk - the backend's command appends a line per spawn - so
-// the assertion reads the process table rather than an in-memory flag.
+// The witness is on disk: the backend's command appends a line per spawn, so
+// the assertion counts real spawn attempts rather than trusting an in-memory
+// flag. (It counts launches from that log; it does not inspect the process
+// table itself.)
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_does_not_restart_a_backend_that_is_stopping() {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -1474,4 +1476,56 @@ async fn recovery_does_not_restart_a_backend_that_is_stopping() {
         backend.shared_entry().transport.read().is_none(),
         "a stopped backend was given a live transport by health recovery"
     );
+}
+
+// GW.IDLE.RACE.8 - shutdown must exclude a restart that is already running.
+//
+// The `stopping` latch alone cannot do this: force_restart reads it and THEN
+// does async work, so it can pass the check before stop() latches and go on to
+// register a cleanup after the final drain, or start a child after teardown.
+// The check and the work it guards are not one operation, so a flag cannot
+// close the window - only mutual exclusion can.
+//
+// Positioned inside the window rather than after it: the test holds the shared
+// side of the lifecycle lock, which is exactly what an in-flight restart holds,
+// and asserts shutdown cannot proceed past it.
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_waits_for_a_restart_already_in_flight() {
+    let backend =
+        stoppable_backend_with_command("/nonexistent-mcp-binary", Duration::from_secs(60));
+    backend.set_transport_for_test(Arc::new(SessionMock::new("live")));
+
+    // Stand in for a restart that has passed its own stopping check.
+    let restarting = backend.lifecycle.read().await;
+
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopper = {
+        let backend = Arc::clone(&backend);
+        let stopped = Arc::clone(&stopped);
+        tokio::spawn(async move {
+            let _ = backend.stop().await;
+            stopped.store(true, Ordering::SeqCst);
+        })
+    };
+
+    // Bounded wait: unexcluded shutdown would have completed many times over.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !stopped.load(Ordering::SeqCst),
+        "stop() ran to completion while a restart was still in flight; it can \
+         therefore latch and drain before that restart registers its cleanup or \
+         starts its child"
+    );
+
+    drop(restarting);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !stopped.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "stop() never completed after the restart finished"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    stopper.await.expect("stopper task panicked");
 }
