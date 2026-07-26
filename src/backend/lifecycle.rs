@@ -552,6 +552,13 @@ impl Backend {
             })
             .ok();
 
+        // Latched BEFORE anything is torn down. Setting it later - after the
+        // pool has been walked - leaves a gap in which a restart finishing its
+        // start sees `stopping == false`, approves itself, and installs a
+        // transport into a slot shutdown has already visited and will not
+        // revisit. The child then survives a completed shutdown.
+        self.replaced_transport_cleanups.lock().stopping = true;
+
         info!(backend = %self.name, "Stopping backend");
 
         // Take every slot's transport out first (dropping the parking_lot write
@@ -583,9 +590,6 @@ impl Backend {
         // the situation is logged either way.
         let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
         loop {
-            // Latched before every take, so a `force_restart` that has not yet
-            // reached its own check cannot start new work behind this drain.
-            self.replaced_transport_cleanups.lock().stopping = true;
             // Re-taken each pass on purpose. The health loop only checks its
             // shutdown signal between ticks, so a `health_probe` already in
             // flight can call `force_restart` and register a new cleanup WHILE
@@ -722,12 +726,34 @@ impl Backend {
         if self.replaced_transport_cleanups.lock().stopping {
             let orphan = entry.transport.write().take();
             if let Some(orphan) = orphan {
+                // This is the transport THIS call installed: `start_lock` is
+                // still held, and every installer (here and
+                // `ensure_entry_started`) takes it, so nothing else can have
+                // swapped the slot underneath us.
+                //
                 warn!(
                     backend = %self.name,
                     "Shutdown completed while this backend was restarting; closing \
                      the transport it had just started"
                 );
-                let _ = orphan.close().await;
+
+                // `start_entry` PUBLISHES before returning, so between that and
+                // the check above a client can have taken
+                // `ensure_entry_started`'s lock-free fast path and cloned this
+                // transport. `start_lock` stops another starter replacing the
+                // slot; it does not stop readers taking what is in it. Closing
+                // inline regardless would tear the transport out from under
+                // that caller - the exact defect this whole change exists to
+                // fix, reintroduced at teardown.
+                //
+                // Having taken it out of the slot, no NEW caller can reach it,
+                // so the count only falls from here. One means nobody else has
+                // it and closing now is safe; more means waiting is.
+                if Arc::strong_count(&orphan) == 1 {
+                    let _ = orphan.close().await;
+                } else {
+                    self.close_after_last_owner(orphan);
+                }
             }
             return Ok(RestartOutcome::SkippedStopping);
         }
