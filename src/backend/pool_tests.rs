@@ -1437,3 +1437,41 @@ async fn shutdown_waits_for_a_replaced_transports_cleanup() {
          was detached, so shutdown can drop it unrun and abandon the session"
     );
 }
+
+// GW.IDLE.RACE.7 - recovery must not restart a backend that is shutting down.
+//
+// The health loop only checks its shutdown signal between ticks, so a probe
+// already in flight can call force_restart() while stop() is tearing the
+// backend down. stop() has by then taken every transport out of the pool, so a
+// restart there spawns a fresh child process that nothing left alive will ever
+// close: an orphan MCP server outliving the gateway. It also registers a
+// cleanup after shutdown's final drain, which is how this was found.
+//
+// The witness is on disk - the backend's command appends a line per spawn - so
+// the assertion reads the process table rather than an in-memory flag.
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_does_not_restart_a_backend_that_is_stopping() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let log = dir.path().join("spawns");
+    let backend = stoppable_backend_with_command(
+        &format!("sh -c 'echo spawn >> {}; sleep 1'", log.display()),
+        Duration::from_secs(60),
+    );
+    backend.set_transport_for_test(Arc::new(SessionMock::new("live")));
+
+    backend.stop().await.expect("stop");
+
+    let spawns_before = spawn_count(&log);
+    let _ = backend.force_restart().await;
+
+    assert_eq!(
+        spawn_count(&log),
+        spawns_before,
+        "force_restart spawned a child for a backend that had already been \
+         stopped; nothing remains to close it, so it outlives the gateway"
+    );
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "a stopped backend was given a live transport by health recovery"
+    );
+}

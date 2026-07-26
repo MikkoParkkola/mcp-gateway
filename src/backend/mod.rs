@@ -67,16 +67,34 @@ pub struct Backend {
     /// Request counter
     request_count: AtomicU64,
     /// Cleanup tasks for transports that `force_restart` replaced while
-    /// requests were still using them.
+    /// requests were still using them, plus the shutdown latch that stops new
+    /// ones being created.
     ///
-    /// Each waits for its transport's last owner to let go and then closes it.
-    /// The handles are kept rather than detached so [`Backend::stop`] can drain
-    /// them: a replaced transport is no longer reachable through `pool`, so
-    /// shutdown would otherwise close only the CURRENT transport and let the
+    /// Each task waits for its transport's last owner to let go and then closes
+    /// it. The handles are kept rather than detached so [`Backend::stop`] can
+    /// drain them: a replaced transport is no longer reachable through `pool`,
+    /// so shutdown would otherwise close only the CURRENT transport and let the
     /// runtime exit with the old one's `close()` unrun — skipping an HTTP
     /// backend's session DELETEs at exactly the reload and shutdown boundaries
     /// where they matter.
-    replaced_transport_cleanups: parking_lot::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    ///
+    /// `stopping` and `handles` share one lock because they are one decision:
+    /// whether more cleanup work can still appear. Without the latch,
+    /// `force_restart` racing shutdown can register a cleanup after the final
+    /// drain — or worse, start a whole new child process after `stop()` has
+    /// torn the backend down, leaving an orphan nothing will ever close.
+    replaced_transport_cleanups: parking_lot::Mutex<CleanupState>,
+}
+
+/// Deferred-cleanup bookkeeping for [`Backend`], behind a single lock.
+#[derive(Default)]
+pub(crate) struct CleanupState {
+    /// Set by [`Backend::stop`] before it drains. Once true, `force_restart` is
+    /// a no-op: restarting a backend that is being shut down can only create
+    /// work nobody will clean up.
+    pub(crate) stopping: bool,
+    /// Cleanup tasks awaiting their transport's last owner.
+    pub(crate) handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 #[cfg(test)]

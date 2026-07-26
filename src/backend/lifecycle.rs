@@ -11,7 +11,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 use reqwest::Client;
 use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::Backend;
 use super::cached_metadata::CachedMetadata;
@@ -139,7 +139,7 @@ impl Backend {
             last_used: std::sync::atomic::AtomicU64::new(0),
             semaphore: Semaphore::new(100), // Max concurrent requests
             request_count: std::sync::atomic::AtomicU64::new(0),
-            replaced_transport_cleanups: parking_lot::Mutex::new(Vec::new()),
+            replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
         }
     }
 
@@ -513,7 +513,19 @@ impl Backend {
     /// Never returns `Err` today: individual slot-close failures are logged and
     /// the remaining slots are still drained. The `Result` is retained for
     /// forward compatibility and to match the registry's stop contract.
+    /// Concurrency contract: `stop()` is idempotent but NOT single-flight. Two
+    /// concurrent calls both latch `stopping` and both drain, and whichever
+    /// takes the handle list first is the one that waits - the other can return
+    /// while cleanup is still running. Callers wanting "everything is closed"
+    /// must not race their own shutdown calls. Sequential calls are harmless:
+    /// the second finds nothing left to do.
     pub async fn stop(&self) -> Result<()> {
+        /// How long shutdown waits for replaced transports whose callers have
+        /// not finished. Bounds SHUTDOWN, not a request: exceeding it detaches
+        /// the remaining cleanups rather than closing anything under a live
+        /// caller, so it cannot cut a request short.
+        const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
+
         info!(backend = %self.name, "Stopping backend");
 
         // Take every slot's transport out first (dropping the parking_lot write
@@ -543,23 +555,40 @@ impl Backend {
         // handles are dropped, which detaches those tasks rather than killing
         // them - they may still finish if the runtime outlives this call - and
         // the situation is logged either way.
-        let pending: Vec<tokio::task::JoinHandle<()>> =
-            std::mem::take(&mut *self.replaced_transport_cleanups.lock());
-        if !pending.is_empty() {
-            const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
-            let drained = tokio::time::timeout(DRAIN_DEADLINE, async move {
-                for handle in pending {
-                    let _ = handle.await;
-                }
-            })
-            .await;
-            if drained.is_err() {
+        let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
+        loop {
+            // Latched before every take, so a `force_restart` that has not yet
+            // reached its own check cannot start new work behind this drain.
+            self.replaced_transport_cleanups.lock().stopping = true;
+            // Re-taken each pass on purpose. The health loop only checks its
+            // shutdown signal between ticks, so a `health_probe` already in
+            // flight can call `force_restart` and register a new cleanup WHILE
+            // this drain is running. Taking the list once would leave that last
+            // one undrained - the very case this drain exists for.
+            let pending: Vec<tokio::task::JoinHandle<()>> =
+                std::mem::take(&mut self.replaced_transport_cleanups.lock().handles);
+            if pending.is_empty() {
+                break;
+            }
+
+            let remaining = drain_until.saturating_duration_since(tokio::time::Instant::now());
+            let timed_out = remaining.is_zero()
+                || tokio::time::timeout(remaining, async move {
+                    for handle in pending {
+                        let _ = handle.await;
+                    }
+                })
+                .await
+                .is_err();
+
+            if timed_out {
                 warn!(
                     backend = %self.name,
                     deadline_secs = DRAIN_DEADLINE.as_secs(),
                     "Replaced transports still had live callers at shutdown; \
                      abandoning their cleanup"
                 );
+                break;
             }
         }
 
@@ -597,6 +626,17 @@ impl Backend {
         // Rebuild only the canonical shared slot; per-user sessions are left
         // intact so one caller's health recovery cannot tear down another's
         // in-flight session (MIK-6735). The idle reaper reclaims per-user slots.
+        // Refuse once shutdown has begun. `stop()` has already taken every
+        // transport out of the pool; restarting here would spawn a fresh child
+        // process (or a new upstream session) that nothing left alive will ever
+        // close, turning a shutdown into an orphan. The health loop only checks
+        // its shutdown signal between ticks, so a probe already in flight can
+        // reach this point during teardown.
+        if self.replaced_transport_cleanups.lock().stopping {
+            debug!(backend = %self.name, "Skipping force_restart: backend is stopping");
+            return Ok(());
+        }
+
         let entry = self.pooled_entry(&PoolKey::Shared);
         let _guard = entry.start_lock.lock().await;
         // Take the transport out and drop the RwLock write guard *before*
@@ -706,8 +746,8 @@ impl Backend {
         // Drop handles for cleanups that already finished so a long-lived
         // backend restarted many times does not accumulate them.
         let mut pending = self.replaced_transport_cleanups.lock();
-        pending.retain(|h| !h.is_finished());
-        pending.push(handle);
+        pending.handles.retain(|h| !h.is_finished());
+        pending.handles.push(handle);
     }
 
     /// Active health/recovery probe driven by the background health loop.
