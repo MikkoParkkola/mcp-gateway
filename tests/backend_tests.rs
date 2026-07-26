@@ -80,7 +80,7 @@ async fn test_backend_registry() {
     let registry = BackendRegistry::new();
 
     let backend = Arc::new(create_test_backend("test1", "echo"));
-    registry.register(backend);
+    let _ = registry.register(backend);
 
     assert!(registry.get("test1").is_some());
     assert!(registry.get("nonexistent").is_none());

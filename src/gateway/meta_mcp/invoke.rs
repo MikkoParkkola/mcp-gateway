@@ -3075,7 +3075,7 @@ mod identity_propagation_enforcement_tests {
             captured: Arc::clone(&captured),
             captured_identity: Arc::clone(&captured_identity),
         }));
-        registry.register(backend);
+        let _ = registry.register(backend);
 
         let mut m = MetaMcp::new(registry);
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
@@ -3378,7 +3378,7 @@ mod identity_propagation_enforcement_tests {
             &crate::config::FailsafeConfig::default(),
             std::time::Duration::from_secs(60),
         ));
-        registry.register(backend);
+        let _ = registry.register(backend);
 
         let m = MetaMcp::new(registry);
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
@@ -3419,7 +3419,7 @@ mod identity_propagation_enforcement_tests {
             &crate::config::FailsafeConfig::default(),
             std::time::Duration::from_secs(60),
         ));
-        registry.register(backend);
+        let _ = registry.register(backend);
 
         let m = MetaMcp::new(registry);
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));

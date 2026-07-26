@@ -1049,7 +1049,7 @@ fn claiming_a_lease_is_excluded_while_the_reaper_holds_the_transport() {
     // Stand in for the reaper, holding the guard across the whole window.
     let reaper_guard = entry.transport.write();
 
-    let claimer = {
+    let claim_task = {
         let backend = Arc::clone(&backend);
         let claimed = Arc::clone(&claimed);
         let release = Arc::clone(&release);
@@ -1093,7 +1093,7 @@ fn claiming_a_lease_is_excluded_while_the_reaper_holds_the_transport() {
     );
 
     release.store(true, Ordering::SeqCst);
-    claimer.join().expect("claimer thread panicked");
+    claim_task.join().expect("claim thread panicked");
 }
 
 /// A transport whose `close()` parks until released, letting a test position
@@ -1500,7 +1500,7 @@ async fn shutdown_waits_for_a_restart_already_in_flight() {
     let restarting = backend.lifecycle.read().await;
 
     let stopped = Arc::new(AtomicBool::new(false));
-    let stopper = {
+    let shutdown_task = {
         let backend = Arc::clone(&backend);
         let stopped = Arc::clone(&stopped);
         tokio::spawn(async move {
@@ -1528,7 +1528,7 @@ async fn shutdown_waits_for_a_restart_already_in_flight() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    stopper.await.expect("stopper task panicked");
+    shutdown_task.await.expect("shutdown task panicked");
 }
 
 // GW.IDLE.RACE.9 - a restart that finishes after shutdown must undo itself.
@@ -1612,8 +1612,7 @@ done
         std::process::Command::new("kill")
             .args(["-0", &pid])
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .is_ok_and(|s| s.success())
     };
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while alive() {
@@ -1688,8 +1687,7 @@ done
         std::process::Command::new("kill")
             .args(["-0", &pid])
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .is_ok_and(|s| s.success())
     };
     assert!(alive(), "precondition: the racing start's child is running");
 

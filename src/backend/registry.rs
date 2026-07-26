@@ -151,15 +151,39 @@ impl BackendRegistry {
     /// Refused once shutdown has begun: a backend registered after `stop_all`
     /// has taken its snapshot would never be stopped. Returns `false` when the
     /// registration was refused for that reason.
+    ///
+    /// Checked twice, and the second check is the one that matters. A single
+    /// check before the insert is not atomic with `stop_all`'s snapshot: the
+    /// check can pass, shutdown can then latch AND snapshot, and only then does
+    /// the insert land - into a map nothing will look at again. Re-checking
+    /// after the insert closes that window without a second lock. Either
+    /// shutdown latched before this check, in which case the entry is withdrawn
+    /// here, or it latched afterwards, in which case its snapshot is taken
+    /// after the insert and includes it.
+    ///
+    /// Withdrawing is safe: a backend that has only just been registered has
+    /// not been started, so there is nothing to stop.
+    #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
+        let name = backend.name.clone();
         if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
             warn!(
-                backend = %backend.name,
+                backend = %name,
                 "Refusing to register a backend during shutdown; it would never be stopped"
             );
             return false;
         }
-        self.backends.insert(backend.name.clone(), backend);
+
+        self.backends.insert(name.clone(), backend);
+
+        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            self.backends.remove(&name);
+            warn!(
+                backend = %name,
+                "Withdrawing a backend registered as shutdown began; it would never be stopped"
+            );
+            return false;
+        }
         true
     }
 

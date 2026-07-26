@@ -858,8 +858,7 @@ done
             std::process::Command::new("kill")
                 .args(["-0", &pid])
                 .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
+                .is_ok_and(|s| s.success())
         };
         assert!(alive(), "precondition: child is running");
 

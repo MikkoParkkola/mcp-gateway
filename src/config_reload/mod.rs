@@ -436,13 +436,21 @@ fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
 ///   skipped.
 /// - **Profile changes**: logged at `INFO`; the `LiveConfig` is updated by the
 ///   caller after this function returns.
+///
+/// Returns `false` when the registry refused a registration because the gateway
+/// is shutting down. The patch is then only partly applied, so the caller must
+/// NOT publish the new config as live: doing so would describe backends that
+/// are not registered and report a reload that did not happen.
+#[must_use = "a partly applied patch must not be published as the live config"]
 pub async fn apply_patch(
     patch: &ConfigPatch,
     registry: &BackendRegistry,
     failsafe_config: &crate::config::FailsafeConfig,
     cache_ttl: Duration,
     runtime_config: &RuntimeConfig,
-) {
+) -> bool {
+    let mut fully_applied = true;
+
     if patch.restart_required() {
         warn!("Config reload: server host/port changed — restart required to apply this change");
     }
@@ -456,8 +464,15 @@ pub async fn apply_patch(
             cache_ttl,
             runtime_plan,
         ));
-        registry.register(Arc::clone(&backend));
-        info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend added");
+        if registry.register(Arc::clone(&backend)) {
+            info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend added");
+        } else {
+            // The registry refuses registrations once shutdown has begun,
+            // because nothing would ever stop them. Reporting "added" here
+            // would tell an operator a backend exists when it does not.
+            warn!(backend = %name, "Config reload: backend not added, gateway is shutting down");
+            fully_applied = false;
+        }
     }
 
     for name in &patch.backends_removed {
@@ -486,13 +501,23 @@ pub async fn apply_patch(
             cache_ttl,
             runtime_plan,
         ));
-        registry.register(Arc::clone(&backend));
-        info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend updated");
+        if registry.register(Arc::clone(&backend)) {
+            info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend updated");
+        } else {
+            // The old instance was already stopped above, so this backend is now
+            // registered but dead. Shutdown is in progress and about to remove
+            // it anyway; what matters is that the caller does not treat this
+            // reload as applied.
+            warn!(backend = %name, "Config reload: backend not updated, gateway is shutting down");
+            fully_applied = false;
+        }
     }
 
     if patch.profiles_changed {
         info!("Config reload: meta/profile config updated (in-place)");
     }
+
+    fully_applied
 }
 
 // ============================================================================
@@ -793,7 +818,7 @@ async fn reload_once(
 
     info!(changes = %patch.summary(), "Config reload: applying patch");
 
-    apply_patch(
+    let fully_applied = apply_patch(
         &patch,
         registry,
         failsafe_cfg,
@@ -801,6 +826,15 @@ async fn reload_once(
         &new_config.runtime,
     )
     .await;
+
+    if !fully_applied {
+        warn!(
+            "Config reload: aborted, the gateway is shutting down; keeping the \
+             previous live config rather than publishing one that describes \
+             backends which were never registered"
+        );
+        return;
+    }
 
     // Swap live config after patch is applied so readers see a consistent view.
     live_config.set(new_config);
@@ -872,7 +906,7 @@ impl ReloadContext {
         };
 
         let outcome = patch.outcome();
-        apply_patch(
+        let fully_applied = apply_patch(
             &patch,
             &self.registry,
             &self.failsafe_config,
@@ -880,6 +914,18 @@ impl ReloadContext {
             &new_config.runtime,
         )
         .await;
+
+        if !fully_applied {
+            // Publishing here would describe backends the registry refused, and
+            // report a reload that did not happen. The caller asked for an
+            // outcome; the honest one is an error.
+            return Err(
+                "config reload aborted: the gateway is shutting down and refused \
+                 to register one or more backends"
+                    .to_string(),
+            );
+        }
+
         self.live_config.set(new_config);
 
         Ok(outcome)
