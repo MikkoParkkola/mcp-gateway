@@ -183,13 +183,24 @@ impl BackendRegistry {
     /// easy to over-read: this says the entry is IN the map when the snapshot is
     /// taken, not that it survives until then. Registering the same name again
     /// REPLACES it - `DashMap::insert` discards the displaced value - so a
-    /// backend that was started and then displaced is stopped by nobody. That
-    /// is pre-existing behaviour, unchanged here, and no current caller can hit
-    /// it: the only path that re-registers a name is config reload's "modified"
-    /// branch, which stops the old instance first. A caller that ever registers
-    /// a duplicate name over a STARTED backend without stopping it orphans that
-    /// process, so this API should grow safe duplicate semantics - reject, or
-    /// hand the displaced backend back - before anyone relies on replacement.
+    /// backend that was started and then displaced is stopped by nobody.
+    ///
+    /// KNOWN DEFECT, and it is REACHABLE. `ReloadContext::reload_outcome` has no
+    /// serialization, and it is called from three concurrent HTTP paths: the
+    /// `gateway_reload_config` meta-tool, the admin UI reload, and every admin
+    /// UI backend edit via `write_config_and_reload_outcome`. Two concurrent
+    /// reloads can both stop backend A and then register replacements B and C;
+    /// ordinary traffic can start B in between; C's insert then discards B
+    /// without stopping it, orphaning that process - the exact failure
+    /// `stop_when_idle_for` exists to prevent.
+    ///
+    /// An earlier version of this comment claimed no current caller could hit
+    /// it. That was wrong: it checked that the reload path stops the old
+    /// instance before re-registering, but never checked whether two reloads
+    /// can run at once. The fix is to serialize reload transactions AND make
+    /// registration either reject a duplicate or hand the displaced backend
+    /// back so the caller can stop it. Tracked separately; the replacement
+    /// semantics are pre-existing, the reachability is not new either.
     #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
         let stopping = self.stopping.lock();
