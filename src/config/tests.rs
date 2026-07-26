@@ -802,3 +802,114 @@ fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
         "disabled backend oauth must not trip the F3 gate"
     );
 }
+
+/// `idle_timeout` was accepted, documented as "hibernate after N idle", and read
+/// by nothing but a `Debug` impl. Parsing tolerates extra keys, so simply
+/// deleting the field would let it keep sitting in real configs looking
+/// effective. A retired key must announce itself — and the assertions below call
+/// the SHIPPED detector, not a copy of its logic.
+#[test]
+fn config_with_retired_idle_timeout_still_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    // NOTE: `backends:` is the real key. An earlier version of this test used
+    // `servers:`, which the root config ignores — it loaded ZERO backends and so
+    // never exercised a backend carrying the retired key at all.
+    std::fs::write(
+        &path,
+        "backends:\n  demo:\n    command: \"echo hi\"\n    idle_timeout: 10m\n",
+    )
+    .expect("write config");
+
+    let cfg = Config::load(Some(&path)).expect("a config carrying a retired key must still load");
+    assert!(
+        cfg.backends.contains_key("demo"),
+        "the backend carrying the retired key must survive parsing, \
+         otherwise this test proves nothing about that backend"
+    );
+}
+
+#[test]
+fn retired_idle_timeout_key_is_detected() {
+    let found = Config::retired_keys_in_str(
+        "backends:\n  demo:\n    command: \"echo hi\"\n    idle_timeout: 10m\n",
+    );
+    assert_eq!(
+        found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        vec!["idle_timeout"],
+        "the shipped detector must see the retired key"
+    );
+}
+
+#[test]
+fn retired_key_detector_ignores_comments_and_clean_configs() {
+    assert!(
+        Config::retired_keys_in_str(
+            "backends:\n  demo:\n    # idle_timeout: 10m  (removed)\n    command: \"echo hi\"\n"
+        )
+        .is_empty(),
+        "a commented-out key must not warn"
+    );
+    assert!(
+        Config::retired_keys_in_str("backends:\n  demo:\n    command: \"echo hi\"\n").is_empty(),
+        "a clean config must not warn"
+    );
+}
+
+#[test]
+fn retired_key_detector_sees_quoted_keys() {
+    assert!(
+        !Config::retired_keys_in_str("backends:\n  demo:\n    \"idle_timeout\": 10m\n").is_empty(),
+        "YAML permits quoting the key; the detector must not miss that spelling"
+    );
+}
+
+/// Flow style is valid YAML and loads identically to the block form. A
+/// line-oriented detector saw nothing here, so an operator whose config used
+/// flow mappings got the removal with no warning at all — the exact silence
+/// this warning exists to break.
+#[test]
+fn retired_key_detector_sees_flow_style_mappings() {
+    assert!(
+        !Config::retired_keys_in_str("backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}")
+            .is_empty(),
+        "flow-style mappings are valid YAML; the detector must see the key there too"
+    );
+}
+
+/// The mirror failure: the key's NAME inside a value is not a use of the key.
+/// A CHANGELOG excerpt or a description quoting `idle_timeout:` must not make
+/// the gateway warn about a config that never set it.
+#[test]
+fn retired_key_detector_ignores_the_name_inside_values() {
+    assert!(
+        Config::retired_keys_in_str(
+            "backends:\n  demo:\n    command: \"echo hi\"\n    description: |\n      idle_timeout: 10m was removed in 4.0.0\n"
+        )
+        .is_empty(),
+        "the key name appearing inside a block scalar is text, not a set key"
+    );
+}
+
+/// `Config::load` warns by reading the file from disk, a path the string-level
+/// tests never touch. Without this, the detector could be perfect and still be
+/// wired to nothing.
+#[test]
+fn retired_key_detector_reads_the_loaded_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  demo:\n    command: \"echo hi\"\n    idle_timeout: 10m\n",
+    )
+    .expect("write config");
+
+    assert_eq!(
+        Config::retired_keys_in_file(&path)
+            .iter()
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>(),
+        vec!["idle_timeout"],
+        "the file-reading path Config::load uses must find the retired key"
+    );
+}

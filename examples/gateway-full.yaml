@@ -222,7 +222,6 @@ backends:
   #   description: "Web search via Tavily"
   #   enabled: true
   #   timeout: 30s
-  #   idle_timeout: 300s          # Hibernate after 5 min idle
   #   env:
   #     TAVILY_API_KEY: "${TAVILY_API_KEY}"
   #   cwd: /tmp                   # Working directory (stdio only)

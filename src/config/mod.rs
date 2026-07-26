@@ -202,8 +202,71 @@ impl Config {
             .map_err(|e| Error::Config(e.to_string()))?;
         config.expand_env_vars();
         config.validate()?;
+        Self::warn_on_retired_keys(resolved.as_deref());
 
         Ok(config)
+    }
+
+    /// Configuration keys that were removed. Left loadable on purpose: parsing
+    /// tolerates extra keys, so an old file keeps working.
+    const RETIRED_KEYS: &'static [(&'static str, &'static str)] = &[(
+        "idle_timeout",
+        "backend idle hibernation was never implemented; this key is now removed \
+         and has no effect. Delete it from your config — a command that rewrites \
+         the config will drop it silently along with any surrounding comments.",
+    )];
+
+    /// Retired keys present in the config file at `path`, as (key, explanation).
+    ///
+    /// Returns findings rather than logging directly so the detector is testable.
+    /// Parsing is tolerant of extra keys, which is exactly what let `idle_timeout`
+    /// sit in real configs looking effective: accepted, documented as
+    /// "hibernate after N idle", and read by nothing but a `Debug` impl. Ignoring
+    /// it silently now would repeat that mistake more quietly.
+    pub(crate) fn retired_keys_in_file(path: &Path) -> Vec<(&'static str, &'static str)> {
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        Self::retired_keys_in_str(&raw)
+    }
+
+    /// Structural scan, split out so tests exercise the shipped logic.
+    ///
+    /// Parses the document and looks for the retired name as an actual mapping
+    /// key under `backends.<name>` — where every real occurrence of
+    /// `idle_timeout` lived. An earlier line-oriented version missed flow-style
+    /// mappings (`backends: {demo: {idle_timeout: 10m}}`), which load fine and
+    /// would therefore have gone unwarned, and could fire on the key's name
+    /// appearing inside a block scalar. Both are real configs; a detector that
+    /// is honest only about the spellings it happens to recognise is the same
+    /// failure this commit removes.
+    pub(crate) fn retired_keys_in_str(raw: &str) -> Vec<(&'static str, &'static str)> {
+        // Unparseable YAML never reaches here through `Config::load`, which
+        // fails on it first. Nothing useful to say about a file we cannot read.
+        let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
+            return Vec::new();
+        };
+        let Some(backends) = doc.get("backends").and_then(serde_yaml::Value::as_mapping) else {
+            return Vec::new();
+        };
+        Self::RETIRED_KEYS
+            .iter()
+            .filter(|(key, _)| {
+                backends.values().any(|backend| {
+                    backend
+                        .as_mapping()
+                        .is_some_and(|fields| fields.keys().any(|k| k.as_str() == Some(*key)))
+                })
+            })
+            .copied()
+            .collect()
+    }
+
+    fn warn_on_retired_keys(path: Option<&Path>) {
+        let Some(path) = path else { return };
+        for (key, why) in Self::retired_keys_in_file(path) {
+            tracing::warn!(config = %path.display(), key = %key, "retired config key: {}", why);
+        }
     }
 
     /// Load environment files into the process environment.
@@ -718,9 +781,6 @@ pub struct BackendConfig {
     /// Transport type.
     #[serde(flatten)]
     pub transport: TransportConfig,
-    /// Idle timeout before hibernation.
-    #[serde(with = "humantime_serde")]
-    pub idle_timeout: Duration,
     /// Request timeout for this backend.
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
@@ -762,7 +822,6 @@ impl std::fmt::Debug for BackendConfig {
             .field("description", &self.description)
             .field("enabled", &self.enabled)
             .field("transport", &self.transport)
-            .field("idle_timeout", &self.idle_timeout)
             .field("timeout", &self.timeout)
             // `env` and `headers` values routinely carry credentials
             // (Authorization bearers, API keys, env-injected secrets). The
@@ -785,7 +844,6 @@ impl Default for BackendConfig {
             description: String::new(),
             enabled: true,
             transport: TransportConfig::default(),
-            idle_timeout: Duration::from_secs(300),
             timeout: Duration::from_secs(30),
             env: HashMap::new(),
             headers: HashMap::new(),

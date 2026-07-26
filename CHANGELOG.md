@@ -24,6 +24,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous number of calls. `max_attempts: 0` clamps to a single attempt rather
   than none.
 
+### Changed
+
+- **Helm charts track the 4.0.0 release.** `deploy/helm/mcp-gateway` and
+  `deploy/helm/mcp-gateway-crds` `appVersion` and the default image `tag` move
+  to `4.0.0`; both chart `version`s bumped to `0.2.0` for republishing. Bumped
+  in the same commit as the crate version rather than at release time, so the
+  repository never describes a 4.0.0 gateway that Helm would install as 3.3.2.
+
+### Removed
+
+- **`BackendConfig::idle_timeout` removed** (Rust API only; config files unaffected). The field was
+  parsed, documented in `examples/gateway-full.yaml` as "Hibernate after 5 min
+  idle", and read by exactly one thing in the codebase: a `Debug` formatter.
+  Nothing enforced it. Operators set it in good faith — one real config carried
+  `idle_timeout: 10m` on a stdio backend whose child then ran for over three days
+  and burned 10.4 CPU-hours.
+
+  Two attempts to implement it were reviewed and rejected. The blocker is not
+  difficulty: the name spans stdio child-process lifetime, per-user session TTL,
+  HTTP connection pooling, and remote scale-to-zero. Closing an HTTP client
+  transport does not scale down the service behind it, so no single
+  implementation can be correct for every transport.
+
+  **Impact on existing configs: none at load time.** Config parsing tolerates
+  extra keys, so files carrying `idle_timeout` keep loading unchanged. The
+  gateway now logs a warning naming the key so its inertness is visible rather
+  than silent. Note that any command which rewrites the config will drop the key
+  along with surrounding comments, since the writer re-serialises from memory —
+  delete it by hand first if you care about the comments.
+
+  **Impact on API consumers:** code constructing `BackendConfig` with a struct
+  literal that sets `idle_timeout` will no longer compile. Remove the field.
+
+  **Why this is a major bump.** Removing a `pub` field from `BackendConfig` is
+  an incompatible change to the Rust library API, and 3.3.2 was published with
+  an unqualified claim of SemVer adherence — so a consumer on a caret range
+  would receive the removal and fail to compile. Zero reverse dependencies on
+  crates.io shows that nobody HAS broken, not that breaking is permitted, and a
+  stability policy published in this same release can only bind releases after
+  it. Both arguments for calling this minor were tried and rejected in review;
+  the honest answer is 4.0.0, and on a binary product with no known library
+  consumers the cost of that is essentially the number itself.
+
+  The versioned surfaces are unaffected either way: configs carrying the key
+  keep loading, and no command changes behaviour. The new **Versioning and
+  stability** section in the README states the scope going forward — SemVer
+  covers the CLI and the config format, not the Rust library API — so a future
+  removal of this kind will not need a major bump. Embedders should pin an
+  exact version.
+
+  **A replacement is planned: `stop_when_idle_for` (#392).** It does what
+  `idle_timeout` claimed to do — stop a backend process the gateway started once
+  it has been unused for a given time, and restart it on the next request — but
+  scoped correctly. It is valid only where the gateway owns the process
+  lifecycle (a backend with a `command`), and is rejected at config load for
+  externally managed HTTP endpoints, because closing a client connection does
+  not stop a server the gateway did not start. Local HTTP MCP servers are
+  included in that exclusion: locality does not grant ownership.
+
+  It also introduces a third health state. A backend stopped on purpose is
+  neither healthy nor failed, and without `Dormant` a sleeping backend trips its
+  own circuit breaker and shows as degraded.
 
 ## [3.3.2] - 2026-07-15
 
