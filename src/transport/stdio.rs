@@ -817,6 +817,8 @@ done
 
     /// Is dropping every handle enough to reap the child, or does the reader
     /// task's strong `Arc` keep the whole thing alive?
+    // Unix-only: drives a real child and reads the process table via `kill`.
+    #[cfg(unix)]
     #[tokio::test]
     async fn dropping_the_last_handle_reaps_the_child() {
         let workspace = tempfile::tempdir().expect("workspace");

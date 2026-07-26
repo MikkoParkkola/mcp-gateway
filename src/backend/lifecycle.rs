@@ -581,26 +581,13 @@ impl Backend {
                 // session underneath a live caller, which is a worse failure
                 // than the one recovery is trying to fix.
                 //
-                // So hand it to its own users and let ownership finish the job:
-                // dropping this reference means the transport goes away when the
-                // LAST in-flight caller drops theirs, exactly then. A stdio child
-                // is reaped by `kill_on_drop` at that moment - the reader task
-                // holds only a `Weak`, so it cannot pin the transport open (see
-                // src/transport/stdio.rs).
-                //
-                // Two earlier attempts answered "when is it safe to close?" with
-                // a timer instead, and both were rejected: a fixed cap is
-                // arbitrary, and a cap derived from config is unsound because one
-                // logical attempt can re-handshake and retry in ways no formula
-                // sees. Ownership already knows the answer, so nothing has to
-                // predict it.
-                //
-                // The trade, stated plainly: on this path an HTTP backend's
-                // upstream session is not explicitly DELETEd and is reclaimed by
-                // its own expiry instead, because that DELETE is an async network
-                // call and `Drop` cannot await. Letting a remote session time out
-                // is strictly better than cutting off a live request.
-                drop(old);
+                // So close it exactly when its last user lets go, and never
+                // before. No deadline is imposed on that user: the two earlier
+                // attempts here both tried to answer "when is it safe?" with a
+                // timer and both were rejected - a fixed cap is arbitrary, and a
+                // cap derived from config is unsound because one logical attempt
+                // can re-handshake and retry in ways no formula sees.
+                Self::close_after_last_owner(self.name.clone(), old);
             } else {
                 let _ = old.close().await;
             }
@@ -609,9 +596,71 @@ impl Backend {
         Ok(())
     }
 
-    /// Active health/recovery probe driven by the background health loop.
+    /// Close a replaced transport the moment its last user releases it.
     ///
-    /// This is the gateway's automatic equivalent of `gateway_revive_server`.
+    /// [`Backend::force_restart`] cannot await this inline: it is the health
+    /// loop's recovery path, and the case it exists for is a WEDGED backend
+    /// whose in-flight request may never return, so blocking recovery on that
+    /// request would convert an interruption bug into a never-recovers bug. The
+    /// fresh transport is installed immediately and the old one is closed behind
+    /// it.
+    ///
+    /// **No deadline, deliberately.** Two earlier revisions capped this wait and
+    /// both were rejected in review: any cap closes the transport underneath a
+    /// request that is merely slower than the cap. The cap cannot be derived
+    /// either - a single logical attempt can re-handshake and retry (see
+    /// `HttpTransport`'s session-expiry path) in ways no formula predicts. So
+    /// this waits for the actual condition instead of a proxy for it.
+    ///
+    /// The `Arc` strong count is the drain signal, not `in_flight`: `in_flight`
+    /// counts requests against the SLOT, which new traffic keeps non-zero, while
+    /// the strong count tracks holders of THIS transport and reaches one (ours)
+    /// exactly when the last in-flight caller is done.
+    ///
+    /// Closing rather than merely dropping matters for HTTP: `close()` sends the
+    /// per-session DELETEs, and dropping skips them, abandoning upstream sessions
+    /// on every busy recovery with nothing guaranteeing the remote ever reclaims
+    /// them. stdio would be fine either way now that its reader task holds a
+    /// `Weak` (`kill_on_drop` reaps the child), but one path for both transports
+    /// is simpler than two.
+    ///
+    /// A holder that never releases keeps this task alive. That is the intended
+    /// trade - leaking one transport beats terminating a live request - and the
+    /// poll backs off to seconds and warns once so it stays cheap and visible
+    /// rather than silent.
+    fn close_after_last_owner(name: String, old: Arc<dyn Transport>) {
+        const FIRST_POLL: Duration = Duration::from_millis(20);
+        const MAX_POLL: Duration = Duration::from_secs(5);
+        const WARN_AFTER: Duration = Duration::from_secs(300);
+
+        tokio::spawn(async move {
+            let started = tokio::time::Instant::now();
+            let mut delay = FIRST_POLL;
+            let mut warned = false;
+
+            while Arc::strong_count(&old) > 1 {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(MAX_POLL);
+
+                if !warned && started.elapsed() >= WARN_AFTER {
+                    warned = true;
+                    warn!(
+                        backend = %name,
+                        held_for_secs = started.elapsed().as_secs(),
+                        "Replaced transport still held long after recovery; \
+                         waiting rather than closing it under its holder"
+                    );
+                }
+            }
+
+            if let Err(error) = old.close().await {
+                warn!(backend = %name, %error, "Replaced transport failed to close cleanly");
+            }
+        });
+    }
+
+    /// Active health/recovery probe driven by the background health loop.
+    ///    /// This is the gateway's automatic equivalent of `gateway_revive_server`.
     /// Two properties make it actually recover a wedged backend, which the old
     /// `backend.request("ping")` health check could not:
     ///

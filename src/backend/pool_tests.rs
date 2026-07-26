@@ -1360,18 +1360,23 @@ async fn health_recovery_does_not_close_a_transport_a_request_is_using() {
         "the in-flight caller's transport is no longer usable"
     );
 
-    // Release it the way a finishing request would. Ownership must then collect
-    // it immediately - no timer, no polling, no deadline to get wrong.
+    // Release it the way a finishing request would. It must then be CLOSED, not
+    // merely dropped: close() is what sends an HTTP backend's per-session
+    // DELETEs, and skipping them abandons upstream sessions on every recovery.
     drop(held);
     drop(lease);
 
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !closed.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the replaced transport was never closed after its last holder let \
+             go; recovery leaked it and, for HTTP, its upstream session with it"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(
         dropped.load(Ordering::SeqCst),
-        "the replaced transport outlived its last holder; recovery leaked it"
-    );
-    assert!(
-        !closed.load(Ordering::SeqCst),
-        "close() was called on a transport handed over to its in-flight callers; \
-         cleanup on this path is by ownership, not by an explicit close"
+        "the transport was closed but never released"
     );
 }
