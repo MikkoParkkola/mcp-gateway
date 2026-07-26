@@ -567,12 +567,64 @@ impl Backend {
         let _guard = entry.start_lock.lock().await;
         // Take the transport out and drop the RwLock write guard *before*
         // awaiting close() -- a parking_lot guard is not Send across an await.
-        let old = entry.transport.write().take();
+        // in_flight is read under that same guard so the answer cannot change
+        // between the check and the take.
+        let (old, busy) = {
+            let mut guard = entry.transport.write();
+            let busy = entry.in_flight.load(std::sync::atomic::Ordering::SeqCst) > 0;
+            (guard.take(), busy)
+        };
         if let Some(old) = old {
-            let _ = old.close().await;
+            if busy {
+                // Requests are executing against this transport right now.
+                // Closing it here kills a stdio child and tears down an HTTP
+                // session underneath a live caller, which is a worse failure
+                // than the one recovery is trying to fix.
+                Self::close_when_drained(self.name.clone(), old);
+            } else {
+                let _ = old.close().await;
+            }
         }
         self.start_entry(&PoolKey::Shared, &entry).await?;
         Ok(())
+    }
+
+    /// Close a replaced transport once the requests still holding it finish.
+    ///
+    /// [`Backend::force_restart`] cannot await the drain inline. It is the health
+    /// loop's recovery path, and the case it exists for is a WEDGED backend whose
+    /// in-flight request may never return; blocking recovery on that request
+    /// converts an interruption bug into a never-recovers bug. So the fresh
+    /// transport is installed immediately and the old one is closed behind it,
+    /// bounded so a hung holder cannot leak it forever.
+    ///
+    /// The `Arc` strong count, not `in_flight`, is the drain signal. `in_flight`
+    /// counts requests against the SLOT, which new traffic keeps non-zero, so
+    /// waiting on it could defer the close indefinitely under load. The strong
+    /// count tracks holders of THIS transport specifically, and drops to one
+    /// (ours) exactly when the last in-flight caller is done with it.
+    ///
+    /// Dropping it instead of closing is not sufficient for both transports:
+    /// stdio reaps its child via `kill_on_drop`, but `HttpTransport`'s `Drop`
+    /// only aborts the token-refresh task and never tears down the session.
+    fn close_when_drained(name: String, old: Arc<dyn Transport>) {
+        const POLL: Duration = Duration::from_millis(50);
+        const DRAIN_CAP: Duration = Duration::from_secs(30);
+
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + DRAIN_CAP;
+            while Arc::strong_count(&old) > 1 && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(POLL).await;
+            }
+            if Arc::strong_count(&old) > 1 {
+                warn!(
+                    backend = %name,
+                    cap_secs = DRAIN_CAP.as_secs(),
+                    "Replaced transport still held after the drain cap; closing anyway"
+                );
+            }
+            let _ = old.close().await;
+        });
     }
 
     /// Active health/recovery probe driven by the background health loop.

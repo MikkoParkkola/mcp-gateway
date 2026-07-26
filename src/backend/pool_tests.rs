@@ -1268,3 +1268,96 @@ async fn a_leased_slot_is_never_evicted() {
         "the evicted slot's transport was never closed"
     );
 }
+
+/// A transport whose closed-flag lives OUTSIDE it, so a test can observe the
+/// close without holding an `Arc` to the transport itself. Holding one would
+/// keep the strong count above the drain threshold and make the assertion
+/// depend on the drain cap rather than on the behaviour under test.
+struct ClosedFlagMock {
+    closed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Transport for ClosedFlagMock {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        self.closed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+// GW.IDLE.RACE.4 - health recovery must not close a transport a client is
+// still using.
+//
+// force_restart() is the health loop's escape hatch for a wedged backend. It
+// took the shared transport and closed it with no regard for in-flight work, so
+// a probe failing while an ordinary request was mid-call killed that request's
+// stdio child (or tore down its HTTP session) underneath it. This pre-dates
+// stop_when_idle_for, but the reaper makes it reachable far more often.
+//
+// The test holds what a live request holds - a lease plus a clone of the
+// transport Arc - and asserts recovery leaves it usable, then that the replaced
+// transport is closed once released rather than leaked. The closed-flag is
+// external so the test never inflates the strong count it is waiting on.
+#[tokio::test(flavor = "multi_thread")]
+async fn health_recovery_does_not_close_a_transport_a_request_is_using() {
+    // A command that cannot spawn at all, so start_entry fails immediately
+    // instead of waiting out an MCP init timeout. What happens to the OLD
+    // transport is settled before the new one is built, so the failure is
+    // irrelevant to the assertions.
+    let backend =
+        stoppable_backend_with_command("/nonexistent-mcp-binary", Duration::from_secs(60));
+    let closed = Arc::new(AtomicBool::new(false));
+    backend.set_transport_for_test(Arc::new(ClosedFlagMock {
+        closed: Arc::clone(&closed),
+    }));
+
+    // Exactly what an in-flight request owns when recovery fires.
+    let lease = backend.begin_activity(&PoolKey::Shared);
+    let held = backend
+        .shared_entry()
+        .transport
+        .read()
+        .clone()
+        .expect("transport installed above");
+
+    let _ = backend.force_restart().await;
+
+    assert!(
+        !closed.load(Ordering::SeqCst),
+        "health recovery closed the transport while a request was still using it"
+    );
+    assert!(
+        held.is_connected(),
+        "the in-flight caller's transport is no longer usable"
+    );
+
+    // Release it the way a finishing request would. The replaced transport must
+    // then actually be closed - deferred, not leaked.
+    drop(held);
+    drop(lease);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !closed.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the replaced transport was never closed after its last holder let \
+             go; deferring the close leaked it"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
