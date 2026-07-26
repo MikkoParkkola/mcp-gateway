@@ -176,8 +176,20 @@ impl BackendRegistry {
     ///
     /// The check and the insert happen under one hold of the shutdown lock, so
     /// a registration that returns `true` has completed its insert before any
-    /// snapshot `stop_all` takes afterwards. That is the guarantee callers need
-    /// and it cannot be built from separate atomic operations.
+    /// snapshot `stop_all` takes afterwards. That cannot be built from separate
+    /// atomic operations, which is why this is a lock.
+    ///
+    /// The guarantee stops there, and the limit is worth stating because it is
+    /// easy to over-read: this says the entry is IN the map when the snapshot is
+    /// taken, not that it survives until then. Registering the same name again
+    /// REPLACES it - `DashMap::insert` discards the displaced value - so a
+    /// backend that was started and then displaced is stopped by nobody. That
+    /// is pre-existing behaviour, unchanged here, and no current caller can hit
+    /// it: the only path that re-registers a name is config reload's "modified"
+    /// branch, which stops the old instance first. A caller that ever registers
+    /// a duplicate name over a STARTED backend without stopping it orphans that
+    /// process, so this API should grow safe duplicate semantics - reject, or
+    /// hand the displaced backend back - before anyone relies on replacement.
     #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
         let stopping = self.stopping.lock();
