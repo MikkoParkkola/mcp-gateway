@@ -139,6 +139,7 @@ impl Backend {
             last_used: std::sync::atomic::AtomicU64::new(0),
             semaphore: Semaphore::new(100), // Max concurrent requests
             request_count: std::sync::atomic::AtomicU64::new(0),
+            replaced_transport_cleanups: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -529,6 +530,39 @@ impl Backend {
             }
         }
 
+        // Transports that `force_restart` replaced while they were in use are
+        // NOT in `pool`, so the loop above cannot see them. Their cleanup tasks
+        // own the only remaining reference and close them once their last
+        // caller lets go - but a detached task is dropped unrun when the
+        // runtime exits, which skips an HTTP backend's session DELETEs at the
+        // reload and shutdown boundaries where they matter most. So wait for
+        // them here.
+        //
+        // Bounded: a caller stuck forever would otherwise wedge shutdown, which
+        // is worse than abandoning one session. Past the deadline the remaining
+        // handles are dropped, which detaches those tasks rather than killing
+        // them - they may still finish if the runtime outlives this call - and
+        // the situation is logged either way.
+        let pending: Vec<tokio::task::JoinHandle<()>> =
+            std::mem::take(&mut *self.replaced_transport_cleanups.lock());
+        if !pending.is_empty() {
+            const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
+            let drained = tokio::time::timeout(DRAIN_DEADLINE, async move {
+                for handle in pending {
+                    let _ = handle.await;
+                }
+            })
+            .await;
+            if drained.is_err() {
+                warn!(
+                    backend = %self.name,
+                    deadline_secs = DRAIN_DEADLINE.as_secs(),
+                    "Replaced transports still had live callers at shutdown; \
+                     abandoning their cleanup"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -587,7 +621,7 @@ impl Backend {
                 // timer and both were rejected - a fixed cap is arbitrary, and a
                 // cap derived from config is unsound because one logical attempt
                 // can re-handshake and retry in ways no formula sees.
-                Self::close_after_last_owner(self.name.clone(), old);
+                self.close_after_last_owner(old);
             } else {
                 let _ = old.close().await;
             }
@@ -615,7 +649,17 @@ impl Backend {
     /// The `Arc` strong count is the drain signal, not `in_flight`: `in_flight`
     /// counts requests against the SLOT, which new traffic keeps non-zero, while
     /// the strong count tracks holders of THIS transport and reaches one (ours)
-    /// exactly when the last in-flight caller is done.
+    /// when the last in-flight caller is done.
+    ///
+    /// Precisely, and weaker than it may look: reaching one means no OTHER
+    /// strong reference exists at that instant, not that none can appear
+    /// afterwards. The stdio reader task holds a `Weak` and can still upgrade
+    /// between the check and `close()`, so `close()` may overlap a
+    /// `handle_response` call. That is benign - `handle_response` is
+    /// synchronous and only routes a reply to a pending receiver - and the
+    /// transport cannot be closed out from under a real caller, because a
+    /// caller's own `Arc` keeps the count above one for as long as it is
+    /// working. The guarantee is "no live caller", not "no future reference".
     ///
     /// Closing rather than merely dropping matters for HTTP: `close()` sends the
     /// per-session DELETEs, and dropping skips them, abandoning upstream sessions
@@ -628,12 +672,13 @@ impl Backend {
     /// trade - leaking one transport beats terminating a live request - and the
     /// poll backs off to seconds and warns once so it stays cheap and visible
     /// rather than silent.
-    fn close_after_last_owner(name: String, old: Arc<dyn Transport>) {
+    fn close_after_last_owner(&self, old: Arc<dyn Transport>) {
         const FIRST_POLL: Duration = Duration::from_millis(20);
         const MAX_POLL: Duration = Duration::from_secs(5);
         const WARN_AFTER: Duration = Duration::from_secs(300);
 
-        tokio::spawn(async move {
+        let name = self.name.clone();
+        let handle = tokio::spawn(async move {
             let started = tokio::time::Instant::now();
             let mut delay = FIRST_POLL;
             let mut warned = false;
@@ -657,6 +702,12 @@ impl Backend {
                 warn!(backend = %name, %error, "Replaced transport failed to close cleanly");
             }
         });
+
+        // Drop handles for cleanups that already finished so a long-lived
+        // backend restarted many times does not accumulate them.
+        let mut pending = self.replaced_transport_cleanups.lock();
+        pending.retain(|h| !h.is_finished());
+        pending.push(handle);
     }
 
     /// Active health/recovery probe driven by the background health loop.

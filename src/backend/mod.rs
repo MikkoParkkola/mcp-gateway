@@ -66,6 +66,17 @@ pub struct Backend {
     semaphore: Semaphore,
     /// Request counter
     request_count: AtomicU64,
+    /// Cleanup tasks for transports that `force_restart` replaced while
+    /// requests were still using them.
+    ///
+    /// Each waits for its transport's last owner to let go and then closes it.
+    /// The handles are kept rather than detached so [`Backend::stop`] can drain
+    /// them: a replaced transport is no longer reachable through `pool`, so
+    /// shutdown would otherwise close only the CURRENT transport and let the
+    /// runtime exit with the old one's `close()` unrun — skipping an HTTP
+    /// backend's session DELETEs at exactly the reload and shutdown boundaries
+    /// where they matter.
+    replaced_transport_cleanups: parking_lot::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 #[cfg(test)]

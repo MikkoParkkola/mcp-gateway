@@ -1366,17 +1366,74 @@ async fn health_recovery_does_not_close_a_transport_a_request_is_using() {
     drop(held);
     drop(lease);
 
+    // Wait for BOTH: the mock sets `closed` inside close(), but the cleanup task
+    // only releases its Arc after close() returns. Asserting `dropped` the
+    // instant `closed` is observed is a race - another worker can see the store
+    // before the mock is destroyed.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !closed.load(Ordering::SeqCst) {
+    while !(closed.load(Ordering::SeqCst) && dropped.load(Ordering::SeqCst)) {
         assert!(
             std::time::Instant::now() < deadline,
-            "the replaced transport was never closed after its last holder let \
-             go; recovery leaked it and, for HTTP, its upstream session with it"
+            "the replaced transport was not closed AND released after its last \
+             holder let go (closed={}, released={}); recovery leaked it and, for \
+             HTTP, its upstream session with it",
+            closed.load(Ordering::SeqCst),
+            dropped.load(Ordering::SeqCst)
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+// GW.IDLE.RACE.6 - shutdown must wait for a replaced transport's cleanup.
+//
+// A transport that force_restart replaced while it was in use is no longer in
+// `pool`, so `stop()`'s loop over the pool cannot see it: only its cleanup task
+// holds it. Detach that task and the runtime can exit with its `close()` unrun,
+// which skips an HTTP backend's per-session DELETEs at exactly the reload and
+// shutdown boundaries where abandoning a session matters most.
+//
+// The holder here is released while `stop()` is already waiting, so the test
+// distinguishes waiting from not waiting: without the drain, `stop()` returns
+// before the release and the transport is still open when it does.
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_waits_for_a_replaced_transports_cleanup() {
+    let backend =
+        stoppable_backend_with_command("/nonexistent-mcp-binary", Duration::from_secs(60));
+    let closed = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    backend.set_transport_for_test(Arc::new(ClosedFlagMock {
+        closed: Arc::clone(&closed),
+        dropped: Arc::clone(&dropped),
+    }));
+
+    let lease = backend.begin_activity(&PoolKey::Shared);
+    let held = backend
+        .shared_entry()
+        .transport
+        .read()
+        .clone()
+        .expect("transport installed above");
+
+    // Replaced while in use: cleanup is deferred and the old transport is now
+    // reachable only from its cleanup task.
+    let _ = backend.force_restart().await;
+    drop(lease);
     assert!(
-        dropped.load(Ordering::SeqCst),
-        "the transport was closed but never released"
+        !closed.load(Ordering::SeqCst),
+        "precondition: cleanup is still waiting on the holder"
+    );
+
+    // Let go only once shutdown is already under way.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        drop(held);
+    });
+
+    backend.stop().await.expect("stop");
+
+    assert!(
+        closed.load(Ordering::SeqCst),
+        "stop() returned while a replaced transport was still open; its cleanup \
+         was detached, so shutdown can drop it unrun and abandon the session"
     );
 }
