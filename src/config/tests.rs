@@ -802,3 +802,114 @@ fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
         "disabled backend oauth must not trip the F3 gate"
     );
 }
+
+// ── GW.IDLE.3 — ownership validation ────────────────────────────────────────
+//
+// `stop_when_idle_for` promises the gateway will stop a process. It can only
+// honour that where it started the process. Accepting it elsewhere would repeat
+// exactly the `idle_timeout` failure: a setting accepted everywhere, enforced
+// nowhere, trusted by operators.
+
+#[test]
+fn stop_when_idle_for_is_accepted_on_a_gateway_started_backend() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 5m\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("stdio backend may opt in");
+    let backend = cfg
+        .backends
+        .get("owned")
+        .expect("backend must survive parsing");
+    assert_eq!(
+        backend.stop_when_idle_for,
+        Some(std::time::Duration::from_secs(300)),
+        "the duration must round-trip, not silently default"
+    );
+}
+
+#[test]
+fn stop_when_idle_for_is_rejected_on_a_backend_the_gateway_does_not_start() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    // A LOCAL http backend: locality does not grant ownership. The gateway did
+    // not start this server and cannot stop it.
+    std::fs::write(
+        &path,
+        "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n    stop_when_idle_for: 5m\n",
+    )
+    .expect("write");
+
+    let err =
+        Config::load(Some(&path)).expect_err("the gateway cannot stop a process it did not start");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("external"),
+        "the error must name the offending backend, got: {msg}"
+    );
+    assert!(
+        msg.contains("stop_when_idle_for"),
+        "the error must name the setting, got: {msg}"
+    );
+}
+
+#[test]
+fn omitting_stop_when_idle_for_leaves_a_backend_running_indefinitely() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "backends:\n  owned:\n    command: \"echo hi\"\n").expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("load");
+    assert_eq!(
+        cfg.backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        None,
+        "absent must mean never stop - no magic default that changes behaviour on upgrade"
+    );
+}
+
+#[test]
+fn an_http_backend_without_the_setting_still_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("http backends are fine without the setting");
+    assert!(
+        cfg.backends.contains_key("external"),
+        "control: the validation must reject only the setting, not the transport"
+    );
+}
+
+#[test]
+fn duration_parser_handles_milliseconds() {
+    // Regression: the parser tested the "s" suffix BEFORE "ms", so "100ms" took
+    // the seconds branch and failed to parse "100m" as an integer. Every ms value
+    // in every duration field was rejected.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1500ms\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("ms suffix must parse");
+    assert_eq!(
+        cfg.backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        Some(std::time::Duration::from_millis(1500))
+    );
+}

@@ -26,7 +26,9 @@ use pool::{PoolKey, PooledEntry};
 
 pub(crate) use annotations::normalize_tool_annotations;
 pub use lifecycle::runtime_plan_for_backend;
-pub use registry::{BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus};
+pub use registry::{
+    BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
+};
 
 /// MCP Backend - manages connection to a single MCP server
 pub struct Backend {

@@ -12,6 +12,41 @@ use tracing::warn;
 use super::Backend;
 use crate::runtime::{RuntimeDenyReason, RuntimeLicenseTier, RuntimeProviderKind};
 
+/// Coarse lifecycle state of a backend, distinct from its health.
+///
+/// A backend stopped ON PURPOSE is neither healthy nor failed. Without a third
+/// state it has to be reported as one of them: as healthy it hides a stopped
+/// process, and as failed it trips circuit breakers and lights dashboards red
+/// for a backend that is behaving exactly as configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendLifecycle {
+    /// Transport is up and usable.
+    Running,
+    /// Deliberately stopped after being idle. Available on demand: the next
+    /// request restarts it. Must NOT trip or heal a circuit breaker, and must
+    /// not be probed by the health loop.
+    Dormant,
+    /// Expected to be usable and is not - crashed, failing probes, or breaker
+    /// open.
+    Unhealthy,
+    /// Never started. The gateway starts backends lazily, so this is the normal
+    /// state for a configured backend nothing has used yet.
+    NotStarted,
+}
+
+impl std::fmt::Display for BackendLifecycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Running => "running",
+            Self::Dormant => "dormant",
+            Self::Unhealthy => "unhealthy",
+            Self::NotStarted => "not_started",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Backend status information
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BackendStatus {
@@ -19,6 +54,9 @@ pub struct BackendStatus {
     pub name: String,
     /// Whether backend is running
     pub running: bool,
+    /// Lifecycle state. Distinguishes "stopped on purpose because it was idle"
+    /// from "should be running and is not", which `running: bool` alone cannot.
+    pub lifecycle: BackendLifecycle,
     /// Transport type
     pub transport: String,
     /// Number of cached tools

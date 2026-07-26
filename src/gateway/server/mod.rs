@@ -1270,38 +1270,10 @@ impl Gateway {
             }
         });
 
-        // Start idle checker task: evict per-user transport/session slots
-        // (MIK-6735) that have been idle past the TTL. The canonical shared slot
-        // is never touched here; whole-backend hibernation remains future work.
-        let backends_idle = Arc::clone(&self.backends);
-        let mut shutdown_rx2 = shutdown_tx.subscribe();
-
-        tokio::spawn(async move {
-            // ponytail: fixed 5-min idle TTL; make it configurable if operators
-            // need per-backend tuning.
-            const PER_USER_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        for backend in backends_idle.all() {
-                            let closed =
-                                backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL).await;
-                            if closed > 0 {
-                                debug!(
-                                    backend = %backend.name,
-                                    closed,
-                                    "Evicted idle per-user transport slots"
-                                );
-                            }
-                        }
-                    }
-                    _ = shutdown_rx2.recv() => {
-                        break;
-                    }
-                }
-            }
-        });
+        // Idle reaper. Shared with `run_stdio`: a setting that works in one serve
+        // mode and silently does nothing in the other is the same class of defect
+        // this feature exists to correct.
+        spawn_idle_reaper(Arc::clone(&self.backends), Some(shutdown_tx.subscribe()));
 
         // Spawn periodic cost-governance persistence (every 5 minutes)
         #[cfg(feature = "cost-governance")]
@@ -1462,6 +1434,11 @@ impl Gateway {
                 build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, false);
             spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Stdio);
         }
+
+        // Reap what warm-start and lazy starts spawn. Without this the setting
+        // is accepted and validated in stdio mode and then never acted on.
+        // No shutdown channel here: the process exits with the read loop below.
+        spawn_idle_reaper(Arc::clone(&self.backends), None);
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
@@ -2306,4 +2283,64 @@ mod tests {
             "a key containing non-whitespace bytes must still yield a signer"
         );
     }
+}
+
+/// Spawn the backend idle reaper.
+///
+/// Two jobs on one 60s tick: evict per-user transport slots idle past a fixed TTL
+/// (MIK-6735), and stop backends that opted into `stop_when_idle_for`.
+///
+/// Called from BOTH the HTTP serve path and `run_stdio`. Living only in the
+/// former would mean a stdio-mode gateway accepted the setting, validated it, and
+/// then never acted on it - indistinguishable from the dead `idle_timeout` this
+/// replaces.
+///
+/// `shutdown` is `None` in stdio mode, where the process exits with its read loop
+/// and there is no broadcast channel to observe.
+fn spawn_idle_reaper(
+    backends: Arc<BackendRegistry>,
+    shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+) -> tokio::task::JoinHandle<()> {
+    /// Per-user slots keep their own fixed TTL. Pointing them at
+    /// `stop_when_idle_for` would silently repurpose a backend-lifetime setting
+    /// into a per-user session lifetime, discarding stateful HTTP sessions and
+    /// OAuth refresh state at that cadence.
+    const PER_USER_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+    const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(SWEEP_INTERVAL);
+        let mut shutdown = shutdown;
+        loop {
+            let tick = interval.tick();
+            if let Some(rx) = shutdown.as_mut() {
+                tokio::select! {
+                    _ = tick => {}
+                    _ = rx.recv() => break,
+                }
+            } else {
+                tick.await;
+            }
+
+            for backend in backends.all() {
+                let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL).await;
+                if closed > 0 {
+                    debug!(
+                        backend = %backend.name,
+                        closed,
+                        "Evicted idle per-user transport slots"
+                    );
+                }
+
+                // No-op unless this backend opted in AND the gateway owns its
+                // process; declines while work is in flight.
+                if backend.stop_if_idle().await {
+                    debug!(
+                        backend = %backend.name,
+                        "Stopped idle backend; next request restarts it"
+                    );
+                }
+            }
+        }
+    })
 }

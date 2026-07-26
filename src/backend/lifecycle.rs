@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -16,7 +15,7 @@ use tracing::{info, warn};
 
 use super::Backend;
 use super::cached_metadata::CachedMetadata;
-use super::pool::{PoolKey, PooledEntry, now_unix_secs};
+use super::pool::{PoolKey, PooledEntry};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
@@ -185,9 +184,13 @@ impl Backend {
         for _attempt in 0..MAX_RACE_RETRIES {
             let entry = self.pooled_entry(key);
 
-            // Update last-used clocks (backend-wide + per-slot for idle eviction).
-            self.last_used.store(now_unix_secs(), Ordering::Relaxed);
-            entry.touch();
+            // NOTE: deliberately does NOT touch the idle clocks. `last_used` means
+            // "when did a CLIENT last use this backend", and is written only by the
+            // request/notify paths in `ops.rs`. Touching it here is what made idle
+            // stopping unreachable in an earlier attempt: `health_probe` ->
+            // `ensure_started` -> here, on a 10s default health interval against a
+            // 300s deadline, refreshed the clock forever. The health loop kept every
+            // backend permanently warm and the feature was a silent no-op.
 
             {
                 let transport = entry.transport.read();
@@ -292,6 +295,15 @@ impl Backend {
     /// Returns an error if the transport fails to connect or initialize.
     async fn start_entry(&self, key: &PoolKey, entry: &PooledEntry) -> Result<Arc<dyn Transport>> {
         info!(backend = %self.name, ?key, "Starting backend transport");
+
+        // Whatever the reason for starting - a client request, a health-driven
+        // force_restart, warm start - this slot is no longer stopped-for-idleness.
+        // Clearing here rather than in `ensure_entry_started` is deliberate:
+        // `force_restart` calls this directly, and clearing only in the former
+        // left a restarted backend flagged dormant while actually running.
+        entry
+            .stopped_when_idle
+            .store(false, std::sync::atomic::Ordering::SeqCst);
 
         let transport: Arc<dyn Transport> = match &self.config.transport {
             TransportConfig::Stdio {
@@ -585,6 +597,14 @@ impl Backend {
     /// or the `ping` call fails. The breaker is left for organic traffic to
     /// trip -- this probe never records failures, only recoveries.
     pub async fn health_probe(&self, timeout: Duration) -> Result<()> {
+        // Hold the transport for the whole probe WITHOUT claiming client activity.
+        // Without this the reaper can close the transport between the health
+        // loop's gate check and the probe's ping; the probe reads that as a fault
+        // and calls force_restart(), so an idle backend is stopped and instantly
+        // restarted. With a 10s health interval against a 60s sweep their ticks
+        // coincide regularly, which would make the feature a periodic no-op - the
+        // exact failure this change exists to correct.
+        let _lease = self.begin_internal_activity();
         // `ensure_started` now respawns reliably because `is_connected()` does a
         // real liveness check (Fix C).
         if let Err(e) = self.ensure_started().await {

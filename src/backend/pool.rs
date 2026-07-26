@@ -5,7 +5,7 @@
 //! pool slots.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use parking_lot::RwLock;
@@ -61,7 +61,81 @@ pub(crate) struct PooledEntry {
     pub(crate) transport: RwLock<Option<Arc<dyn Transport>>>,
     pub(crate) start_lock: Mutex<()>,
     pub(crate) last_used: AtomicU64,
+    /// Set when the reaper stopped this slot for idleness, cleared when it is
+    /// started again.
+    ///
+    /// Dormant must be a recorded fact, not an inference. Inferring it from
+    /// "opted in, no transport, breaker closed" misreports a backend whose FIRST
+    /// start failed: nothing has updated the failsafe yet, so it still looks
+    /// healthy, and a backend that never came up would be shown as sleeping.
+    pub(crate) stopped_when_idle: std::sync::atomic::AtomicBool,
+    /// Client requests currently executing against this slot.
+    ///
+    /// `last_used` records when a request STARTED, so it cannot answer "is work
+    /// happening right now". Without this counter a call outliving the idle
+    /// deadline has its transport closed mid-flight.
+    pub(crate) in_flight: AtomicUsize,
     pub(crate) failsafe: Failsafe,
+}
+
+/// RAII marker for one in-flight client request against a pool slot.
+///
+/// Construction is the single place that writes the idle clock. `last_used`
+/// means "when did a CLIENT last use this backend", deliberately excluding
+/// internal health probes and metadata refreshes — an earlier attempt let
+/// `ensure_entry_started` touch it, and the 10s default health interval then
+/// refreshed it forever against a 300s deadline, so the feature was a silent
+/// no-op.
+///
+/// Ordering: the count is incremented BEFORE the caller acquires the transport
+/// read guard, and [`Backend::stop_if_idle`] reads it while holding the transport
+/// WRITE guard. Either the increment lands first and stopping backs off, or
+/// stopping wins and the caller then observes `None` and starts a new transport.
+/// No interleaving hands a caller a transport that is being closed.
+pub(crate) struct ActivityGuard {
+    entry: Arc<PooledEntry>,
+    /// Whether dropping this guard counts as client activity. False for internal
+    /// leases, which protect the transport without deferring the idle deadline.
+    touch_on_drop: bool,
+}
+
+impl ActivityGuard {
+    fn new(entry: Arc<PooledEntry>) -> Self {
+        entry.in_flight.fetch_add(1, Ordering::SeqCst);
+        entry.touch();
+        Self {
+            entry,
+            touch_on_drop: true,
+        }
+    }
+
+    /// A lease that protects the slot from being stopped WITHOUT claiming client
+    /// activity.
+    ///
+    /// Internal work - metadata refreshes, health probes - must not defer
+    /// stopping, or the idle clock stops meaning "a client used this" and the
+    /// feature silently never fires. But such work still holds a live transport
+    /// and must not have it closed mid-call. Those are two separate concerns and
+    /// this guard covers only the second.
+    fn internal(entry: Arc<PooledEntry>) -> Self {
+        entry.in_flight.fetch_add(1, Ordering::SeqCst);
+        Self {
+            entry,
+            touch_on_drop: false,
+        }
+    }
+}
+
+impl Drop for ActivityGuard {
+    fn drop(&mut self) {
+        // Touch on the way out too: a long CLIENT request should leave the slot
+        // looking used as of its COMPLETION, not its start. Internal leases skip
+        // this so they never defer the idle deadline.
+        if self.touch_on_drop {
+            self.entry.touch();
+        }
+        self.entry.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl PooledEntry {
@@ -70,6 +144,8 @@ impl PooledEntry {
             transport: RwLock::new(None),
             start_lock: Mutex::new(()),
             last_used: AtomicU64::new(now_unix_secs()),
+            stopped_when_idle: std::sync::atomic::AtomicBool::new(false),
+            in_flight: AtomicUsize::new(0),
             failsafe: Failsafe::new(name, failsafe_config),
         }
     }
@@ -178,7 +254,14 @@ impl Backend {
             // lock so a request that touched the slot after the first pass keeps
             // it alive and is never torn down mid-flight.
             let removed = self.pool.remove_if(&key, |k, entry| {
+                // in_flight is checked INSIDE the shard lock, alongside the
+                // timestamp. A relaxed timestamp alone is not enough: a request
+                // can hold this entry and have incremented in_flight while the
+                // clock still reads stale - notably while it waits on the backend
+                // semaphore, where it holds the entry but has not touched it.
+                // Evicting then closes the transport underneath a live request.
                 !matches!(k, PoolKey::Shared)
+                    && entry.in_flight.load(Ordering::SeqCst) == 0
                     && now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed))
                         >= cutoff
             });
@@ -258,5 +341,88 @@ impl Backend {
                 .circuit_breaker
                 .record_failure("test-trip", std::time::Duration::ZERO);
         }
+    }
+}
+
+impl Backend {
+    /// How long this backend may sit unused before its process is stopped.
+    /// `None` means never.
+    pub fn stop_when_idle_for(&self) -> Option<Duration> {
+        self.config.stop_when_idle_for
+    }
+
+    /// Mark the start of a client request against `key`, returning a guard that
+    /// protects the slot from being stopped until dropped. The only caller-facing
+    /// way to write the idle clock.
+    pub(super) fn begin_activity(&self, key: &PoolKey) -> ActivityGuard {
+        self.last_used.store(now_unix_secs(), Ordering::Relaxed);
+        ActivityGuard::new(self.pooled_entry(key))
+    }
+
+    /// Hold the shared slot's transport open for internal work without claiming
+    /// client activity.
+    ///
+    /// Metadata refreshes call `ensure_started()` and then separately reach for
+    /// the transport. Without a lease the reaper can take it in between, and the
+    /// caller sees a spurious `BackendUnavailable` for a backend that is fine.
+    pub(super) fn begin_internal_activity(&self) -> ActivityGuard {
+        ActivityGuard::internal(self.pooled_entry(&PoolKey::Shared))
+    }
+
+    /// Stop this backend's process if it has been unused past
+    /// `stop_when_idle_for`. Returns `true` if a live transport was closed.
+    ///
+    /// The pool entry deliberately STAYS in the pool; only the transport is
+    /// released. `shared_entry()` expects the entry to always be present and
+    /// panics otherwise, and the entry owns the circuit breaker and health
+    /// metrics, which must survive being stopped.
+    /// `ensure_entry_started` treats a `None`-or-disconnected transport as
+    /// "start it", so the next request transparently restarts the process.
+    ///
+    /// Synchronisation is the transport `RwLock`, NOT `start_lock`.
+    /// `ensure_entry_started` clones a connected transport under a READ guard on
+    /// its fast path, before it ever awaits `start_lock` — so `start_lock` cannot
+    /// exclude that clone, and a reaper holding only `start_lock` could close a
+    /// transport a caller had just been handed. `Arc` would keep the Rust object
+    /// alive but not the child process or its pipes, so the caller would fail
+    /// spuriously. Taking the WRITE guard excludes the fast-path read outright.
+    ///
+    /// In-flight work is refused rather than drained: if a request is running the
+    /// sweep simply declines and the next one retries. That holds the same
+    /// invariant as a drain — never terminate work in progress — without holding
+    /// a half-stopped state that every other path would then have to understand.
+    pub async fn stop_if_idle(&self) -> bool {
+        let Some(idle_for) = self.config.stop_when_idle_for else {
+            return false; // never stop this backend
+        };
+        // Sub-second deadlines would truncate to a 0 cutoff, making every slot
+        // eligible on every sweep including one used this same second.
+        let cutoff = idle_for.as_secs().max(1);
+        let entry = self.shared_entry();
+
+        let taken = {
+            let mut guard = entry.transport.write();
+
+            if entry.in_flight.load(Ordering::SeqCst) > 0 {
+                return false; // work in progress; retry next sweep
+            }
+            if now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed)) < cutoff {
+                return false; // used recently
+            }
+            guard.take()
+        };
+
+        let Some(transport) = taken else {
+            return false; // already stopped
+        };
+        let _ = transport.close().await;
+        entry.stopped_when_idle.store(true, Ordering::SeqCst);
+
+        tracing::info!(
+            backend = %self.name,
+            idle_for_secs = cutoff,
+            "Stopped idle backend; next request will restart it"
+        );
+        true
     }
 }
