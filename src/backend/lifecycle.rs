@@ -141,6 +141,7 @@ impl Backend {
             request_count: std::sync::atomic::AtomicU64::new(0),
             replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
             lifecycle: tokio::sync::RwLock::new(()),
+            starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -296,6 +297,11 @@ impl Backend {
     ///
     /// Returns an error if the transport fails to connect or initialize.
     async fn start_entry(&self, key: &PoolKey, entry: &PooledEntry) -> Result<Arc<dyn Transport>> {
+        // Held for the whole start. From the moment a process is spawned until
+        // it is either published or closed, shutdown must not consider itself
+        // finished - the process is alive either way.
+        let _in_flight = super::StartGuard::new(&self.starts_in_flight);
+
         info!(backend = %self.name, ?key, "Starting backend transport");
 
         // Whatever the reason for starting - a client request, a health-driven
@@ -606,10 +612,38 @@ impl Backend {
                 .collect()
         };
 
+        // One deadline covers both waits below: in-flight starts, then the
+        // cleanup drain. Shutdown must be bounded overall, not per stage.
+        let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
+
         for transport in transports {
             if let Err(e) = transport.close().await {
                 warn!(backend = %self.name, error = %e, "Failed to close pooled transport");
             }
+        }
+
+        // Wait for starts that were already under way. Refusing to publish is
+        // not the whole guarantee: a start that has spawned its child and is
+        // waiting on the MCP handshake owns a live process right now, and the
+        // traversal above could not see it because it has not published yet.
+        // Returning here would let that process outlive shutdown for as long as
+        // the handshake takes. Once the counter reaches zero every such start
+        // has resolved - published into a pool this call already emptied, or
+        // refused and closed.
+        while self
+            .starts_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
+        {
+            if tokio::time::Instant::now() >= drain_until {
+                warn!(
+                    backend = %self.name,
+                    "Backend start still in flight at the end of shutdown; its \
+                     process may briefly outlive this call"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         // Transports that `force_restart` replaced while they were in use are
@@ -625,7 +659,6 @@ impl Backend {
         // handles are dropped, which detaches those tasks rather than killing
         // them - they may still finish if the runtime outlives this call - and
         // the situation is logged either way.
-        let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
         loop {
             // Re-taken each pass on purpose. The health loop only checks its
             // shutdown signal between ticks, so a `health_probe` already in

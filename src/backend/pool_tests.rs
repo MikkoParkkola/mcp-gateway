@@ -1679,17 +1679,9 @@ done
     // Let the child spawn and get into its pre-handshake delay, so the start is
     // genuinely in flight when shutdown begins.
     tokio::time::sleep(Duration::from_millis(120)).await;
-    backend.stop().await.expect("stop");
-    let _ = starter.await;
-
-    assert!(
-        backend.shared_entry().transport.read().is_none(),
-        "a start published a transport into a backend that had already been \
-         shut down; stop() has walked the pool and will not revisit it"
-    );
 
     let pid = std::fs::read_to_string(&pidfile)
-        .expect("child recorded its pid")
+        .expect("child recorded its pid before shutdown")
         .trim()
         .to_string();
     let alive = || {
@@ -1699,13 +1691,26 @@ done
             .map(|s| s.success())
             .unwrap_or(false)
     };
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while alive() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "shutdown completed but the racing start's child (pid {pid}) is \
-             still running; it outlives the gateway"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    assert!(alive(), "precondition: the racing start's child is running");
+
+    backend.stop().await.expect("stop");
+
+    // Checked BEFORE awaiting the starter, deliberately. Awaiting it first
+    // would only prove the child dies EVENTUALLY, which it always did - the
+    // publish refusal closes it. The claim under test is stronger and is the
+    // one shutdown has to make: by the time stop() RETURNS, nothing it started
+    // is still running.
+    assert!(
+        !alive(),
+        "stop() returned while the racing start's child (pid {pid}) was still \
+         running; a start that has spawned but not yet published owns a live \
+         process that the pool traversal cannot see"
+    );
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "a start published a transport into a backend that had already been \
+         shut down; stop() has walked the pool and will not revisit it"
+    );
+
+    let _ = starter.await;
 }

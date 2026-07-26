@@ -98,6 +98,36 @@ pub struct Backend {
     /// because concurrent restarts are already serialised by the slot's
     /// `start_lock`; this is only about excluding shutdown.
     lifecycle: tokio::sync::RwLock<()>,
+    /// Starts that have spawned a process (or opened a session) but have not yet
+    /// either published it or been refused.
+    ///
+    /// A counter rather than the lifecycle lock, because `start_entry` is
+    /// reached from inside `force_restart`, which already holds that lock's read
+    /// side - and `tokio::sync::RwLock` reads are not reentrant when a writer is
+    /// queued, so nesting them would deadlock against `stop()`.
+    ///
+    /// `stop()` waits for this to reach zero. Refusing to publish is not enough
+    /// on its own: a start that has spawned its child and is waiting on the MCP
+    /// handshake owns a live process, and shutdown returning before that
+    /// resolves leaves the process running for as long as the handshake takes.
+    starts_in_flight: std::sync::atomic::AtomicUsize,
+}
+
+/// Decrements [`Backend::starts_in_flight`] however its start ends - published,
+/// refused, failed, or unwound by an error further up.
+pub(crate) struct StartGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl StartGuard<'_> {
+    pub(crate) fn new(counter: &std::sync::atomic::AtomicUsize) -> StartGuard<'_> {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        StartGuard(counter)
+    }
+}
+
+impl Drop for StartGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// What [`Backend::force_restart`] actually did.
@@ -116,9 +146,12 @@ pub enum RestartOutcome {
 /// Deferred-cleanup bookkeeping for [`Backend`], behind a single lock.
 #[derive(Default)]
 pub(crate) struct CleanupState {
-    /// Set by [`Backend::stop`] before it drains. Once true, `force_restart` is
-    /// a no-op: restarting a backend that is being shut down can only create
-    /// work nobody will clean up.
+    /// Set by [`Backend::stop`] before it tears anything down, and never
+    /// cleared: **a stopped `Backend` is terminal.** Do not add a reset. Both
+    /// config-reload paths (`src/config_reload/mod.rs`) stop the old instance
+    /// and construct a NEW one rather than reviving it, so a latch that never
+    /// clears is the accurate model. Clearing it would reintroduce the window
+    /// where a start publishes into a pool shutdown has already emptied.
     pub(crate) stopping: bool,
     /// Cleanup tasks awaiting their transport's last owner.
     pub(crate) handles: Vec<tokio::task::JoinHandle<()>>,
