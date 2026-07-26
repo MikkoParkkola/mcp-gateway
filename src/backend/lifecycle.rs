@@ -526,10 +526,31 @@ impl Backend {
         /// the remaining cleanups rather than closing anything under a live
         /// caller, so it cannot cut a request short.
         const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
+        /// How long shutdown waits to exclude a restart already in flight.
+        /// Sized above a typical backend start so an ordinary in-flight restart
+        /// finishes first, and finite so a hung one cannot hang shutdown.
+        const LIFECYCLE_WAIT: Duration = Duration::from_secs(15);
 
         // Exclusive: waits for any restart already in progress to finish, and
         // blocks any that has not yet started until the latch below is set.
-        let _lifecycle = self.lifecycle.write().await;
+        //
+        // Bounded, because a restart holds this across `start_entry`, which runs
+        // to the backend's own init timeout - and if a start hangs past even
+        // that, an unbounded wait here would hang shutdown itself. Timing out
+        // gives up the exclusion and reopens the narrow race it prevents, which
+        // is the better of two bad outcomes at that point, so it is logged
+        // loudly rather than passed over.
+        let _lifecycle = tokio::time::timeout(LIFECYCLE_WAIT, self.lifecycle.write())
+            .await
+            .inspect_err(|_| {
+                warn!(
+                    backend = %self.name,
+                    wait_secs = LIFECYCLE_WAIT.as_secs(),
+                    "Restart still in flight after the shutdown wait; proceeding \
+                     without exclusion"
+                );
+            })
+            .ok();
 
         info!(backend = %self.name, "Stopping backend");
 
@@ -653,6 +674,16 @@ impl Backend {
 
         let entry = self.pooled_entry(&PoolKey::Shared);
         let _guard = entry.start_lock.lock().await;
+
+        // Re-checked after the await. The lock above normally prevents shutdown
+        // from interleaving at all, but it is not the only line of defence:
+        // `stop()` bounds its wait for that lock, so it can proceed without it
+        // rather than hang forever. Correctness must not depend on having won
+        // the lock, only on this flag.
+        if self.replaced_transport_cleanups.lock().stopping {
+            debug!(backend = %self.name, "Abandoning force_restart: shutdown began while waiting");
+            return Ok(RestartOutcome::SkippedStopping);
+        }
         // Take the transport out and drop the RwLock write guard *before*
         // awaiting close() -- a parking_lot guard is not Send across an await.
         // in_flight is read under that same guard so the answer cannot change
@@ -681,6 +712,26 @@ impl Backend {
             }
         }
         self.start_entry(&PoolKey::Shared, &entry).await?;
+
+        // Last check, and the one that actually closes the race: starting is
+        // slow, so shutdown can begin and finish while it runs. A flag read
+        // before a slow operation says nothing about the world after it. If
+        // shutdown got in, undo the start rather than leave a live child that
+        // `stop()` has already walked past - it took every transport out of the
+        // pool before this one existed, so nothing else will ever close it.
+        if self.replaced_transport_cleanups.lock().stopping {
+            let orphan = entry.transport.write().take();
+            if let Some(orphan) = orphan {
+                warn!(
+                    backend = %self.name,
+                    "Shutdown completed while this backend was restarting; closing \
+                     the transport it had just started"
+                );
+                let _ = orphan.close().await;
+            }
+            return Ok(RestartOutcome::SkippedStopping);
+        }
+
         Ok(RestartOutcome::Rebuilt)
     }
 

@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::backend::RestartOutcome;
 use crate::backend::registry::BackendLifecycle;
 use crate::config::TransportConfig;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -1528,4 +1529,67 @@ async fn shutdown_waits_for_a_restart_already_in_flight() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     stopper.await.expect("stopper task panicked");
+}
+
+// GW.IDLE.RACE.9 - a restart that finishes after shutdown must undo itself.
+//
+// The lifecycle lock normally stops these overlapping, but `stop()` bounds its
+// wait for that lock rather than hanging shutdown forever, so correctness
+// cannot depend on having won it. Starting is slow: a flag read BEFORE a slow
+// operation says nothing about the world after it. If shutdown ran to
+// completion in the meantime it has already walked past every transport in the
+// pool, so a child started afterwards is one nothing will ever close.
+//
+// The test drives that window directly - the latch is flipped WHILE the start
+// is in progress, which is precisely the state a timed-out lock leaves behind -
+// rather than asserting the easy case where shutdown finished first. The child
+// is a real MCP responder, because the undo only matters when the start
+// SUCCEEDS; a failed start has nothing to undo.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_that_outlives_shutdown_closes_what_it_started() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let server = dir.path().join("server.sh");
+    std::fs::write(
+        &server,
+        r#"sleep 0.3
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'
+            ;;
+    esac
+done
+"#,
+    )
+    .expect("write server");
+
+    let backend = stoppable_backend_with_command(
+        &format!("sh {}", server.display()),
+        Duration::from_secs(60),
+    );
+
+    let flipper = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move {
+            // Inside the child's 0.3s pre-handshake delay: the start is under
+            // way and has not yet installed anything.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Exactly what stop() does to the latch, minus the lock it may have
+            // failed to acquire.
+            backend.replaced_transport_cleanups.lock().stopping = true;
+        })
+    };
+
+    let outcome = backend.force_restart().await;
+    flipper.await.expect("flipper task panicked");
+
+    assert!(
+        matches!(outcome, Ok(RestartOutcome::SkippedStopping)),
+        "a restart that finished after shutdown reported success: {outcome:?}"
+    );
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "the restart left a transport installed on a backend that had already \
+         been shut down; nothing remains to close it"
+    );
 }
