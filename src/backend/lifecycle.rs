@@ -622,50 +622,10 @@ impl Backend {
                 .collect()
         };
 
-        // One deadline covers both waits below: in-flight starts, then the
-        // cleanup drain. Shutdown must be bounded overall, not per stage.
-        for transport in transports {
-            if let Err(e) = transport.close().await {
-                warn!(backend = %self.name, error = %e, "Failed to close pooled transport");
-            }
-        }
+        self.close_pooled_transports(transports, DRAIN_DEADLINE)
+            .await;
 
-        // Wait for starts that were already under way. Refusing to publish is
-        // not the whole guarantee: a start that has spawned its child and is
-        // waiting on the MCP handshake owns a live process right now, and the
-        // traversal above could not see it because it has not published yet.
-        // Returning here would let that process outlive shutdown for as long as
-        // the handshake takes. Once the counter reaches zero every such start
-        // has resolved - published into a pool this call already emptied, or
-        // refused and closed.
-        // Each wait gets its own budget, started when that wait begins. Sharing
-        // one deadline - or starting this one before the closes above - lets
-        // whichever runs first consume it, so a slow close would leave the
-        // start wait, and then the cleanup drain, with nothing. That would
-        // silently skip the HTTP session DELETEs the drain exists to send.
-        // Shutdown is bounded by the sum, deliberately: every stage matters and
-        // none may starve another.
-        let starts_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
-        while self
-            .starts_in_flight
-            .load(std::sync::atomic::Ordering::SeqCst)
-            > 0
-        {
-            if tokio::time::Instant::now() >= starts_until {
-                // The one case where shutdown's guarantee does not hold: it
-                // is bounded, so a start that never resolves is abandoned
-                // rather than allowed to wedge the gateway. The process is
-                // still closed when that start finally finishes - late, and
-                // said out loud here rather than quietly.
-                warn!(
-                    backend = %self.name,
-                    "Backend start still in flight at the end of shutdown; its \
-                     process will outlive this call until that start resolves"
-                );
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        self.await_starts_in_flight(DRAIN_DEADLINE).await;
 
         // Transports that `force_restart` replaced while they were in use are
         // NOT in `pool`, so the loop above cannot see them. Their cleanup tasks
@@ -734,6 +694,72 @@ impl Backend {
         }
 
         Ok(())
+    }
+
+    /// Close transports taken out of the pool, bounded as a STAGE.
+    ///
+    /// `close()` has no deadline of its own: `StdioTransport::close` waits on
+    /// the writer mutex, which a request blocked writing to a child that has
+    /// stopped reading can hold indefinitely, and HTTP closes its sessions one
+    /// after another. Without a bound here one wedged backend hangs gateway
+    /// shutdown forever - and stopping backends concurrently does not help,
+    /// because joining them waits for the slowest.
+    async fn close_pooled_transports(&self, transports: Vec<Arc<dyn Transport>>, budget: Duration) {
+        let until = tokio::time::Instant::now() + budget;
+        for transport in transports {
+            let remaining = until.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                warn!(
+                    backend = %self.name,
+                    "Ran out of time closing pooled transports; abandoning the rest"
+                );
+                return;
+            }
+            match tokio::time::timeout(remaining, transport.close()).await {
+                Ok(Err(error)) => {
+                    warn!(backend = %self.name, %error, "Failed to close pooled transport");
+                }
+                Err(_) => {
+                    warn!(
+                        backend = %self.name,
+                        "Timed out closing a pooled transport; abandoning it"
+                    );
+                }
+                Ok(Ok(())) => {}
+            }
+        }
+    }
+
+    /// Wait for starts that were already under way when shutdown began.
+    ///
+    /// Refusing to publish is not the whole guarantee: a start that has spawned
+    /// its child and is waiting on the MCP handshake owns a live process right
+    /// now, and the pool traversal cannot see it because it has not published.
+    /// Returning without this lets that process outlive shutdown for as long as
+    /// the handshake takes. At zero, every such start has resolved - published
+    /// into a pool already emptied, or refused and closed.
+    ///
+    /// Bounded, and this is the one case where shutdown's guarantee does not
+    /// hold: a start that never resolves is abandoned rather than allowed to
+    /// wedge the gateway. Its process is still closed when that start finally
+    /// finishes - late, and said out loud rather than quietly.
+    async fn await_starts_in_flight(&self, budget: Duration) {
+        let until = tokio::time::Instant::now() + budget;
+        while self
+            .starts_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
+        {
+            if tokio::time::Instant::now() >= until {
+                warn!(
+                    backend = %self.name,
+                    "Backend start still in flight at the end of shutdown; its \
+                     process will outlive this call until that start resolves"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// Check if backend is running (canonical shared slot connected).

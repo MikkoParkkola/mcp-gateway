@@ -127,6 +127,13 @@ pub enum BackendRuntimeState {
 pub struct BackendRegistry {
     /// Backends by name
     backends: DashMap<String, Arc<Backend>>,
+    /// Set once [`BackendRegistry::stop_all`] begins, and never cleared.
+    ///
+    /// Without it, `stop_all` snapshots the map and a backend registered after
+    /// that snapshot - by a config reload racing shutdown - is simply never
+    /// stopped, and its process outlives the gateway. Refusing late
+    /// registrations makes the snapshot complete rather than merely current.
+    stopping: std::sync::atomic::AtomicBool,
 }
 
 impl BackendRegistry {
@@ -135,12 +142,25 @@ impl BackendRegistry {
     pub fn new() -> Self {
         Self {
             backends: DashMap::new(),
+            stopping: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     /// Register a backend
-    pub fn register(&self, backend: Arc<Backend>) {
+    ///
+    /// Refused once shutdown has begun: a backend registered after `stop_all`
+    /// has taken its snapshot would never be stopped. Returns `false` when the
+    /// registration was refused for that reason.
+    pub fn register(&self, backend: Arc<Backend>) -> bool {
+        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            warn!(
+                backend = %backend.name,
+                "Refusing to register a backend during shutdown; it would never be stopped"
+            );
+            return false;
+        }
         self.backends.insert(backend.name.clone(), backend);
+        true
     }
 
     /// Get a backend by name
@@ -183,6 +203,12 @@ impl BackendRegistry {
     /// serialise: total shutdown is now bounded by the slowest single backend
     /// rather than the sum of all of them.
     pub async fn stop_all(&self) {
+        // Latched BEFORE the snapshot, so a registration either lands in it or
+        // is refused. Taken afterwards, the snapshot would be a photograph of a
+        // moving target.
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         let backends: Vec<std::sync::Arc<Backend>> = self
             .backends
             .iter()
@@ -201,5 +227,55 @@ impl BackendRegistry {
 impl Default for BackendRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::config::{BackendConfig, TransportConfig};
+
+    fn stdio_backend(name: &str) -> Arc<Backend> {
+        let cfg = BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "/nonexistent-mcp-binary".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        };
+        Arc::new(Backend::new(
+            name,
+            cfg,
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ))
+    }
+
+    // A backend registered after shutdown has taken its snapshot would never be
+    // stopped, and its process would outlive the gateway. Config reload can
+    // genuinely race shutdown, so the registry refuses late registrations
+    // rather than accepting one it cannot honour.
+    #[tokio::test]
+    async fn a_backend_registered_after_shutdown_is_refused() {
+        let registry = BackendRegistry::new();
+        assert!(
+            registry.register(stdio_backend("before")),
+            "registration before shutdown must be accepted"
+        );
+
+        registry.stop_all().await;
+
+        assert!(
+            !registry.register(stdio_backend("after")),
+            "the registry accepted a backend after shutdown; nothing will ever \
+             stop it"
+        );
+        assert!(
+            registry.get("after").is_none(),
+            "a backend refused during shutdown must not be in the registry"
+        );
     }
 }
