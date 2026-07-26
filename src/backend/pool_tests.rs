@@ -94,9 +94,16 @@ fn per_user_backend() -> Arc<Backend> {
 /// stopped when idle. Ownership is what makes stopping meaningful: the gateway
 /// spawned this process, so it can stop it.
 fn stoppable_backend(idle_for: Duration) -> Arc<Backend> {
+    stoppable_backend_with_command("echo hi", idle_for)
+}
+
+/// A stoppable backend whose start command is observable from outside the
+/// process. Tests that need to prove a start did NOT happen need a witness in
+/// the world - a file, the process table - rather than an in-memory flag.
+fn stoppable_backend_with_command(command: &str, idle_for: Duration) -> Arc<Backend> {
     let cfg = BackendConfig {
         transport: TransportConfig::Stdio {
-            command: "echo hi".to_string(),
+            command: command.to_string(),
             cwd: None,
             protocol_version: None,
         },
@@ -1017,5 +1024,186 @@ async fn a_restarted_backend_is_not_flagged_dormant() {
             .load(Ordering::SeqCst),
         "starting a backend by ANY route must clear the stopped-for-idleness flag, \
          or a restarted backend keeps reporting dormant"
+    );
+}
+
+// GW.IDLE.RACE.1 - the reaper's check-and-take must EXCLUDE lease acquisition.
+//
+// Positioned inside the window rather than after it. The test holds the
+// transport WRITE guard, which is precisely what `stop_if_idle` holds between
+// reading `in_flight` and taking the transport. If claiming a lease does not
+// take the READ guard, it slips into that window: the reaper passes its
+// zero-check, then closes a transport a live request is about to use. `SeqCst`
+// cannot prevent that - it does not make an earlier read conditional on a later
+// increment - so the lock is the only thing that can, and this asserts the lock.
+#[test]
+fn claiming_a_lease_is_excluded_while_the_reaper_holds_the_transport() {
+    let backend = stoppable_backend(Duration::from_secs(1));
+    backend.set_transport_for_test(Arc::new(SessionMock::new("live")));
+    let entry = backend.shared_entry();
+
+    let claimed = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+
+    // Stand in for the reaper, holding the guard across the whole window.
+    let reaper_guard = entry.transport.write();
+
+    let claimer = {
+        let backend = Arc::clone(&backend);
+        let claimed = Arc::clone(&claimed);
+        let release = Arc::clone(&release);
+        std::thread::spawn(move || {
+            let _lease = backend.begin_activity(&PoolKey::Shared);
+            claimed.store(true, Ordering::SeqCst);
+            // Keep the lease alive so the assertions below see a real count.
+            while !release.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+
+    // Bounded wait: an unexcluded claim would have landed many times over.
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(
+        !claimed.load(Ordering::SeqCst),
+        "a lease was claimed while the reaper held the transport write guard; \
+         the claim does not take the read guard, so check-and-take is not atomic"
+    );
+    assert_eq!(
+        entry.in_flight.load(Ordering::SeqCst),
+        0,
+        "in_flight moved inside the reaper's window"
+    );
+
+    drop(reaper_guard);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !claimed.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the claim never completed after the reaper released the transport"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        entry.in_flight.load(Ordering::SeqCst),
+        1,
+        "the claim completed but did not register in_flight"
+    );
+
+    release.store(true, Ordering::SeqCst);
+    claimer.join().expect("claimer thread panicked");
+}
+
+/// A transport whose `close()` parks until released, letting a test position
+/// itself INSIDE the reaper's post-take window: transport already removed from
+/// the slot, stop not yet finished.
+struct BlockingCloseMock {
+    entered_close: Arc<AtomicBool>,
+    release: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Transport for BlockingCloseMock {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        self.entered_close.store(true, Ordering::SeqCst);
+        while !self.release.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        Ok(())
+    }
+}
+
+/// How many times this backend's command has been spawned, read from the file
+/// the command itself appends to. An external witness: it reflects the process
+/// table, not a field the code under test maintains.
+fn spawn_count(log: &std::path::Path) -> usize {
+    std::fs::read_to_string(log).map_or(0, |s| s.lines().count())
+}
+
+// GW.IDLE.RACE.2 - the health probe must not restart a backend the reaper is
+// in the middle of stopping.
+//
+// The window is between the reaper taking the transport and its stop being
+// complete. A probe entering there sees a slot with no transport; if it cannot
+// tell "deliberately stopped" from "not started yet" it calls ensure_started()
+// and respawns the process the sweep just released - a periodic silent no-op,
+// which is the exact failure this feature exists to prevent. Recording
+// `stopped_when_idle` under the same write guard that takes the transport is
+// what closes it; recording it after `close()` completes leaves it open.
+//
+// The test parks the reaper inside `close()` so it is genuinely in the window,
+// rather than asserting after the stop has finished - the mistake that let six
+// earlier tests pass against broken code.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_health_probe_does_not_restart_a_backend_mid_stop() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let log = dir.path().join("spawns");
+    let backend = stoppable_backend_with_command(
+        &format!("sh -c 'echo spawn >> {}; sleep 1'", log.display()),
+        Duration::from_secs(1),
+    );
+
+    let entered_close = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    backend.set_transport_for_test(Arc::new(BlockingCloseMock {
+        entered_close: Arc::clone(&entered_close),
+        release: Arc::clone(&release),
+    }));
+    backend.shared_entry().last_used.store(0, Ordering::Relaxed);
+
+    let stopper = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.stop_if_idle().await })
+    };
+
+    // Park until the reaper is demonstrably inside the window.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !entered_close.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reaper never reached close(); the test never entered the window"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "precondition: the reaper has taken the transport"
+    );
+
+    let spawns_before = spawn_count(&log);
+    let _ = backend.health_probe(Duration::from_millis(200)).await;
+
+    assert_eq!(
+        spawn_count(&log),
+        spawns_before,
+        "the health probe spawned a child while the reaper was stopping this \
+         backend; stopping and restarting on every sweep is the silent no-op \
+         this feature exists to prevent"
+    );
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "the health probe installed a transport for a backend being stopped"
+    );
+
+    release.store(true, Ordering::SeqCst);
+    assert!(
+        stopper.await.expect("stopper task panicked"),
+        "stop_if_idle should report that it closed a live transport"
     );
 }

@@ -87,11 +87,19 @@ pub(crate) struct PooledEntry {
 /// refreshed it forever against a 300s deadline, so the feature was a silent
 /// no-op.
 ///
-/// Ordering: the count is incremented BEFORE the caller acquires the transport
-/// read guard, and [`Backend::stop_if_idle`] reads it while holding the transport
-/// WRITE guard. Either the increment lands first and stopping backs off, or
-/// stopping wins and the caller then observes `None` and starts a new transport.
-/// No interleaving hands a caller a transport that is being closed.
+/// Ordering, and it took two rejected reviews to get this right: the count is
+/// claimed while holding the transport READ guard, and [`Backend::stop_if_idle`]
+/// checks it while holding the transport WRITE guard. The `RwLock` — not the
+/// atomic — is what makes the two mutually exclusive. `SeqCst` on its own cannot
+/// help here, because it does not make the reaper's earlier read conditional on
+/// a claim that happens later; the reaper would pass its check and close the
+/// transport anyway.
+///
+/// So exactly one of two things happens. Either the claim lands first, the
+/// reaper sees a non-zero count and declines; or the reaper takes the transport
+/// AND records `stopped_when_idle` under the same write guard, so a claim
+/// arriving afterwards observes a slot that is unambiguously stopped rather than
+/// one that merely looks unstarted.
 pub(crate) struct ActivityGuard {
     entry: Arc<PooledEntry>,
     /// Whether dropping this guard counts as client activity. False for internal
@@ -100,28 +108,19 @@ pub(crate) struct ActivityGuard {
 }
 
 impl ActivityGuard {
-    fn new(entry: Arc<PooledEntry>) -> Self {
-        entry.in_flight.fetch_add(1, Ordering::SeqCst);
-        entry.touch();
-        Self {
-            entry,
-            touch_on_drop: true,
-        }
-    }
-
-    /// A lease that protects the slot from being stopped WITHOUT claiming client
-    /// activity.
+    /// Adopt a slot whose `in_flight` count has ALREADY been claimed by
+    /// [`Backend::claim_pooled_entry`].
     ///
-    /// Internal work - metadata refreshes, health probes - must not defer
-    /// stopping, or the idle clock stops meaning "a client used this" and the
-    /// feature silently never fires. But such work still holds a live transport
-    /// and must not have it closed mid-call. Those are two separate concerns and
-    /// this guard covers only the second.
-    fn internal(entry: Arc<PooledEntry>) -> Self {
-        entry.in_flight.fetch_add(1, Ordering::SeqCst);
+    /// Claiming and adopting are separate on purpose. The claim has to happen
+    /// while the pool's shard guard and the transport read guard are both held,
+    /// which only the pool can arrange; this constructor merely takes ownership
+    /// of the resulting count so `Drop` releases it exactly once. Incrementing
+    /// here instead would double-count, and incrementing after the guards were
+    /// released is the bug this whole split exists to remove.
+    fn adopt_claimed(entry: Arc<PooledEntry>, touch_on_drop: bool) -> Self {
         Self {
             entry,
-            touch_on_drop: false,
+            touch_on_drop,
         }
     }
 }
@@ -181,23 +180,39 @@ impl Backend {
         }
     }
 
-    /// Fetch (or lazily create) the pooled entry for `key`. The `Arc` is cloned
-    /// out so the `DashMap` shard guard is released before any `.await`.
+    /// Fetch (or lazily create) the pooled entry for `key`, running `under_guard`
+    /// before the `DashMap` shard guard is released.
+    ///
+    /// The callback is the entire point of this shape. Cloning the `Arc` out and
+    /// *then* acting on it leaves a window in which
+    /// [`Backend::evict_idle_per_user_entries`] can remove and close the slot:
+    /// the caller ends up holding an orphan, and the evictor closes a transport
+    /// out from under a live request. Re-checking `in_flight` inside `remove_if`
+    /// does not fix that — the claim has to be inside the same guard that handed
+    /// out the `Arc`, or the two are simply not ordered. Anything that must be
+    /// atomic with respect to removal belongs in `under_guard`.
+    ///
+    /// Telemetry stays OUTSIDE the guard: `self.pool.len()` walks every shard, so
+    /// calling it while holding one is asking for trouble.
     ///
     /// Logs + gauges the live slot count on creation only (MIK-6735 fix 3) —
     /// minimal observability into per-user pool growth without a per-request
     /// cost on the (overwhelmingly more common) cache-hit path.
-    pub(super) fn pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
+    fn pooled_entry_with<R>(
+        &self,
+        key: &PoolKey,
+        under_guard: impl FnOnce(&Arc<PooledEntry>) -> R,
+    ) -> (Arc<PooledEntry>, R) {
         let mut created = false;
-        let entry = Arc::clone(
-            self.pool
-                .entry(key.clone())
-                .or_insert_with(|| {
-                    created = true;
-                    Arc::new(PooledEntry::new(&self.name, &self.failsafe_config))
-                })
-                .value(),
-        );
+        let (entry, out) = {
+            let slot = self.pool.entry(key.clone()).or_insert_with(|| {
+                created = true;
+                Arc::new(PooledEntry::new(&self.name, &self.failsafe_config))
+            });
+            let entry = Arc::clone(slot.value());
+            let out = under_guard(&entry);
+            (entry, out)
+        };
         if created {
             #[allow(clippy::cast_precision_loss)] // pool size is never remotely close to 2^52
             let live = self.pool.len() as f64;
@@ -208,7 +223,39 @@ impl Backend {
             .set(live);
             tracing::debug!(backend = %self.name, ?key, live_slots = live, "Pool slot created");
         }
-        entry
+        (entry, out)
+    }
+
+    /// Fetch (or lazily create) the pooled entry for `key`. The `Arc` is cloned
+    /// out so the `DashMap` shard guard is released before any `.await`.
+    ///
+    /// Callers that intend to USE the slot's transport want
+    /// [`Backend::claim_pooled_entry`] instead: this one hands back an entry the
+    /// evictor is still free to remove.
+    pub(super) fn pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
+        self.pooled_entry_with(key, |_| ()).0
+    }
+
+    /// Fetch (or lazily create) the entry for `key` AND claim one in-flight slot
+    /// on it, without releasing the shard guard in between.
+    ///
+    /// Two locks are held for the claim, each excluding a different teardown
+    /// path, and both are necessary:
+    ///
+    /// - the shard guard excludes `evict_idle_per_user_entries`, whose
+    ///   `remove_if` predicate reads `in_flight` under that same guard;
+    /// - the transport read guard excludes [`Backend::stop_if_idle`], which
+    ///   checks `in_flight` under the transport write guard.
+    ///
+    /// Lock order is shard → transport, matching every other nesting in this
+    /// module (`shared_transport`, `stop_all`), so no cycle exists. The read
+    /// guard is scoped to the claim itself and never survives to an `.await`.
+    fn claim_pooled_entry(&self, key: &PoolKey) -> Arc<PooledEntry> {
+        self.pooled_entry_with(key, |entry| {
+            let _transport = entry.transport.read();
+            entry.in_flight.fetch_add(1, Ordering::SeqCst);
+        })
+        .0
     }
 
     /// The canonical shared slot's `PooledEntry`. Inserted at construction and
@@ -356,17 +403,25 @@ impl Backend {
     /// way to write the idle clock.
     pub(super) fn begin_activity(&self, key: &PoolKey) -> ActivityGuard {
         self.last_used.store(now_unix_secs(), Ordering::Relaxed);
-        ActivityGuard::new(self.pooled_entry(key))
+        let entry = self.claim_pooled_entry(key);
+        entry.touch();
+        ActivityGuard::adopt_claimed(entry, true)
     }
 
     /// Hold the shared slot's transport open for internal work without claiming
     /// client activity.
     ///
+    /// Internal work — metadata refreshes, health probes — must not defer
+    /// stopping, or `last_used` stops meaning "a client used this" and the
+    /// feature silently never fires. But such work still holds a live transport
+    /// and must not have it closed mid-call. Those are two separate concerns and
+    /// this lease covers only the second.
+    ///
     /// Metadata refreshes call `ensure_started()` and then separately reach for
     /// the transport. Without a lease the reaper can take it in between, and the
     /// caller sees a spurious `BackendUnavailable` for a backend that is fine.
     pub(super) fn begin_internal_activity(&self) -> ActivityGuard {
-        ActivityGuard::internal(self.pooled_entry(&PoolKey::Shared))
+        ActivityGuard::adopt_claimed(self.claim_pooled_entry(&PoolKey::Shared), false)
     }
 
     /// Stop this backend's process if it has been unused past
@@ -409,14 +464,41 @@ impl Backend {
             if now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed)) < cutoff {
                 return false; // used recently
             }
-            guard.take()
+            let taken = guard.take();
+            if taken.is_some() {
+                // Recorded INSIDE the write guard, atomic with the take.
+                // Storing it after the close() below leaves a window where the
+                // slot has no transport and is not yet flagged as deliberately
+                // stopped. A health probe entering there sees a backend that
+                // looks merely unstarted, calls ensure_started(), and restarts
+                // the very process this sweep just stopped — a periodic silent
+                // no-op, which is the failure this feature exists to prevent.
+                entry.stopped_when_idle.store(true, Ordering::SeqCst);
+            }
+            taken
         };
 
         let Some(transport) = taken else {
             return false; // already stopped
         };
-        let _ = transport.close().await;
-        entry.stopped_when_idle.store(true, Ordering::SeqCst);
+        if let Err(error) = transport.close().await {
+            // The slot is stopped either way — it no longer holds a transport,
+            // and re-clearing the flag would report Running for a slot with
+            // nothing to talk to, which is strictly worse. But a failed close
+            // means the child may have outlived the gateway's handle to it, so
+            // Dormant is not proof the process died. Say so rather than imply
+            // a clean stop.
+            tracing::warn!(
+                backend = %self.name,
+                %error,
+                "Idle backend transport failed to close cleanly; child process may be orphaned"
+            );
+            telemetry_metrics::counter!(
+                "mcp_backend_idle_stop_close_failures",
+                "backend" => self.name.clone()
+            )
+            .increment(1);
+        }
 
         tracing::info!(
             backend = %self.name,

@@ -605,6 +605,22 @@ impl Backend {
         // coincide regularly, which would make the feature a periodic no-op - the
         // exact failure this change exists to correct.
         let _lease = self.begin_internal_activity();
+
+        // A slot the reaper deliberately stopped is not a fault, and probing is
+        // not a reason to wake it. `stop_if_idle` records this flag under the
+        // same transport write guard that takes the transport, so by the time a
+        // lease can be claimed the flag is already visible: either this lease
+        // came first and the sweep declined, or the sweep completed and this
+        // check sees it. Without the bail, the probe's ensure_started() below
+        // would restart the process the sweep just released.
+        if self
+            .shared_entry()
+            .stopped_when_idle
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+
         // `ensure_started` now respawns reliably because `is_connected()` does a
         // real liveness check (Fix C).
         if let Err(e) = self.ensure_started().await {
