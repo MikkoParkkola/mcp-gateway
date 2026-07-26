@@ -1626,70 +1626,86 @@ done
     }
 }
 
-/// Reports whether the backend's shutdown latch was already set at the moment
-/// its transport was closed. `stop()` must latch BEFORE it walks the pool.
-struct LatchOrderMock {
-    backend: parking_lot::Mutex<Option<std::sync::Weak<Backend>>>,
-    latched_at_close: Arc<AtomicBool>,
-}
-
-#[async_trait]
-impl Transport for LatchOrderMock {
-    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
-        Ok(JsonRpcResponse::success_serialized(
-            RequestId::Number(1),
-            json!({}),
-        ))
-    }
-
-    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
-        Ok(())
-    }
-
-    fn is_connected(&self) -> bool {
-        true
-    }
-
-    async fn close(&self) -> Result<()> {
-        let observed = self
-            .backend
-            .lock()
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|b| b.replaced_transport_cleanups.lock().stopping);
-        self.latched_at_close.store(observed, Ordering::SeqCst);
-        Ok(())
-    }
-}
-
-// GW.IDLE.RACE.10 - shutdown must latch BEFORE it walks the pool.
+// GW.IDLE.RACE.10 - a start racing shutdown must never outlive it.
 //
-// Ordering, not existence. Setting `stopping` after the pool traversal leaves a
-// gap: a restart finishing its start in that window reads the latch as unset,
-// approves itself, and installs a transport into a slot shutdown has already
-// visited and will not revisit. The child then survives a completed shutdown,
-// and every later check is looking at the wrong moment.
+// This is the ORDINARY start path, not force_restart: every client request
+// reaches it, and it takes no lifecycle lock, so it can genuinely be mid-start
+// when shutdown runs. If publishing is not ordered against shutdown's pool
+// traversal, the transport lands in a slot `stop()` has already visited and
+// will never revisit - and the child outlives the gateway with nothing holding
+// a handle to close it.
 //
-// Observed from inside the teardown itself - the transport reports what the
-// latch said as it was being closed - rather than inferred from the end state,
-// which looks identical either way.
-#[tokio::test]
-async fn shutdown_latches_before_it_closes_pooled_transports() {
-    let backend =
-        stoppable_backend_with_command("/nonexistent-mcp-binary", Duration::from_secs(60));
-    let latched_at_close = Arc::new(AtomicBool::new(false));
-    let mock = Arc::new(LatchOrderMock {
-        backend: parking_lot::Mutex::new(Some(Arc::downgrade(&backend))),
-        latched_at_close: Arc::clone(&latched_at_close),
-    });
-    backend.set_transport_for_test(mock);
+// Asserting the latch is "set before the traversal" is not enough on its own:
+// an implementation could take every transport out, THEN latch, then close, and
+// still leave exactly this gap. So the test drives the race itself and checks
+// the only thing that matters - after shutdown returns, is anything still
+// alive? The witness is the process table.
+//
+// Unix-only: the witness is read via kill(1).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ordinary_start_racing_shutdown_leaves_no_child_behind() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let server = dir.path().join("server.sh");
+    let pidfile = dir.path().join("child.pid");
+    std::fs::write(
+        &server,
+        format!(
+            r#"echo $$ > "{}"
+sleep 0.3
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-11-25"}}}}'
+            ;;
+    esac
+done
+"#,
+            pidfile.display()
+        ),
+    )
+    .expect("write server");
 
+    let backend = stoppable_backend_with_command(
+        &format!("sh {}", server.display()),
+        Duration::from_secs(60),
+    );
+
+    let starter = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.ensure_started().await })
+    };
+
+    // Let the child spawn and get into its pre-handshake delay, so the start is
+    // genuinely in flight when shutdown begins.
+    tokio::time::sleep(Duration::from_millis(120)).await;
     backend.stop().await.expect("stop");
+    let _ = starter.await;
 
     assert!(
-        latched_at_close.load(Ordering::SeqCst),
-        "shutdown closed a pooled transport before setting the stopping latch; \
-         a restart finishing in that gap approves itself and installs a child \
-         into a slot shutdown will never revisit"
+        backend.shared_entry().transport.read().is_none(),
+        "a start published a transport into a backend that had already been \
+         shut down; stop() has walked the pool and will not revisit it"
     );
+
+    let pid = std::fs::read_to_string(&pidfile)
+        .expect("child recorded its pid")
+        .trim()
+        .to_string();
+    let alive = || {
+        std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while alive() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "shutdown completed but the racing start's child (pid {pid}) is \
+             still running; it outlives the gateway"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }

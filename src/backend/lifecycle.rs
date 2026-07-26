@@ -363,7 +363,37 @@ impl Backend {
             }
         };
 
-        *entry.transport.write() = Some(Arc::clone(&transport));
+        // Publishing is where shutdown has to be enforced, because this is the
+        // ONE place a transport becomes reachable - `ensure_entry_started`,
+        // warm start and `force_restart` all land here. Checking in the callers
+        // instead left the ordinary request path unguarded: a client could
+        // start a backend after `stop()` had walked the pool, and nothing would
+        // ever close that child.
+        //
+        // The check and the publish happen under the cleanup lock, which
+        // `stop()` also holds while it latches and takes every transport out.
+        // So the two are ordered: either this publishes first and shutdown's
+        // traversal finds it, or shutdown latches first and this refuses. There
+        // is no third case, which is what the previous check-then-publish could
+        // not say.
+        let refused = {
+            let cleanups = self.replaced_transport_cleanups.lock();
+            if cleanups.stopping {
+                true
+            } else {
+                *entry.transport.write() = Some(Arc::clone(&transport));
+                false
+            }
+        };
+        if refused {
+            warn!(
+                backend = %self.name,
+                "Backend shut down while this transport was starting; closing it \
+                 instead of publishing"
+            );
+            let _ = transport.close().await;
+            return Err(Error::BackendUnavailable(self.name.clone()));
+        }
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()
@@ -540,7 +570,7 @@ impl Backend {
         // gives up the exclusion and reopens the narrow race it prevents, which
         // is the better of two bad outcomes at that point, so it is logged
         // loudly rather than passed over.
-        let _lifecycle = tokio::time::timeout(LIFECYCLE_WAIT, self.lifecycle.write())
+        let lifecycle_guard = tokio::time::timeout(LIFECYCLE_WAIT, self.lifecycle.write())
             .await
             .inspect_err(|_| {
                 warn!(
@@ -557,17 +587,24 @@ impl Backend {
         // start sees `stopping == false`, approves itself, and installs a
         // transport into a slot shutdown has already visited and will not
         // revisit. The child then survives a completed shutdown.
-        self.replaced_transport_cleanups.lock().stopping = true;
-
         info!(backend = %self.name, "Stopping backend");
 
-        // Take every slot's transport out first (dropping the parking_lot write
-        // guards) so no lock is held across the async close().
-        let transports: Vec<Arc<dyn Transport>> = self
-            .pool
-            .iter()
-            .filter_map(|entry| entry.value().transport.write().take())
-            .collect();
+        // Latch and empty the pool under ONE hold of the cleanup lock, which is
+        // the same lock `start_entry` publishes under. Latching first but
+        // traversing afterwards is not enough: a transport published between
+        // the two lands in a slot this traversal has already passed, and
+        // nothing revisits it. Holding across both makes "no more transports
+        // can appear" true at the moment the pool is emptied.
+        //
+        // No await inside - the closes happen after the guard is dropped.
+        let transports: Vec<Arc<dyn Transport>> = {
+            let mut cleanups = self.replaced_transport_cleanups.lock();
+            cleanups.stopping = true;
+            self.pool
+                .iter()
+                .filter_map(|entry| entry.value().transport.write().take())
+                .collect()
+        };
 
         for transport in transports {
             if let Err(e) = transport.close().await {
@@ -598,7 +635,26 @@ impl Backend {
             let pending: Vec<tokio::task::JoinHandle<()>> =
                 std::mem::take(&mut self.replaced_transport_cleanups.lock().handles);
             if pending.is_empty() {
-                break;
+                // An empty list is not "no more work": a restart still holding
+                // the lifecycle lock can register a cleanup after this take.
+                // Exclusivity is the test for that - if the write lock is
+                // available, no restart is in flight, so nothing more can
+                // arrive. (Already holding it means the same thing.)
+                let no_restart_in_flight =
+                    lifecycle_guard.is_some() || self.lifecycle.try_write().is_ok();
+                if no_restart_in_flight {
+                    break;
+                }
+                if tokio::time::Instant::now() >= drain_until {
+                    warn!(
+                        backend = %self.name,
+                        "Restart still in flight at the end of the shutdown drain; \
+                         its cleanup may not run"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
             }
 
             let remaining = drain_until.saturating_duration_since(tokio::time::Instant::now());
@@ -715,50 +771,20 @@ impl Backend {
                 let _ = old.close().await;
             }
         }
-        self.start_entry(&PoolKey::Shared, &entry).await?;
-
-        // Last check, and the one that actually closes the race: starting is
-        // slow, so shutdown can begin and finish while it runs. A flag read
-        // before a slow operation says nothing about the world after it. If
-        // shutdown got in, undo the start rather than leave a live child that
-        // `stop()` has already walked past - it took every transport out of the
-        // pool before this one existed, so nothing else will ever close it.
-        if self.replaced_transport_cleanups.lock().stopping {
-            let orphan = entry.transport.write().take();
-            if let Some(orphan) = orphan {
-                // This is the transport THIS call installed: `start_lock` is
-                // still held, and every installer (here and
-                // `ensure_entry_started`) takes it, so nothing else can have
-                // swapped the slot underneath us.
-                //
-                warn!(
-                    backend = %self.name,
-                    "Shutdown completed while this backend was restarting; closing \
-                     the transport it had just started"
-                );
-
-                // `start_entry` PUBLISHES before returning, so between that and
-                // the check above a client can have taken
-                // `ensure_entry_started`'s lock-free fast path and cloned this
-                // transport. `start_lock` stops another starter replacing the
-                // slot; it does not stop readers taking what is in it. Closing
-                // inline regardless would tear the transport out from under
-                // that caller - the exact defect this whole change exists to
-                // fix, reintroduced at teardown.
-                //
-                // Having taken it out of the slot, no NEW caller can reach it,
-                // so the count only falls from here. One means nobody else has
-                // it and closing now is safe; more means waiting is.
-                if Arc::strong_count(&orphan) == 1 {
-                    let _ = orphan.close().await;
+        // `start_entry` refuses to publish once shutdown has latched, so there
+        // is no window here in which a live transport can be left behind and
+        // nothing to take back. A start that failed for THAT reason is not a
+        // fault worth reporting as one.
+        match self.start_entry(&PoolKey::Shared, &entry).await {
+            Ok(_) => Ok(RestartOutcome::Rebuilt),
+            Err(error) => {
+                if self.replaced_transport_cleanups.lock().stopping {
+                    Ok(RestartOutcome::SkippedStopping)
                 } else {
-                    self.close_after_last_owner(orphan);
+                    Err(error)
                 }
             }
-            return Ok(RestartOutcome::SkippedStopping);
         }
-
-        Ok(RestartOutcome::Rebuilt)
     }
 
     /// Close a replaced transport the moment its last user releases it.
