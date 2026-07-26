@@ -69,6 +69,12 @@ pub struct UpdateBackendRequest {
     pub env: Option<HashMap<String, String>>,
     /// Whether the backend is enabled.
     pub enabled: Option<bool>,
+    /// Seconds of idleness after which the gateway stops this backend.
+    ///
+    /// Absent leaves the current setting alone. `0` clears it, meaning never
+    /// stop — without an explicit clear the setting would be impossible to turn
+    /// off from the panel once enabled.
+    pub stop_when_idle_for_secs: Option<u64>,
 }
 
 /// Query parameters for `GET /ui/api/registry/search`.
@@ -259,13 +265,17 @@ async fn revive_backend(
 
     let breaker_was_open = backend.is_circuit_tripped();
     backend.reset_circuit_breaker();
-    let rebuilt = backend.force_restart().await.is_ok();
+    // A backend that is shutting down reports Ok without rebuilding anything;
+    // saying "revived" there would misreport it to the operator.
+    let outcome = backend.force_restart().await;
+    let rebuilt = matches!(outcome, Ok(crate::backend::RestartOutcome::Rebuilt));
+    let status = if rebuilt { "revived" } else { "not_revived" };
 
     (
         StatusCode::OK,
         Json(json!({
             "backend": name,
-            "status": "revived",
+            "status": status,
             "breaker_was_open": breaker_was_open,
             "transport_rebuilt": rebuilt,
         })),
@@ -289,6 +299,7 @@ async fn update_backend(
     };
 
     let UpdateBackendRequest {
+        stop_when_idle_for_secs,
         command,
         url,
         description,
@@ -336,7 +347,15 @@ async fn update_backend(
         merged
     });
 
-    if update_backend_config(
+    let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
+        if secs == 0 {
+            None // explicit clear: never stop
+        } else {
+            Some(std::time::Duration::from_secs(secs))
+        }
+    });
+
+    if let Err(message) = update_backend_config(
         &mut config,
         &name,
         BackendUpdate {
@@ -344,12 +363,18 @@ async fn update_backend(
             env,
             enabled,
             transport,
+            stop_when_idle_for,
         },
-    )
-    .is_err()
-    {
-        return flat_error(StatusCode::NOT_FOUND, format!("Backend '{name}' not found"))
-            .into_response();
+    ) {
+        // Surface the refusal verbatim. An operator setting "stop when idle" on a
+        // backend the gateway does not start needs to be told why, not silently
+        // ignored - being silently ignored is what this whole change corrects.
+        let code = if message.contains("not found") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return flat_error(code, message).into_response();
     }
 
     let reload = match write_config_and_reload_outcome(

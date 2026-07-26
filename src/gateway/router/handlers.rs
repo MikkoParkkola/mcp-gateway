@@ -821,6 +821,7 @@ mod health_predicate_tests {
         BackendStatus {
             name: name.to_string(),
             running: true,
+            lifecycle: crate::backend::BackendLifecycle::Running,
             transport: "http".to_string(),
             tools_cached: 0,
             circuit_state: circuit.to_string(),

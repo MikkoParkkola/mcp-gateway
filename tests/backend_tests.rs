@@ -18,6 +18,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
             cwd: None,
             protocol_version: None,
         },
+        stop_when_idle_for: None,
         timeout: Duration::from_secs(30),
         env: HashMap::default(),
         headers: HashMap::default(),
@@ -78,7 +79,7 @@ async fn test_backend_registry() {
     let registry = BackendRegistry::new();
 
     let backend = Arc::new(create_test_backend("test1", "echo"));
-    registry.register(backend);
+    let _ = registry.register(backend);
 
     assert!(registry.get("test1").is_some());
     assert!(registry.get("nonexistent").is_none());

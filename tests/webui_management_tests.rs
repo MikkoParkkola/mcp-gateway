@@ -297,7 +297,7 @@ fn register_http_backend_with_url(
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    state.backends.register(Arc::clone(&backend));
+    let _ = state.backends.register(Arc::clone(&backend));
     backend
 }
 

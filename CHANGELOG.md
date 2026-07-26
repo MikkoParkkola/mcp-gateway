@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`stop_when_idle_for`: release backend processes the gateway started, after
+  they go unused (#392).** The gateway starts backends lazily but never stopped
+  one once started, so every backend touched even once stayed resident for the
+  life of the process. Measured on a six-day-uptime machine: `codex` held 37 MB
+  for 21 hours to do 1.8 seconds of work; `trvl` 67 MB for 11.6 hours to do 7.6
+  seconds.
+
+  ```yaml
+  backends:
+    tavily:
+      command: "npx -y tavily-mcp@0.1.4"
+      stop_when_idle_for: 5m
+  ```
+
+  Valid **only for a backend the gateway starts itself** — one declared with a
+  `command`. For a backend reached over a URL the gateway can close its client
+  connection, but that does not stop the server on the other end, so the setting
+  is **rejected at config load** rather than silently accepted. Locality does not
+  grant ownership: a local HTTP MCP server on `127.0.0.1` is still not ours to
+  stop. Absent means never stop, so upgrading changes no behaviour.
+
+  Configurable per backend in the admin panel, which offers the control only
+  where it applies and refuses it with an explanation elsewhere.
+
+  Adds a third lifecycle state. A backend stopped on purpose is neither healthy
+  nor failed: `Dormant` does not trip or heal a circuit breaker and is not probed
+  by the health loop, so a sleeping backend no longer reports as degraded. A real
+  fault still wins — an open breaker reports `Unhealthy` even for a backend that
+  opted into stopping.
+
+  In-flight work is refused rather than interrupted: a sweep that finds a request
+  running declines, and the next one retries.
+
 ### Changed
 
 - **`failsafe.retry.max_attempts` now means attempts, not retries.** It was
@@ -86,6 +121,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It also introduces a third health state. A backend stopped on purpose is
   neither healthy nor failed, and without `Dormant` a sleeping backend trips its
   own circuit breaker and shows as degraded.
+
+### Fixed
+
+- **Duration parsing rejected every `ms` value.** The parser tested the `"s"`
+  suffix before `"ms"`, so `100ms` took the seconds branch and failed to parse
+  `100m` as an integer. Affected every duration field in the config.
 
 ## [3.3.2] - 2026-07-15
 

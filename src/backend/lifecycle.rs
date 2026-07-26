@@ -6,17 +6,16 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dashmap::DashMap;
 use reqwest::Client;
 use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-use super::Backend;
 use super::cached_metadata::CachedMetadata;
-use super::pool::{PoolKey, PooledEntry, now_unix_secs};
+use super::pool::{PoolKey, PooledEntry};
+use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
@@ -140,6 +139,9 @@ impl Backend {
             last_used: std::sync::atomic::AtomicU64::new(0),
             semaphore: Semaphore::new(100), // Max concurrent requests
             request_count: std::sync::atomic::AtomicU64::new(0),
+            replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
+            lifecycle: tokio::sync::RwLock::new(()),
+            starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -185,9 +187,13 @@ impl Backend {
         for _attempt in 0..MAX_RACE_RETRIES {
             let entry = self.pooled_entry(key);
 
-            // Update last-used clocks (backend-wide + per-slot for idle eviction).
-            self.last_used.store(now_unix_secs(), Ordering::Relaxed);
-            entry.touch();
+            // NOTE: deliberately does NOT touch the idle clocks. `last_used` means
+            // "when did a CLIENT last use this backend", and is written only by the
+            // request/notify paths in `ops.rs`. Touching it here is what made idle
+            // stopping unreachable in an earlier attempt: `health_probe` ->
+            // `ensure_started` -> here, on a 10s default health interval against a
+            // 300s deadline, refreshed the clock forever. The health loop kept every
+            // backend permanently warm and the feature was a silent no-op.
 
             {
                 let transport = entry.transport.read();
@@ -291,7 +297,31 @@ impl Backend {
     ///
     /// Returns an error if the transport fails to connect or initialize.
     async fn start_entry(&self, key: &PoolKey, entry: &PooledEntry) -> Result<Arc<dyn Transport>> {
+        // Held for the whole start. From the moment a process is spawned until
+        // it is either published or closed, shutdown must not consider itself
+        // finished - the process is alive either way.
+        let _in_flight = super::StartGuard::new(&self.starts_in_flight);
+
+        // Cheap early-out. The publish below is the authoritative check - it is
+        // ordered against shutdown's pool traversal, and this one is not - but
+        // spawning a process only to close it moments later is pure waste, and
+        // a caller that starts a backend after `stop()` has already returned
+        // would otherwise leave a child running for the length of a handshake.
+        if self.replaced_transport_cleanups.lock().stopping {
+            debug!(backend = %self.name, ?key, "Not starting: backend is stopped");
+            return Err(Error::BackendUnavailable(self.name.clone()));
+        }
+
         info!(backend = %self.name, ?key, "Starting backend transport");
+
+        // Whatever the reason for starting - a client request, a health-driven
+        // force_restart, warm start - this slot is no longer stopped-for-idleness.
+        // Clearing here rather than in `ensure_entry_started` is deliberate:
+        // `force_restart` calls this directly, and clearing only in the former
+        // left a restarted backend flagged dormant while actually running.
+        entry
+            .stopped_when_idle
+            .store(false, std::sync::atomic::Ordering::SeqCst);
 
         let transport: Arc<dyn Transport> = match &self.config.transport {
             TransportConfig::Stdio {
@@ -349,7 +379,37 @@ impl Backend {
             }
         };
 
-        *entry.transport.write() = Some(Arc::clone(&transport));
+        // Publishing is where shutdown has to be enforced, because this is the
+        // ONE place a transport becomes reachable - `ensure_entry_started`,
+        // warm start and `force_restart` all land here. Checking in the callers
+        // instead left the ordinary request path unguarded: a client could
+        // start a backend after `stop()` had walked the pool, and nothing would
+        // ever close that child.
+        //
+        // The check and the publish happen under the cleanup lock, which
+        // `stop()` also holds while it latches and takes every transport out.
+        // So the two are ordered: either this publishes first and shutdown's
+        // traversal finds it, or shutdown latches first and this refuses. There
+        // is no third case, which is what the previous check-then-publish could
+        // not say.
+        let refused = {
+            let cleanups = self.replaced_transport_cleanups.lock();
+            if cleanups.stopping {
+                true
+            } else {
+                *entry.transport.write() = Some(Arc::clone(&transport));
+                false
+            }
+        };
+        if refused {
+            warn!(
+                backend = %self.name,
+                "Backend shut down while this transport was starting; closing it \
+                 instead of publishing"
+            );
+            let _ = transport.close().await;
+            return Err(Error::BackendUnavailable(self.name.clone()));
+        }
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()
@@ -500,24 +560,206 @@ impl Backend {
     /// Never returns `Err` today: individual slot-close failures are logged and
     /// the remaining slots are still drained. The `Result` is retained for
     /// forward compatibility and to match the registry's stop contract.
+    /// Concurrency contract: `stop()` is idempotent but NOT single-flight. Two
+    /// concurrent calls both latch `stopping` and both drain, and whichever
+    /// takes the handle list first is the one that waits - the other can return
+    /// while cleanup is still running. Callers wanting "everything is closed"
+    /// must not race their own shutdown calls. Sequential calls are harmless:
+    /// the second finds nothing left to do.
     pub async fn stop(&self) -> Result<()> {
+        /// How long shutdown waits for replaced transports whose callers have
+        /// not finished. Bounds SHUTDOWN, not a request: exceeding it detaches
+        /// the remaining cleanups rather than closing anything under a live
+        /// caller, so it cannot cut a request short.
+        const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
+        /// How long shutdown waits to exclude a restart already in flight.
+        /// Sized above a typical backend start so an ordinary in-flight restart
+        /// finishes first, and finite so a hung one cannot hang shutdown.
+        const LIFECYCLE_WAIT: Duration = Duration::from_secs(15);
+
+        // Exclusive: waits for any restart already in progress to finish, and
+        // blocks any that has not yet started until the latch below is set.
+        //
+        // Bounded, because a restart holds this across `start_entry`, which runs
+        // to the backend's own init timeout - and if a start hangs past even
+        // that, an unbounded wait here would hang shutdown itself. Timing out
+        // gives up the exclusion and reopens the narrow race it prevents, which
+        // is the better of two bad outcomes at that point, so it is logged
+        // loudly rather than passed over.
+        let lifecycle_guard = tokio::time::timeout(LIFECYCLE_WAIT, self.lifecycle.write())
+            .await
+            .inspect_err(|_| {
+                warn!(
+                    backend = %self.name,
+                    wait_secs = LIFECYCLE_WAIT.as_secs(),
+                    "Restart still in flight after the shutdown wait; proceeding \
+                     without exclusion"
+                );
+            })
+            .ok();
+
+        // Latched BEFORE anything is torn down. Setting it later - after the
+        // pool has been walked - leaves a gap in which a restart finishing its
+        // start sees `stopping == false`, approves itself, and installs a
+        // transport into a slot shutdown has already visited and will not
+        // revisit. The child then survives a completed shutdown.
         info!(backend = %self.name, "Stopping backend");
 
-        // Take every slot's transport out first (dropping the parking_lot write
-        // guards) so no lock is held across the async close().
-        let transports: Vec<Arc<dyn Transport>> = self
-            .pool
-            .iter()
-            .filter_map(|entry| entry.value().transport.write().take())
-            .collect();
+        // Latch and empty the pool under ONE hold of the cleanup lock, which is
+        // the same lock `start_entry` publishes under. Latching first but
+        // traversing afterwards is not enough: a transport published between
+        // the two lands in a slot this traversal has already passed, and
+        // nothing revisits it. Holding across both makes "no more transports
+        // can appear" true at the moment the pool is emptied.
+        //
+        // No await inside - the closes happen after the guard is dropped.
+        let transports: Vec<Arc<dyn Transport>> = {
+            let mut cleanups = self.replaced_transport_cleanups.lock();
+            cleanups.stopping = true;
+            self.pool
+                .iter()
+                .filter_map(|entry| entry.value().transport.write().take())
+                .collect()
+        };
 
-        for transport in transports {
-            if let Err(e) = transport.close().await {
-                warn!(backend = %self.name, error = %e, "Failed to close pooled transport");
+        self.close_pooled_transports(transports, DRAIN_DEADLINE)
+            .await;
+
+        self.await_starts_in_flight(DRAIN_DEADLINE).await;
+
+        // Transports that `force_restart` replaced while they were in use are
+        // NOT in `pool`, so the loop above cannot see them. Their cleanup tasks
+        // own the only remaining reference and close them once their last
+        // caller lets go - but a detached task is dropped unrun when the
+        // runtime exits, which skips an HTTP backend's session DELETEs at the
+        // reload and shutdown boundaries where they matter most. So wait for
+        // them here.
+        //
+        // Bounded: a caller stuck forever would otherwise wedge shutdown, which
+        // is worse than abandoning one session. Past the deadline the remaining
+        // handles are dropped, which detaches those tasks rather than killing
+        // them - they may still finish if the runtime outlives this call - and
+        // the situation is logged either way.
+        let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
+        loop {
+            // Re-taken each pass on purpose. The health loop only checks its
+            // shutdown signal between ticks, so a `health_probe` already in
+            // flight can call `force_restart` and register a new cleanup WHILE
+            // this drain is running. Taking the list once would leave that last
+            // one undrained - the very case this drain exists for.
+            let pending: Vec<tokio::task::JoinHandle<()>> =
+                std::mem::take(&mut self.replaced_transport_cleanups.lock().handles);
+            if pending.is_empty() {
+                // An empty list is not "no more work": a restart still holding
+                // the lifecycle lock can register a cleanup after this take.
+                // Exclusivity is the test for that - if the write lock is
+                // available, no restart is in flight, so nothing more can
+                // arrive. (Already holding it means the same thing.)
+                let no_restart_in_flight =
+                    lifecycle_guard.is_some() || self.lifecycle.try_write().is_ok();
+                if no_restart_in_flight {
+                    break;
+                }
+                if tokio::time::Instant::now() >= drain_until {
+                    warn!(
+                        backend = %self.name,
+                        "Restart still in flight at the end of the shutdown drain; \
+                         its cleanup may not run"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
+            }
+
+            let remaining = drain_until.saturating_duration_since(tokio::time::Instant::now());
+            let timed_out = remaining.is_zero()
+                || tokio::time::timeout(remaining, async move {
+                    for handle in pending {
+                        let _ = handle.await;
+                    }
+                })
+                .await
+                .is_err();
+
+            if timed_out {
+                warn!(
+                    backend = %self.name,
+                    deadline_secs = DRAIN_DEADLINE.as_secs(),
+                    "Replaced transports still had live callers at shutdown; \
+                     abandoning their cleanup"
+                );
+                break;
             }
         }
 
         Ok(())
+    }
+
+    /// Close transports taken out of the pool, bounded as a STAGE.
+    ///
+    /// `close()` has no deadline of its own: `StdioTransport::close` waits on
+    /// the writer mutex, which a request blocked writing to a child that has
+    /// stopped reading can hold indefinitely, and HTTP closes its sessions one
+    /// after another. Without a bound here one wedged backend hangs gateway
+    /// shutdown forever - and stopping backends concurrently does not help,
+    /// because joining them waits for the slowest.
+    async fn close_pooled_transports(&self, transports: Vec<Arc<dyn Transport>>, budget: Duration) {
+        let until = tokio::time::Instant::now() + budget;
+        for transport in transports {
+            let remaining = until.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                warn!(
+                    backend = %self.name,
+                    "Ran out of time closing pooled transports; abandoning the rest"
+                );
+                return;
+            }
+            match tokio::time::timeout(remaining, transport.close()).await {
+                Ok(Err(error)) => {
+                    warn!(backend = %self.name, %error, "Failed to close pooled transport");
+                }
+                Err(_) => {
+                    warn!(
+                        backend = %self.name,
+                        "Timed out closing a pooled transport; abandoning it"
+                    );
+                }
+                Ok(Ok(())) => {}
+            }
+        }
+    }
+
+    /// Wait for starts that were already under way when shutdown began.
+    ///
+    /// Refusing to publish is not the whole guarantee: a start that has spawned
+    /// its child and is waiting on the MCP handshake owns a live process right
+    /// now, and the pool traversal cannot see it because it has not published.
+    /// Returning without this lets that process outlive shutdown for as long as
+    /// the handshake takes. At zero, every such start has resolved - published
+    /// into a pool already emptied, or refused and closed.
+    ///
+    /// Bounded, and this is the one case where shutdown's guarantee does not
+    /// hold: a start that never resolves is abandoned rather than allowed to
+    /// wedge the gateway. Its process is still closed when that start finally
+    /// finishes - late, and said out loud rather than quietly.
+    async fn await_starts_in_flight(&self, budget: Duration) {
+        let until = tokio::time::Instant::now() + budget;
+        while self
+            .starts_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
+        {
+            if tokio::time::Instant::now() >= until {
+                warn!(
+                    backend = %self.name,
+                    "Backend start still in flight at the end of shutdown; its \
+                     process will outlive this call until that start resolves"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// Check if backend is running (canonical shared slot connected).
@@ -547,25 +789,167 @@ impl Backend {
     /// # Errors
     ///
     /// Returns an error if the fresh transport fails to start or initialize.
-    pub async fn force_restart(&self) -> Result<()> {
+    /// Returns [`RestartOutcome::SkippedStopping`] - NOT an error - when the
+    /// backend is shutting down: nothing was rebuilt, and a caller reporting
+    /// "revived" on the strength of an `Ok` would be lying to its operator.
+    pub async fn force_restart(&self) -> Result<RestartOutcome> {
         // Rebuild only the canonical shared slot; per-user sessions are left
         // intact so one caller's health recovery cannot tear down another's
         // in-flight session (MIK-6735). The idle reaper reclaims per-user slots.
+        // Held for the whole restart so shutdown cannot interleave with it. See
+        // `Backend::lifecycle`: without this, the check below can pass before
+        // stop() latches, and the restart then registers a cleanup after the
+        // final drain or starts a child after teardown.
+        let _lifecycle = self.lifecycle.read().await;
+
+        // Refuse once shutdown has begun. `stop()` has already taken every
+        // transport out of the pool; restarting here would spawn a fresh child
+        // process (or a new upstream session) that nothing left alive will ever
+        // close, turning a shutdown into an orphan. The health loop only checks
+        // its shutdown signal between ticks, so a probe already in flight can
+        // reach this point during teardown.
+        if self.replaced_transport_cleanups.lock().stopping {
+            debug!(backend = %self.name, "Skipping force_restart: backend is stopping");
+            return Ok(RestartOutcome::SkippedStopping);
+        }
+
         let entry = self.pooled_entry(&PoolKey::Shared);
         let _guard = entry.start_lock.lock().await;
+
+        // Re-checked after the await. The lock above normally prevents shutdown
+        // from interleaving at all, but it is not the only line of defence:
+        // `stop()` bounds its wait for that lock, so it can proceed without it
+        // rather than hang forever. Correctness must not depend on having won
+        // the lock, only on this flag.
+        if self.replaced_transport_cleanups.lock().stopping {
+            debug!(backend = %self.name, "Abandoning force_restart: shutdown began while waiting");
+            return Ok(RestartOutcome::SkippedStopping);
+        }
         // Take the transport out and drop the RwLock write guard *before*
         // awaiting close() -- a parking_lot guard is not Send across an await.
-        let old = entry.transport.write().take();
+        // in_flight is read under that same guard so the answer cannot change
+        // between the check and the take.
+        let (old, busy) = {
+            let mut guard = entry.transport.write();
+            let busy = entry.in_flight.load(std::sync::atomic::Ordering::SeqCst) > 0;
+            (guard.take(), busy)
+        };
         if let Some(old) = old {
-            let _ = old.close().await;
+            if busy {
+                // Requests are executing against this transport right now.
+                // Closing it here kills a stdio child and tears down an HTTP
+                // session underneath a live caller, which is a worse failure
+                // than the one recovery is trying to fix.
+                //
+                // So close it exactly when its last user lets go, and never
+                // before. No deadline is imposed on that user: the two earlier
+                // attempts here both tried to answer "when is it safe?" with a
+                // timer and both were rejected - a fixed cap is arbitrary, and a
+                // cap derived from config is unsound because one logical attempt
+                // can re-handshake and retry in ways no formula sees.
+                self.close_after_last_owner(old);
+            } else {
+                let _ = old.close().await;
+            }
         }
-        self.start_entry(&PoolKey::Shared, &entry).await?;
-        Ok(())
+        // `start_entry` refuses to publish once shutdown has latched, so there
+        // is no window here in which a live transport can be left behind and
+        // nothing to take back. A start that failed for THAT reason is not a
+        // fault worth reporting as one.
+        match self.start_entry(&PoolKey::Shared, &entry).await {
+            Ok(_) => Ok(RestartOutcome::Rebuilt),
+            Err(error) => {
+                if self.replaced_transport_cleanups.lock().stopping {
+                    Ok(RestartOutcome::SkippedStopping)
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    /// Close a replaced transport the moment its last user releases it.
+    ///
+    /// [`Backend::force_restart`] cannot await this inline: it is the health
+    /// loop's recovery path, and the case it exists for is a WEDGED backend
+    /// whose in-flight request may never return, so blocking recovery on that
+    /// request would convert an interruption bug into a never-recovers bug. The
+    /// fresh transport is installed immediately and the old one is closed behind
+    /// it.
+    ///
+    /// **No deadline, deliberately.** Two earlier revisions capped this wait and
+    /// both were rejected in review: any cap closes the transport underneath a
+    /// request that is merely slower than the cap. The cap cannot be derived
+    /// either - a single logical attempt can re-handshake and retry (see
+    /// `HttpTransport`'s session-expiry path) in ways no formula predicts. So
+    /// this waits for the actual condition instead of a proxy for it.
+    ///
+    /// The `Arc` strong count is the drain signal, not `in_flight`: `in_flight`
+    /// counts requests against the SLOT, which new traffic keeps non-zero, while
+    /// the strong count tracks holders of THIS transport and reaches one (ours)
+    /// when the last in-flight caller is done.
+    ///
+    /// Precisely, and weaker than it may look: reaching one means no OTHER
+    /// strong reference exists at that instant, not that none can appear
+    /// afterwards. The stdio reader task holds a `Weak` and can still upgrade
+    /// between the check and `close()`, so `close()` may overlap a
+    /// `handle_response` call. That is benign - `handle_response` is
+    /// synchronous and only routes a reply to a pending receiver - and the
+    /// transport cannot be closed out from under a real caller, because a
+    /// caller's own `Arc` keeps the count above one for as long as it is
+    /// working. The guarantee is "no live caller", not "no future reference".
+    ///
+    /// Closing rather than merely dropping matters for HTTP: `close()` sends the
+    /// per-session DELETEs, and dropping skips them, abandoning upstream sessions
+    /// on every busy recovery with nothing guaranteeing the remote ever reclaims
+    /// them. stdio would be fine either way now that its reader task holds a
+    /// `Weak` (`kill_on_drop` reaps the child), but one path for both transports
+    /// is simpler than two.
+    ///
+    /// A holder that never releases keeps this task alive. That is the intended
+    /// trade - leaking one transport beats terminating a live request - and the
+    /// poll backs off to seconds and warns once so it stays cheap and visible
+    /// rather than silent.
+    fn close_after_last_owner(&self, old: Arc<dyn Transport>) {
+        const FIRST_POLL: Duration = Duration::from_millis(20);
+        const MAX_POLL: Duration = Duration::from_secs(5);
+        const WARN_AFTER: Duration = Duration::from_secs(300);
+
+        let name = self.name.clone();
+        let handle = tokio::spawn(async move {
+            let started = tokio::time::Instant::now();
+            let mut delay = FIRST_POLL;
+            let mut warned = false;
+
+            while Arc::strong_count(&old) > 1 {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(MAX_POLL);
+
+                if !warned && started.elapsed() >= WARN_AFTER {
+                    warned = true;
+                    warn!(
+                        backend = %name,
+                        held_for_secs = started.elapsed().as_secs(),
+                        "Replaced transport still held long after recovery; \
+                         waiting rather than closing it under its holder"
+                    );
+                }
+            }
+
+            if let Err(error) = old.close().await {
+                warn!(backend = %name, %error, "Replaced transport failed to close cleanly");
+            }
+        });
+
+        // Drop handles for cleanups that already finished so a long-lived
+        // backend restarted many times does not accumulate them.
+        let mut pending = self.replaced_transport_cleanups.lock();
+        pending.handles.retain(|h| !h.is_finished());
+        pending.handles.push(handle);
     }
 
     /// Active health/recovery probe driven by the background health loop.
-    ///
-    /// This is the gateway's automatic equivalent of `gateway_revive_server`.
+    ///    /// This is the gateway's automatic equivalent of `gateway_revive_server`.
     /// Two properties make it actually recover a wedged backend, which the old
     /// `backend.request("ping")` health check could not:
     ///
@@ -585,6 +969,30 @@ impl Backend {
     /// or the `ping` call fails. The breaker is left for organic traffic to
     /// trip -- this probe never records failures, only recoveries.
     pub async fn health_probe(&self, timeout: Duration) -> Result<()> {
+        // Hold the transport for the whole probe WITHOUT claiming client activity.
+        // Without this the reaper can close the transport between the health
+        // loop's gate check and the probe's ping; the probe reads that as a fault
+        // and calls force_restart(), so an idle backend is stopped and instantly
+        // restarted. With a 10s health interval against a 60s sweep their ticks
+        // coincide regularly, which would make the feature a periodic no-op - the
+        // exact failure this change exists to correct.
+        let _lease = self.begin_internal_activity();
+
+        // A slot the reaper deliberately stopped is not a fault, and probing is
+        // not a reason to wake it. `stop_if_idle` records this flag under the
+        // same transport write guard that takes the transport, so by the time a
+        // lease can be claimed the flag is already visible: either this lease
+        // came first and the sweep declined, or the sweep completed and this
+        // check sees it. Without the bail, the probe's ensure_started() below
+        // would restart the process the sweep just released.
+        if self
+            .shared_entry()
+            .stopped_when_idle
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+
         // `ensure_started` now respawns reliably because `is_connected()` does a
         // real liveness check (Fix C).
         if let Err(e) = self.ensure_started().await {

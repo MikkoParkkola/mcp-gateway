@@ -803,64 +803,113 @@ fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
     );
 }
 
-/// `idle_timeout` was accepted, documented as "hibernate after N idle", and read
-/// by nothing but a `Debug` impl. Parsing tolerates extra keys, so simply
-/// deleting the field would let it keep sitting in real configs looking
-/// effective. A retired key must announce itself — and the assertions below call
-/// the SHIPPED detector, not a copy of its logic.
+// ── GW.IDLE.3 — ownership validation ────────────────────────────────────────
+//
+// `stop_when_idle_for` promises the gateway will stop a process. It can only
+// honour that where it started the process. Accepting it elsewhere would repeat
+// nowhere, trusted by operators.
+
 #[test]
-fn config_with_retired_idle_timeout_still_loads() {
+fn stop_when_idle_for_is_accepted_on_a_gateway_started_backend() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    // NOTE: `backends:` is the real key. An earlier version of this test used
-    // `servers:`, which the root config ignores — it loaded ZERO backends and so
-    // never exercised a backend carrying the retired key at all.
     std::fs::write(
         &path,
-        "backends:\n  demo:\n    command: \"echo hi\"\n    idle_timeout: 10m\n",
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 5m\n",
     )
-    .expect("write config");
+    .expect("write");
 
-    let cfg = Config::load(Some(&path)).expect("a config carrying a retired key must still load");
-    assert!(
-        cfg.backends.contains_key("demo"),
-        "the backend carrying the retired key must survive parsing, \
-         otherwise this test proves nothing about that backend"
-    );
-}
-
-#[test]
-fn retired_idle_timeout_key_is_detected() {
-    let found = Config::retired_keys_in_str(
-        "backends:\n  demo:\n    command: \"echo hi\"\n    idle_timeout: 10m\n",
-    );
+    let cfg = Config::load(Some(&path)).expect("stdio backend may opt in");
+    let backend = cfg
+        .backends
+        .get("owned")
+        .expect("backend must survive parsing");
     assert_eq!(
-        found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-        vec!["idle_timeout"],
-        "the shipped detector must see the retired key"
+        backend.stop_when_idle_for,
+        Some(std::time::Duration::from_secs(300)),
+        "the duration must round-trip, not silently default"
     );
 }
 
 #[test]
-fn retired_key_detector_ignores_comments_and_clean_configs() {
+fn stop_when_idle_for_is_rejected_on_a_backend_the_gateway_does_not_start() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    // A LOCAL http backend: locality does not grant ownership. The gateway did
+    // not start this server and cannot stop it.
+    std::fs::write(
+        &path,
+        "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n    stop_when_idle_for: 5m\n",
+    )
+    .expect("write");
+
+    let err =
+        Config::load(Some(&path)).expect_err("the gateway cannot stop a process it did not start");
+    let msg = err.to_string();
     assert!(
-        Config::retired_keys_in_str(
-            "backends:\n  demo:\n    # idle_timeout: 10m  (removed)\n    command: \"echo hi\"\n"
-        )
-        .is_empty(),
-        "a commented-out key must not warn"
+        msg.contains("external"),
+        "the error must name the offending backend, got: {msg}"
     );
     assert!(
-        Config::retired_keys_in_str("backends:\n  demo:\n    command: \"echo hi\"\n").is_empty(),
-        "a clean config must not warn"
+        msg.contains("stop_when_idle_for"),
+        "the error must name the setting, got: {msg}"
     );
 }
 
 #[test]
-fn retired_key_detector_sees_quoted_keys() {
+fn omitting_stop_when_idle_for_leaves_a_backend_running_indefinitely() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "backends:\n  owned:\n    command: \"echo hi\"\n").expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("load");
+    assert_eq!(
+        cfg.backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        None,
+        "absent must mean never stop - no magic default that changes behaviour on upgrade"
+    );
+}
+
+#[test]
+fn an_http_backend_without_the_setting_still_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("http backends are fine without the setting");
     assert!(
-        !Config::retired_keys_in_str("backends:\n  demo:\n    \"idle_timeout\": 10m\n").is_empty(),
-        "YAML permits quoting the key; the detector must not miss that spelling"
+        cfg.backends.contains_key("external"),
+        "control: the validation must reject only the setting, not the transport"
+    );
+}
+
+#[test]
+fn duration_parser_handles_milliseconds() {
+    // Regression: the parser tested the "s" suffix BEFORE "ms", so "100ms" took
+    // the seconds branch and failed to parse "100m" as an integer. Every ms value
+    // in every duration field was rejected.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1500ms\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("ms suffix must parse");
+    assert_eq!(
+        cfg.backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        Some(std::time::Duration::from_millis(1500))
     );
 }
 
