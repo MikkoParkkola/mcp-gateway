@@ -302,6 +302,16 @@ impl Backend {
         // finished - the process is alive either way.
         let _in_flight = super::StartGuard::new(&self.starts_in_flight);
 
+        // Cheap early-out. The publish below is the authoritative check - it is
+        // ordered against shutdown's pool traversal, and this one is not - but
+        // spawning a process only to close it moments later is pure waste, and
+        // a caller that starts a backend after `stop()` has already returned
+        // would otherwise leave a child running for the length of a handshake.
+        if self.replaced_transport_cleanups.lock().stopping {
+            debug!(backend = %self.name, ?key, "Not starting: backend is stopped");
+            return Err(Error::BackendUnavailable(self.name.clone()));
+        }
+
         info!(backend = %self.name, ?key, "Starting backend transport");
 
         // Whatever the reason for starting - a client request, a health-driven
@@ -614,7 +624,13 @@ impl Backend {
 
         // One deadline covers both waits below: in-flight starts, then the
         // cleanup drain. Shutdown must be bounded overall, not per stage.
-        let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
+        // Each wait below gets its own budget rather than sharing one. A shared
+        // deadline lets whatever runs first consume all of it: slow transport
+        // closes, or a stuck start, would leave the cleanup drain with nothing
+        // and silently skip the HTTP session DELETEs it exists to send.
+        // Shutdown is bounded by the sum, deliberately - both stages matter and
+        // neither may starve the other.
+        let starts_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
 
         for transport in transports {
             if let Err(e) = transport.close().await {
@@ -635,7 +651,7 @@ impl Backend {
             .load(std::sync::atomic::Ordering::SeqCst)
             > 0
         {
-            if tokio::time::Instant::now() >= drain_until {
+            if tokio::time::Instant::now() >= starts_until {
                 warn!(
                     backend = %self.name,
                     "Backend start still in flight at the end of shutdown; its \
@@ -659,6 +675,7 @@ impl Backend {
         // handles are dropped, which detaches those tasks rather than killing
         // them - they may still finish if the runtime outlives this call - and
         // the situation is logged either way.
+        let drain_until = tokio::time::Instant::now() + DRAIN_DEADLINE;
         loop {
             // Re-taken each pass on purpose. The health loop only checks its
             // shutdown signal between ticks, so a `health_probe` already in

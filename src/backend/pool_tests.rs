@@ -1714,3 +1714,61 @@ done
 
     let _ = starter.await;
 }
+
+// GW.IDLE.RACE.11 - a start arriving AFTER shutdown must not spawn at all.
+//
+// The in-flight counter closes the case where a start was already running when
+// shutdown began. It says nothing about one that arrives afterwards: `stop()`
+// observes zero, returns, and the next request enters the start path with
+// nothing to stop it. Waiting for the publish to refuse it is too late - the
+// child is already spawned by then and lives for the length of a handshake.
+//
+// Ordering is what makes this airtight, and it is worth stating because it is
+// easy to get backwards: the guard is taken BEFORE the latch is read. So either
+// the increment lands first and shutdown's counter wait sees it, or the read
+// happens after the latch was set and the start refuses. There is no ordering
+// in which a start both escapes the counter and misses the latch.
+//
+// Unix-only: the witness is the process table, read via kill(1).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_after_shutdown_never_spawns_a_child() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let log = dir.path().join("spawns");
+    let backend = stoppable_backend_with_command(
+        &format!("sh -c 'echo spawn >> {}; sleep 5'", log.display()),
+        Duration::from_secs(60),
+    );
+
+    backend.stop().await.expect("stop");
+    assert_eq!(
+        spawn_count(&log),
+        0,
+        "precondition: nothing was started before shutdown"
+    );
+
+    // Every ordinary route into the start path, after shutdown has returned.
+    let started = backend.ensure_started().await;
+    let restarted = backend.force_restart().await;
+
+    assert!(
+        started.is_err(),
+        "a stopped backend reported a successful start"
+    );
+    assert!(
+        matches!(restarted, Ok(RestartOutcome::SkippedStopping)),
+        "force_restart on a stopped backend should report that it did nothing, \
+         got {restarted:?}"
+    );
+    assert_eq!(
+        spawn_count(&log),
+        0,
+        "a start after shutdown spawned a child process; it is closed only when \
+         the publish refuses it, so it runs for the length of a handshake with \
+         shutdown already finished"
+    );
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "a stopped backend was given a live transport"
+    );
+}
