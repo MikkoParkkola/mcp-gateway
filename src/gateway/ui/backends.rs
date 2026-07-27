@@ -25,15 +25,14 @@ use serde_json::json;
 
 use super::{
     backend_ops::{
-        BackendUpdate, add_backend as add_backend_config, load_config_or_default,
-        remove_backend as remove_backend_config, resolve_transport,
-        update_backend as update_backend_config,
+        BackendUpdate, add_backend as add_backend_config, remove_backend as remove_backend_config,
+        resolve_transport, update_backend as update_backend_config,
     },
     errors::{admin_auth_required, config_path_unavailable, flat_error},
     is_admin,
 };
 use crate::config::TransportConfig;
-use crate::config_persistence::write_config_and_reload_outcome;
+use crate::config_persistence::{ConfigMutation, mutate_config_and_reload};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;
@@ -179,25 +178,27 @@ async fn add_backend(
         }
     };
 
-    // Load current config and check for duplicates
-    let mut config = load_config_or_default(config_path);
-    if add_backend_config(&mut config, &req.name, transport, description, req.env).is_err() {
-        return flat_error(
-            StatusCode::CONFLICT,
-            format!("Backend '{}' already exists", req.name),
-        )
-        .into_response();
-    }
-
-    // Persist and reload
-    let reload = match write_config_and_reload_outcome(
+    // Load, check for duplicates, persist and reload - all inside one lock, so
+    // a second request cannot build its change on the pre-edit config.
+    let mutation = mutate_config_and_reload(
         config_path,
-        &config,
         state.meta_mcp.reload_context().as_deref(),
+        |config| {
+            add_backend_config(config, &req.name, transport, description, req.env).map_err(|_| {
+                (
+                    StatusCode::CONFLICT,
+                    format!("Backend '{}' already exists", req.name),
+                )
+            })
+        },
     )
-    .await
-    {
-        Ok(reload) => reload,
+    .await;
+
+    let reload = match mutation {
+        Ok(ConfigMutation::Applied((), reload)) => reload,
+        Ok(ConfigMutation::Rejected((code, message))) => {
+            return flat_error(code, message).into_response();
+        }
         Err(e) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };
 
@@ -225,20 +226,22 @@ async fn remove_backend(
         return config_path_unavailable().into_response();
     };
 
-    let mut config = load_config_or_default(config_path);
-    if remove_backend_config(&mut config, &name).is_err() {
-        return flat_error(StatusCode::NOT_FOUND, format!("Backend '{name}' not found"))
-            .into_response();
-    }
-
-    if let Err(e) = write_config_and_reload_outcome(
+    let mutation = mutate_config_and_reload(
         config_path,
-        &config,
         state.meta_mcp.reload_context().as_deref(),
+        |config| {
+            remove_backend_config(config, &name)
+                .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))
+        },
     )
-    .await
-    {
-        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    .await;
+
+    match mutation {
+        Ok(ConfigMutation::Applied((), _)) => {}
+        Ok(ConfigMutation::Rejected((code, message))) => {
+            return flat_error(code, message).into_response();
+        }
+        Err(e) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
 
     (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
@@ -316,75 +319,81 @@ async fn update_backend(
         .into_response();
     }
 
-    let mut config = load_config_or_default(config_path);
-    if !config.backends.contains_key(&name) {
-        return flat_error(StatusCode::NOT_FOUND, format!("Backend '{name}' not found"))
-            .into_response();
-    }
-
-    let transport = command
-        .map(|command| TransportConfig::Stdio {
-            command,
-            cwd: None,
-            protocol_version: None,
-        })
-        .or_else(|| {
-            url.map(|http_url| TransportConfig::Http {
-                http_url,
-                streamable_http: false,
-                protocol_version: None,
-            })
-        });
-
-    let env = env.map(|env_patch| {
-        let mut merged = config
-            .backends
-            .get(&name)
-            .expect("checked above")
-            .env
-            .clone();
-        merged.extend(env_patch);
-        merged
-    });
-
-    let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
-        if secs == 0 {
-            None // explicit clear: never stop
-        } else {
-            Some(std::time::Duration::from_secs(secs))
-        }
-    });
-
-    if let Err(message) = update_backend_config(
-        &mut config,
-        &name,
-        BackendUpdate {
-            description,
-            env,
-            enabled,
-            transport,
-            stop_when_idle_for,
-        },
-    ) {
-        // Surface the refusal verbatim. An operator setting "stop when idle" on a
-        // backend the gateway does not start needs to be told why, not silently
-        // ignored - being silently ignored is what this whole change corrects.
-        let code = if message.contains("not found") {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::BAD_REQUEST
-        };
-        return flat_error(code, message).into_response();
-    }
-
-    let reload = match write_config_and_reload_outcome(
+    // Everything from here reads the config and writes it back, so it all runs
+    // inside one lock. Splitting the read from the write is what lets one edit
+    // overwrite another.
+    let mutation = mutate_config_and_reload(
         config_path,
-        &config,
         state.meta_mcp.reload_context().as_deref(),
+        |config| {
+            if !config.backends.contains_key(&name) {
+                return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
+            }
+
+            let transport = command
+                .map(|command| TransportConfig::Stdio {
+                    command,
+                    cwd: None,
+                    protocol_version: None,
+                })
+                .or_else(|| {
+                    url.map(|http_url| TransportConfig::Http {
+                        http_url,
+                        streamable_http: false,
+                        protocol_version: None,
+                    })
+                });
+
+            let env = env.map(|env_patch| {
+                let mut merged = config
+                    .backends
+                    .get(&name)
+                    .expect("checked above")
+                    .env
+                    .clone();
+                merged.extend(env_patch);
+                merged
+            });
+
+            let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
+                if secs == 0 {
+                    None // explicit clear: never stop
+                } else {
+                    Some(std::time::Duration::from_secs(secs))
+                }
+            });
+
+            update_backend_config(
+                config,
+                &name,
+                BackendUpdate {
+                    description,
+                    env,
+                    enabled,
+                    transport,
+                    stop_when_idle_for,
+                },
+            )
+            .map_err(|message| {
+                // Surface the refusal verbatim. An operator setting "stop when idle" on a
+                // backend the gateway does not start needs to be told why, not silently
+                // ignored - being silently ignored is what this whole change corrects.
+                let code = if message.contains("not found") {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                (code, message)
+            })
+        },
     )
-    .await
-    {
-        Ok(reload) => reload,
+    .await;
+
+    let reload = match mutation {
+        Ok(ConfigMutation::Applied((), reload)) => reload,
+        Ok(ConfigMutation::Rejected((code, message))) => {
+            return flat_error(code, message).into_response();
+        }
         Err(e) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };
 

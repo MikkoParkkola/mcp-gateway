@@ -956,6 +956,41 @@ impl ReloadContext {
             .map_err(|e| format!("Config written but reload failed: {e}"))
     }
 
+    /// Read the config, apply `mutate`, write, and reload, all under one guard.
+    ///
+    /// The read belongs inside the guard. Two admin UI edits that each read the
+    /// file before locking will each build their change on the same starting
+    /// copy, and whichever writes second erases the other's change while
+    /// telling its caller the edit was saved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string on write, rename, or reload failure. A refusal
+    /// from `mutate` comes back as `ConfigMutation::Rejected`, not an error.
+    pub async fn mutate_and_reload_outcome<T, E, F>(
+        &self,
+        path: &std::path::Path,
+        mutate: F,
+    ) -> std::result::Result<crate::config_persistence::ConfigMutation<T, E>, String>
+    where
+        F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+    {
+        use crate::config_persistence::ConfigMutation;
+
+        let _reload_guard = self.registry.lock_reload().await;
+        let mut config = crate::config_persistence::load_config_or_default(path);
+        let value = match mutate(&mut config) {
+            Ok(value) => value,
+            Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
+        };
+        crate::config_persistence::write_config(path, &config)?;
+        let outcome = self
+            .reload_outcome_locked()
+            .await
+            .map_err(|e| format!("Config written but reload failed: {e}"))?;
+        Ok(ConfigMutation::Applied(value, Some(outcome)))
+    }
+
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {

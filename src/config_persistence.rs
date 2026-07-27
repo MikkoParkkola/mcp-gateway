@@ -93,6 +93,53 @@ pub async fn write_config_and_reload_outcome(
     Ok(None)
 }
 
+/// What a guarded read-modify-write did: either the change was applied and
+/// persisted, or the caller's own check rejected it and nothing was written.
+pub enum ConfigMutation<T, E> {
+    /// The change was applied, persisted, and (when a reload context exists)
+    /// reloaded.
+    Applied(T, Option<ReloadOutcome>),
+    /// The caller's closure refused the change. The file is untouched.
+    Rejected(E),
+}
+
+/// Read the config, apply `mutate` to it, and persist the result without
+/// letting another writer slip in between the read and the write.
+///
+/// Reading outside the lock is what makes edits vanish: two requests each read
+/// the same starting file, each apply their own change to that stale copy, and
+/// the second write erases the first change while reporting success. Doing the
+/// read inside the same critical section as the write is what stops it.
+///
+/// # Errors
+///
+/// Returns an error string on validation, write, rename, or reload failure. A
+/// refusal from `mutate` is not an error; it comes back as
+/// [`ConfigMutation::Rejected`] with the file untouched.
+pub async fn mutate_config_and_reload<T, E, F>(
+    path: &Path,
+    reload_context: Option<&ReloadContext>,
+    mutate: F,
+) -> Result<ConfigMutation<T, E>, String>
+where
+    F: FnOnce(&mut Config) -> Result<T, E>,
+{
+    if let Some(ctx) = reload_context {
+        return ctx.mutate_and_reload_outcome(path, mutate).await;
+    }
+
+    // No live gateway to reload, so no reload lock exists to hold. This path is
+    // the CLI acting on a config file nothing else is serving.
+    let mut config = load_config_or_default(path);
+    match mutate(&mut config) {
+        Ok(value) => {
+            write_config(path, &config)?;
+            Ok(ConfigMutation::Applied(value, None))
+        }
+        Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),
+    }
+}
+
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     #[cfg(windows)]
     {

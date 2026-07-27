@@ -143,9 +143,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed with `Failed to replace config file: No such file or directory`. A
   test that runs eight concurrent saves reproduces it on the first iteration.
   Temp filenames are now unique per write, and the write happens inside the
-  same lock as the reload, so a save reloads its own bytes. The bug predates
-  this release; it is fixed here because the reload work is what made the
-  boundary visible.
+  same lock as the reload, so a save reloads its own bytes.
+
+  The same symptom had a second cause one layer up: each admin UI save read the
+  whole config, changed one backend, and wrote the whole thing back, and the
+  read happened before the lock. Two saves therefore both started from the
+  pre-edit config, and the second wrote the first person's change out of
+  existence while telling both callers it had saved. Adding, removing, and
+  editing a backend now do the read, the change, the write, and the reload
+  under one lock, so an edit that waits its turn builds on what it waited for.
+  A test queues one edit behind another and fails if the queued edit erases it.
+
+  Both bugs predate this release; they are fixed here because the reload work
+  is what made the boundary visible.
 
 - **Concurrent config reloads could orphan a backend process (#397).** A reload
   stops a modified backend and then registers its replacement, and registration

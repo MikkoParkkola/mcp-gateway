@@ -931,3 +931,80 @@ async fn a_config_write_waits_for_the_reload_lock() {
     assert!(outcome.is_ok(), "write failed: {outcome:?}");
     assert!(config_path.exists(), "config was never written");
 }
+
+/// An edit must not erase a change that landed while it was queued. Reading the
+/// config outside the lock is what loses one: the queued edit starts from the
+/// copy it read before waiting, so its write drops whatever landed in the
+/// meantime while still reporting success.
+#[tokio::test]
+async fn a_queued_edit_does_not_erase_the_edit_it_waited_for() {
+    // GIVEN: a config file with no backends in it
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    crate::config_persistence::write_config(&config_path, &Config::default()).unwrap();
+
+    let ctx = Arc::new(ReloadContext::new(
+        config_path.clone(),
+        Arc::new(LiveConfig::new(Config::default())),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+
+    // WHEN: an edit adding "beta" is queued behind the reload lock
+    let started = Arc::new(tokio::sync::Barrier::new(2));
+    let guard = ctx.registry.lock_reload().await;
+    let queued_edit = tokio::spawn({
+        let ctx = Arc::clone(&ctx);
+        let started = Arc::clone(&started);
+        let path = config_path.clone();
+        async move {
+            started.wait().await;
+            ctx.mutate_and_reload_outcome(&path, |config: &mut Config| {
+                config.backends.insert("beta".to_string(), test_backend());
+                Ok::<(), ()>(())
+            })
+            .await
+        }
+    });
+    started.wait().await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // AND: the edit that holds the lock adds "alpha" and finishes first
+    let mut won_the_lock = Config::default();
+    won_the_lock
+        .backends
+        .insert("alpha".to_string(), test_backend());
+    crate::config_persistence::write_config(&config_path, &won_the_lock).unwrap();
+    drop(guard);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), queued_edit)
+        .await
+        .expect("the queued edit never finished")
+        .unwrap();
+    assert!(result.is_ok(), "the queued edit failed: {:?}", result.err());
+
+    // THEN: the saved config has both, not just the queued edit's own change
+    let saved = Config::load(Some(&config_path)).unwrap();
+    let mut names: Vec<&String> = saved.backends.keys().collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["alpha", "beta"],
+        "the queued edit erased the change it was waiting behind"
+    );
+}
+
+/// A backend config that passes validation, for tests that only care about the
+/// name.
+#[cfg(test)]
+fn test_backend() -> crate::config::BackendConfig {
+    crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "http://127.0.0.1:9/mcp".to_string(),
+            streamable_http: false,
+            protocol_version: None,
+        },
+        ..crate::config::BackendConfig::default()
+    }
+}
