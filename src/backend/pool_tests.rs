@@ -1933,3 +1933,260 @@ async fn concurrent_stops_wait_for_one_teardown() {
          that caller can now let the runtime exit with children alive"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Does a close() that TIMES OUT leave the child process alive?
+//
+// pool.rs's Err(_) arm warns "Child process may be orphaned" and bumps
+// `mcp_backend_idle_stop_close_failures`. "May be" is not an answer, and it is
+// not reachable by reading: it depends on who still holds an Arc to the
+// transport when the timeout fires.
+//
+// The real StdioTransport cannot answer it. Its close() body is
+//   *self.writer.lock().await = None;
+//   if let Some(ref mut child) = *self.child.lock().await { child.kill().await }
+// An uncontended tokio Mutex returns Ready inline, so with a tiny close_stage
+// the future still runs to `child.kill()` (SIGKILL, uncatchable) before the
+// timeout can ever preempt it -- the child dies from close(), not from drop,
+// and the measurement is contaminated.
+//
+// So the mock below reproduces StdioTransport's OWNERSHIP shape (it owns a real
+// tokio::process::Child with kill_on_drop(true)) while making close() genuinely
+// unresumable. What survives the timeout is then decided purely by Arc
+// ownership, which is the actual question.
+//
+// Second leg of the argument, already in the tree:
+// `transport::stdio::tests::dropping_the_last_handle_reaps_the_child` proves
+// the same drop-reaps-child property for the REAL StdioTransport, including its
+// reader task's deliberate Weak handle.
+#[cfg(unix)]
+struct RealChildWedgedClose {
+    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+}
+
+#[cfg(unix)]
+#[async_trait]
+impl Transport for RealChildWedgedClose {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        // Wedged exactly like a real close() blocked on the writer mutex that a
+        // stuck write_all still holds: it never reaches the child.kill() below.
+        std::future::pending::<()>().await;
+        let _ = &self.child;
+        Ok(())
+    }
+}
+
+// `kill -0` is the wrong probe here: it succeeds on a ZOMBIE, i.e. a child that
+// kill_on_drop already SIGKILLed but tokio's orphan queue has not reaped yet.
+// That would report a dead process as orphaned. Process STATE is the honest
+// probe: None = gone, Some("Z...") = dead awaiting reap, anything else = alive.
+#[cfg(unix)]
+fn process_state(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps must be runnable to probe the process table");
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+#[cfg(unix)]
+fn is_alive(pid: u32) -> bool {
+    process_state(pid).is_some_and(|s| !s.starts_with('Z'))
+}
+
+#[cfg(unix)]
+async fn spawn_probe_child() -> (tokio::process::Child, u32) {
+    let child = tokio::process::Command::new("sleep")
+        .arg("300")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn a long-lived probe child");
+    let pid = child.id().expect("a freshly spawned child has a pid");
+    assert!(
+        is_alive(pid),
+        "probe child must be alive before the test acts"
+    );
+    (child, pid)
+}
+
+// THE QUESTION. close() times out inside stop_if_idle -- is the child orphaned?
+//
+// Real time, not start_paused: the reap is done by the OS plus tokio's orphan
+// queue, and paused time would burn the whole poll loop in zero real time.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_close_that_times_out_still_reaps_the_child() {
+    let (child, pid) = spawn_probe_child().await;
+
+    let mut backend = stoppable_backend(Duration::from_secs(1));
+    {
+        let b = Arc::get_mut(&mut backend).expect("sole owner before the test starts");
+        b.budgets.close_stage = Duration::from_millis(100);
+    }
+    // Constructed inline on purpose: a local binding would leave a stray Arc
+    // clone alive and silently turn this into the control test below.
+    backend.set_transport_for_test(Arc::new(RealChildWedgedClose {
+        child: tokio::sync::Mutex::new(Some(child)),
+    }));
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .expect("the pool entry exists once a transport is installed")
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    assert!(
+        backend.stop_if_idle().await,
+        "stop_if_idle must report a stop even when close() times out"
+    );
+
+    for _ in 0..40 {
+        if !is_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let state = process_state(pid).unwrap_or_else(|| "<gone>".to_string());
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
+    panic!(
+        "child {pid} still alive 2s after close() timed out (ps stat = {state}); \
+         the idle sweep leaked a process the gateway can no longer reach"
+    );
+}
+
+// CONTROL. Same wedged close, but one Arc clone outlives the sweep.
+//
+// Two jobs. It proves the probe above can actually observe a survivor (a probe
+// that always reports "reaped" proves nothing), and it isolates the mechanism:
+// what reaps the child is the pool dropping the LAST Arc, not close() itself.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_surviving_transport_clone_orphans_the_child() {
+    let (child, pid) = spawn_probe_child().await;
+
+    let mut backend = stoppable_backend(Duration::from_secs(1));
+    {
+        let b = Arc::get_mut(&mut backend).expect("sole owner before the test starts");
+        b.budgets.close_stage = Duration::from_millis(100);
+    }
+    let survivor: Arc<dyn Transport> = Arc::new(RealChildWedgedClose {
+        child: tokio::sync::Mutex::new(Some(child)),
+    });
+    backend.set_transport_for_test(Arc::clone(&survivor));
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .expect("the pool entry exists once a transport is installed")
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    assert!(
+        backend.stop_if_idle().await,
+        "stop_if_idle must report a stop"
+    );
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let alive = is_alive(pid);
+
+    drop(survivor);
+    for _ in 0..40 {
+        if !is_alive(pid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
+
+    assert!(
+        alive,
+        "child {pid} died even though a transport clone was still held; \
+         the reap is then NOT tied to dropping the last Arc and the sibling \
+         test's verdict does not mean what it claims"
+    );
+}
+
+// The leak question, independent of reachability: if a caller-scoped clone DOES
+// outlive the sweep (ops.rs:25 / lifecycle.rs:1029 shape), is the child lost, or
+// merely reaped late? Function-scoped clone, dropped at scope end, no explicit
+// kill in the measured window.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_scoped_clone_delays_the_reap_but_does_not_leak_it() {
+    let (child, pid) = spawn_probe_child().await;
+
+    let mut backend = stoppable_backend(Duration::from_secs(1));
+    {
+        let b = Arc::get_mut(&mut backend).expect("sole owner before the test starts");
+        b.budgets.close_stage = Duration::from_millis(100);
+    }
+    let transport: Arc<dyn Transport> = Arc::new(RealChildWedgedClose {
+        child: tokio::sync::Mutex::new(Some(child)),
+    });
+    backend.set_transport_for_test(Arc::clone(&transport));
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .expect("the pool entry exists once a transport is installed")
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    {
+        // Stands in for the caller's local `let transport = self.shared_transport()`.
+        let _caller_scoped = Arc::clone(&transport);
+        drop(transport); // the pool's Arc and this one are now the only strong refs
+
+        assert!(
+            backend.stop_if_idle().await,
+            "stop_if_idle must report a stop"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            is_alive(pid),
+            "child {pid} died while the caller still held the transport"
+        );
+    } // caller's frame ends here — nothing else references the transport
+
+    for _ in 0..40 {
+        if !is_alive(pid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let leaked = is_alive(pid);
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
+
+    assert!(
+        !leaked,
+        "child {pid} was still alive 2s after the last transport clone left \
+         scope: the child is LEAKED, not merely reaped late"
+    );
+}
