@@ -10,7 +10,7 @@
 //! a PROCESS-GLOBAL recorder behind a `OnceLock` (src/metrics.rs `HANDLE`).
 //! A second test in the same binary calling `install()`/`render()` would
 //! share that global state and race on it. Run only this binary:
-//!   cargo test --features metrics --test metrics_export_test
+//!   `cargo test --features metrics --test metrics_export_test`
 
 #![cfg(feature = "metrics")]
 
