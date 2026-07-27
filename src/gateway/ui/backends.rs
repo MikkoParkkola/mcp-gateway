@@ -32,7 +32,7 @@ use super::{
     is_admin,
 };
 use crate::config::TransportConfig;
-use crate::config_persistence::{ConfigMutation, mutate_config_and_reload};
+use crate::config_reload::{ConfigMutation, mutate_config_and_reload};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;

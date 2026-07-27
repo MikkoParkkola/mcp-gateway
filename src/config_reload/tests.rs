@@ -1008,3 +1008,55 @@ fn test_backend() -> crate::config::BackendConfig {
         ..crate::config::BackendConfig::default()
     }
 }
+
+/// Without a live gateway there is nothing to reload, so the write still has
+/// to land on disk and report no reload outcome rather than failing.
+#[tokio::test]
+async fn write_config_and_reload_without_context_persists_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    let config = Config::default();
+
+    write_config_and_reload(&path, &config, None).await.unwrap();
+
+    assert!(path.exists());
+    let loaded = Config::load(Some(&path)).unwrap();
+    assert_eq!(loaded.backends.len(), config.backends.len());
+}
+
+#[tokio::test]
+async fn write_config_and_reload_outcome_without_context_returns_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    let config = Config::default();
+
+    let outcome = write_config_and_reload_outcome(&path, &config, None)
+        .await
+        .unwrap();
+
+    assert!(outcome.is_none());
+}
+
+/// `config_persistence` must not reach back into `config_reload`.
+///
+/// The two modules used to import each other: persistence called the reload
+/// context, and the reload context called persistence. A cycle like that has no
+/// build order to reason about, so a change to either module can only be
+/// reviewed by reading both. The dependency now points one way — reload knows
+/// about persistence, never the reverse — and this test is what keeps it that
+/// way, because nothing else in the build will complain if someone adds the
+/// import back.
+#[test]
+fn config_persistence_does_not_depend_on_config_reload() {
+    let source = include_str!("../config_persistence.rs");
+
+    let offenders: Vec<_> = source
+        .lines()
+        .filter(|line| line.contains("config_reload"))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "config_persistence reaches back into config_reload, restoring the cycle: {offenders:?}"
+    );
+}
