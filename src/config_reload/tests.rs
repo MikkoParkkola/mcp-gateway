@@ -1060,3 +1060,130 @@ fn config_persistence_does_not_depend_on_config_reload() {
         "config_persistence reaches back into config_reload, restoring the cycle: {offenders:?}"
     );
 }
+
+/// A config write must not queue behind a stuck reload forever.
+///
+/// The reload lock is held across a full reload: stop backends, re-register
+/// them, republish. A backend that is slow to shut down holds it for as long as
+/// it takes. Every admin UI backend edit waits on that same lock with no bound,
+/// so the HTTP handler blocks, the request times out somewhere the operator
+/// cannot see, and the retry queues behind the first one. Reporting "busy" lets
+/// the caller decide, and lets the UI answer 503 instead of hanging.
+#[tokio::test]
+async fn a_config_write_reports_busy_instead_of_waiting_forever() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    let ctx = test_reload_context(&config_path);
+
+    let guard = ctx.registry.lock_reload().await;
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        ctx.mutate_and_reload_outcome_within(
+            &config_path,
+            std::time::Duration::from_millis(50),
+            |config: &mut Config| -> std::result::Result<(), ()> {
+                config
+                    .backends
+                    .insert("blocked".to_string(), test_backend());
+                Ok(())
+            },
+        ),
+    )
+    .await
+    .expect("the write hung on the reload lock instead of reporting busy");
+
+    drop(guard);
+
+    assert!(
+        matches!(result, Err(ConfigWriteError::Busy)),
+        "a write blocked behind a held reload lock did not report busy"
+    );
+    assert!(
+        !config_path.exists(),
+        "a write that reported busy still touched the config file"
+    );
+}
+
+/// The same bound applies to the whole-config write path, not just the
+/// read-modify-write one.
+#[tokio::test]
+async fn a_whole_config_write_reports_busy_instead_of_waiting_forever() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    let ctx = test_reload_context(&config_path);
+
+    let guard = ctx.registry.lock_reload().await;
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        ctx.write_and_reload_outcome_within(
+            &config_path,
+            std::time::Duration::from_millis(50),
+            &Config::default(),
+        ),
+    )
+    .await
+    .expect("the write hung on the reload lock instead of reporting busy");
+
+    drop(guard);
+
+    assert!(
+        matches!(result, Err(ConfigWriteError::Busy)),
+        "a whole-config write blocked behind a held reload lock did not report busy"
+    );
+}
+
+/// A write that waits and then gets the lock must still succeed. The bound is
+/// there to stop unbounded queueing, not to fail edits that arrive during a
+/// normal reload.
+#[tokio::test]
+async fn a_write_that_gets_the_lock_within_its_bound_still_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    let ctx = std::sync::Arc::new(test_reload_context(&config_path));
+
+    let guard = ctx.registry.lock_reload().await;
+
+    let writer = tokio::spawn({
+        let ctx = std::sync::Arc::clone(&ctx);
+        let config_path = config_path.clone();
+        async move {
+            ctx.mutate_and_reload_outcome_within(
+                &config_path,
+                std::time::Duration::from_secs(5),
+                |config: &mut Config| -> std::result::Result<(), ()> {
+                    config
+                        .backends
+                        .insert("patient".to_string(), test_backend());
+                    Ok(())
+                },
+            )
+            .await
+        }
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    drop(guard);
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), writer)
+        .await
+        .expect("the write never completed after the lock was released")
+        .expect("the write task panicked");
+
+    assert!(
+        matches!(result, Ok(ConfigMutation::Applied((), _))),
+        "a write that waited out a normal reload was refused as busy"
+    );
+}
+
+/// A reload context wired to a scratch config path, with no live backends.
+fn test_reload_context(config_path: &std::path::Path) -> ReloadContext {
+    ReloadContext::new(
+        config_path.to_path_buf(),
+        Arc::new(LiveConfig::new(Config::default())),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+}
