@@ -102,10 +102,14 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let tmp_path = temp_config_path(path);
-        std::fs::write(&tmp_path, yaml).map_err(|e| format!("Failed to write temp config: {e}"))?;
+        // Leave no debris behind on either failure. The scratch name is unique
+        // per call, so without cleanup each failure would strand one more file
+        // next to the config instead of reusing a single stale one.
+        std::fs::write(&tmp_path, yaml).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to write temp config: {e}")
+        })?;
         std::fs::rename(&tmp_path, path).map_err(|e| {
-            // Leave no debris behind: the temp name is unique per call, so a
-            // failed rename would otherwise accumulate one orphan per failure.
             let _ = std::fs::remove_file(&tmp_path);
             format!("Failed to replace config file: {e}")
         })
@@ -181,17 +185,39 @@ mod tests {
     }
 
     /// Concurrent writers must each either persist their own bytes or fail
-    /// honestly. Against a shared temp path one writer's rename finds the file
-    /// already renamed away and fails with "Failed to replace config file".
+    /// honestly, and the file left behind must be exactly one writer's config.
+    /// Against a shared scratch path one writer's rename finds the file already
+    /// renamed away and fails with "Failed to replace config file", and the
+    /// bytes that land can belong to a writer that reported success elsewhere.
     #[test]
     fn concurrent_config_writes_do_not_lose_the_temp_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
 
+        // Each writer's config is distinguishable, so the assertion below can
+        // tell "one writer won" from "the file is a mix of two writers".
+        let config_for = |writer: usize| {
+            let mut config = Config::default();
+            config.backends.insert(
+                format!("writer-{writer}"),
+                crate::config::BackendConfig {
+                    transport: crate::config::TransportConfig::Http {
+                        http_url: "http://127.0.0.1:9/mcp".to_string(),
+                        streamable_http: false,
+                        protocol_version: None,
+                    },
+                    ..crate::config::BackendConfig::default()
+                },
+            );
+            config
+        };
+
         for _ in 0..40 {
             let errors: Vec<String> = std::thread::scope(|scope| {
+                let path = &path;
+                let config_for = &config_for;
                 let handles: Vec<_> = (0..8)
-                    .map(|_| scope.spawn(|| write_config(&path, &Config::default())))
+                    .map(|writer| scope.spawn(move || write_config(path, &config_for(writer))))
                     .collect();
                 handles
                     .into_iter()
@@ -201,11 +227,31 @@ mod tests {
 
             assert!(
                 errors.is_empty(),
-                "concurrent writers collided on the temp file: {errors:?}"
+                "concurrent writers collided on the scratch file: {errors:?}"
+            );
+
+            let loaded = Config::load(Some(&path)).expect("config left unparseable");
+            let names: Vec<&String> = loaded.backends.keys().collect();
+            assert_eq!(
+                names.len(),
+                1,
+                "persisted config is not any single writer's: {names:?}"
+            );
+            assert!(
+                names[0].starts_with("writer-"),
+                "persisted config is not any single writer's: {names:?}"
             );
         }
 
-        assert!(Config::load(Some(&path)).is_ok(), "config left unparseable");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name()))
+            .filter(|name| name != "gateway.yaml")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "scratch files were left next to the config: {leftovers:?}"
+        );
     }
 
     #[test]
