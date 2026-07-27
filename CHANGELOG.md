@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.4.0] - 2026-07-27
 
 ### Added
 
@@ -58,8 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fewer call per request than before. Raise `max_attempts` by one to keep the
   previous number of calls. `max_attempts: 0` clamps to a single attempt rather
   than none.
-
-### Changed
 
 - **Helm charts track the 3.4.0 release.** `deploy/helm/mcp-gateway` and
   `deploy/helm/mcp-gateway-crds` `appVersion` and the default image `tag` move
@@ -135,9 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   register a replacement; the second registration discarded the first, and if
   ordinary traffic had started that first replacement in the gap, its child
   process was left running with nothing holding a handle to it — the exact leak
-  `stop_when_idle_for` exists to prevent. Reload transactions now hold a lock
-  for the whole patch, so one reload's stop-then-register completes before the
-  next one's stop begins.
+  `stop_when_idle_for` exists to prevent. A reload now holds a lock across the
+  whole transaction — reading the config file, comparing it against the live
+  one, applying the difference, and publishing the result — so the next reload
+  compares against a config that already includes the previous one's work.
+  Holding the lock only around the apply step is not enough: both reloads would
+  have already decided "backend added" against the same stale live config
+  before they queued, and both would still register.
 
 - **Duration parsing rejected every `ms` value.** The parser tested the `"s"`
   suffix before `"ms"`, so `100ms` took the seconds branch and failed to parse
