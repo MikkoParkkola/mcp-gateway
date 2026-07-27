@@ -32,7 +32,7 @@ use super::{
     is_admin,
 };
 use crate::config::TransportConfig;
-use crate::config_persistence::{ConfigMutation, mutate_config_and_reload};
+use crate::config_reload::{ConfigMutation, ConfigWriteError, mutate_config_and_reload};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;
@@ -199,7 +199,14 @@ async fn add_backend(
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
-        Err(e) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        // A busy gateway has written nothing, so this is a retry-me, not a
+        // failure. 500 would tell the operator their edit broke something.
+        Err(e @ ConfigWriteError::Busy) => {
+            return flat_error(StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response();
+        }
+        Err(e) => {
+            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     };
 
     (
@@ -241,7 +248,14 @@ async fn remove_backend(
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
-        Err(e) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        // A busy gateway has written nothing, so this is a retry-me, not a
+        // failure. 500 would tell the operator their edit broke something.
+        Err(e @ ConfigWriteError::Busy) => {
+            return flat_error(StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response();
+        }
+        Err(e) => {
+            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     }
 
     (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
@@ -394,7 +408,14 @@ async fn update_backend(
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
-        Err(e) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        // A busy gateway has written nothing, so this is a retry-me, not a
+        // failure. 500 would tell the operator their edit broke something.
+        Err(e @ ConfigWriteError::Busy) => {
+            return flat_error(StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response();
+        }
+        Err(e) => {
+            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     };
 
     Json(json!({"status": "updated", "name": name, "reload": reload})).into_response()

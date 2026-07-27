@@ -1,0 +1,14 @@
+# Prometheus alert rules for mcp-gateway.
+#
+# Source of truth for the prose rationale: docs/DEPLOYMENT.md, section
+# "Alerting on a backend that would not stop". Keep this file and that
+# section in sync — this is the copy promtool actually validates.
+groups:
+  - name: mcp-gateway
+    rules:
+      - alert: McpBackendIdleStopCloseFailures
+        expr: increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backend {{ $labels.backend }} did not stop cleanly when idle"

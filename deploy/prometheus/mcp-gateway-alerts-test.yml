@@ -1,0 +1,80 @@
+# Unit tests for deploy/prometheus/mcp-gateway-alerts.yml, run offline with
+# `promtool test rules`. No scrape target, no Prometheus server, no network.
+#
+# Interval is 1m so that "single increment ages out of the 15m window" can be
+# expressed in a small, readable number of eval steps.
+rule_files:
+  - mcp-gateway-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # (a) Counter never increments -> no alert, ever.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-a"}'
+        values: "0x20"
+
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts: []
+
+  # (b) A single increment fires the alert, with the backend label attached.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-a"}'
+        values: "0x5 1 1x14"
+
+    alert_rule_test:
+      # increase() needs at least two samples spanning the step for the
+      # extrapolated rate to register; one step after the bump is enough.
+      - eval_time: 6m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              backend: stdio-a
+            exp_annotations:
+              summary: "Backend stdio-a did not stop cleanly when idle"
+
+  # (c) The alert resolves once the single increment ages out of the 15m
+  # increase() window -- no `for`, so this is a pure function of the window.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-a"}'
+        values: "0x5 1 1x30"
+
+    alert_rule_test:
+      # Still inside the 15m window after the bump at t=5m: firing.
+      - eval_time: 15m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              backend: stdio-a
+            exp_annotations:
+              summary: "Backend stdio-a did not stop cleanly when idle"
+      # Now the bump (t=5m) is more than 15m behind eval_time (t=21m):
+      # resolved.
+      - eval_time: 21m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts: []
+
+  # (d) Per-backend: a failure on one backend must not page for another.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-a"}'
+        values: "0x5 1 1x14"
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-b"}'
+        values: "0x20"
+
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              backend: stdio-a
+            exp_annotations:
+              summary: "Backend stdio-a did not stop cleanly when idle"

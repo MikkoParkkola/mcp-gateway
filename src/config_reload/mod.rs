@@ -39,7 +39,7 @@
 //! # });
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -934,10 +934,14 @@ impl ReloadContext {
 
     /// Write `config` to `path`, then reload, with both steps under one lock.
     ///
+    /// Waits [`RELOAD_LOCK_WAIT`] for the reload lock. See
+    /// [`Self::write_and_reload_outcome_within`] for why the wait is bounded.
+    ///
     /// # Errors
     ///
-    /// Returns an error string on validation, serialization, write, rename, or
-    /// reload failure.
+    /// [`ConfigWriteError::Busy`] when the lock did not come free in time, and
+    /// [`ConfigWriteError::Failed`] on validation, serialization, write,
+    /// rename, or reload failure.
     ///
     /// The write must be inside the same critical section as the reload. Two
     /// admin UI edits that write first and lock second can interleave so that
@@ -948,12 +952,30 @@ impl ReloadContext {
         &self,
         path: &std::path::Path,
         config: &Config,
-    ) -> std::result::Result<ReloadOutcome, String> {
-        let _reload_guard = self.registry.lock_reload().await;
+    ) -> std::result::Result<ReloadOutcome, ConfigWriteError> {
+        self.write_and_reload_outcome_within(path, RELOAD_LOCK_WAIT, config)
+            .await
+    }
+
+    /// [`Self::write_and_reload_outcome`] with an explicit bound on the wait.
+    ///
+    /// The bound is a parameter so a test can prove the busy path without
+    /// spending the production wait in wall-clock time.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::write_and_reload_outcome`].
+    pub async fn write_and_reload_outcome_within(
+        &self,
+        path: &std::path::Path,
+        wait: Duration,
+        config: &Config,
+    ) -> std::result::Result<ReloadOutcome, ConfigWriteError> {
+        let _reload_guard = self.lock_reload_within(wait).await?;
         crate::config_persistence::write_config(path, config)?;
         self.reload_outcome_locked()
             .await
-            .map_err(|e| format!("Config written but reload failed: {e}"))
+            .map_err(|e| ConfigWriteError::Failed(format!("Config written but reload failed: {e}")))
     }
 
     /// Read the config, apply `mutate`, write, and reload, all under one guard.
@@ -963,32 +985,74 @@ impl ReloadContext {
     /// copy, and whichever writes second erases the other's change while
     /// telling its caller the edit was saved.
     ///
+    /// Waits [`RELOAD_LOCK_WAIT`] for the reload lock. See
+    /// [`Self::mutate_and_reload_outcome_within`] for why the wait is bounded.
+    ///
     /// # Errors
     ///
-    /// Returns an error string on write, rename, or reload failure. A refusal
-    /// from `mutate` comes back as `ConfigMutation::Rejected`, not an error.
+    /// [`ConfigWriteError::Busy`] when the lock did not come free in time, and
+    /// [`ConfigWriteError::Failed`] on write, rename, or reload failure. A
+    /// refusal from `mutate` is not an error; it comes back as
+    /// [`ConfigMutation::Rejected`].
     pub async fn mutate_and_reload_outcome<T, E, F>(
         &self,
         path: &std::path::Path,
         mutate: F,
-    ) -> std::result::Result<crate::config_persistence::ConfigMutation<T, E>, String>
+    ) -> std::result::Result<ConfigMutation<T, E>, ConfigWriteError>
     where
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
-        use crate::config_persistence::ConfigMutation;
+        self.mutate_and_reload_outcome_within(path, RELOAD_LOCK_WAIT, mutate)
+            .await
+    }
 
-        let _reload_guard = self.registry.lock_reload().await;
+    /// [`Self::mutate_and_reload_outcome`] with an explicit bound on the wait.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::mutate_and_reload_outcome`].
+    pub async fn mutate_and_reload_outcome_within<T, E, F>(
+        &self,
+        path: &std::path::Path,
+        wait: Duration,
+        mutate: F,
+    ) -> std::result::Result<ConfigMutation<T, E>, ConfigWriteError>
+    where
+        F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+    {
+        let _reload_guard = self.lock_reload_within(wait).await?;
         let mut config = crate::config_persistence::load_config_or_default(path);
         let value = match mutate(&mut config) {
             Ok(value) => value,
             Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
         };
         crate::config_persistence::write_config(path, &config)?;
-        let outcome = self
-            .reload_outcome_locked()
-            .await
-            .map_err(|e| format!("Config written but reload failed: {e}"))?;
+        let outcome = self.reload_outcome_locked().await.map_err(|e| {
+            ConfigWriteError::Failed(format!("Config written but reload failed: {e}"))
+        })?;
         Ok(ConfigMutation::Applied(value, Some(outcome)))
+    }
+
+    /// Take the reload lock, giving up after `wait`.
+    ///
+    /// The bound covers *acquiring* the lock, not holding it. A write that wins
+    /// the lock then runs its reload to completion, however long that takes;
+    /// what the bound prevents is every other write queueing behind that one
+    /// forever.
+    ///
+    /// Only config *writes* are bounded at all. A reload triggered by the
+    /// meta-tool, the admin UI reload button, or the file watcher still waits as
+    /// long as it takes: refusing one of those would silently drop a config
+    /// change the operator already made on disk, which trades a hang for a lost
+    /// edit. A refused write, by contrast, has changed nothing and can be
+    /// retried.
+    async fn lock_reload_within(
+        &self,
+        wait: Duration,
+    ) -> std::result::Result<tokio::sync::MutexGuard<'_, ()>, ConfigWriteError> {
+        tokio::time::timeout(wait, self.registry.lock_reload())
+            .await
+            .map_err(|_| ConfigWriteError::Busy)
     }
 
     /// The reload transaction itself. The caller must already hold the reload
@@ -1019,6 +1083,135 @@ impl ReloadContext {
         self.live_config.set(new_config);
 
         Ok(outcome)
+    }
+}
+
+/// How long a config write waits for the reload lock before reporting busy.
+///
+/// Long enough to sit out a normal reload — stopping and re-registering
+/// backends — and short enough that a stuck one surfaces as a refusal the
+/// caller can act on rather than a request that never returns.
+const RELOAD_LOCK_WAIT: Duration = Duration::from_secs(5);
+
+/// Why a config write did not happen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigWriteError {
+    /// Another reload or write held the reload lock for longer than this write
+    /// was willing to wait. Nothing was read, written, or reloaded, so the same
+    /// request can simply be retried.
+    Busy,
+    /// The write itself failed. The message describes which step.
+    Failed(String),
+}
+
+impl std::fmt::Display for ConfigWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy => write!(
+                f,
+                "the gateway is applying another config change; nothing was written, retry shortly"
+            ),
+            Self::Failed(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigWriteError {}
+
+impl From<String> for ConfigWriteError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+/// Serialize `config`, write it atomically, then trigger hot-reload when a
+/// reload context is available.
+///
+/// Persistence is always authoritative for the on-disk file. Hot-reload then
+/// applies only the subset of changes supported by [`ReloadContext`] (for
+/// example, backend changes); server listener changes remain on disk until the
+/// process is restarted.
+///
+/// # Errors
+///
+/// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
+/// [`ConfigWriteError::Failed`] on serialization, write, rename, or reload failure.
+pub async fn write_config_and_reload(
+    path: &Path,
+    config: &Config,
+    reload_context: Option<&ReloadContext>,
+) -> std::result::Result<(), ConfigWriteError> {
+    write_config_and_reload_outcome(path, config, reload_context)
+        .await
+        .map(|_| ())
+}
+
+/// Serialize `config`, write it atomically, then return any hot-reload outcome.
+///
+/// # Errors
+///
+/// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
+/// [`ConfigWriteError::Failed`] on serialization, write, rename, or reload failure.
+pub async fn write_config_and_reload_outcome(
+    path: &Path,
+    config: &Config,
+    reload_context: Option<&ReloadContext>,
+) -> std::result::Result<Option<ReloadOutcome>, ConfigWriteError> {
+    if let Some(ctx) = reload_context {
+        // Write and reload share one lock inside the context. Writing here
+        // first would reopen the race the lock exists to close.
+        return ctx.write_and_reload_outcome(path, config).await.map(Some);
+    }
+
+    crate::config_persistence::write_config(path, config)?;
+    Ok(None)
+}
+
+/// What a guarded read-modify-write did: either the change was applied and
+/// persisted, or the caller's own check rejected it and nothing was written.
+pub enum ConfigMutation<T, E> {
+    /// The change was applied, persisted, and (when a reload context exists)
+    /// reloaded.
+    Applied(T, Option<ReloadOutcome>),
+    /// The caller's closure refused the change. The file is untouched.
+    Rejected(E),
+}
+
+/// Read the config, apply `mutate` to it, and persist the result without
+/// letting another writer slip in between the read and the write.
+///
+/// Reading outside the lock is what makes edits vanish: two requests each read
+/// the same starting file, each apply their own change to that stale copy, and
+/// the second write erases the first change while reporting success. Doing the
+/// read inside the same critical section as the write is what stops it.
+///
+/// # Errors
+///
+/// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
+/// [`ConfigWriteError::Failed`] on validation, write, rename, or reload failure.
+/// A refusal from `mutate` is not an error; it comes back as
+/// [`ConfigMutation::Rejected`] with the file untouched.
+pub async fn mutate_config_and_reload<T, E, F>(
+    path: &Path,
+    reload_context: Option<&ReloadContext>,
+    mutate: F,
+) -> std::result::Result<ConfigMutation<T, E>, ConfigWriteError>
+where
+    F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+{
+    if let Some(ctx) = reload_context {
+        return ctx.mutate_and_reload_outcome(path, mutate).await;
+    }
+
+    // No live gateway to reload, so no reload lock exists to hold. This path is
+    // the CLI acting on a config file nothing else is serving.
+    let mut config = crate::config_persistence::load_config_or_default(path);
+    match mutate(&mut config) {
+        Ok(value) => {
+            crate::config_persistence::write_config(path, &config)?;
+            Ok(ConfigMutation::Applied(value, None))
+        }
+        Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),
     }
 }
 

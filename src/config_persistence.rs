@@ -2,14 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared helpers for mutating and persisting gateway config files.
 
-use std::path::Path;
-#[cfg(not(windows))]
-use std::path::PathBuf;
-#[cfg(not(windows))]
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
-use crate::config_reload::{ReloadContext, ReloadOutcome};
 
 /// Load config from `path`, returning `Config::default()` when the file is absent
 /// or cannot be parsed.
@@ -52,134 +49,138 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     write_yaml(path, &yaml)
 }
 
-/// Serialize `config`, write it atomically, then trigger hot-reload when a
-/// reload context is available.
+/// How many times a rename is retried before the write is reported failed.
 ///
-/// Persistence is always authoritative for the on-disk file. Hot-reload then
-/// applies only the subset of changes supported by [`ReloadContext`] (for
-/// example, backend changes); server listener changes remain on disk until the
-/// process is restarted.
+/// Windows can refuse a rename that Unix would complete: another process
+/// holding the destination open produces a sharing violation, which is
+/// transient rather than fatal. Retrying a bounded number of times rides that
+/// out; giving up after it leaves the previous config in place.
 ///
-/// # Errors
-///
-/// Returns an error string on serialization, write, rename, or reload failure.
-pub async fn write_config_and_reload(
-    path: &Path,
-    config: &Config,
-    reload_context: Option<&ReloadContext>,
-) -> Result<(), String> {
-    write_config_and_reload_outcome(path, config, reload_context)
-        .await
-        .map(|_| ())
-}
+/// Retries are immediate and never sleep. The write path is synchronous but is
+/// reached from an async task that holds the reload lock, so parking the thread
+/// here would stall an executor worker and lengthen exactly the lock hold that
+/// the caller's busy bound exists to cap. An immediate retry only rides out a
+/// violation that clears within the syscall round trip; a longer-lived one is
+/// reported instead of waited on.
+const RENAME_ATTEMPTS: u32 = 8;
 
-/// Serialize `config`, write it atomically, then return any hot-reload outcome.
+/// How many scratch names are tried before a write gives up.
 ///
-/// # Errors
+/// Each name is probed with an exclusive create, so a collision means some
+/// other writer owns that name right now. A handful of probes clears any
+/// realistic amount of concurrency; past that, failing is more honest than
+/// reusing a name whose owner is still writing to it.
+const SCRATCH_ATTEMPTS: u64 = 8;
+
+/// Write `yaml` to a scratch file next to `path`, then rename it over `path`.
 ///
-/// Returns an error string on serialization, write, rename, or reload failure.
-pub async fn write_config_and_reload_outcome(
-    path: &Path,
-    config: &Config,
-    reload_context: Option<&ReloadContext>,
-) -> Result<Option<ReloadOutcome>, String> {
-    if let Some(ctx) = reload_context {
-        // Write and reload share one lock inside the context. Writing here
-        // first would reopen the race the lock exists to close.
-        return ctx.write_and_reload_outcome(path, config).await.map(Some);
-    }
-
-    write_config(path, config)?;
-    Ok(None)
-}
-
-/// What a guarded read-modify-write did: either the change was applied and
-/// persisted, or the caller's own check rejected it and nothing was written.
-pub enum ConfigMutation<T, E> {
-    /// The change was applied, persisted, and (when a reload context exists)
-    /// reloaded.
-    Applied(T, Option<ReloadOutcome>),
-    /// The caller's closure refused the change. The file is untouched.
-    Rejected(E),
-}
-
-/// Read the config, apply `mutate` to it, and persist the result without
-/// letting another writer slip in between the read and the write.
+/// The rename is what makes the write atomic: a reader sees either the old
+/// file or the new one, never a half-written one. Writing in place instead
+/// would leave the config truncated if the process died mid-write, which is
+/// exactly the config a restart needs to be intact.
 ///
-/// Reading outside the lock is what makes edits vanish: two requests each read
-/// the same starting file, each apply their own change to that stale copy, and
-/// the second write erases the first change while reporting success. Doing the
-/// read inside the same critical section as the write is what stops it.
-///
-/// # Errors
-///
-/// Returns an error string on validation, write, rename, or reload failure. A
-/// refusal from `mutate` is not an error; it comes back as
-/// [`ConfigMutation::Rejected`] with the file untouched.
-pub async fn mutate_config_and_reload<T, E, F>(
-    path: &Path,
-    reload_context: Option<&ReloadContext>,
-    mutate: F,
-) -> Result<ConfigMutation<T, E>, String>
-where
-    F: FnOnce(&mut Config) -> Result<T, E>,
-{
-    if let Some(ctx) = reload_context {
-        return ctx.mutate_and_reload_outcome(path, mutate).await;
-    }
-
-    // No live gateway to reload, so no reload lock exists to hold. This path is
-    // the CLI acting on a config file nothing else is serving.
-    let mut config = load_config_or_default(path);
-    match mutate(&mut config) {
-        Ok(value) => {
-            write_config(path, &config)?;
-            Ok(ConfigMutation::Applied(value, None))
-        }
-        Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),
-    }
-}
-
+/// This path is deliberately not platform-gated. An earlier version wrote in
+/// place on Windows, so the one platform without a crash-safe write was also
+/// the one no test covered.
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        std::fs::write(path, yaml).map_err(|e| format!("Failed to write config: {e}"))
-    }
+    let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
 
-    #[cfg(not(windows))]
-    {
-        let tmp_path = temp_config_path(path);
-        // Leave no debris behind on either failure. The scratch name is unique
-        // per call, so without cleanup each failure would strand one more file
-        // next to the config instead of reusing a single stale one.
-        std::fs::write(&tmp_path, yaml).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Failed to write temp config: {e}")
-        })?;
-        std::fs::rename(&tmp_path, path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Failed to replace config file: {e}")
-        })
-    }
+    // Leave no debris behind on any failure. The scratch name is unique per
+    // call, so without cleanup each failure would strand one more file next to
+    // the config instead of reusing a single stale one.
+    let cleanup = |e: &std::io::Error, what: &str| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to {what} config: {e}")
+    };
+
+    // Write through the handle the exclusive create returned. Reopening by
+    // path would reopen the gap the exclusive create just closed.
+    file.write_all(yaml.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| cleanup(&e, "write temp"))?;
+    drop(file);
+
+    rename_with_retry(&tmp_path, path).map_err(|e| cleanup(&e, "replace"))
 }
 
-/// A temp path unique to this call, in the same directory as `path` so the
-/// rename stays atomic.
+/// Claim a scratch file next to `path` that no other writer holds.
 ///
-/// Uniqueness is the point. A shared `<config>.tmp` lets two concurrent writers
-/// collide: both write the same temp file, the first rename ships whichever
-/// bytes landed last while reporting its own edit saved, and the second rename
-/// fails because the file it wrote is already gone.
-#[cfg(not(windows))]
-fn temp_config_path(path: &Path) -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+/// The create is exclusive, so a name already in use is refused rather than
+/// truncated. A refused name belongs to another live writer, so it is left
+/// alone and the next name is tried.
+///
+/// # Errors
+///
+/// Returns an error when every candidate name is taken, or on any I/O failure
+/// other than a collision.
+fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, PathBuf), String> {
+    for seed in first..first.wrapping_add(SCRATCH_ATTEMPTS) {
+        let candidate = scratch_candidate(path, seed);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((file, candidate)),
+            // Someone else's scratch file. Not ours to write to, and not ours
+            // to delete either.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("Failed to create temp config: {e}")),
+        }
+    }
+    Err(format!(
+        "Failed to create temp config: {SCRATCH_ATTEMPTS} scratch names next to the config were all in use"
+    ))
+}
 
+/// Rename `from` over `to`, retrying while the OS reports a transient refusal.
+///
+/// Retries are immediate; see [`RENAME_ATTEMPTS`] for why this must not sleep.
+///
+/// `std::fs::rename` replaces an existing `to` on every platform we support,
+/// Windows included: std documents the call as "replacing the original file if
+/// `to` already exists", and the Windows implementation is `MoveFileExW` with
+/// `MOVEFILE_REPLACE_EXISTING` (std `sys/fs/windows.rs`). Two separate reviews
+/// have read this loop and reported that Windows renames fail once the config
+/// exists; both were wrong. Do not add a `remove_file(to)` before the rename to
+/// "fix" it -- that would reintroduce the window where the config is missing,
+/// which is the whole thing this function exists to avoid.
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut last = None;
+    for _ in 0..RENAME_ATTEMPTS {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) if is_transient(&e) => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("rename exhausted its retries")))
+}
+
+/// Whether an error is the kind another process can stop causing.
+///
+/// A Windows sharing violation surfaces as `PermissionDenied` or, on older
+/// mappings, uncategorised. On Unix neither classification is reachable from a
+/// rename inside a directory the process just wrote to, so the retry loop
+/// costs nothing there.
+fn is_transient(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::PermissionDenied) || e.raw_os_error() == Some(32)
+}
+
+/// The next scratch seed no other writer in this process will pick.
+fn next_scratch_seed() -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The scratch path for a given seed.
+///
+/// Split from the counter so a test can name a candidate deterministically.
+/// Probing the shared counter to predict the next name is flaky: tests run in
+/// parallel threads of one binary and any other write moves it.
+fn scratch_candidate(path: &Path, seed: u64) -> PathBuf {
     let mut tmp_path = path.as_os_str().to_os_string();
-    tmp_path.push(format!(
-        ".tmp.{}.{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
+    tmp_path.push(format!(".tmp.{}.{seed}", std::process::id()));
     PathBuf::from(tmp_path)
 }
 
@@ -213,14 +214,110 @@ mod tests {
     /// The temp file used by an atomic config write must be unique per call.
     /// A shared `<config>.tmp` lets two concurrent writers clobber each other:
     /// one renames the other's bytes into place and reports its own edit saved.
-    #[cfg(not(windows))]
+    /// Every platform writes through a scratch file and renames it into place.
+    ///
+    /// Windows used to write the config in place, so a crash mid-write left a
+    /// truncated config behind — on the one platform no test covered. This
+    /// asserts the observable half of the unified path: the scratch file is
+    /// gone, the config parses, and nothing extra is left in the directory.
+    #[test]
+    fn a_config_write_leaves_no_scratch_file_on_any_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+
+        write_config(&path, &Config::default()).unwrap();
+
+        assert!(Config::load(Some(&path)).is_ok(), "config is not parseable");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|e| e.file_name()))
+            .filter(|name| name != "gateway.yaml")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the write left scratch files next to the config: {leftovers:?}"
+        );
+    }
+
+    /// A rename that fails for a reason another process can stop causing is
+    /// retried; one that cannot succeed is reported immediately.
+    #[test]
+    fn only_transient_rename_errors_are_retried() {
+        assert!(
+            is_transient(&std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            "a sharing violation would be reported as a permanent failure"
+        );
+        assert!(
+            !is_transient(&std::io::Error::from(std::io::ErrorKind::NotFound)),
+            "a missing scratch file would be retried until the attempts ran out"
+        );
+    }
+
+    /// The write path runs on an async executor worker while the reload lock is
+    /// held. Parking that thread stalls unrelated requests and lengthens the
+    /// hold that the busy bound exists to cap, so no sleep may creep back in.
+    #[test]
+    fn the_write_path_never_parks_the_thread_it_runs_on() {
+        // Split so this needle does not match the line that defines it.
+        let needle = concat!("thread::", "sleep");
+        let source = include_str!("config_persistence.rs");
+        let sleeps: Vec<&str> = source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("//"))
+            .filter(|line| line.contains(needle))
+            .collect();
+        assert!(
+            sleeps.is_empty(),
+            "the config write path blocks its executor thread: {sleeps:?}"
+        );
+    }
+
+    #[test]
+    fn a_scratch_name_already_in_use_is_never_claimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        let taken = scratch_candidate(&path, 7);
+        std::fs::write(&taken, b"another writer's bytes").unwrap();
+
+        let (_file, chosen) = create_scratch_exclusive(&path, 7).unwrap();
+
+        assert_ne!(
+            chosen, taken,
+            "the write claimed a scratch file another writer already held"
+        );
+        assert_eq!(
+            std::fs::read(&taken).unwrap(),
+            b"another writer's bytes",
+            "the write truncated another writer's scratch file"
+        );
+    }
+
+    /// Exhausting every candidate must fail rather than reuse a live name.
+    #[test]
+    fn a_write_fails_when_every_scratch_name_is_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        for seed in 0..SCRATCH_ATTEMPTS {
+            std::fs::write(scratch_candidate(&path, seed), b"held").unwrap();
+        }
+
+        let error = create_scratch_exclusive(&path, 0).unwrap_err();
+
+        assert!(
+            error.contains("were all in use"),
+            "exhaustion is not distinguishable from an I/O failure: {error}"
+        );
+    }
+
     #[test]
     fn each_config_write_gets_its_own_temp_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
 
-        let first = temp_config_path(&path);
-        let second = temp_config_path(&path);
+        let (_first_handle, first) = create_scratch_exclusive(&path, next_scratch_seed()).unwrap();
+        let (_second_handle, second) =
+            create_scratch_exclusive(&path, next_scratch_seed()).unwrap();
 
         assert_ne!(
             first, second,
@@ -322,31 +419,5 @@ mod tests {
 
         assert!(matches!(result, Err(msg) if msg.contains("Failed to validate config")));
         assert!(!path.exists());
-    }
-
-    #[tokio::test]
-    async fn write_config_and_reload_without_context_persists_yaml() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-        let config = Config::default();
-
-        write_config_and_reload(&path, &config, None).await.unwrap();
-
-        assert!(path.exists());
-        let loaded = Config::load(Some(&path)).unwrap();
-        assert_eq!(loaded.backends.len(), config.backends.len());
-    }
-
-    #[tokio::test]
-    async fn write_config_and_reload_outcome_without_context_returns_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-        let config = Config::default();
-
-        let outcome = write_config_and_reload_outcome(&path, &config, None)
-            .await
-            .unwrap();
-
-        assert!(outcome.is_none());
     }
 }

@@ -44,6 +44,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING for library users: four config-writing functions moved module.**
+  `write_config_and_reload`, `write_config_and_reload_outcome`,
+  `mutate_config_and_reload`, and `ConfigMutation` now live in `config_reload`
+  instead of `config_persistence`. Rust code calling them by the old path stops
+  compiling and needs one import changed; `load_config_or_default` and
+  `write_config` did not move. Nothing changes for anyone running the binary.
+
+  The two modules referenced each other in a cycle, which no Rust build
+  complains about and which made both harder to reason about. No compatibility
+  re-export is provided, because a re-export from `config_persistence` would
+  recreate the cycle it removes. The break is documented here rather than
+  deferred to 4.0.0 deliberately: two of the four names are new in this release
+  and never shipped, and crates.io lists no reverse dependencies on this crate
+  (`/api/v1/crates/mcp-gateway/reverse_dependencies`, total 0, checked
+  2026-07-27). Private consumers outside the registry cannot be ruled out.
+
 - **`failsafe.retry.max_attempts` now means attempts, not retries.** It was
   passed straight to `backon`, which counts retries, so every backend made
   `max_attempts + 1` calls: a configured `3` produced four, and the shipped
@@ -191,6 +207,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `100m` as an integer. Affected every duration field in the config. Values
   using `ms` failed the config load outright rather than being misread, so no
   config that previously loaded changes meaning.
+
+- **Config writes could park an admin request forever.** A save waited on the
+  reload lock with no bound, and that lock is held across a whole reload:
+  stopping backends, re-registering, republishing. One slow backend shutdown
+  parked every settings-panel edit indefinitely, with retries queueing behind
+  it. A write that is *waiting* for the lock now gives up after five seconds and
+  answers 503, which is a refusal the caller can retry rather than a request
+  that never returns. The bound covers the wait only. Once a write wins the
+  lock it still runs the reload to completion, so the one edit that triggers a
+  slow backend shutdown can still take as long as that shutdown takes; what no
+  longer happens is every other edit queueing behind it forever. Reloads stay
+  unbounded on purpose: refusing one would silently drop a change already
+  written to disk, and a refused write changed nothing.
+
+- **The scratch file a config save writes through could be silently reused.**
+  The name came from a counter private to one process, and it was opened in a
+  mode that truncates whatever is already there. A second gateway process, a
+  leftover from a crashed run, or a wrapped counter put two writers on one file.
+  The save now claims the file exclusively and moves to the next name rather
+  than truncating a file someone else holds. It never deletes a scratch file it
+  did not create, since a live writer may own it.
+
+- **On Windows the config was written in place, so a crash mid-write truncated
+  it.** Every other platform wrote to a scratch file and renamed it into place,
+  which is atomic; Windows took a separate branch that did not, and no test
+  reached it. Both branches are gone, replaced by one path every platform takes,
+  with a bounded retry for the sharing violations Windows raises when another
+  handle is momentarily open. The remaining Windows-specific piece, classifying
+  OS error 32 as transient, is unverified on Windows itself.
+
+- **A config write could block a runtime worker thread.** The rename retry above
+  slept between attempts, in a synchronous function reached from an async task
+  that holds the reload lock, lengthening the exact wait the five-second bound
+  exists to cap. It also retried on permission errors, which are permanent on
+  Unix, paying every sleep before failing anyway. Retries are immediate now.
+
+- **The alert rule this release documents is now tested, offline.** Prometheus'
+  own `promtool` checks it on four cases: silent when the counter is flat, firing
+  after a single increment, resolving once that increment ages out of the window,
+  and firing per backend rather than across all of them. The rules and their
+  tests live in `deploy/prometheus/`. A test also covers the export half of the
+  counter's path, that the recorder carries this metric name and its `backend`
+  label through to scrape output. It issues the counter directly rather than
+  driving a real failing shutdown, so it pairs with the existing pool tests
+  covering the increment itself; neither half was observed before.
 
 ## [3.3.2] - 2026-07-15
 
