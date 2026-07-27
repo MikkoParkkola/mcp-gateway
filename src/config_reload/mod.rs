@@ -815,6 +815,13 @@ impl ConfigWatcher {
                                     );
                                 }
                                 Err(e) => {
+                                    // Every other error out of `reload_outcome`
+                                    // comes from reading or parsing the file:
+                                    // that call has exactly two failure sources
+                                    // and the arm above catches the other one. A
+                                    // third source added later lands here and
+                                    // would be mislabelled, so give it its own
+                                    // arm rather than widening this message.
                                     warn!(
                                         error = %e,
                                         "Config reload: failed to parse config file, keeping current config"
