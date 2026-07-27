@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared helpers for mutating and persisting gateway config files.
 
-use std::path::Path;
-#[cfg(not(windows))]
-use std::path::PathBuf;
-#[cfg(not(windows))]
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
@@ -140,27 +137,69 @@ where
     }
 }
 
-fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        std::fs::write(path, yaml).map_err(|e| format!("Failed to write config: {e}"))
-    }
+/// How many times a rename is retried before the write is reported failed.
+///
+/// Windows can refuse a rename that Unix would complete: another process
+/// holding the destination open produces a sharing violation, which is
+/// transient rather than fatal. Retrying a bounded number of times rides that
+/// out; giving up after it leaves the previous config in place.
+const RENAME_ATTEMPTS: u32 = 8;
 
-    #[cfg(not(windows))]
-    {
-        let tmp_path = temp_config_path(path);
-        // Leave no debris behind on either failure. The scratch name is unique
-        // per call, so without cleanup each failure would strand one more file
-        // next to the config instead of reusing a single stale one.
-        std::fs::write(&tmp_path, yaml).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Failed to write temp config: {e}")
-        })?;
-        std::fs::rename(&tmp_path, path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("Failed to replace config file: {e}")
-        })
+/// Pause between rename attempts. Eight attempts cost at most ~35ms, and only
+/// on the failure path.
+const RENAME_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Write `yaml` to a scratch file next to `path`, then rename it over `path`.
+///
+/// The rename is what makes the write atomic: a reader sees either the old
+/// file or the new one, never a half-written one. Writing in place instead
+/// would leave the config truncated if the process died mid-write, which is
+/// exactly the config a restart needs to be intact.
+///
+/// This path is deliberately not platform-gated. An earlier version wrote in
+/// place on Windows, so the one platform without a crash-safe write was also
+/// the one no test covered.
+fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
+    let tmp_path = temp_config_path(path);
+
+    // Leave no debris behind on any failure. The scratch name is unique per
+    // call, so without cleanup each failure would strand one more file next to
+    // the config instead of reusing a single stale one.
+    let cleanup = |e: std::io::Error, what: &str| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to {what} config: {e}")
+    };
+
+    std::fs::write(&tmp_path, yaml).map_err(|e| cleanup(e, "write temp"))?;
+    rename_with_retry(&tmp_path, path).map_err(|e| cleanup(e, "replace"))
+}
+
+/// Rename `from` over `to`, retrying while the OS reports a transient refusal.
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut last = None;
+    for attempt in 0..RENAME_ATTEMPTS {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) if is_transient(&e) => {
+                if attempt + 1 < RENAME_ATTEMPTS {
+                    std::thread::sleep(RENAME_RETRY_DELAY);
+                }
+                last = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
     }
+    Err(last.unwrap_or_else(|| std::io::Error::other("rename exhausted its retries")))
+}
+
+/// Whether an error is the kind another process can stop causing.
+///
+/// A Windows sharing violation surfaces as `PermissionDenied` or, on older
+/// mappings, uncategorised. On Unix neither classification is reachable from a
+/// rename inside a directory the process just wrote to, so the retry loop
+/// costs nothing there.
+fn is_transient(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::PermissionDenied) || e.raw_os_error() == Some(32)
 }
 
 /// A temp path unique to this call, in the same directory as `path` so the
@@ -170,7 +209,6 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
 /// collide: both write the same temp file, the first rename ships whichever
 /// bytes landed last while reporting its own edit saved, and the second rename
 /// fails because the file it wrote is already gone.
-#[cfg(not(windows))]
 fn temp_config_path(path: &Path) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -213,7 +251,45 @@ mod tests {
     /// The temp file used by an atomic config write must be unique per call.
     /// A shared `<config>.tmp` lets two concurrent writers clobber each other:
     /// one renames the other's bytes into place and reports its own edit saved.
-    #[cfg(not(windows))]
+    /// Every platform writes through a scratch file and renames it into place.
+    ///
+    /// Windows used to write the config in place, so a crash mid-write left a
+    /// truncated config behind — on the one platform no test covered. This
+    /// asserts the observable half of the unified path: the scratch file is
+    /// gone, the config parses, and nothing extra is left in the directory.
+    #[test]
+    fn a_config_write_leaves_no_scratch_file_on_any_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+
+        write_config(&path, &Config::default()).unwrap();
+
+        assert!(Config::load(Some(&path)).is_ok(), "config is not parseable");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|e| e.file_name()))
+            .filter(|name| name != "gateway.yaml")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the write left scratch files next to the config: {leftovers:?}"
+        );
+    }
+
+    /// A rename that fails for a reason another process can stop causing is
+    /// retried; one that cannot succeed is reported immediately.
+    #[test]
+    fn only_transient_rename_errors_are_retried() {
+        assert!(
+            is_transient(&std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            "a sharing violation would be reported as a permanent failure"
+        );
+        assert!(
+            !is_transient(&std::io::Error::from(std::io::ErrorKind::NotFound)),
+            "a missing scratch file would be retried until the attempts ran out"
+        );
+    }
+
     #[test]
     fn each_config_write_gets_its_own_temp_file() {
         let dir = tempfile::tempdir().unwrap();
