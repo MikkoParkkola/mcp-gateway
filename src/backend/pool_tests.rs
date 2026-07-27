@@ -1771,6 +1771,75 @@ async fn a_start_after_shutdown_never_spawns_a_child() {
     );
 }
 
+/// Never finishes closing. Models the real hang the shutdown path already
+/// guards against: `StdioTransport::close` waits on the writer mutex, which a
+/// request blocked writing to a child that stopped reading holds forever.
+struct WedgedCloseMock;
+
+#[async_trait]
+impl Transport for WedgedCloseMock {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
+// One wedged backend must not cost every OTHER backend its idle stop.
+//
+// The sweep walks backends one after another inside a single task, so an
+// unbounded close here is not a local delay: the loop never reaches the next
+// backend, never ticks again, and the feature silently stops working for the
+// whole gateway. The shutdown path already bounds close() for this exact
+// reason; the idle path has the same hazard and needs the same bound.
+#[tokio::test(start_paused = true)]
+async fn a_wedged_close_cannot_wedge_the_idle_sweep() {
+    let mut backend = stoppable_backend(Duration::from_secs(1));
+    {
+        let b = Arc::get_mut(&mut backend).expect("sole owner before the test starts");
+        b.budgets.close_stage = Duration::from_secs(10);
+    }
+    backend.set_transport_for_test(Arc::new(WedgedCloseMock));
+    backend
+        .pool
+        .get(&PoolKey::Shared)
+        .unwrap()
+        .value()
+        .last_used
+        .store(0, Ordering::Relaxed);
+
+    // Generous relative to the 10s budget: this asserts the close is bounded at
+    // all, not where the bound sits.
+    let stopped = tokio::time::timeout(Duration::from_secs(600), backend.stop_if_idle())
+        .await
+        .expect("a close that never finishes must be abandoned, not awaited forever");
+
+    assert!(
+        stopped,
+        "the transport was taken out of the pool, so the slot is stopped whether or not \
+         the child died with it"
+    );
+    assert_eq!(
+        backend.lifecycle(),
+        BackendLifecycle::Dormant,
+        "abandoning the close must still leave the slot stopped, not half-running"
+    );
+}
+
 /// Closes slowly, so a caller that returns without waiting is visible.
 struct SlowCloseMock {
     closed: Arc<AtomicBool>,

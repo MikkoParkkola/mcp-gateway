@@ -481,23 +481,50 @@ impl Backend {
         let Some(transport) = taken else {
             return false; // already stopped
         };
-        if let Err(error) = transport.close().await {
-            // The slot is stopped either way — it no longer holds a transport,
-            // and re-clearing the flag would report Running for a slot with
-            // nothing to talk to, which is strictly worse. But a failed close
-            // means the child may have outlived the gateway's handle to it, so
-            // Dormant is not proof the process died. Say so rather than imply
-            // a clean stop.
-            tracing::warn!(
-                backend = %self.name,
-                %error,
-                "Idle backend transport failed to close cleanly; child process may be orphaned"
-            );
-            telemetry_metrics::counter!(
-                "mcp_backend_idle_stop_close_failures",
-                "backend" => self.name.clone()
-            )
-            .increment(1);
+        // BOUNDED, for the same reason `close_pooled_transports` is bounded at
+        // shutdown: `close()` has no deadline of its own — `StdioTransport::close`
+        // waits on the writer mutex, which a request blocked writing to a child
+        // that stopped reading can hold indefinitely. The sweep visits backends
+        // one after another in a single task, so an unbounded close here does
+        // not merely delay THIS backend: it wedges the whole sweep, and every
+        // other backend then idles forever without being stopped. The transport
+        // is already out of the pool, so abandoning the wait cannot strand a
+        // caller — only, at worst, the child process, which is exactly what the
+        // failure branch below already reports.
+        let close = tokio::time::timeout(self.budgets.close_stage, transport.close()).await;
+        match close {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                // The slot is stopped either way — it no longer holds a transport,
+                // and re-clearing the flag would report Running for a slot with
+                // nothing to talk to, which is strictly worse. But a failed close
+                // means the child may have outlived the gateway's handle to it, so
+                // Dormant is not proof the process died. Say so rather than imply
+                // a clean stop.
+                tracing::warn!(
+                    backend = %self.name,
+                    %error,
+                    "Idle backend transport failed to close cleanly; child process may be orphaned"
+                );
+                telemetry_metrics::counter!(
+                    "mcp_backend_idle_stop_close_failures",
+                    "backend" => self.name.clone()
+                )
+                .increment(1);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    backend = %self.name,
+                    budget_secs = self.budgets.close_stage.as_secs(),
+                    "Idle backend transport did not close within its budget; \
+                     abandoning the close so the sweep keeps running. Child process may be orphaned"
+                );
+                telemetry_metrics::counter!(
+                    "mcp_backend_idle_stop_close_failures",
+                    "backend" => self.name.clone()
+                )
+                .increment(1);
+            }
         }
 
         tracing::info!(
