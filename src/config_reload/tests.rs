@@ -875,3 +875,59 @@ async fn concurrent_reloads_do_not_both_add_the_same_backend() {
         "the backend should be registered after the reloads"
     );
 }
+
+/// The config write must happen inside the reload lock, not before it.
+///
+/// This is the assertion that pins the fix. If the write runs first and the
+/// lock is taken afterwards, two admin UI edits interleave: both write, then
+/// both reload, and each is told its own edit was applied while the file on
+/// disk holds only the last writer's bytes. Holding the guard here proves the
+/// write is inside the critical section, because a write that were outside it
+/// would land on disk while this test still owns the lock.
+#[tokio::test]
+async fn a_config_write_waits_for_the_reload_lock() {
+    // GIVEN: a context whose config file does not exist yet, so the file
+    // appearing is unambiguous evidence that the write ran.
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+
+    let ctx = Arc::new(ReloadContext::new(
+        config_path.clone(),
+        Arc::new(LiveConfig::new(Config::default())),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+
+    // WHEN: a write starts while the reload lock is held
+    let started = Arc::new(tokio::sync::Barrier::new(2));
+    let guard = ctx.registry.lock_reload().await;
+    let writer = tokio::spawn({
+        let ctx = Arc::clone(&ctx);
+        let started = Arc::clone(&started);
+        let path = config_path.clone();
+        async move {
+            started.wait().await;
+            ctx.write_and_reload_outcome(&path, &Config::default())
+                .await
+        }
+    });
+    started.wait().await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // THEN: nothing has been written - the writer is queued behind the lock
+    assert!(
+        !config_path.exists(),
+        "the config was written while the reload lock was held, so the write \
+         is outside the critical section and two edits can still interleave"
+    );
+
+    // AND: releasing the lock lets it finish
+    drop(guard);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), writer)
+        .await
+        .expect("write did not finish after the lock was released")
+        .unwrap();
+    assert!(outcome.is_ok(), "write failed: {outcome:?}");
+    assert!(config_path.exists(), "config was never written");
+}

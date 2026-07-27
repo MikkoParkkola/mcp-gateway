@@ -5,6 +5,8 @@
 use std::path::Path;
 #[cfg(not(windows))]
 use std::path::PathBuf;
+#[cfg(not(windows))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
 use crate::config_reload::{ReloadContext, ReloadOutcome};
@@ -81,16 +83,13 @@ pub async fn write_config_and_reload_outcome(
     config: &Config,
     reload_context: Option<&ReloadContext>,
 ) -> Result<Option<ReloadOutcome>, String> {
-    write_config(path, config)?;
-
     if let Some(ctx) = reload_context {
-        let outcome = ctx
-            .reload_outcome()
-            .await
-            .map_err(|e| format!("Config written but reload failed: {e}"))?;
-        return Ok(Some(outcome));
+        // Write and reload share one lock inside the context. Writing here
+        // first would reopen the race the lock exists to close.
+        return ctx.write_and_reload_outcome(path, config).await.map(Some);
     }
 
+    write_config(path, config)?;
     Ok(None)
 }
 
@@ -104,14 +103,32 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     {
         let tmp_path = temp_config_path(path);
         std::fs::write(&tmp_path, yaml).map_err(|e| format!("Failed to write temp config: {e}"))?;
-        std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to replace config file: {e}"))
+        std::fs::rename(&tmp_path, path).map_err(|e| {
+            // Leave no debris behind: the temp name is unique per call, so a
+            // failed rename would otherwise accumulate one orphan per failure.
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to replace config file: {e}")
+        })
     }
 }
 
+/// A temp path unique to this call, in the same directory as `path` so the
+/// rename stays atomic.
+///
+/// Uniqueness is the point. A shared `<config>.tmp` lets two concurrent writers
+/// collide: both write the same temp file, the first rename ships whichever
+/// bytes landed last while reporting its own edit saved, and the second rename
+/// fails because the file it wrote is already gone.
 #[cfg(not(windows))]
 fn temp_config_path(path: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let mut tmp_path = path.as_os_str().to_os_string();
-    tmp_path.push(".tmp");
+    tmp_path.push(format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     PathBuf::from(tmp_path)
 }
 
@@ -140,6 +157,55 @@ mod tests {
         assert!(path.exists());
         let loaded = Config::load(Some(&path)).unwrap();
         assert_eq!(loaded.backends.len(), config.backends.len());
+    }
+
+    /// The temp file used by an atomic config write must be unique per call.
+    /// A shared `<config>.tmp` lets two concurrent writers clobber each other:
+    /// one renames the other's bytes into place and reports its own edit saved.
+    #[cfg(not(windows))]
+    #[test]
+    fn each_config_write_gets_its_own_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+
+        let first = temp_config_path(&path);
+        let second = temp_config_path(&path);
+
+        assert_ne!(
+            first, second,
+            "two writers shared one temp path, so either can overwrite the other"
+        );
+        for tmp in [&first, &second] {
+            assert_eq!(tmp.parent(), path.parent(), "temp file left its directory");
+        }
+    }
+
+    /// Concurrent writers must each either persist their own bytes or fail
+    /// honestly. Against a shared temp path one writer's rename finds the file
+    /// already renamed away and fails with "Failed to replace config file".
+    #[test]
+    fn concurrent_config_writes_do_not_lose_the_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+
+        for _ in 0..40 {
+            let errors: Vec<String> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..8)
+                    .map(|_| scope.spawn(|| write_config(&path, &Config::default())))
+                    .collect();
+                handles
+                    .into_iter()
+                    .filter_map(|h| h.join().unwrap().err())
+                    .collect()
+            });
+
+            assert!(
+                errors.is_empty(),
+                "concurrent writers collided on the temp file: {errors:?}"
+            );
+        }
+
+        assert!(Config::load(Some(&path)).is_ok(), "config left unparseable");
     }
 
     #[test]

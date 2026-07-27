@@ -135,6 +135,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two admin UI config edits at once could lose one of them silently.** Saving
+  a config wrote the file first and took the reload lock afterwards, and every
+  save on Unix used the same temp filename, `<config>.tmp`. Two saves arriving
+  together therefore wrote the same temp file: whichever renamed first shipped
+  the other's bytes while reporting its own edit saved, and the second rename
+  failed with `Failed to replace config file: No such file or directory`. A
+  test that runs eight concurrent saves reproduces it on the first iteration.
+  Temp filenames are now unique per write, and the write happens inside the
+  same lock as the reload, so a save reloads its own bytes. The bug predates
+  this release; it is fixed here because the reload work is what made the
+  boundary visible.
+
 - **Concurrent config reloads could orphan a backend process (#397).** A reload
   stops a modified backend and then registers its replacement, and registration
   replaces by name. Nothing serialized reloads, and four paths can trigger one

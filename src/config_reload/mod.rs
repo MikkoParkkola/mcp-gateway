@@ -929,7 +929,36 @@ impl ReloadContext {
         // backend edit, and the config-file watcher. See `apply_patch` for why
         // the lock cannot live one level down.
         let _reload_guard = self.registry.lock_reload().await;
+        self.reload_outcome_locked().await
+    }
 
+    /// Write `config` to `path`, then reload, with both steps under one lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string on validation, serialization, write, rename, or
+    /// reload failure.
+    ///
+    /// The write must be inside the same critical section as the reload. Two
+    /// admin UI edits that write first and lock second can interleave so that
+    /// one reload reads the other's file, and the caller is told its own edit
+    /// was applied. Holding one guard across write-read-apply-publish is what
+    /// makes an edit's own bytes the ones it reloads.
+    pub async fn write_and_reload_outcome(
+        &self,
+        path: &std::path::Path,
+        config: &Config,
+    ) -> std::result::Result<ReloadOutcome, String> {
+        let _reload_guard = self.registry.lock_reload().await;
+        crate::config_persistence::write_config(path, config)?;
+        self.reload_outcome_locked()
+            .await
+            .map_err(|e| format!("Config written but reload failed: {e}"))
+    }
+
+    /// The reload transaction itself. The caller must already hold the reload
+    /// lock; taking it here as well would deadlock on the non-reentrant mutex.
+    async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let Some((new_config, patch)) = load_config_patch(&self.config_path, &self.live_config)?
         else {
             return Ok(ReloadOutcome::no_changes());
