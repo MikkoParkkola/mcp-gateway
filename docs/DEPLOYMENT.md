@@ -379,14 +379,18 @@ memory pressure on the host, days later.
 # prometheus rules
 - alert: McpBackendIdleStopCloseFailures
   expr: increase(mcp_backend_idle_stop_close_failures[15m]) > 0
-  for: 5m
   labels: { severity: warning }
   annotations:
     summary: "Backend {{ $labels.backend }} did not stop cleanly when idle"
 ```
 
-Any increase is worth knowing about, so the threshold is zero rather than a rate.
-`for: 5m` keeps a single transient close from paging anyone.
+Every occurrence is worth knowing about, because each one may be a process that
+outlives the gateway's tracking and never comes back on its own. So the
+threshold is zero rather than a rate, and there is no `for` clause: the
+expression stays true for the whole 15-minute window after a single increment,
+which means `for` would delay the notification without ever suppressing an
+isolated failure. Warning rather than page — the damage is one leaked process,
+not an outage.
 
 When it fires: check for an orphaned child process of the gateway
 (`pgrep -P $(pgrep -f mcp-gateway)`) and kill what the gateway no longer tracks.
