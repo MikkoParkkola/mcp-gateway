@@ -78,6 +78,11 @@ pub struct ConfigPatch {
     pub profiles_changed: bool,
 }
 
+/// Summary text a reload reports when the file on disk matches the live config.
+/// Shared so the file-watcher can recognise the no-op case without matching on a
+/// literal that could drift away from the one `no_changes` writes.
+const NO_CHANGES_SUMMARY: &str = "no changes detected";
+
 /// Structured reload outcome for callers that need more than a log line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReloadOutcome {
@@ -172,7 +177,7 @@ impl ReloadOutcome {
     #[must_use]
     pub fn no_changes() -> Self {
         Self {
-            changes: "no changes detected".to_string(),
+            changes: NO_CHANGES_SUMMARY.to_string(),
             restart_required: false,
             restart_reason: None,
         }
@@ -748,6 +753,20 @@ impl ConfigWatcher {
             let mut pending_trigger: Option<ReloadTrigger> = None;
             let mut ticker = tokio::time::interval(Duration::from_millis(100));
 
+            // The watcher runs the same reload transaction as the meta-tool and
+            // the admin UI, through the same function (#397). It used to have a
+            // private copy of that transaction, which meant the regression test
+            // covering the reload lock only ever exercised the other two entry
+            // points: an edit that moved the lock here alone would not have
+            // failed a single test.
+            let ctx = ReloadContext::new(
+                config_path,
+                live_config,
+                registry,
+                failsafe_cfg,
+                cache_ttl,
+            );
+
             loop {
                 tokio::select! {
                     Some(trigger) = event_rx.recv() => {
@@ -765,14 +784,24 @@ impl ConfigWatcher {
                             let trigger = pending_trigger.take().unwrap();
                             last_event = None;
                             log_reload_trigger(&trigger);
-                            reload_once(
-                                &config_path,
-                                &live_config,
-                                &registry,
-                                &failsafe_cfg,
-                                cache_ttl,
-                            )
-                            .await;
+                            match ctx.reload_outcome().await {
+                                Ok(outcome) if outcome.changes == NO_CHANGES_SUMMARY => {
+                                    tracing::debug!("Config reload: no changes detected");
+                                }
+                                Ok(outcome) => {
+                                    info!(
+                                        changes = %outcome.changes,
+                                        restart_required = outcome.restart_required,
+                                        "Config reload: complete"
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        error = %e,
+                                        "Config reload failed; keeping the current config"
+                                    );
+                                }
+                            }
                         }
                     }
                     _ = shutdown_rx.recv() => {
@@ -816,59 +845,6 @@ fn load_config_patch(
     }
 }
 
-/// Parse the config file, compute the diff, and apply the patch.
-async fn reload_once(
-    config_path: &std::path::Path,
-    live_config: &Arc<LiveConfig>,
-    registry: &Arc<BackendRegistry>,
-    failsafe_cfg: &crate::config::FailsafeConfig,
-    cache_ttl: Duration,
-) {
-    // Serializes the whole reload transaction (#397): the config read, the
-    // diff, the patch, and the publish. Two reloads that each diff against the
-    // same live config would both decide to register the same backend, and the
-    // second registration discards the first without stopping it - leaking the
-    // child process if traffic started it in between. Taking this lock only
-    // around `apply_patch` would not help, because the stale diff is already
-    // computed by then.
-    let _reload_guard = registry.lock_reload().await;
-
-    let Some((new_config, patch)) = (match load_config_patch(config_path, live_config) {
-        Ok(result) => result,
-        Err(e) => {
-            warn!(error = %e, "Config reload: failed to parse config file, keeping current config");
-            return;
-        }
-    }) else {
-        tracing::debug!("Config reload: no changes detected");
-        return;
-    };
-
-    info!(changes = %patch.summary(), "Config reload: applying patch");
-
-    let fully_applied = apply_patch(
-        &patch,
-        registry,
-        failsafe_cfg,
-        cache_ttl,
-        &new_config.runtime,
-    )
-    .await;
-
-    if !fully_applied {
-        warn!(
-            "Config reload: aborted, the gateway is shutting down; keeping the \
-             previous live config rather than publishing one that describes \
-             backends which were never registered"
-        );
-        return;
-    }
-
-    // Swap live config after patch is applied so readers see a consistent view.
-    live_config.set(new_config);
-
-    info!("Config reload: complete");
-}
 
 // ============================================================================
 // ReloadContext — imperative reload handle for the meta-tool
