@@ -811,16 +811,35 @@ async fn concurrent_reloads_do_not_both_add_the_same_backend() {
     ));
 
     // WHEN: two reloads start while the reload lock is held, so both are queued
-    // before either can read the config
+    // before either can read the config.
+    //
+    // The barrier is what makes that claim checkable. Spawning alone proves
+    // nothing: a task that the runtime has not scheduled yet has also not read
+    // the config, so releasing the guard before it starts would let this test
+    // pass even with the lock in the wrong place. Waiting on a barrier that only
+    // opens once all three parties have arrived proves both tasks are running
+    // and inside the closure. The sleep that follows covers the remaining few
+    // instructions between the barrier and the lock, which is a window no
+    // synchronisation primitive can close from outside the function under test.
+    let started = Arc::new(tokio::sync::Barrier::new(3));
     let guard = ctx.registry.lock_reload().await;
     let first = tokio::spawn({
         let ctx = Arc::clone(&ctx);
-        async move { ctx.reload_outcome().await }
+        let started = Arc::clone(&started);
+        async move {
+            started.wait().await;
+            ctx.reload_outcome().await
+        }
     });
     let second = tokio::spawn({
         let ctx = Arc::clone(&ctx);
-        async move { ctx.reload_outcome().await }
+        let started = Arc::clone(&started);
+        async move {
+            started.wait().await;
+            ctx.reload_outcome().await
+        }
     });
+    started.wait().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
         ctx.registry.get("svc").is_none(),
