@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared helpers for mutating and persisting gateway config files.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -149,6 +150,14 @@ const RENAME_ATTEMPTS: u32 = 8;
 /// on the failure path.
 const RENAME_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
 
+/// How many scratch names are tried before a write gives up.
+///
+/// Each name is probed with an exclusive create, so a collision means some
+/// other writer owns that name right now. A handful of probes clears any
+/// realistic amount of concurrency; past that, failing is more honest than
+/// reusing a name whose owner is still writing to it.
+const SCRATCH_ATTEMPTS: u64 = 8;
+
 /// Write `yaml` to a scratch file next to `path`, then rename it over `path`.
 ///
 /// The rename is what makes the write atomic: a reader sees either the old
@@ -160,18 +169,54 @@ const RENAME_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis
 /// place on Windows, so the one platform without a crash-safe write was also
 /// the one no test covered.
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
-    let tmp_path = temp_config_path(path);
+    let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
 
     // Leave no debris behind on any failure. The scratch name is unique per
     // call, so without cleanup each failure would strand one more file next to
     // the config instead of reusing a single stale one.
-    let cleanup = |e: std::io::Error, what: &str| {
+    let cleanup = |e: &std::io::Error, what: &str| {
         let _ = std::fs::remove_file(&tmp_path);
         format!("Failed to {what} config: {e}")
     };
 
-    std::fs::write(&tmp_path, yaml).map_err(|e| cleanup(e, "write temp"))?;
-    rename_with_retry(&tmp_path, path).map_err(|e| cleanup(e, "replace"))
+    // Write through the handle the exclusive create returned. Reopening by
+    // path would reopen the gap the exclusive create just closed.
+    file.write_all(yaml.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| cleanup(&e, "write temp"))?;
+    drop(file);
+
+    rename_with_retry(&tmp_path, path).map_err(|e| cleanup(&e, "replace"))
+}
+
+/// Claim a scratch file next to `path` that no other writer holds.
+///
+/// The create is exclusive, so a name already in use is refused rather than
+/// truncated. A refused name belongs to another live writer, so it is left
+/// alone and the next name is tried.
+///
+/// # Errors
+///
+/// Returns an error when every candidate name is taken, or on any I/O failure
+/// other than a collision.
+fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, PathBuf), String> {
+    for seed in first..first.wrapping_add(SCRATCH_ATTEMPTS) {
+        let candidate = scratch_candidate(path, seed);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((file, candidate)),
+            // Someone else's scratch file. Not ours to write to, and not ours
+            // to delete either.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("Failed to create temp config: {e}")),
+        }
+    }
+    Err(format!(
+        "Failed to create temp config: {SCRATCH_ATTEMPTS} scratch names next to the config were all in use"
+    ))
 }
 
 /// Rename `from` over `to`, retrying while the OS reports a transient refusal.
@@ -202,22 +247,20 @@ fn is_transient(e: &std::io::Error) -> bool {
     matches!(e.kind(), std::io::ErrorKind::PermissionDenied) || e.raw_os_error() == Some(32)
 }
 
-/// A temp path unique to this call, in the same directory as `path` so the
-/// rename stays atomic.
-///
-/// Uniqueness is the point. A shared `<config>.tmp` lets two concurrent writers
-/// collide: both write the same temp file, the first rename ships whichever
-/// bytes landed last while reporting its own edit saved, and the second rename
-/// fails because the file it wrote is already gone.
-fn temp_config_path(path: &Path) -> PathBuf {
+/// The next scratch seed no other writer in this process will pick.
+fn next_scratch_seed() -> u64 {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
 
+/// The scratch path for a given seed.
+///
+/// Split from the counter so a test can name a candidate deterministically.
+/// Probing the shared counter to predict the next name is flaky: tests run in
+/// parallel threads of one binary and any other write moves it.
+fn scratch_candidate(path: &Path, seed: u64) -> PathBuf {
     let mut tmp_path = path.as_os_str().to_os_string();
-    tmp_path.push(format!(
-        ".tmp.{}.{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
+    tmp_path.push(format!(".tmp.{}.{seed}", std::process::id()));
     PathBuf::from(tmp_path)
 }
 
@@ -290,13 +333,54 @@ mod tests {
         );
     }
 
+    /// A scratch name already in use belongs to another live writer. Claiming
+    /// it truncates bytes that writer is about to rename over the config, so
+    /// its edit ships half-written or vanishes entirely.
+    #[test]
+    fn a_scratch_name_already_in_use_is_never_claimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        let taken = scratch_candidate(&path, 7);
+        std::fs::write(&taken, b"another writer's bytes").unwrap();
+
+        let (_file, chosen) = create_scratch_exclusive(&path, 7).unwrap();
+
+        assert_ne!(
+            chosen, taken,
+            "the write claimed a scratch file another writer already held"
+        );
+        assert_eq!(
+            std::fs::read(&taken).unwrap(),
+            b"another writer's bytes",
+            "the write truncated another writer's scratch file"
+        );
+    }
+
+    /// Exhausting every candidate must fail rather than reuse a live name.
+    #[test]
+    fn a_write_fails_when_every_scratch_name_is_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        for seed in 0..SCRATCH_ATTEMPTS {
+            std::fs::write(scratch_candidate(&path, seed), b"held").unwrap();
+        }
+
+        let error = create_scratch_exclusive(&path, 0).unwrap_err();
+
+        assert!(
+            error.contains("were all in use"),
+            "exhaustion is not distinguishable from an I/O failure: {error}"
+        );
+    }
+
     #[test]
     fn each_config_write_gets_its_own_temp_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
 
-        let first = temp_config_path(&path);
-        let second = temp_config_path(&path);
+        let (_first_handle, first) = create_scratch_exclusive(&path, next_scratch_seed()).unwrap();
+        let (_second_handle, second) =
+            create_scratch_exclusive(&path, next_scratch_seed()).unwrap();
 
         assert_ne!(
             first, second,
