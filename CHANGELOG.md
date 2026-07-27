@@ -241,9 +241,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own `promtool` checks it on four cases: silent when the counter is flat, firing
   after a single increment, resolving once that increment ages out of the window,
   and firing per backend rather than across all of them. The rules and their
-  tests live in `deploy/prometheus/`. A test also proves the counter reaches the
-  scrape output with its `backend` label, which until now was read from the code
-  rather than observed.
+  tests live in `deploy/prometheus/`. A test also covers the export half of the
+  counter's path, that the recorder carries this metric name and its `backend`
+  label through to scrape output. It issues the counter directly rather than
+  driving a real failing shutdown, so it pairs with the existing pool tests
+  covering the increment itself; neither half was observed before.
 
 ## [3.3.2] - 2026-07-15
 

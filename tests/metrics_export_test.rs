@@ -15,7 +15,13 @@
 #![cfg(feature = "metrics")]
 
 #[test]
-fn idle_stop_close_failure_counter_reaches_metrics_render() {
+fn a_counter_named_like_the_idle_stop_failure_metric_survives_render() {
+    // Scope, stated so the name cannot drift from what is proven: this
+    // exercises the EXPORT half only. It issues the same macro call, name, and
+    // label shape as `Backend::stop_when_idle` in `src/backend/pool.rs`, and
+    // proves the recorder carries them through to scrape output. It does NOT
+    // drive a real failing close; that the production path increments at all is
+    // covered by the pool tests. The two halves together are the chain.
     mcp_gateway::metrics::install();
 
     // Baseline: before this specific counter/label pair is ever incremented,
