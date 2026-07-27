@@ -212,10 +212,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reload lock with no bound, and that lock is held across a whole reload:
   stopping backends, re-registering, republishing. One slow backend shutdown
   parked every settings-panel edit indefinitely, with retries queueing behind
-  it. Writes now give up after five seconds and answer 503, which is a refusal
-  the caller can retry rather than a request that never returns. Reloads
-  themselves stay unbounded on purpose: refusing one would silently drop a
-  change already written to disk, and a refused write changed nothing.
+  it. A write that is *waiting* for the lock now gives up after five seconds and
+  answers 503, which is a refusal the caller can retry rather than a request
+  that never returns. The bound covers the wait only. Once a write wins the
+  lock it still runs the reload to completion, so the one edit that triggers a
+  slow backend shutdown can still take as long as that shutdown takes; what no
+  longer happens is every other edit queueing behind it forever. Reloads stay
+  unbounded on purpose: refusing one would silently drop a change already
+  written to disk, and a refused write changed nothing.
 
 - **The scratch file a config save writes through could be silently reused.**
   The name came from a counter private to one process, and it was opened in a

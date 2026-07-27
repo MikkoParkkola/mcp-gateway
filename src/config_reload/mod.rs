@@ -1035,11 +1035,17 @@ impl ReloadContext {
 
     /// Take the reload lock, giving up after `wait`.
     ///
-    /// Only config *writes* are bounded. A reload triggered by the meta-tool,
-    /// the admin UI reload button, or the file watcher still waits as long as
-    /// it takes: refusing one of those would silently drop a config change the
-    /// operator already made on disk, which trades a hang for a lost edit.
-    /// A refused write, by contrast, has changed nothing and can be retried.
+    /// The bound covers *acquiring* the lock, not holding it. A write that wins
+    /// the lock then runs its reload to completion, however long that takes;
+    /// what the bound prevents is every other write queueing behind that one
+    /// forever.
+    ///
+    /// Only config *writes* are bounded at all. A reload triggered by the
+    /// meta-tool, the admin UI reload button, or the file watcher still waits as
+    /// long as it takes: refusing one of those would silently drop a config
+    /// change the operator already made on disk, which trades a hang for a lost
+    /// edit. A refused write, by contrast, has changed nothing and can be
+    /// retried.
     async fn lock_reload_within(
         &self,
         wait: Duration,
