@@ -83,6 +83,16 @@ pub struct ConfigPatch {
 /// literal that could drift away from the one `no_changes` writes.
 const NO_CHANGES_SUMMARY: &str = "no changes detected";
 
+/// Error text a reload returns when the registry refused a backend because the
+/// gateway is shutting down. A shared constant because the file-watcher has to
+/// tell this apart from a bad config file: one is a broken file an operator must
+/// fix, the other is normal shutdown, and they must not share an alert. The
+/// honest fix is a typed error, but `reload_outcome` returns `Result<_, String>`
+/// to callers outside this crate, so changing its shape is a next-major job.
+const SHUTDOWN_ABORTED_ERROR: &str =
+    "config reload aborted: the gateway is shutting down and refused to register \
+     one or more backends";
+
 /// Structured reload outcome for callers that need more than a log line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReloadOutcome {
@@ -795,10 +805,19 @@ impl ConfigWatcher {
                                         "Config reload: complete"
                                     );
                                 }
+                                Err(e) if e == SHUTDOWN_ABORTED_ERROR => {
+                                    warn!(
+                                        "Config reload: aborted, the gateway is \
+                                         shutting down; keeping the previous live \
+                                         config rather than publishing one that \
+                                         describes backends which were never \
+                                         registered"
+                                    );
+                                }
                                 Err(e) => {
                                     warn!(
                                         error = %e,
-                                        "Config reload failed; keeping the current config"
+                                        "Config reload: failed to parse config file, keeping current config"
                                     );
                                 }
                             }
@@ -929,11 +948,7 @@ impl ReloadContext {
             // Publishing here would describe backends the registry refused, and
             // report a reload that did not happen. The caller asked for an
             // outcome; the honest one is an error.
-            return Err(
-                "config reload aborted: the gateway is shutting down and refused \
-                 to register one or more backends"
-                    .to_string(),
-            );
+            return Err(SHUTDOWN_ABORTED_ERROR.to_string());
         }
 
         self.live_config.set(new_config);
