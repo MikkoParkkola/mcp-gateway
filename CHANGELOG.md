@@ -56,7 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-export is provided, because a re-export from `config_persistence` would
   recreate the cycle it removes. The break is documented here rather than
   deferred to 4.0.0 deliberately: two of the four names are new in this release
-  and never shipped, and the library surface has no known dependents.
+  and never shipped, and crates.io lists no reverse dependencies on this crate
+  (`/api/v1/crates/mcp-gateway/reverse_dependencies`, total 0, checked
+  2026-07-27). Private consumers outside the registry cannot be ruled out.
 
 - **`failsafe.retry.max_attempts` now means attempts, not retries.** It was
   passed straight to `backon`, which counts retries, so every backend made
