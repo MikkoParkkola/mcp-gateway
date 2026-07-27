@@ -136,6 +136,15 @@ fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, P
 /// Rename `from` over `to`, retrying while the OS reports a transient refusal.
 ///
 /// Retries are immediate; see [`RENAME_ATTEMPTS`] for why this must not sleep.
+///
+/// `std::fs::rename` replaces an existing `to` on every platform we support,
+/// Windows included: std documents the call as "replacing the original file if
+/// `to` already exists", and the Windows implementation is `MoveFileExW` with
+/// `MOVEFILE_REPLACE_EXISTING` (std `sys/fs/windows.rs`). Two separate reviews
+/// have read this loop and reported that Windows renames fail once the config
+/// exists; both were wrong. Do not add a `remove_file(to)` before the rename to
+/// "fix" it -- that would reintroduce the window where the config is missing,
+/// which is the whole thing this function exists to avoid.
 fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut last = None;
     for _ in 0..RENAME_ATTEMPTS {
