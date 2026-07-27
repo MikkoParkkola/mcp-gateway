@@ -135,6 +135,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The deployment guide said the Prometheus endpoint was off by default.** It
+  has been on in a default build, and it is unauthenticated, so an operator
+  following the guide could be exposing `/metrics` without knowing. The feature
+  table now says so and points at the section explaining how to keep it off the
+  public internet.
+
+  The same section now lists `mcp_backend_idle_stop_close_failures`, the counter
+  `stop_when_idle_for` raises when a backend refuses to shut down, together with
+  the alert rule to watch it and what an operator does when it fires. A backend
+  that will not stop can leave its child process alive, and until now nothing
+  told anyone that had happened.
+
 - **Two admin UI config edits at once could lose one of them silently.** Saving
   a config wrote the file first and took the reload lock afterwards, and every
   save on Unix used the same temp filename, `<config>.tmp`. Two saves arriving
