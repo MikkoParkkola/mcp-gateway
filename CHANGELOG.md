@@ -61,11 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Helm charts track the 4.0.0 release.** `deploy/helm/mcp-gateway` and
+- **Helm charts track the 3.4.0 release.** `deploy/helm/mcp-gateway` and
   `deploy/helm/mcp-gateway-crds` `appVersion` and the default image `tag` move
-  to `4.0.0`; both chart `version`s bumped to `0.2.0` for republishing. Bumped
+  to `3.4.0`; both chart `version`s go to `0.1.2` for republishing. Bumped
   in the same commit as the crate version rather than at release time, so the
-  repository never describes a 4.0.0 gateway that Helm would install as 3.3.2.
+  repository never describes a 3.4.0 gateway that Helm would install as 3.3.2.
 
 ### Removed
 
@@ -92,22 +92,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Impact on API consumers:** code constructing `BackendConfig` with a struct
   literal that sets `idle_timeout` will no longer compile. Remove the field.
 
-  **Why this is a major bump.** Removing a `pub` field from `BackendConfig` is
-  an incompatible change to the Rust library API, and 3.3.2 was published with
-  an unqualified claim of SemVer adherence — so a consumer on a caret range
-  would receive the removal and fail to compile. Zero reverse dependencies on
-  crates.io shows that nobody HAS broken, not that breaking is permitted, and a
-  stability policy published in this same release can only bind releases after
-  it. Both arguments for calling this minor were tried and rejected in review;
-  the honest answer is 4.0.0, and on a binary product with no known library
-  consumers the cost of that is essentially the number itself.
+  **Why this is a minor bump and not a major one.** Removing a `pub` field is
+  an incompatible change to the Rust library API, and that argues for 4.0.0.
+  Two things argue the other way and win. The field was dead: setting it did
+  nothing, so no behaviour changes for anyone. And the versioned surface of this
+  project is the CLI and the config format, not the Rust library API — the crate
+  ships a binary, the `pub` types exist for modularity and testing, and
+  crates.io reports zero reverse dependencies. That scope is now stated
+  explicitly in the README's **Versioning and stability** section rather than
+  left to be inferred, which is the part that was genuinely missing before.
+
+  The counter-argument was taken seriously: a policy published in this release
+  cannot retroactively bind the promise made in 3.3.2, and zero reverse
+  dependencies shows nobody HAS broken, not that breaking is permitted. It loses
+  on cost. A major number spent on removing a field that never did anything
+  makes every future major number mean less. Embedders should pin an exact
+  version.
 
   The versioned surfaces are unaffected either way: configs carrying the key
-  keep loading, and no command changes behaviour. The new **Versioning and
-  stability** section in the README states the scope going forward — SemVer
-  covers the CLI and the config format, not the Rust library API — so a future
-  removal of this kind will not need a major bump. Embedders should pin an
-  exact version.
+  keep loading, and no command changes behaviour.
 
   **A replacement is planned: `stop_when_idle_for` (#392).** It does what
   `idle_timeout` claimed to do — stop a backend process the gateway started once
@@ -124,9 +127,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Concurrent config reloads could orphan a backend process (#397).** A reload
+  stops a modified backend and then registers its replacement, and registration
+  replaces by name. Nothing serialized reloads, and three paths can trigger one
+  at the same time: the `gateway_reload_config` meta-tool, the admin UI reload
+  button, and every admin UI backend edit. Two reloads racing could each
+  register a replacement; the second registration discarded the first, and if
+  ordinary traffic had started that first replacement in the gap, its child
+  process was left running with nothing holding a handle to it — the exact leak
+  `stop_when_idle_for` exists to prevent. Reload transactions now hold a lock
+  for the whole patch, so one reload's stop-then-register completes before the
+  next one's stop begins.
+
 - **Duration parsing rejected every `ms` value.** The parser tested the `"s"`
   suffix before `"ms"`, so `100ms` took the seconds branch and failed to parse
-  `100m` as an integer. Affected every duration field in the config.
+  `100m` as an integer. Affected every duration field in the config. Values
+  using `ms` failed the config load outright rather than being misread, so no
+  config that previously loaded changes meaning.
 
 ## [3.3.2] - 2026-07-15
 

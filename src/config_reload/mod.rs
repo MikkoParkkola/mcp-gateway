@@ -449,6 +449,15 @@ fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
 /// solely after the permanent shutdown latch, so the inconsistency is bounded
 /// to a gateway that is terminating anyway. If registration ever becomes
 /// refusable for another reason, this needs a rollback rather than a flag.
+/// The caller must hold [`BackendRegistry::lock_reload`] across the whole
+/// transaction that surrounds this call - reading the live config, diffing it,
+/// applying the patch, and publishing the new config (#397). Taking the lock
+/// inside this function is not enough: the patch is computed against the live
+/// config beforehand, so two reloads can each compute a patch that adds the
+/// same backend, queue here, and register two instances under one name. The
+/// second registration discards the first without stopping it, and if traffic
+/// started that first instance in the gap its child process is orphaned. Both
+/// callers in this module take the lock before they read the config.
 #[must_use = "a partly applied patch must not be published as the live config"]
 pub async fn apply_patch(
     patch: &ConfigPatch,
@@ -815,6 +824,15 @@ async fn reload_once(
     failsafe_cfg: &crate::config::FailsafeConfig,
     cache_ttl: Duration,
 ) {
+    // Serializes the whole reload transaction (#397): the config read, the
+    // diff, the patch, and the publish. Two reloads that each diff against the
+    // same live config would both decide to register the same backend, and the
+    // second registration discards the first without stopping it - leaking the
+    // child process if traffic started it in between. Taking this lock only
+    // around `apply_patch` would not help, because the stale diff is already
+    // computed by then.
+    let _reload_guard = registry.lock_reload().await;
+
     let Some((new_config, patch)) = (match load_config_patch(config_path, live_config) {
         Ok(result) => result,
         Err(e) => {
@@ -910,6 +928,12 @@ impl ReloadContext {
     ///
     /// Returns an error string if the config file cannot be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+        // Serializes the whole reload transaction (#397) - read, diff, apply,
+        // publish. All three concurrent entry points (the meta-tool, the admin
+        // UI reload, and every admin UI backend edit) land here. See
+        // `apply_patch` for why the lock cannot live one level down.
+        let _reload_guard = self.registry.lock_reload().await;
+
         let Some((new_config, patch)) = load_config_patch(&self.config_path, &self.live_config)?
         else {
             return Ok(ReloadOutcome::no_changes());

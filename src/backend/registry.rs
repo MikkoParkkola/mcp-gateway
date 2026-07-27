@@ -155,6 +155,20 @@ pub struct BackendRegistry {
     /// arrange. The guarantee here is by construction - one critical section on
     /// each side - not by demonstration.
     stopping: parking_lot::Mutex<bool>,
+
+    /// Serializes config-reload transactions (#397).
+    ///
+    /// A reload stops the old instance of a modified backend and then registers
+    /// a replacement. Those two steps are not atomic, and `register` replaces by
+    /// name, so two reloads running at once can each register a replacement and
+    /// the second insert discards the first without stopping it. If ordinary
+    /// traffic started the discarded one in between, its child process is
+    /// orphaned. Held across the whole of `config_reload::apply_patch`, so
+    /// reloads queue instead of interleaving.
+    ///
+    /// A `tokio` mutex, not `parking_lot`: the critical section awaits
+    /// `Backend::stop`.
+    reload: tokio::sync::Mutex<()>,
 }
 
 impl BackendRegistry {
@@ -164,7 +178,17 @@ impl BackendRegistry {
         Self {
             backends: DashMap::new(),
             stopping: parking_lot::Mutex::new(false),
+            reload: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Take the reload lock, so one config-reload transaction runs at a time.
+    ///
+    /// Held by `config_reload::apply_patch` for the duration of the patch. See
+    /// the `reload` field for why. Callers that mutate the registry as a
+    /// transaction (stop-then-register) must take it; single operations do not.
+    pub async fn lock_reload(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.reload.lock().await
     }
 
     /// Register a backend
@@ -185,22 +209,22 @@ impl BackendRegistry {
     /// REPLACES it - `DashMap::insert` discards the displaced value - so a
     /// backend that was started and then displaced is stopped by nobody.
     ///
-    /// KNOWN DEFECT, and it is REACHABLE. `ReloadContext::reload_outcome` has no
-    /// serialization, and it is called from three concurrent HTTP paths: the
+    /// That displacement was reachable (#397): `ReloadContext::reload_outcome`
+    /// had no serialization and is called from three concurrent HTTP paths - the
     /// `gateway_reload_config` meta-tool, the admin UI reload, and every admin
     /// UI backend edit via `write_config_and_reload_outcome`. Two concurrent
-    /// reloads can both stop backend A and then register replacements B and C;
-    /// ordinary traffic can start B in between; C's insert then discards B
-    /// without stopping it, orphaning that process - the exact failure
-    /// `stop_when_idle_for` exists to prevent.
+    /// reloads could both stop backend A and then register replacements B and C;
+    /// ordinary traffic could start B in between; C's insert then discarded B
+    /// without stopping it, orphaning that process.
     ///
-    /// An earlier version of this comment claimed no current caller could hit
-    /// it. That was wrong: it checked that the reload path stops the old
-    /// instance before re-registering, but never checked whether two reloads
-    /// can run at once. The fix is to serialize reload transactions AND make
-    /// registration either reject a duplicate or hand the displaced backend
-    /// back so the caller can stop it. Tracked separately; the replacement
-    /// semantics are pre-existing, the reachability is not new either.
+    /// Fixed by serializing the reload transaction rather than by changing the
+    /// semantics here: `config_reload::apply_patch` holds
+    /// `BackendRegistry::lock_reload` across the whole patch, so the stop and
+    /// the re-register of one reload complete before the next reload's stop
+    /// begins. Replace-by-name is still what this function does, and a caller
+    /// that registers a duplicate name outside that lock still displaces
+    /// silently. The only such callers today are startup, which runs before the
+    /// gateway serves, and tests.
     #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
         let stopping = self.stopping.lock();

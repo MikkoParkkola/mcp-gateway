@@ -768,3 +768,91 @@ fn control_plane_role_mapping_change_is_detected() {
         "control_plane change should set profiles_changed"
     );
 }
+
+// -------------------------------------------------------------------------
+// Reload serialization (#397)
+// -------------------------------------------------------------------------
+
+/// Two config reloads must not overlap, and the lock has to cover the config
+/// read as well as the patch.
+///
+/// A reload compares the file on disk against the live config, then applies the
+/// difference. Registration replaces by name and does not stop what it
+/// displaces, so two reloads that both compare against the same live config
+/// both decide to add the same backend: the second registration discards the
+/// first, and if traffic started that first instance in the gap its child
+/// process is orphaned (#397).
+///
+/// This test drives the stale-comparison case directly. It holds the reload
+/// lock, starts two reloads against a config file that adds one backend, then
+/// releases. Serialized correctly, the first reload adds the backend and
+/// publishes, so the second one compares against the published config and finds
+/// nothing to do. If the lock is taken any later than the config read - inside
+/// `apply_patch`, say - both reloads decide "backend added" before they queue
+/// and both register, which this test sees as a second reload reporting a
+/// change instead of reporting none.
+#[tokio::test]
+async fn concurrent_reloads_do_not_both_add_the_same_backend() {
+    // GIVEN: a live config with no backends, and a file on disk that adds one
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &config_path,
+        "backends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+    )
+    .unwrap();
+
+    let ctx = Arc::new(ReloadContext::new(
+        config_path,
+        Arc::new(LiveConfig::new(Config::default())),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+
+    // WHEN: two reloads start while the reload lock is held, so both are queued
+    // before either can read the config
+    let guard = ctx.registry.lock_reload().await;
+    let first = tokio::spawn({
+        let ctx = Arc::clone(&ctx);
+        async move { ctx.reload_outcome().await }
+    });
+    let second = tokio::spawn({
+        let ctx = Arc::clone(&ctx);
+        async move { ctx.reload_outcome().await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        ctx.registry.get("svc").is_none(),
+        "a reload applied while the reload lock was held"
+    );
+    drop(guard);
+
+    let first = tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .expect("first reload did not finish")
+        .expect("first reload task panicked")
+        .expect("first reload failed");
+    let second = tokio::time::timeout(Duration::from_secs(5), second)
+        .await
+        .expect("second reload did not finish")
+        .expect("second reload task panicked")
+        .expect("second reload failed");
+
+    // THEN: exactly one of them added the backend; the other saw an up-to-date
+    // config and did nothing
+    let added = [first.changes.as_str(), second.changes.as_str()]
+        .into_iter()
+        .filter(|c| c.contains("svc"))
+        .count();
+    assert_eq!(
+        added, 1,
+        "both reloads registered the same backend, so one instance was \
+         displaced without being stopped (#397); outcomes were {:?} and {:?}",
+        first.changes, second.changes
+    );
+    assert!(
+        ctx.registry.get("svc").is_some(),
+        "the backend should be registered after the reloads"
+    );
+}
