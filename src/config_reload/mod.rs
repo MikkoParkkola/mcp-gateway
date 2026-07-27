@@ -931,9 +931,10 @@ impl ReloadContext {
     /// Returns an error string if the config file cannot be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
         // Serializes the whole reload transaction (#397) - read, diff, apply,
-        // publish. All three concurrent entry points (the meta-tool, the admin
-        // UI reload, and every admin UI backend edit) land here. See
-        // `apply_patch` for why the lock cannot live one level down.
+        // publish. All four concurrent entry points land here: the
+        // `gateway_reload_config` meta-tool, the admin UI reload, every admin UI
+        // backend edit, and the config-file watcher. See `apply_patch` for why
+        // the lock cannot live one level down.
         let _reload_guard = self.registry.lock_reload().await;
 
         let Some((new_config, patch)) = load_config_patch(&self.config_path, &self.live_config)?

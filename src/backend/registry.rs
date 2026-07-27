@@ -217,7 +217,9 @@ impl BackendRegistry {
     /// That displacement was reachable (#397): `ReloadContext::reload_outcome`
     /// had no serialization and is called from three concurrent HTTP paths - the
     /// `gateway_reload_config` meta-tool, the admin UI reload, and every admin
-    /// UI backend edit via `write_config_and_reload_outcome`. Two concurrent
+    /// UI backend edit via `write_config_and_reload_outcome`. The config-file
+    /// watcher is a fourth caller; it is not an HTTP path, but it races with
+    /// those three all the same. Two concurrent
     /// reloads could both stop backend A and then register replacements B and C;
     /// ordinary traffic could start B in between; C's insert then discarded B
     /// without stopping it, orphaning that process.
