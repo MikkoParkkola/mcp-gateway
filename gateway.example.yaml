@@ -33,7 +33,7 @@ failsafe:
     reset_timeout: 30s
   retry:
     enabled: true
-    max_attempts: 3
+    max_attempts: 3               # Total attempts (1 original + 2 retries)
     initial_backoff: 0s
     max_backoff: 10s
     multiplier: 2.0

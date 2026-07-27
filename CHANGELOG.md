@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`failsafe.retry.max_attempts` now means attempts, not retries.** It was
+  passed straight to `backon`, which counts retries, so every backend made
+  `max_attempts + 1` calls: a configured `3` produced four, and the shipped
+  default of `3` has always meant four.
+
+  The two user-facing statements of this setting already contradicted each
+  other — `examples/gateway-full.yaml` documented it as "Total attempts
+  (1 original + 2 retries)" while the struct doc said "Maximum retry attempts".
+  The code now matches the example and the name.
+
+  **Action required if you tuned around the old behaviour:** backends make one
+  fewer call per request than before. Raise `max_attempts` by one to keep the
+  previous number of calls. `max_attempts: 0` clamps to a single attempt rather
+  than none.
+
+
 ## [3.3.2] - 2026-07-15
 
 ### Fixed
