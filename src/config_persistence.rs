@@ -55,11 +55,14 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 /// holding the destination open produces a sharing violation, which is
 /// transient rather than fatal. Retrying a bounded number of times rides that
 /// out; giving up after it leaves the previous config in place.
+///
+/// Retries are immediate and never sleep. The write path is synchronous but is
+/// reached from an async task that holds the reload lock, so parking the thread
+/// here would stall an executor worker and lengthen exactly the lock hold that
+/// the caller's busy bound exists to cap. An immediate retry only rides out a
+/// violation that clears within the syscall round trip; a longer-lived one is
+/// reported instead of waited on.
 const RENAME_ATTEMPTS: u32 = 8;
-
-/// Pause between rename attempts. Eight attempts cost at most ~35ms, and only
-/// on the failure path.
-const RENAME_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// How many scratch names are tried before a write gives up.
 ///
@@ -131,17 +134,14 @@ fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, P
 }
 
 /// Rename `from` over `to`, retrying while the OS reports a transient refusal.
+///
+/// Retries are immediate; see [`RENAME_ATTEMPTS`] for why this must not sleep.
 fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut last = None;
-    for attempt in 0..RENAME_ATTEMPTS {
+    for _ in 0..RENAME_ATTEMPTS {
         match std::fs::rename(from, to) {
             Ok(()) => return Ok(()),
-            Err(e) if is_transient(&e) => {
-                if attempt + 1 < RENAME_ATTEMPTS {
-                    std::thread::sleep(RENAME_RETRY_DELAY);
-                }
-                last = Some(e);
-            }
+            Err(e) if is_transient(&e) => last = Some(e),
             Err(e) => return Err(e),
         }
     }
@@ -244,9 +244,26 @@ mod tests {
         );
     }
 
-    /// A scratch name already in use belongs to another live writer. Claiming
-    /// it truncates bytes that writer is about to rename over the config, so
-    /// its edit ships half-written or vanishes entirely.
+    /// The write path runs on an async executor worker while the reload lock is
+    /// held. Parking that thread stalls unrelated requests and lengthens the
+    /// hold that the busy bound exists to cap, so no sleep may creep back in.
+    #[test]
+    fn the_write_path_never_parks_the_thread_it_runs_on() {
+        // Split so this needle does not match the line that defines it.
+        let needle = concat!("thread::", "sleep");
+        let source = include_str!("config_persistence.rs");
+        let sleeps: Vec<&str> = source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("//"))
+            .filter(|line| line.contains(needle))
+            .collect();
+        assert!(
+            sleeps.is_empty(),
+            "the config write path blocks its executor thread: {sleeps:?}"
+        );
+    }
+
     #[test]
     fn a_scratch_name_already_in_use_is_never_claimed() {
         let dir = tempfile::tempdir().unwrap();
