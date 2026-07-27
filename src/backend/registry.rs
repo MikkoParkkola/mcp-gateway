@@ -163,8 +163,12 @@ pub struct BackendRegistry {
     /// name, so two reloads running at once can each register a replacement and
     /// the second insert discards the first without stopping it. If ordinary
     /// traffic started the discarded one in between, its child process is
-    /// orphaned. Held across the whole of `config_reload::apply_patch`, so
-    /// reloads queue instead of interleaving.
+    /// orphaned. Held across the whole reload transaction - reading the config
+    /// file, comparing it against the live one, applying the difference, and
+    /// publishing the result - so reloads queue instead of interleaving.
+    /// Holding it only across the apply step is not enough: both reloads would
+    /// have compared against the same stale live config before they queued, and
+    /// both would still register.
     ///
     /// A `tokio` mutex, not `parking_lot`: the critical section awaits
     /// `Backend::stop`.
@@ -184,8 +188,9 @@ impl BackendRegistry {
 
     /// Take the reload lock, so one config-reload transaction runs at a time.
     ///
-    /// Held by `config_reload::apply_patch` for the duration of the patch. See
-    /// the `reload` field for why. Callers that mutate the registry as a
+    /// Taken by each config-reload entry point before it reads the config file,
+    /// and held until the new config is published. See the `reload` field for
+    /// why it has to start that early. Callers that mutate the registry as a
     /// transaction (stop-then-register) must take it; single operations do not.
     pub async fn lock_reload(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.reload.lock().await
@@ -218,10 +223,11 @@ impl BackendRegistry {
     /// without stopping it, orphaning that process.
     ///
     /// Fixed by serializing the reload transaction rather than by changing the
-    /// semantics here: `config_reload::apply_patch` holds
-    /// `BackendRegistry::lock_reload` across the whole patch, so the stop and
-    /// the re-register of one reload complete before the next reload's stop
-    /// begins. Replace-by-name is still what this function does, and a caller
+    /// semantics here: every reload entry point takes
+    /// `BackendRegistry::lock_reload` before it reads the config file and holds
+    /// it until the new config is published, so the stop and the re-register of
+    /// one reload complete before the next reload even reads its input.
+    /// Replace-by-name is still what this function does, and a caller
     /// that registers a duplicate name outside that lock still displaces
     /// silently. The only such callers today are startup, which runs before the
     /// gateway serves, and tests.
