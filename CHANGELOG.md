@@ -59,6 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous number of calls. `max_attempts: 0` clamps to a single attempt rather
   than none.
 
+- **A config-file reload now logs once, on completion, instead of twice.** The
+  file watcher had its own copy of the reload sequence, and that copy logged
+  `Config reload: applying patch` with the change summary before applying and a
+  bare `Config reload: complete` afterwards. The watcher now runs the same
+  reload used by the meta-tool and the admin UI, so a single line is emitted
+  when the reload finishes, carrying the same change summary plus whether a
+  restart is required. **If you grep logs for `applying patch`, that string is
+  gone**; match on `Config reload: complete` and read the `changes` field. A
+  reload that finds nothing to do logs at debug level, as before.
+
 - **Helm charts track the 3.4.0 release.** `deploy/helm/mcp-gateway` and
   `deploy/helm/mcp-gateway-crds` `appVersion` and the default image `tag` move
   to `3.4.0`; both chart `version`s go to `0.1.2` for republishing. Bumped
@@ -127,9 +137,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Concurrent config reloads could orphan a backend process (#397).** A reload
   stops a modified backend and then registers its replacement, and registration
-  replaces by name. Nothing serialized reloads, and three paths can trigger one
+  replaces by name. Nothing serialized reloads, and four paths can trigger one
   at the same time: the `gateway_reload_config` meta-tool, the admin UI reload
-  button, and every admin UI backend edit. Two reloads racing could each
+  button, every admin UI backend edit, and the config-file watcher that fires
+  when the file changes on disk. Two reloads racing could each
   register a replacement; the second registration discarded the first, and if
   ordinary traffic had started that first replacement in the gap, its child
   process was left running with nothing holding a handle to it — the exact leak
