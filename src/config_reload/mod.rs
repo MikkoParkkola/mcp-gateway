@@ -89,8 +89,7 @@ const NO_CHANGES_SUMMARY: &str = "no changes detected";
 /// fix, the other is normal shutdown, and they must not share an alert. The
 /// honest fix is a typed error, but `reload_outcome` returns `Result<_, String>`
 /// to callers outside this crate, so changing its shape is a next-major job.
-const SHUTDOWN_ABORTED_ERROR: &str =
-    "config reload aborted: the gateway is shutting down and refused to register \
+const SHUTDOWN_ABORTED_ERROR: &str = "config reload aborted: the gateway is shutting down and refused to register \
      one or more backends";
 
 /// Structured reload outcome for callers that need more than a log line.
@@ -769,13 +768,8 @@ impl ConfigWatcher {
             // covering the reload lock only ever exercised the other two entry
             // points: an edit that moved the lock here alone would not have
             // failed a single test.
-            let ctx = ReloadContext::new(
-                config_path,
-                live_config,
-                registry,
-                failsafe_cfg,
-                cache_ttl,
-            );
+            let ctx =
+                ReloadContext::new(config_path, live_config, registry, failsafe_cfg, cache_ttl);
 
             loop {
                 tokio::select! {
@@ -870,7 +864,6 @@ fn load_config_patch(
         Ok(Some((new_config, patch)))
     }
 }
-
 
 // ============================================================================
 // ReloadContext — imperative reload handle for the meta-tool
