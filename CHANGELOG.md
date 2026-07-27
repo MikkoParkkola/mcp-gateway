@@ -5,7 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.4.0] - 2026-07-27
+
+### Added
+
+- **`stop_when_idle_for`: release backend processes the gateway started, after
+  they go unused (#392).** The gateway starts backends lazily but never stopped
+  one once started, so every backend touched even once stayed resident for the
+  life of the process. Measured on a six-day-uptime machine: `codex` held 37 MB
+  for 21 hours to do 1.8 seconds of work; `trvl` 67 MB for 11.6 hours to do 7.6
+  seconds.
+
+  ```yaml
+  backends:
+    tavily:
+      command: "npx -y tavily-mcp@0.1.4"
+      stop_when_idle_for: 5m
+  ```
+
+  Valid **only for a backend the gateway starts itself** — one declared with a
+  `command`. For a backend reached over a URL the gateway can close its client
+  connection, but that does not stop the server on the other end, so the setting
+  is **rejected at config load** rather than silently accepted. Locality does not
+  grant ownership: a local HTTP MCP server on `127.0.0.1` is still not ours to
+  stop. Absent means never stop, so upgrading changes no behaviour.
+
+  Configurable per backend in the admin panel, which offers the control only
+  where it applies and refuses it with an explanation elsewhere.
+
+  Adds a third lifecycle state. A backend stopped on purpose is neither healthy
+  nor failed: `Dormant` does not trip or heal a circuit breaker and is not probed
+  by the health loop, so a sleeping backend no longer reports as degraded. A real
+  fault still wins — an open breaker reports `Unhealthy` even for a backend that
+  opted into stopping.
+
+  In-flight work is refused rather than interrupted: a sweep that finds a request
+  running declines, and the next one retries.
 
 ### Changed
 
@@ -24,6 +59,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous number of calls. `max_attempts: 0` clamps to a single attempt rather
   than none.
 
+- **A config-file reload now logs once, on completion, instead of twice.** The
+  file watcher had its own copy of the reload sequence, and that copy logged
+  `Config reload: applying patch` with the change summary before applying and a
+  bare `Config reload: complete` afterwards. The watcher now runs the same
+  reload used by the meta-tool and the admin UI, so a single line is emitted
+  when the reload finishes, carrying the same change summary plus whether a
+  restart is required. **If you grep logs for `applying patch`, that string is
+  gone**; match on `Config reload: complete` and read the `changes` field. A
+  reload that finds nothing to do logs at debug level, as before.
+
+- **Helm charts track the 3.4.0 release.** `deploy/helm/mcp-gateway` and
+  `deploy/helm/mcp-gateway-crds` `appVersion` and the default image `tag` move
+  to `3.4.0`; both chart `version`s go to `0.1.2` for republishing. Bumped
+  in the same commit as the crate version rather than at release time, so the
+  repository never describes a 3.4.0 gateway that Helm would install as 3.3.2.
+
+### Removed
+
+- **`BackendConfig::idle_timeout` removed** (Rust API only; config files unaffected). The field was
+  parsed, documented in `examples/gateway-full.yaml` as "Hibernate after 5 min
+  idle", and read by exactly one thing in the codebase: a `Debug` formatter.
+  Nothing enforced it. Operators set it in good faith — one real config carried
+  `idle_timeout: 10m` on a stdio backend whose child then ran for over three days
+  and burned 10.4 CPU-hours.
+
+  Two attempts to implement it were reviewed and rejected. The blocker is not
+  difficulty: the name spans stdio child-process lifetime, per-user session TTL,
+  HTTP connection pooling, and remote scale-to-zero. Closing an HTTP client
+  transport does not scale down the service behind it, so no single
+  implementation can be correct for every transport.
+
+  **Impact on existing configs: none at load time.** Config parsing tolerates
+  extra keys, so files carrying `idle_timeout` keep loading unchanged. The
+  gateway now logs a warning naming the key so its inertness is visible rather
+  than silent. Note that any command which rewrites the config will drop the key
+  along with surrounding comments, since the writer re-serialises from memory —
+  delete it by hand first if you care about the comments.
+
+  **Impact on API consumers:** code constructing `BackendConfig` with a struct
+  literal that sets `idle_timeout` will no longer compile. Remove the field.
+
+  **Why this is a minor bump and not a major one.** Removing a `pub` field is
+  an incompatible change to the Rust library API, and that argues for 4.0.0.
+  Two things argue the other way and win. The field was dead: setting it did
+  nothing, so no behaviour changes for anyone. And the versioned surface of this
+  project is the CLI and the config format, not the Rust library API — the crate
+  ships a binary, the `pub` types exist for modularity and testing, and
+  crates.io reports zero reverse dependencies. That scope is now stated
+  explicitly in the README's **Versioning and stability** section rather than
+  left to be inferred, which is the part that was genuinely missing before.
+
+  The counter-argument was taken seriously: a policy published in this release
+  cannot retroactively bind the promise made in 3.3.2, and zero reverse
+  dependencies shows nobody HAS broken, not that breaking is permitted. It loses
+  on cost. A major number spent on removing a field that never did anything
+  makes every future major number mean less. Embedders should pin an exact
+  version.
+
+  The versioned surfaces are unaffected either way: configs carrying the key
+  keep loading, and no command changes behaviour.
+
+  **A replacement is planned: `stop_when_idle_for` (#392).** It does what
+  `idle_timeout` claimed to do — stop a backend process the gateway started once
+  it has been unused for a given time, and restart it on the next request — but
+  scoped correctly. It is valid only where the gateway owns the process
+  lifecycle (a backend with a `command`), and is rejected at config load for
+  externally managed HTTP endpoints, because closing a client connection does
+  not stop a server the gateway did not start. Local HTTP MCP servers are
+  included in that exclusion: locality does not grant ownership.
+
+  It also introduces a third health state. A backend stopped on purpose is
+  neither healthy nor failed, and without `Dormant` a sleeping backend trips its
+  own circuit breaker and shows as degraded.
+
+### Fixed
+
+- **The deployment guide said the Prometheus endpoint was off by default.** It
+  has been on in a default build, and it is unauthenticated, so an operator
+  following the guide could be exposing `/metrics` without knowing. The feature
+  table now says so and points at the section explaining how to keep it off the
+  public internet.
+
+  The same section now lists `mcp_backend_idle_stop_close_failures`, the counter
+  `stop_when_idle_for` raises when a backend refuses to shut down, together with
+  the alert rule to watch it and what an operator does when it fires. A backend
+  that will not stop can leave its child process alive, and until now nothing
+  told anyone that had happened.
+
+- **Two admin UI config edits at once could lose one of them silently.** Saving
+  a config wrote the file first and took the reload lock afterwards, and every
+  save on Unix used the same temp filename, `<config>.tmp`. Two saves arriving
+  together therefore wrote the same temp file: whichever renamed first shipped
+  the other's bytes while reporting its own edit saved, and the second rename
+  failed with `Failed to replace config file: No such file or directory`. A
+  test that runs eight concurrent saves reproduces it on the first iteration.
+  Temp filenames are now unique per write, and the write happens inside the
+  same lock as the reload, so a save reloads its own bytes.
+
+  The same symptom had a second cause one layer up: each admin UI save read the
+  whole config, changed one backend, and wrote the whole thing back, and the
+  read happened before the lock. Two saves therefore both started from the
+  pre-edit config, and the second wrote the first person's change out of
+  existence while telling both callers it had saved. Adding, removing, and
+  editing a backend now do the read, the change, the write, and the reload
+  under one lock, so an edit that waits its turn builds on what it waited for.
+  A test queues one edit behind another and fails if the queued edit erases it.
+
+  Both bugs predate this release; they are fixed here because the reload work
+  is what made the boundary visible.
+
+- **Concurrent config reloads could orphan a backend process (#397).** A reload
+  stops a modified backend and then registers its replacement, and registration
+  replaces by name. Nothing serialized reloads, and four paths can trigger one
+  at the same time: the `gateway_reload_config` meta-tool, the admin UI reload
+  button, every admin UI backend edit, and the config-file watcher that fires
+  when the file changes on disk. Two reloads racing could each
+  register a replacement; the second registration discarded the first, and if
+  ordinary traffic had started that first replacement in the gap, its child
+  process was left running with nothing holding a handle to it — the exact leak
+  `stop_when_idle_for` exists to prevent. A reload now holds a lock across the
+  whole transaction — reading the config file, comparing it against the live
+  one, applying the difference, and publishing the result — so the next reload
+  compares against a config that already includes the previous one's work.
+  Holding the lock only around the apply step is not enough: both reloads would
+  have already decided "backend added" against the same stale live config
+  before they queued, and both would still register.
+
+- **Duration parsing rejected every `ms` value.** The parser tested the `"s"`
+  suffix before `"ms"`, so `100ms` took the seconds branch and failed to parse
+  `100m` as an integer. Affected every duration field in the config. Values
+  using `ms` failed the config load outright rather than being misread, so no
+  config that previously loaded changes meaning.
 
 ## [3.3.2] - 2026-07-15
 

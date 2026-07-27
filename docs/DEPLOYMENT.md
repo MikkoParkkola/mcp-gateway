@@ -29,11 +29,11 @@ The release profile applies: `lto = "thin"`, `codegen-units = 1`, `panic = "abor
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `webui` | Yes | Embedded web dashboard at `/ui` and `/dashboard` |
-| `metrics` | No | Prometheus metrics endpoint at `/metrics` |
+| `metrics` | Yes | Prometheus metrics endpoint at `/metrics`, unauthenticated (see [Prometheus Metrics](#prometheus-metrics)) |
 
 ```bash
-cargo build --release --features metrics       # Add metrics
-cargo build --release --no-default-features    # Minimal (no web UI)
+cargo build --release                          # Default features, including metrics
+cargo build --release --no-default-features    # Minimal (no web UI, no metrics)
 ```
 
 ## Single-Node Templates
@@ -354,13 +354,49 @@ Includes: timestamp, level, span context, backend name, request ID, latency, cir
 
 ### Prometheus Metrics
 
-Build with `--features metrics`, scrape `/metrics`:
+Included in a default build. Scrape `/metrics`. The endpoint is unauthenticated,
+because Prometheus scrapers do not send auth headers — keep it off the public
+internet with a firewall rule or a reverse-proxy allow-list.
 
 - `mcp_gateway_requests_total` -- count per backend/tool
 - `mcp_gateway_request_duration_seconds` -- latency histogram
 - `mcp_gateway_circuit_breaker_state` -- state gauge
 - `mcp_gateway_rate_limiter_rejections_total` -- rejection count
 - `mcp_gateway_active_connections` -- current connections
+- `mcp_backend_idle_stop_close_failures` -- per backend, counts backends stopped
+  for idleness that did not shut down cleanly (see below)
+
+#### Alerting on a backend that would not stop
+
+`stop_when_idle_for` stops a backend the gateway started once it goes unused. If
+that shutdown fails or runs past its budget, the gateway gives up on the close so
+the sweep keeps running, and increments `mcp_backend_idle_stop_close_failures`.
+The child process may still be alive. Nothing else reports this, so an
+unmonitored gateway leaks one process per occurrence and the first symptom is
+memory pressure on the host, days later.
+
+```yaml
+# prometheus rules
+- alert: McpBackendIdleStopCloseFailures
+  expr: increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+  labels: { severity: warning }
+  annotations:
+    summary: "Backend {{ $labels.backend }} did not stop cleanly when idle"
+```
+
+Every occurrence is worth knowing about, because each one may be a process that
+outlives the gateway's tracking and never comes back on its own. So the
+threshold is zero rather than a rate, and there is no `for` clause: the
+expression stays true for the whole 15-minute window after a single increment,
+which means `for` would delay the notification without ever suppressing an
+isolated failure. Warning rather than page — the damage is one leaked process,
+not an outage.
+
+When it fires: check for an orphaned child process of the gateway
+(`pgrep -P $(pgrep -f mcp-gateway)`) and kill what the gateway no longer tracks.
+Then look at that backend's shutdown path — a server ignoring SIGTERM is the
+usual cause. Setting a longer `stop_when_idle_for` does not help; removing the
+setting for that backend stops the leak at the cost of keeping it resident.
 
 ### Live Statistics / Web Dashboard
 

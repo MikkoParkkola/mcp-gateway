@@ -52,7 +52,6 @@ backends:
     command: gitnexus mcp
     cwd: null
     protocol_version: null
-    idle_timeout: 300s
     timeout: 30s
     env: {}
     headers: {}
@@ -65,7 +64,6 @@ backends:
     command: /Users/mikko/github/trvl/bin/trvl mcp
     cwd: null
     protocol_version: null
-    idle_timeout: 300s
     timeout: 30s
     env: {}
     headers: {}
@@ -78,7 +76,6 @@ backends:
     command: npx -y @superhuman/mcp-mail
     cwd: null
     protocol_version: null
-    idle_timeout: 600s
     timeout: 60s
     env: {}
     headers: {}

@@ -169,7 +169,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
 
 fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
     let state = test_router_app_state();
-    state.backends.register(backend);
+    let _ = state.backends.register(backend);
     state
 }
 
@@ -178,7 +178,7 @@ fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
 /// Uses a fixed signer key so a twin validator can verify the receipt.
 fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<AppState> {
     let backends = Arc::new(BackendRegistry::new());
-    backends.register(backend);
+    let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     // Derive the receipt-domain subkey before stamping, mirroring the
     // production `resolve_provenance_signer` wiring in `gateway::server`
@@ -244,7 +244,7 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
     use crate::security::transparency_log::TransparencyLogConfig;
 
     let backends = Arc::new(BackendRegistry::new());
-    backends.register(backend);
+    let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     meta.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
@@ -1243,7 +1243,7 @@ async fn backend_handler_tools_call_enforces_api_key_tool_scope() {
     backend.set_transport_for_test(transport_dyn);
 
     let state = test_router_app_state_with_auth(&scoped_auth_config(false));
-    state.backends.register(backend);
+    let _ = state.backends.register(backend);
     let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
@@ -1516,7 +1516,7 @@ fn surfaced_tool_calls_resolve_to_backend_authorization_target() {
 #[test]
 fn authorize_tool_target_blocks_ssrf_when_protection_enabled() {
     let state = test_router_app_state_with_ssrf(true, false);
-    state
+    let _ = state
         .backends
         .register(http_backend_at("loopback", "http://127.0.0.1:9000/mcp"));
     let args = json!({});
@@ -1544,7 +1544,7 @@ fn authorize_tool_target_blocks_ssrf_when_protection_enabled() {
 #[test]
 fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled() {
     let state = test_router_app_state_with_ssrf(true, false);
-    state
+    let _ = state
         .backends
         .register(http_backend_at("public", "https://gateway-public.test/mcp"));
     let args = json!({});
@@ -1571,7 +1571,7 @@ fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled() {
 #[test]
 fn authorize_tool_target_skips_ssrf_when_trust_configured_backends_enabled() {
     let state = test_router_app_state_with_ssrf(true, true);
-    state
+    let _ = state
         .backends
         .register(http_backend_at("loopback", "http://127.0.0.1:9000/mcp"));
     let args = json!({});

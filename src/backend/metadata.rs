@@ -91,6 +91,12 @@ impl Backend {
     {
         cache
             .get_or_fetch_shared(self.cache_ttl, || async {
+                // Hold the transport open for the whole fetch WITHOUT claiming
+                // client activity. ensure_started() and request_internal() reach
+                // for the transport separately; without this lease the reaper can
+                // take it in between and the caller sees a spurious
+                // BackendUnavailable for a backend that is perfectly fine.
+                let _lease = self.begin_internal_activity();
                 self.ensure_started().await?;
 
                 let response = self.request_internal(method, None).await?;

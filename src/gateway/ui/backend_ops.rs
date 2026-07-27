@@ -8,6 +8,7 @@
 //! future HTTP handlers can call the same functions directly.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +39,15 @@ pub struct BackendInfo {
     pub url: Option<String>,
     /// Environment variables.
     pub env: HashMap<String, String>,
+    /// Seconds of idleness after which the gateway stops this backend, or
+    /// `None` when it is never stopped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_when_idle_for_secs: Option<u64>,
+    /// Whether this backend can be stopped when idle at all. False for a backend
+    /// reached over a URL the gateway did not start: it can close the connection
+    /// but cannot stop the server. The panel should hide or disable the control
+    /// rather than let an operator set something that will be refused.
+    pub can_stop_when_idle: bool,
 }
 
 /// Partial update applied by [`update_backend`].
@@ -53,6 +63,13 @@ pub struct BackendUpdate {
     pub enabled: Option<bool>,
     /// Replace the transport (overrides existing when `Some`).
     pub transport: Option<TransportConfig>,
+    /// Stop this backend when it has been idle this long, or clear the setting.
+    ///
+    /// Double `Option` on purpose: the outer layer distinguishes "the panel did
+    /// not send this field" (leave it alone) from "the panel sent it" (apply),
+    /// and the inner one carries `None` to mean "never stop". Collapsing them
+    /// would make the setting impossible to turn off once enabled.
+    pub stop_when_idle_for: Option<Option<Duration>>,
 }
 
 // ── Core operations ───────────────────────────────────────────────────────────
@@ -130,6 +147,19 @@ pub fn update_backend(
     }
     if let Some(transport) = update.transport {
         backend.transport = transport;
+    }
+    if let Some(idle) = update.stop_when_idle_for {
+        // Refuse rather than silently drop. The panel is a place operators trust
+        // to tell them what is in effect; accepting a setting the gateway cannot
+        // honour is how `idle_timeout` came to sit on 24 backends doing nothing.
+        if idle.is_some() && !matches!(backend.transport, TransportConfig::Stdio { .. }) {
+            return Err(format!(
+                "Backend '{name}' is reached over a URL the gateway did not start, so the \
+                 gateway cannot stop it. 'Stop when idle' is available only for backends the \
+                 gateway launches itself (those with a command)."
+            ));
+        }
+        backend.stop_when_idle_for = idle;
     }
 
     Ok(())
@@ -295,11 +325,15 @@ fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
         TransportConfig::A2a { a2a_url, .. } => ("a2a".to_string(), None, Some(a2a_url.clone())),
     };
 
+    let can_stop_when_idle = matches!(backend.transport, TransportConfig::Stdio { .. });
+
     BackendInfo {
         name: name.to_string(),
         description: backend.description.clone(),
         transport: transport_kind,
         enabled: backend.enabled,
+        stop_when_idle_for_secs: backend.stop_when_idle_for.map(|d| d.as_secs()),
+        can_stop_when_idle,
         command,
         url,
         env: backend.env.clone(),
@@ -712,5 +746,137 @@ mod tests {
         assert!(json.contains("\"TOKEN\":\"abc\""));
         // command should not appear for http transport
         assert!(!json.contains("\"command\""));
+    }
+}
+
+#[cfg(test)]
+mod stop_when_idle_ui_tests {
+    use super::*;
+
+    fn stdio_backend() -> BackendConfig {
+        BackendConfig {
+            transport: TransportConfig::Stdio {
+                command: "echo hi".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        }
+    }
+
+    fn http_backend() -> BackendConfig {
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "http://127.0.0.1:39400/mcp".to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        }
+    }
+
+    fn config_with(name: &str, backend: BackendConfig) -> Config {
+        let mut c = Config::default();
+        c.backends.insert(name.to_string(), backend);
+        c
+    }
+
+    // GW.IDLE.10 - settable from the panel on a backend the gateway starts.
+    #[test]
+    fn panel_can_set_and_clear_stop_when_idle_on_an_owned_backend() {
+        let mut config = config_with("owned", stdio_backend());
+
+        update_backend(
+            &mut config,
+            "owned",
+            BackendUpdate {
+                stop_when_idle_for: Some(Some(Duration::from_secs(300))),
+                ..Default::default()
+            },
+        )
+        .expect("an owned backend may opt in");
+        assert_eq!(
+            config.backends["owned"].stop_when_idle_for,
+            Some(Duration::from_secs(300))
+        );
+
+        // And it must be switchable back off, or the panel is a one-way door.
+        update_backend(
+            &mut config,
+            "owned",
+            BackendUpdate {
+                stop_when_idle_for: Some(None),
+                ..Default::default()
+            },
+        )
+        .expect("clearing must be possible");
+        assert_eq!(config.backends["owned"].stop_when_idle_for, None);
+    }
+
+    // The panel must refuse, not silently drop. Silently dropping is exactly how
+    // `idle_timeout` came to sit on 24 backends doing nothing.
+    #[test]
+    fn panel_refuses_stop_when_idle_on_a_backend_the_gateway_does_not_start() {
+        let mut config = config_with("external", http_backend());
+
+        let err = update_backend(
+            &mut config,
+            "external",
+            BackendUpdate {
+                stop_when_idle_for: Some(Some(Duration::from_secs(300))),
+                ..Default::default()
+            },
+        )
+        .expect_err("the gateway cannot stop a process it did not start");
+
+        assert!(err.contains("external"), "must name the backend: {err}");
+        assert_eq!(
+            config.backends["external"].stop_when_idle_for, None,
+            "a refused update must not partially apply"
+        );
+    }
+
+    // An omitted field must leave the existing setting alone.
+    #[test]
+    fn an_unrelated_panel_edit_does_not_disturb_the_setting() {
+        let mut config = config_with("owned", stdio_backend());
+        config.backends.get_mut("owned").unwrap().stop_when_idle_for =
+            Some(Duration::from_secs(600));
+
+        update_backend(
+            &mut config,
+            "owned",
+            BackendUpdate {
+                description: Some("renamed".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("update");
+
+        assert_eq!(
+            config.backends["owned"].stop_when_idle_for,
+            Some(Duration::from_secs(600)),
+            "editing the description must not silently clear an unrelated setting"
+        );
+    }
+
+    // The panel needs to know whether to offer the control at all.
+    #[test]
+    fn backend_info_reports_whether_the_control_is_offerable() {
+        let owned = config_with("owned", stdio_backend());
+        let external = config_with("external", http_backend());
+
+        assert!(
+            get_backend(&owned, "owned")
+                .expect("info")
+                .can_stop_when_idle,
+            "a gateway-started backend can be stopped"
+        );
+        assert!(
+            !get_backend(&external, "external")
+                .expect("info")
+                .can_stop_when_idle,
+            "the panel must hide the control for a backend the gateway did not start"
+        );
     }
 }

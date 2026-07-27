@@ -5,6 +5,8 @@
 use std::path::Path;
 #[cfg(not(windows))]
 use std::path::PathBuf;
+#[cfg(not(windows))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
 use crate::config_reload::{ReloadContext, ReloadOutcome};
@@ -81,17 +83,61 @@ pub async fn write_config_and_reload_outcome(
     config: &Config,
     reload_context: Option<&ReloadContext>,
 ) -> Result<Option<ReloadOutcome>, String> {
-    write_config(path, config)?;
-
     if let Some(ctx) = reload_context {
-        let outcome = ctx
-            .reload_outcome()
-            .await
-            .map_err(|e| format!("Config written but reload failed: {e}"))?;
-        return Ok(Some(outcome));
+        // Write and reload share one lock inside the context. Writing here
+        // first would reopen the race the lock exists to close.
+        return ctx.write_and_reload_outcome(path, config).await.map(Some);
     }
 
+    write_config(path, config)?;
     Ok(None)
+}
+
+/// What a guarded read-modify-write did: either the change was applied and
+/// persisted, or the caller's own check rejected it and nothing was written.
+pub enum ConfigMutation<T, E> {
+    /// The change was applied, persisted, and (when a reload context exists)
+    /// reloaded.
+    Applied(T, Option<ReloadOutcome>),
+    /// The caller's closure refused the change. The file is untouched.
+    Rejected(E),
+}
+
+/// Read the config, apply `mutate` to it, and persist the result without
+/// letting another writer slip in between the read and the write.
+///
+/// Reading outside the lock is what makes edits vanish: two requests each read
+/// the same starting file, each apply their own change to that stale copy, and
+/// the second write erases the first change while reporting success. Doing the
+/// read inside the same critical section as the write is what stops it.
+///
+/// # Errors
+///
+/// Returns an error string on validation, write, rename, or reload failure. A
+/// refusal from `mutate` is not an error; it comes back as
+/// [`ConfigMutation::Rejected`] with the file untouched.
+pub async fn mutate_config_and_reload<T, E, F>(
+    path: &Path,
+    reload_context: Option<&ReloadContext>,
+    mutate: F,
+) -> Result<ConfigMutation<T, E>, String>
+where
+    F: FnOnce(&mut Config) -> Result<T, E>,
+{
+    if let Some(ctx) = reload_context {
+        return ctx.mutate_and_reload_outcome(path, mutate).await;
+    }
+
+    // No live gateway to reload, so no reload lock exists to hold. This path is
+    // the CLI acting on a config file nothing else is serving.
+    let mut config = load_config_or_default(path);
+    match mutate(&mut config) {
+        Ok(value) => {
+            write_config(path, &config)?;
+            Ok(ConfigMutation::Applied(value, None))
+        }
+        Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),
+    }
 }
 
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
@@ -103,15 +149,37 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let tmp_path = temp_config_path(path);
-        std::fs::write(&tmp_path, yaml).map_err(|e| format!("Failed to write temp config: {e}"))?;
-        std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to replace config file: {e}"))
+        // Leave no debris behind on either failure. The scratch name is unique
+        // per call, so without cleanup each failure would strand one more file
+        // next to the config instead of reusing a single stale one.
+        std::fs::write(&tmp_path, yaml).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to write temp config: {e}")
+        })?;
+        std::fs::rename(&tmp_path, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to replace config file: {e}")
+        })
     }
 }
 
+/// A temp path unique to this call, in the same directory as `path` so the
+/// rename stays atomic.
+///
+/// Uniqueness is the point. A shared `<config>.tmp` lets two concurrent writers
+/// collide: both write the same temp file, the first rename ships whichever
+/// bytes landed last while reporting its own edit saved, and the second rename
+/// fails because the file it wrote is already gone.
 #[cfg(not(windows))]
 fn temp_config_path(path: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let mut tmp_path = path.as_os_str().to_os_string();
-    tmp_path.push(".tmp");
+    tmp_path.push(format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     PathBuf::from(tmp_path)
 }
 
@@ -140,6 +208,97 @@ mod tests {
         assert!(path.exists());
         let loaded = Config::load(Some(&path)).unwrap();
         assert_eq!(loaded.backends.len(), config.backends.len());
+    }
+
+    /// The temp file used by an atomic config write must be unique per call.
+    /// A shared `<config>.tmp` lets two concurrent writers clobber each other:
+    /// one renames the other's bytes into place and reports its own edit saved.
+    #[cfg(not(windows))]
+    #[test]
+    fn each_config_write_gets_its_own_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+
+        let first = temp_config_path(&path);
+        let second = temp_config_path(&path);
+
+        assert_ne!(
+            first, second,
+            "two writers shared one temp path, so either can overwrite the other"
+        );
+        for tmp in [&first, &second] {
+            assert_eq!(tmp.parent(), path.parent(), "temp file left its directory");
+        }
+    }
+
+    /// Concurrent writers must each either persist their own bytes or fail
+    /// honestly, and the file left behind must be exactly one writer's config.
+    /// Against a shared scratch path one writer's rename finds the file already
+    /// renamed away and fails with "Failed to replace config file", and the
+    /// bytes that land can belong to a writer that reported success elsewhere.
+    #[test]
+    fn concurrent_config_writes_do_not_lose_the_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+
+        // Each writer's config is distinguishable, so the assertion below can
+        // tell "one writer won" from "the file is a mix of two writers".
+        let config_for = |writer: usize| {
+            let mut config = Config::default();
+            config.backends.insert(
+                format!("writer-{writer}"),
+                crate::config::BackendConfig {
+                    transport: crate::config::TransportConfig::Http {
+                        http_url: "http://127.0.0.1:9/mcp".to_string(),
+                        streamable_http: false,
+                        protocol_version: None,
+                    },
+                    ..crate::config::BackendConfig::default()
+                },
+            );
+            config
+        };
+
+        for _ in 0..40 {
+            let errors: Vec<String> = std::thread::scope(|scope| {
+                let path = &path;
+                let config_for = &config_for;
+                let handles: Vec<_> = (0..8)
+                    .map(|writer| scope.spawn(move || write_config(path, &config_for(writer))))
+                    .collect();
+                handles
+                    .into_iter()
+                    .filter_map(|h| h.join().unwrap().err())
+                    .collect()
+            });
+
+            assert!(
+                errors.is_empty(),
+                "concurrent writers collided on the scratch file: {errors:?}"
+            );
+
+            let loaded = Config::load(Some(&path)).expect("config left unparseable");
+            let names: Vec<&String> = loaded.backends.keys().collect();
+            assert_eq!(
+                names.len(),
+                1,
+                "persisted config is not any single writer's: {names:?}"
+            );
+            assert!(
+                names[0].starts_with("writer-"),
+                "persisted config is not any single writer's: {names:?}"
+            );
+        }
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name()))
+            .filter(|name| name != "gateway.yaml")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "scratch files were left next to the config: {leftovers:?}"
+        );
     }
 
     #[test]

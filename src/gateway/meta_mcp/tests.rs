@@ -709,7 +709,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
         }),
     });
     backend.set_transport_for_test(transport);
-    registry.register(backend);
+    let _ = registry.register(backend);
 
     let meta = MetaMcp::new(registry);
     let result = meta
@@ -771,7 +771,7 @@ async fn gateway_search_includes_stale_non_empty_backend_cache() {
         "zero TTL should make the cache stale immediately"
     );
 
-    registry.register(backend);
+    let _ = registry.register(backend);
     let meta = MetaMcp::new(registry).with_code_mode(true);
 
     let result = meta
@@ -832,7 +832,7 @@ async fn gateway_search_server_qualified_query_fills_empty_backend_cache() {
     backend.set_transport_for_test(transport_dyn);
 
     assert_eq!(backend.cached_tools_count(), 0);
-    registry.register(backend);
+    let _ = registry.register(backend);
     let meta = MetaMcp::new(registry).with_code_mode(true);
 
     let result = meta
@@ -890,7 +890,7 @@ async fn code_mode_discovery_omits_oauth_isolated_backend_on_multi_user_gateway(
     backend.set_transport_for_test(transport);
 
     let registry = Arc::new(BackendRegistry::new());
-    registry.register(backend);
+    let _ = registry.register(backend);
     let meta = MetaMcp::new(registry).with_code_mode(true);
     meta.set_multi_user(true);
 
@@ -955,7 +955,7 @@ async fn tools_resolve_omits_oauth_isolated_backend_on_multi_user_gateway() {
     );
 
     let registry = Arc::new(BackendRegistry::new());
-    registry.register(backend);
+    let _ = registry.register(backend);
     let meta = MetaMcp::new(registry);
     meta.set_multi_user(true);
 
@@ -1396,7 +1396,7 @@ fn tools_list_includes_surfaced_tool_when_in_backend_cache() {
     // Directly populate the cache via get_cached_tool_names by writing to the backend
     // Since tools_cache is private, we test via the public API after warming via reflection.
     // Instead: verify that without cache, surfaced tool is absent.
-    registry.register(backend);
+    let _ = registry.register(backend);
 
     let surfaced = vec![SurfacedToolConfig {
         server: "my_server".to_string(),
@@ -1651,7 +1651,7 @@ fn revive_server_resets_a_tripped_circuit_breaker() {
         CircuitState::Open,
         "precondition: breaker must be open"
     );
-    registry.register(Arc::clone(&backend));
+    let _ = registry.register(Arc::clone(&backend));
     let mm = MetaMcp::new(registry);
 
     // WHEN: the operator runs gateway_revive_server
@@ -1990,7 +1990,7 @@ mod attestation_wiring {
             result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
         });
         backend.set_transport_for_test(transport);
-        registry.register(backend);
+        let _ = registry.register(backend);
         registry
     }
 
@@ -2049,7 +2049,7 @@ mod attestation_wiring {
             }),
         });
         backend.set_transport_for_test(transport);
-        registry.register(backend);
+        let _ = registry.register(backend);
 
         let meta = MetaMcp::new(registry);
         let result = invoke_docs_search(&meta).await;

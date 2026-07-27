@@ -202,8 +202,71 @@ impl Config {
             .map_err(|e| Error::Config(e.to_string()))?;
         config.expand_env_vars();
         config.validate()?;
+        Self::warn_on_retired_keys(resolved.as_deref());
 
         Ok(config)
+    }
+
+    /// Configuration keys that were removed. Left loadable on purpose: parsing
+    /// tolerates extra keys, so an old file keeps working.
+    const RETIRED_KEYS: &'static [(&'static str, &'static str)] = &[(
+        "idle_timeout",
+        "backend idle hibernation was never implemented; this key is now removed \
+         and has no effect. Delete it from your config — a command that rewrites \
+         the config will drop it silently along with any surrounding comments.",
+    )];
+
+    /// Retired keys present in the config file at `path`, as (key, explanation).
+    ///
+    /// Returns findings rather than logging directly so the detector is testable.
+    /// Parsing is tolerant of extra keys, which is exactly what let `idle_timeout`
+    /// sit in real configs looking effective: accepted, documented as
+    /// "hibernate after N idle", and read by nothing but a `Debug` impl. Ignoring
+    /// it silently now would repeat that mistake more quietly.
+    pub(crate) fn retired_keys_in_file(path: &Path) -> Vec<(&'static str, &'static str)> {
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        Self::retired_keys_in_str(&raw)
+    }
+
+    /// Structural scan, split out so tests exercise the shipped logic.
+    ///
+    /// Parses the document and looks for the retired name as an actual mapping
+    /// key under `backends.<name>` — where every real occurrence of
+    /// `idle_timeout` lived. An earlier line-oriented version missed flow-style
+    /// mappings (`backends: {demo: {idle_timeout: 10m}}`), which load fine and
+    /// would therefore have gone unwarned, and could fire on the key's name
+    /// appearing inside a block scalar. Both are real configs; a detector that
+    /// is honest only about the spellings it happens to recognise is the same
+    /// failure this commit removes.
+    pub(crate) fn retired_keys_in_str(raw: &str) -> Vec<(&'static str, &'static str)> {
+        // Unparseable YAML never reaches here through `Config::load`, which
+        // fails on it first. Nothing useful to say about a file we cannot read.
+        let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
+            return Vec::new();
+        };
+        let Some(backends) = doc.get("backends").and_then(serde_yaml::Value::as_mapping) else {
+            return Vec::new();
+        };
+        Self::RETIRED_KEYS
+            .iter()
+            .filter(|(key, _)| {
+                backends.values().any(|backend| {
+                    backend
+                        .as_mapping()
+                        .is_some_and(|fields| fields.keys().any(|k| k.as_str() == Some(*key)))
+                })
+            })
+            .copied()
+            .collect()
+    }
+
+    fn warn_on_retired_keys(path: Option<&Path>) {
+        let Some(path) = path else { return };
+        for (key, why) in Self::retired_keys_in_file(path) {
+            tracing::warn!(config = %path.display(), key = %key, "retired config key: {}", why);
+        }
     }
 
     /// Load environment files into the process environment.
@@ -303,6 +366,7 @@ impl Config {
         self.validate_required_env_references()?;
         self.runtime.validate()?;
         self.validate_backend_runtime_profiles()?;
+        self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         self.key_server.validate()?;
@@ -554,6 +618,42 @@ impl Config {
 
         Ok(())
     }
+
+    /// `stop_when_idle_for` is meaningful only where the gateway OWNS the backend
+    /// process - a backend declared with a `command`, which the gateway spawned
+    /// and can therefore stop and restart.
+    ///
+    /// For an externally managed endpoint the gateway can close its client
+    /// connection, but that does not stop the server on the other end, so the
+    /// setting would promise a reclaim it cannot perform. Locality does not grant
+    /// ownership: a local HTTP MCP server on 127.0.0.1 is still not ours to stop.
+    ///
+    /// This rejects rather than ignores, deliberately. The predecessor key
+    /// `idle_timeout` was accepted everywhere and enforced nowhere; one operator
+    /// had it set on 24 backends believing it worked. Silently accepting a
+    /// setting the gateway cannot honour is the exact failure being corrected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error naming the backend when the setting is present
+    /// on a backend the gateway does not start.
+    fn validate_stop_when_idle_ownership(&self) -> Result<()> {
+        for (name, backend) in &self.backends {
+            if backend.stop_when_idle_for.is_none() {
+                continue;
+            }
+            if !matches!(backend.transport, TransportConfig::Stdio { .. }) {
+                return Err(Error::ConfigValidation(format!(
+                    "backends.{name}.stop_when_idle_for is only valid for a backend the gateway \
+                     starts itself (one declared with a `command`). This backend is reached over \
+                     a URL the gateway did not start, so closing the connection would not stop \
+                     it. Remove the setting, or run that server under the gateway as a stdio \
+                     backend."
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static str, &str)> {
@@ -718,9 +818,20 @@ pub struct BackendConfig {
     /// Transport type.
     #[serde(flatten)]
     pub transport: TransportConfig,
-    /// Idle timeout before hibernation.
-    #[serde(with = "humantime_serde")]
-    pub idle_timeout: Duration,
+    /// Stop this backend's process after it has been unused for this long,
+    /// restarting it on the next request.
+    ///
+    /// Valid ONLY for a backend whose process the gateway owns — one declared
+    /// with a `command`. For an externally managed HTTP endpoint the gateway can
+    /// close its client connection but cannot stop the server on the other end,
+    /// so the setting is rejected at config load rather than silently accepted.
+    /// Locality does not grant ownership: a local HTTP MCP server is still not
+    /// ours to stop.
+    ///
+    /// `None` means never stop the backend once started, which is the historical
+    /// behaviour.
+    #[serde(default, with = "humantime_serde::option")]
+    pub stop_when_idle_for: Option<Duration>,
     /// Request timeout for this backend.
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
@@ -762,7 +873,7 @@ impl std::fmt::Debug for BackendConfig {
             .field("description", &self.description)
             .field("enabled", &self.enabled)
             .field("transport", &self.transport)
-            .field("idle_timeout", &self.idle_timeout)
+            .field("stop_when_idle_for", &self.stop_when_idle_for)
             .field("timeout", &self.timeout)
             // `env` and `headers` values routinely carry credentials
             // (Authorization bearers, API keys, env-injected secrets). The
@@ -785,7 +896,7 @@ impl Default for BackendConfig {
             description: String::new(),
             enabled: true,
             transport: TransportConfig::default(),
-            idle_timeout: Duration::from_secs(300),
+            stop_when_idle_for: None,
             timeout: Duration::from_secs(30),
             env: HashMap::new(),
             headers: HashMap::new(),
@@ -992,6 +1103,28 @@ pub mod humantime_serde {
 
     use serde::{self, Deserialize, Deserializer, Serializer};
 
+    /// Parse a human-readable duration such as `"30s"`, `"5m"`, `"100ms"`.
+    ///
+    /// NOTE: `"ms"` is tested BEFORE `"s"`. The previous implementation tested
+    /// `"s"` first, so `"100ms"` took the seconds branch and failed to parse
+    /// `"100m"` as an integer — every `ms` value in every duration field was
+    /// rejected. Bare integers are seconds.
+    fn parse(text: &str) -> Result<Duration, String> {
+        let text = text.trim();
+        if let Some(ms) = text.strip_suffix("ms") {
+            ms.parse::<u64>().map(Duration::from_millis)
+        } else if let Some(secs) = text.strip_suffix('s') {
+            secs.parse::<u64>().map(Duration::from_secs)
+        } else if let Some(mins) = text.strip_suffix('m') {
+            mins.parse::<u64>().map(|m| Duration::from_secs(m * 60))
+        } else if let Some(hours) = text.strip_suffix('h') {
+            hours.parse::<u64>().map(|h| Duration::from_secs(h * 3600))
+        } else {
+            text.parse::<u64>().map(Duration::from_secs)
+        }
+        .map_err(|e| format!("invalid duration {text:?}: {e}"))
+    }
+
     /// Serialize `Duration` to a human-readable string (e.g., `"30s"`).
     ///
     /// # Errors
@@ -1004,33 +1137,53 @@ pub mod humantime_serde {
         serializer.serialize_str(&format!("{}s", duration.as_secs()))
     }
 
-    /// Deserialize a human-readable duration string (e.g., `"30s"`, `"5m"`, `"100ms"`).
+    /// Deserialize a human-readable duration string.
     ///
     /// # Errors
     ///
-    /// Returns a deserialization error if the string cannot be parsed as a duration.
+    /// Returns a deserialization error if the string cannot be parsed.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
+        let text = String::deserialize(deserializer)?;
+        parse(&text).map_err(serde::de::Error::custom)
+    }
 
-        if let Some(secs) = s.strip_suffix('s') {
-            secs.parse::<u64>()
-                .map(Duration::from_secs)
-                .map_err(serde::de::Error::custom)
-        } else if let Some(mins) = s.strip_suffix('m') {
-            mins.parse::<u64>()
-                .map(|m| Duration::from_secs(m * 60))
-                .map_err(serde::de::Error::custom)
-        } else if let Some(ms) = s.strip_suffix("ms") {
-            ms.parse::<u64>()
-                .map(Duration::from_millis)
-                .map_err(serde::de::Error::custom)
-        } else {
-            s.parse::<u64>()
-                .map(Duration::from_secs)
-                .map_err(serde::de::Error::custom)
+    /// Same encoding for an optional duration. A missing key deserialises to
+    /// `None`, so "unset" stays distinguishable from any real value — no magic
+    /// zero standing in for "never".
+    pub mod option {
+        use std::time::Duration;
+
+        use serde::{Deserialize, Deserializer, Serializer};
+
+        /// # Errors
+        ///
+        /// Returns a serialization error if the serializer fails.
+        pub fn serialize<S>(value: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match value {
+                Some(d) => super::serialize(d, serializer),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        /// # Errors
+        ///
+        /// Returns a deserialization error if the string cannot be parsed.
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            match Option::<String>::deserialize(deserializer)? {
+                None => Ok(None),
+                Some(text) => super::parse(&text)
+                    .map(Some)
+                    .map_err(serde::de::Error::custom),
+            }
         }
     }
 }

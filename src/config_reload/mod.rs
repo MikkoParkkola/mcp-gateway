@@ -78,6 +78,20 @@ pub struct ConfigPatch {
     pub profiles_changed: bool,
 }
 
+/// Summary text a reload reports when the file on disk matches the live config.
+/// Shared so the file-watcher can recognise the no-op case without matching on a
+/// literal that could drift away from the one `no_changes` writes.
+const NO_CHANGES_SUMMARY: &str = "no changes detected";
+
+/// Error text a reload returns when the registry refused a backend because the
+/// gateway is shutting down. A shared constant because the file-watcher has to
+/// tell this apart from a bad config file: one is a broken file an operator must
+/// fix, the other is normal shutdown, and they must not share an alert. The
+/// honest fix is a typed error, but `reload_outcome` returns `Result<_, String>`
+/// to callers outside this crate, so changing its shape is a next-major job.
+const SHUTDOWN_ABORTED_ERROR: &str = "config reload aborted: the gateway is shutting down and refused to register \
+     one or more backends";
+
 /// Structured reload outcome for callers that need more than a log line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReloadOutcome {
@@ -172,7 +186,7 @@ impl ReloadOutcome {
     #[must_use]
     pub fn no_changes() -> Self {
         Self {
-            changes: "no changes detected".to_string(),
+            changes: NO_CHANGES_SUMMARY.to_string(),
             restart_required: false,
             restart_reason: None,
         }
@@ -436,13 +450,38 @@ fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
 ///   skipped.
 /// - **Profile changes**: logged at `INFO`; the `LiveConfig` is updated by the
 ///   caller after this function returns.
+///
+/// Returns `false` when the registry refused a registration because the gateway
+/// is shutting down. The patch is then only partly applied, so the caller must
+/// NOT publish the new config as live: doing so would describe backends that
+/// are not registered and report a reload that did not happen.
+///
+/// Not transactional, and deliberately not: additions and removals already
+/// applied stay applied, and a modified backend's old instance may already be
+/// stopped. Keeping the previous `LiveConfig` therefore does not describe the
+/// registry exactly either. That is acceptable only because a refusal happens
+/// solely after the permanent shutdown latch, so the inconsistency is bounded
+/// to a gateway that is terminating anyway. If registration ever becomes
+/// refusable for another reason, this needs a rollback rather than a flag.
+/// The caller must hold [`BackendRegistry::lock_reload`] across the whole
+/// transaction that surrounds this call - reading the live config, diffing it,
+/// applying the patch, and publishing the new config (#397). Taking the lock
+/// inside this function is not enough: the patch is computed against the live
+/// config beforehand, so two reloads can each compute a patch that adds the
+/// same backend, queue here, and register two instances under one name. The
+/// second registration discards the first without stopping it, and if traffic
+/// started that first instance in the gap its child process is orphaned. Both
+/// callers in this module take the lock before they read the config.
+#[must_use = "a partly applied patch must not be published as the live config"]
 pub async fn apply_patch(
     patch: &ConfigPatch,
     registry: &BackendRegistry,
     failsafe_config: &crate::config::FailsafeConfig,
     cache_ttl: Duration,
     runtime_config: &RuntimeConfig,
-) {
+) -> bool {
+    let mut fully_applied = true;
+
     if patch.restart_required() {
         warn!("Config reload: server host/port changed — restart required to apply this change");
     }
@@ -456,8 +495,15 @@ pub async fn apply_patch(
             cache_ttl,
             runtime_plan,
         ));
-        registry.register(Arc::clone(&backend));
-        info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend added");
+        if registry.register(Arc::clone(&backend)) {
+            info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend added");
+        } else {
+            // The registry refuses registrations once shutdown has begun,
+            // because nothing would ever stop them. Reporting "added" here
+            // would tell an operator a backend exists when it does not.
+            warn!(backend = %name, "Config reload: backend not added, gateway is shutting down");
+            fully_applied = false;
+        }
     }
 
     for name in &patch.backends_removed {
@@ -486,13 +532,25 @@ pub async fn apply_patch(
             cache_ttl,
             runtime_plan,
         ));
-        registry.register(Arc::clone(&backend));
-        info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend updated");
+        if registry.register(Arc::clone(&backend)) {
+            info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend updated");
+        } else {
+            // The old instance was stopped above and the replacement refused,
+            // so depending on timing the map now holds a stopped backend or no
+            // entry at all under this name. Neither is worth repairing:
+            // refusal only happens after the permanent shutdown latch, so the
+            // gateway is going away regardless. What matters is that the caller
+            // does not treat this reload as applied.
+            warn!(backend = %name, "Config reload: backend not updated, gateway is shutting down");
+            fully_applied = false;
+        }
     }
 
     if patch.profiles_changed {
         info!("Config reload: meta/profile config updated (in-place)");
     }
+
+    fully_applied
 }
 
 // ============================================================================
@@ -704,6 +762,15 @@ impl ConfigWatcher {
             let mut pending_trigger: Option<ReloadTrigger> = None;
             let mut ticker = tokio::time::interval(Duration::from_millis(100));
 
+            // The watcher runs the same reload transaction as the meta-tool and
+            // the admin UI, through the same function (#397). It used to have a
+            // private copy of that transaction, which meant the regression test
+            // covering the reload lock only ever exercised the other two entry
+            // points: an edit that moved the lock here alone would not have
+            // failed a single test.
+            let ctx =
+                ReloadContext::new(config_path, live_config, registry, failsafe_cfg, cache_ttl);
+
             loop {
                 tokio::select! {
                     Some(trigger) = event_rx.recv() => {
@@ -721,14 +788,40 @@ impl ConfigWatcher {
                             let trigger = pending_trigger.take().unwrap();
                             last_event = None;
                             log_reload_trigger(&trigger);
-                            reload_once(
-                                &config_path,
-                                &live_config,
-                                &registry,
-                                &failsafe_cfg,
-                                cache_ttl,
-                            )
-                            .await;
+                            match ctx.reload_outcome().await {
+                                Ok(outcome) if outcome.changes == NO_CHANGES_SUMMARY => {
+                                    tracing::debug!("Config reload: no changes detected");
+                                }
+                                Ok(outcome) => {
+                                    info!(
+                                        changes = %outcome.changes,
+                                        restart_required = outcome.restart_required,
+                                        "Config reload: complete"
+                                    );
+                                }
+                                Err(e) if e == SHUTDOWN_ABORTED_ERROR => {
+                                    warn!(
+                                        "Config reload: aborted, the gateway is \
+                                         shutting down; keeping the previous live \
+                                         config rather than publishing one that \
+                                         describes backends which were never \
+                                         registered"
+                                    );
+                                }
+                                Err(e) => {
+                                    // Every other error out of `reload_outcome`
+                                    // comes from reading or parsing the file:
+                                    // that call has exactly two failure sources
+                                    // and the arm above catches the other one. A
+                                    // third source added later lands here and
+                                    // would be mislabelled, so give it its own
+                                    // arm rather than widening this message.
+                                    warn!(
+                                        error = %e,
+                                        "Config reload: failed to parse config file, keeping current config"
+                                    );
+                                }
+                            }
                         }
                     }
                     _ = shutdown_rx.recv() => {
@@ -770,42 +863,6 @@ fn load_config_patch(
     } else {
         Ok(Some((new_config, patch)))
     }
-}
-
-/// Parse the config file, compute the diff, and apply the patch.
-async fn reload_once(
-    config_path: &std::path::Path,
-    live_config: &Arc<LiveConfig>,
-    registry: &Arc<BackendRegistry>,
-    failsafe_cfg: &crate::config::FailsafeConfig,
-    cache_ttl: Duration,
-) {
-    let Some((new_config, patch)) = (match load_config_patch(config_path, live_config) {
-        Ok(result) => result,
-        Err(e) => {
-            warn!(error = %e, "Config reload: failed to parse config file, keeping current config");
-            return;
-        }
-    }) else {
-        tracing::debug!("Config reload: no changes detected");
-        return;
-    };
-
-    info!(changes = %patch.summary(), "Config reload: applying patch");
-
-    apply_patch(
-        &patch,
-        registry,
-        failsafe_cfg,
-        cache_ttl,
-        &new_config.runtime,
-    )
-    .await;
-
-    // Swap live config after patch is applied so readers see a consistent view.
-    live_config.set(new_config);
-
-    info!("Config reload: complete");
 }
 
 // ============================================================================
@@ -866,13 +923,84 @@ impl ReloadContext {
     ///
     /// Returns an error string if the config file cannot be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
+        // Serializes the whole reload transaction (#397) - read, diff, apply,
+        // publish. All four concurrent entry points land here: the
+        // `gateway_reload_config` meta-tool, the admin UI reload, every admin UI
+        // backend edit, and the config-file watcher. See `apply_patch` for why
+        // the lock cannot live one level down.
+        let _reload_guard = self.registry.lock_reload().await;
+        self.reload_outcome_locked().await
+    }
+
+    /// Write `config` to `path`, then reload, with both steps under one lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string on validation, serialization, write, rename, or
+    /// reload failure.
+    ///
+    /// The write must be inside the same critical section as the reload. Two
+    /// admin UI edits that write first and lock second can interleave so that
+    /// one reload reads the other's file, and the caller is told its own edit
+    /// was applied. Holding one guard across write-read-apply-publish is what
+    /// makes an edit's own bytes the ones it reloads.
+    pub async fn write_and_reload_outcome(
+        &self,
+        path: &std::path::Path,
+        config: &Config,
+    ) -> std::result::Result<ReloadOutcome, String> {
+        let _reload_guard = self.registry.lock_reload().await;
+        crate::config_persistence::write_config(path, config)?;
+        self.reload_outcome_locked()
+            .await
+            .map_err(|e| format!("Config written but reload failed: {e}"))
+    }
+
+    /// Read the config, apply `mutate`, write, and reload, all under one guard.
+    ///
+    /// The read belongs inside the guard. Two admin UI edits that each read the
+    /// file before locking will each build their change on the same starting
+    /// copy, and whichever writes second erases the other's change while
+    /// telling its caller the edit was saved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string on write, rename, or reload failure. A refusal
+    /// from `mutate` comes back as `ConfigMutation::Rejected`, not an error.
+    pub async fn mutate_and_reload_outcome<T, E, F>(
+        &self,
+        path: &std::path::Path,
+        mutate: F,
+    ) -> std::result::Result<crate::config_persistence::ConfigMutation<T, E>, String>
+    where
+        F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+    {
+        use crate::config_persistence::ConfigMutation;
+
+        let _reload_guard = self.registry.lock_reload().await;
+        let mut config = crate::config_persistence::load_config_or_default(path);
+        let value = match mutate(&mut config) {
+            Ok(value) => value,
+            Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
+        };
+        crate::config_persistence::write_config(path, &config)?;
+        let outcome = self
+            .reload_outcome_locked()
+            .await
+            .map_err(|e| format!("Config written but reload failed: {e}"))?;
+        Ok(ConfigMutation::Applied(value, Some(outcome)))
+    }
+
+    /// The reload transaction itself. The caller must already hold the reload
+    /// lock; taking it here as well would deadlock on the non-reentrant mutex.
+    async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let Some((new_config, patch)) = load_config_patch(&self.config_path, &self.live_config)?
         else {
             return Ok(ReloadOutcome::no_changes());
         };
 
         let outcome = patch.outcome();
-        apply_patch(
+        let fully_applied = apply_patch(
             &patch,
             &self.registry,
             &self.failsafe_config,
@@ -880,6 +1008,14 @@ impl ReloadContext {
             &new_config.runtime,
         )
         .await;
+
+        if !fully_applied {
+            // Publishing here would describe backends the registry refused, and
+            // report a reload that did not happen. The caller asked for an
+            // outcome; the honest one is an error.
+            return Err(SHUTDOWN_ABORTED_ERROR.to_string());
+        }
+
         self.live_config.set(new_config);
 
         Ok(outcome)

@@ -222,7 +222,13 @@ backends:
   #   description: "Web search via Tavily"
   #   enabled: true
   #   timeout: 30s
-  #   idle_timeout: 300s          # Hibernate after 5 min idle
+  #   stop_when_idle_for: 5m      # Stop this backend after 5 min unused;
+  #                               # the next request restarts it. Valid ONLY for
+  #                               # a backend the gateway starts itself (one with
+  #                               # a `command`) - the gateway cannot stop a
+  #                               # server it did not start, so this is rejected
+  #                               # at config load for `http_url` backends,
+  #                               # including local ones. Omit it to never stop.
   #   env:
   #     TAVILY_API_KEY: "${TAVILY_API_KEY}"
   #   cwd: /tmp                   # Working directory (stdio only)

@@ -478,7 +478,7 @@ mod tests {
             std::time::Duration::from_secs(60),
         ));
         let registry = Arc::new(BackendRegistry::new());
-        registry.register(backend);
+        let _ = registry.register(backend);
 
         let m = MetaMcp::new(registry);
         m.set_multi_user(true);
@@ -526,7 +526,7 @@ mod tests {
             std::time::Duration::from_secs(60),
         ));
         let registry = Arc::new(BackendRegistry::new());
-        registry.register(backend);
+        let _ = registry.register(backend);
 
         let m = MetaMcp::new(registry);
         m.set_multi_user(true);

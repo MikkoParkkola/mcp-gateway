@@ -802,3 +802,163 @@ fn validate_accepts_identity_propagation_with_disabled_backend_oauth() {
         "disabled backend oauth must not trip the F3 gate"
     );
 }
+
+// ── GW.IDLE.3 — ownership validation ────────────────────────────────────────
+//
+// `stop_when_idle_for` promises the gateway will stop a process. It can only
+// honour that where it started the process. Accepting it elsewhere would repeat
+// nowhere, trusted by operators.
+
+#[test]
+fn stop_when_idle_for_is_accepted_on_a_gateway_started_backend() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 5m\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("stdio backend may opt in");
+    let backend = cfg
+        .backends
+        .get("owned")
+        .expect("backend must survive parsing");
+    assert_eq!(
+        backend.stop_when_idle_for,
+        Some(std::time::Duration::from_secs(300)),
+        "the duration must round-trip, not silently default"
+    );
+}
+
+#[test]
+fn stop_when_idle_for_is_rejected_on_a_backend_the_gateway_does_not_start() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    // A LOCAL http backend: locality does not grant ownership. The gateway did
+    // not start this server and cannot stop it.
+    std::fs::write(
+        &path,
+        "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n    stop_when_idle_for: 5m\n",
+    )
+    .expect("write");
+
+    let err =
+        Config::load(Some(&path)).expect_err("the gateway cannot stop a process it did not start");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("external"),
+        "the error must name the offending backend, got: {msg}"
+    );
+    assert!(
+        msg.contains("stop_when_idle_for"),
+        "the error must name the setting, got: {msg}"
+    );
+}
+
+#[test]
+fn omitting_stop_when_idle_for_leaves_a_backend_running_indefinitely() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "backends:\n  owned:\n    command: \"echo hi\"\n").expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("load");
+    assert_eq!(
+        cfg.backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        None,
+        "absent must mean never stop - no magic default that changes behaviour on upgrade"
+    );
+}
+
+#[test]
+fn an_http_backend_without_the_setting_still_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  external:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("http backends are fine without the setting");
+    assert!(
+        cfg.backends.contains_key("external"),
+        "control: the validation must reject only the setting, not the transport"
+    );
+}
+
+#[test]
+fn duration_parser_handles_milliseconds() {
+    // Regression: the parser tested the "s" suffix BEFORE "ms", so "100ms" took
+    // the seconds branch and failed to parse "100m" as an integer. Every ms value
+    // in every duration field was rejected.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  owned:\n    command: \"echo hi\"\n    stop_when_idle_for: 1500ms\n",
+    )
+    .expect("write");
+
+    let cfg = Config::load(Some(&path)).expect("ms suffix must parse");
+    assert_eq!(
+        cfg.backends
+            .get("owned")
+            .expect("backend")
+            .stop_when_idle_for,
+        Some(std::time::Duration::from_millis(1500))
+    );
+}
+
+/// Flow style is valid YAML and loads identically to the block form. A
+/// line-oriented detector saw nothing here, so an operator whose config used
+/// flow mappings got the removal with no warning at all — the exact silence
+/// this warning exists to break.
+#[test]
+fn retired_key_detector_sees_flow_style_mappings() {
+    assert!(
+        !Config::retired_keys_in_str("backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}")
+            .is_empty(),
+        "flow-style mappings are valid YAML; the detector must see the key there too"
+    );
+}
+
+/// The mirror failure: the key's NAME inside a value is not a use of the key.
+/// A CHANGELOG excerpt or a description quoting `idle_timeout:` must not make
+/// the gateway warn about a config that never set it.
+#[test]
+fn retired_key_detector_ignores_the_name_inside_values() {
+    assert!(
+        Config::retired_keys_in_str(
+            "backends:\n  demo:\n    command: \"echo hi\"\n    description: |\n      idle_timeout: 10m is no longer supported\n"
+        )
+        .is_empty(),
+        "the key name appearing inside a block scalar is text, not a set key"
+    );
+}
+
+/// `Config::load` warns by reading the file from disk, a path the string-level
+/// tests never touch. Without this, the detector could be perfect and still be
+/// wired to nothing.
+#[test]
+fn retired_key_detector_reads_the_loaded_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  demo:\n    command: \"echo hi\"\n    idle_timeout: 10m\n",
+    )
+    .expect("write config");
+
+    assert_eq!(
+        Config::retired_keys_in_file(&path)
+            .iter()
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>(),
+        vec!["idle_timeout"],
+        "the file-reading path Config::load uses must find the retired key"
+    );
+}
