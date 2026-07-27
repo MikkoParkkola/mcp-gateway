@@ -933,7 +933,7 @@ fn retired_key_detector_sees_flow_style_mappings() {
 fn retired_key_detector_ignores_the_name_inside_values() {
     assert!(
         Config::retired_keys_in_str(
-            "backends:\n  demo:\n    command: \"echo hi\"\n    description: |\n      idle_timeout: 10m was removed in 4.0.0\n"
+            "backends:\n  demo:\n    command: \"echo hi\"\n    description: |\n      idle_timeout: 10m is no longer supported\n"
         )
         .is_empty(),
         "the key name appearing inside a block scalar is text, not a set key"
