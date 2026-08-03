@@ -104,7 +104,7 @@ shlex = "2.0"
 
 # OAuth / Crypto
 sha2 = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 rand = "0.10"
 dirs = "6.0"
 hmac = "0.13"
