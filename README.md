@@ -1,5 +1,7 @@
 # MCP Gateway
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.MikkoParkkola%2Fmcp-gateway.svg)](https://mcptoplist.com/server/io.github.MikkoParkkola%2Fmcp-gateway)
+
 [![CI](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/MikkoParkkola/mcp-gateway/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
