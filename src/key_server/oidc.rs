@@ -515,7 +515,10 @@ fn find_key_in_jwks(jwks: &JwkSet, kid: &str) -> Option<DecodingKey> {
             AlgorithmParameters::EllipticCurve(ec) => {
                 DecodingKey::from_ec_components(&ec.x, &ec.y).ok()
             }
-            AlgorithmParameters::OctetKey(_) | AlgorithmParameters::OctetKeyPair(_) => None,
+            // jsonwebtoken marks this enum non-exhaustive. Unknown future key
+            // types, along with known unsupported key families, must remain
+            // fail-closed until support is implemented.
+            _ => None,
         };
     }
     None
@@ -698,6 +701,16 @@ mod tests {
 
         // THEN: error
         assert!(check_audience(&aud, &expected).is_err());
+    }
+
+    #[test]
+    fn find_key_rejects_unknown_jwk_types() {
+        let jwks: JwkSet = serde_json::from_value(serde_json::json!({
+            "keys": [{"kid": "future-key", "kty": "FUTURE", "x-vendor": "opaque"}]
+        }))
+        .expect("unknown JWK types should remain deserializable");
+
+        assert!(find_key_in_jwks(&jwks, "future-key").is_none());
     }
 
     #[test]
