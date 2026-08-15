@@ -401,6 +401,16 @@ impl Backend {
         BackendLifecycle::NotStarted
     }
 
+    /// The per-request timeout this backend was configured with.
+    ///
+    /// Exposed so callers that wrap a backend call in a ceiling of their own can
+    /// derive it from the operator's setting instead of hard-coding a number
+    /// that silently pre-empts any backend configured to take longer.
+    #[must_use]
+    pub fn request_timeout(&self) -> std::time::Duration {
+        self.config.timeout
+    }
+
     /// Get backend status.
     ///
     /// Reports the canonical Shared slot's circuit/health state (MIK-6735
