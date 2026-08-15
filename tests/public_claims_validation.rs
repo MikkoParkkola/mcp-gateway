@@ -225,10 +225,10 @@ fn generated_homebrew_formula_stays_gatekeeper_safe() {
     }
 
     assert!(
-        !formula
+        formula
             .lines()
-            .any(|line| line.trim_start().starts_with("version ")),
-        "Homebrew should derive the version from release URLs"
+            .any(|line| line.trim() == "version \"${VERSION}\""),
+        "generated formula must provide the release version explicitly"
     );
     for forbidden in ["post_install", "xattr", "com.apple.quarantine"] {
         assert!(
