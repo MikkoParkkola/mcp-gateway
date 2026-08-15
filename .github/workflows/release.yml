@@ -29,7 +29,7 @@ jobs:
   # Exceptions are time-boxed in .github/osv-scanner.toml.
   security-gate:
     name: Security gate (block release on known vulns)
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,7 +60,7 @@ jobs:
   # If CodeQL is added later, wire it into this same needs: chain.
   secret-leak-lint:
     name: Secret-leak lint (CWE-532)
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the leak-lint parser (fail on parser regression)
@@ -70,7 +70,7 @@ jobs:
 
   verify:
     needs: [security-gate, secret-leak-lint]
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,27 +100,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: avrea-ubuntu-latest-4-vcpu
             target: x86_64-unknown-linux-musl
             artifact: mcp-gateway-linux-x86_64
             suffix: ""
             packages: musl-tools
-          - os: ubuntu-24.04-arm
+          - os: avrea-ubuntu-latest-arm-4-vcpu
             target: aarch64-unknown-linux-musl
             artifact: mcp-gateway-linux-aarch64
             suffix: ""
-            packages: musl-tools gcc-aarch64-linux-gnu
-          - os: macos-latest
+            packages: musl-tools
+          - os: avrea-macos-26-8-vcpu
             target: aarch64-apple-darwin
             artifact: mcp-gateway-darwin-arm64
             suffix: ""
             packages: ""
-          - os: macos-15
+          - os: avrea-macos-26-8-vcpu
             target: x86_64-apple-darwin
             artifact: mcp-gateway-darwin-x86_64
             suffix: ""
             packages: ""
-          - os: windows-latest
+          - os: avrea-windows-2025-4-vcpu
             target: x86_64-pc-windows-msvc
             artifact: mcp-gateway-windows-x86_64
             suffix: .exe
@@ -159,7 +159,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     permissions:
       contents: write
 
@@ -237,7 +237,7 @@ jobs:
 
   publish:
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -252,7 +252,7 @@ jobs:
 
   npm-publish:
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     permissions:
       id-token: write     # OIDC for npm trusted publishing + provenance attestation
       contents: read
@@ -288,7 +288,7 @@ jobs:
 
   homebrew-update:
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
       - name: Compute version and download checksums
