@@ -209,6 +209,36 @@ fn count_capability_yaml_files_by_category() -> Vec<(String, usize)> {
 }
 
 #[test]
+fn generated_homebrew_formula_stays_gatekeeper_safe() {
+    let workflow = read_repo_file(".github/workflows/release.yml");
+    let formula = workflow
+        .split_once("cat > homebrew-tap/Formula/mcp-gateway.rb <<EOF\n")
+        .and_then(|(_, remainder)| remainder.split_once("\n          EOF"))
+        .map(|(formula, _)| formula)
+        .expect("release workflow should contain the generated Homebrew formula");
+
+    for required in ["on_macos do", "on_linux do", "def install", "test do"] {
+        assert!(
+            formula.contains(required),
+            "generated formula is missing {required:?}"
+        );
+    }
+
+    assert!(
+        formula
+            .lines()
+            .any(|line| line.trim() == "version \"${VERSION}\""),
+        "generated formula must provide the release version explicitly"
+    );
+    for forbidden in ["post_install", "xattr", "com.apple.quarantine"] {
+        assert!(
+            !formula.contains(forbidden),
+            "generated formula must not contain {forbidden:?}"
+        );
+    }
+}
+
+#[test]
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,

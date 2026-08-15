@@ -17,7 +17,7 @@ env:
 jobs:
   public-repo-hygiene:
     name: Public repo hygiene
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate public repo hygiene scripts
@@ -33,7 +33,7 @@ jobs:
 
   service-template-smoke:
     name: Service template smoke
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -45,7 +45,7 @@ jobs:
 
   usability-smoke:
     name: First-use usability smoke
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -57,7 +57,7 @@ jobs:
 
   helm-chart-smoke:
     name: Helm chart lint + render
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -68,7 +68,7 @@ jobs:
 
   helm-oci-roundtrip:
     name: Helm OCI package/push/pull
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     services:
       registry:
         image: registry:2
@@ -96,7 +96,7 @@ jobs:
 
   helm-supply-chain:
     name: Helm supply chain (cosign + SBOM)
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     services:
       registry:
         image: registry:2
@@ -119,7 +119,7 @@ jobs:
 
   helm-airgap:
     name: Helm air-gap export/import
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     services:
       registry:
         image: registry:2
@@ -146,7 +146,7 @@ jobs:
 
   k8s-kind-rollback:
     name: K8s kind apply+upgrade+rollback
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate kind rollback smoke script
@@ -172,7 +172,7 @@ jobs:
 
   check:
     name: Clippy (pedantic)
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -183,7 +183,7 @@ jobs:
 
   windows-check:
     name: Windows check
-    runs-on: windows-latest
+    runs-on: avrea-windows-2025-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -192,7 +192,7 @@ jobs:
 
   test:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -201,7 +201,7 @@ jobs:
 
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -211,7 +211,7 @@ jobs:
 
   audit:
     name: Dependency audit
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -224,13 +224,9 @@ jobs:
 
   kani:
     name: Kani
-    # ubuntu-20.04 was retired by GitHub in April 2025. Jobs targeting it
-    # queue forever waiting on a runner image that no longer exists, then
-    # get auto-cancelled at the 24h workflow max — which is exactly what
-    # was happening here on every run for ~3 days. Pin to ubuntu-22.04
-    # (still on the runner-image LTS path) for reproducibility; latest
-    # would also work but pinning matches Kani upstream's CI matrix.
-    runs-on: ubuntu-22.04
+    # Kani's current toolchain is validated against Ubuntu 22.04. Keep the
+    # Avrea runner pinned to that image rather than following latest.
+    runs-on: avrea-ubuntu-22.04-4-vcpu
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -250,7 +246,7 @@ jobs:
 
   public-claims:
     name: Public claims
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -261,7 +257,7 @@ jobs:
 
   secrets-scan:
     name: Secrets scan
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -278,7 +274,7 @@ jobs:
     # trufflehog only flags verified live secret VALUES it can see in the
     # diff. This is the class of bug fixed in #323 (redact credentials from
     # Debug output). Pure stdlib Python, no extra deps, so it stays fast.
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the leak-lint parser (fail on parser regression)
@@ -288,7 +284,7 @@ jobs:
 
   docker:
     name: Docker
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-4-vcpu
     if: startsWith(github.ref, 'refs/tags/v')
     # secrets-scan + secret-leak-lint added so the container image release
     # path can't ship on a tag whose push already failed a security check —
