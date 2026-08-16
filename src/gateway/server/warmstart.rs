@@ -131,6 +131,14 @@ const fn is_transient_io(kind: std::io::ErrorKind) -> bool {
 
 /// How many times warm-start re-asks a backend that answered with no tools.
 ///
+/// ACCEPTED RESIDUAL, raised in review: this budget is per warm-start task, not
+/// per backend instance, so a config reload that replaces a backend mid-loop
+/// inherits whatever the count had reached. A replacement whose tools register
+/// late therefore gets fewer than the full number of re-asks. Keying the count
+/// to the instance means tracking identity through the retry closure, which is
+/// more machinery than the case earns: the failure is reduced patience for a
+/// backend that was reloaded in the same minute it started, not invisibility.
+///
 /// A backend may register its tools a moment after it starts answering, so the
 /// first empty list is not proof. It may also genuinely have none, so this is
 /// bounded rather than endless -- polling and restarting a resource-only

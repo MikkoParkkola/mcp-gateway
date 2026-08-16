@@ -37,7 +37,12 @@ impl Backend {
     /// An empty result is cached with a fresh timestamp like any other, so
     /// without this a retry re-reads the same empty answer and never re-asks.
     pub fn invalidate_tools_cache(&self) {
-        self.tools_cache.invalidate();
+        // Conditional on purpose: only an EMPTY list is discarded. Clearing
+        // unconditionally could erase a tool list another reader populated
+        // between the caller observing emptiness and acting on it, which would
+        // turn a backend that had just become discoverable back into an
+        // invisible one. The check happens under the cache's own write lock.
+        self.tools_cache.invalidate_if(Vec::is_empty);
     }
 
     /// Return the number of tools in the cache (non-blocking, no network I/O).

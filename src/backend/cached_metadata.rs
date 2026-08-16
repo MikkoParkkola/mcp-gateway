@@ -81,7 +81,7 @@ impl<T> CachedMetadata<T> {
         state.cached_at = Some(Instant::now());
     }
 
-    /// Forget the cached value so the next call fetches from the backend.
+    /// Forget the cached value only if it still satisfies `discard`.
     ///
     /// Exists because a cached answer cannot otherwise be re-asked, and one
     /// answer needs re-asking: an EMPTY tool list. It is stored with a fresh
@@ -89,12 +89,23 @@ impl<T> CachedMetadata<T> {
     /// list back within microseconds and never reaches the backend at all --
     /// the retry looks like diligence and is a no-op.
     ///
+    /// CONDITIONAL, deliberately, and there is no unconditional form. Clearing
+    /// whatever is there races with a real cost, raised in review: a caller that
+    /// observed an EMPTY list, then invalidated, could erase a non-empty list
+    /// another reader had populated in between -- turning a backend that had
+    /// just become discoverable back into an invisible one. The predicate runs
+    /// under the same write lock as the clear, so nothing slips between the
+    /// decision and the effect.
+    ///
     /// Deliberately does NOT cancel an in-flight fetch: that fetch is already
     /// going to the backend, which is what the caller wanted.
-    pub(super) fn invalidate(&self) {
+    pub(super) fn invalidate_if(&self, discard: impl Fn(&T) -> bool) {
         let mut state = self.state.write();
-        state.value = None;
-        state.cached_at = None;
+        let should_clear = state.value.as_ref().is_some_and(|v| discard(v));
+        if should_clear {
+            state.value = None;
+            state.cached_at = None;
+        }
     }
 
     fn acquire(&self, ttl: Duration) -> CacheFetchState<'_, T> {
@@ -205,7 +216,7 @@ mod tests {
 
         for round in 0..3 {
             if round > 0 {
-                cache.invalidate();
+                cache.invalidate_if(Vec::is_empty);
             }
             let seen = Arc::clone(&calls);
             let _ = cache
@@ -227,9 +238,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalidate_if_never_erases_a_value_that_no_longer_matches() {
+        // Raised in review, and it is the dangerous direction: a caller that
+        // observed an EMPTY list and then invalidated could erase a non-empty
+        // list another reader had populated in between -- turning a backend
+        // that had just become discoverable back into an invisible one.
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let _ = cache
+            .get_or_fetch_shared(LONG_TTL, || async { Ok(vec![1u8, 2, 3]) })
+            .await;
+
+        cache.invalidate_if(Vec::is_empty);
+
+        let calls = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&calls);
+        let value = cache
+            .get_or_fetch_shared(LONG_TTL, || {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    Ok(Vec::new())
+                }
+            })
+            .await
+            .expect("the populated value must survive");
+
+        assert_eq!(*value, vec![1u8, 2, 3], "a populated list was erased");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "and it should not have refetched"
+        );
+    }
+
+    #[tokio::test]
     async fn invalidate_on_an_empty_cache_is_harmless() {
         let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
-        cache.invalidate();
+        cache.invalidate_if(Vec::is_empty);
 
         let value = cache
             .get_or_fetch_shared(LONG_TTL, || async { Ok(vec![1u8, 2, 3]) })
