@@ -1245,44 +1245,15 @@ impl Gateway {
             )
         };
 
-        // Start health check task
-        let backends_clone = Arc::clone(&self.backends);
-        let health_config = self.config.failsafe.health_check.clone();
-        let mut shutdown_rx = shutdown_tx.subscribe();
-
-        tokio::spawn(async move {
-            if !health_config.enabled {
-                return;
-            }
-
-            let mut interval = tokio::time::interval(health_config.interval);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        for backend in backends_clone.all() {
-                            // Probe running backends (liveness) AND backends whose
-                            // breaker is tripped (recovery). The old guard only
-                            // probed running backends — but a backend that died
-                            // and tripped its breaker reports `is_running()==false`,
-                            // so it was skipped exactly when it needed recovery.
-                            // Cleanly-idle backends (closed breaker, not running)
-                            // are left alone so the idle reaper can shut them down.
-                            if backend.is_running() || backend.is_circuit_tripped() {
-                                // `health_probe` bypasses the breaker, resets it on
-                                // success, and rebuilds the transport on failure —
-                                // the automatic equivalent of gateway_revive_server.
-                                if let Err(e) = backend.health_probe(health_config.timeout).await {
-                                    warn!(backend = %backend.name, error = %e, "Health check failed");
-                                }
-                            }
-                        }
-                    }
-                    _ = shutdown_rx.recv() => {
-                        break;
-                    }
-                }
-            }
-        });
+        // Start health check task. Shared with `run_stdio` for the same reason
+        // the idle reaper is: a setting that works in one serve mode and
+        // silently does nothing in the other is a defect wearing a feature's
+        // clothes.
+        spawn_health_loop(
+            Arc::clone(&self.backends),
+            &self.config.failsafe.health_check,
+            Some(shutdown_tx.subscribe()),
+        );
 
         // Idle reaper. Shared with `run_stdio`: a setting that works in one serve
         // mode and silently does nothing in the other is the same class of defect
@@ -1451,11 +1422,16 @@ impl Gateway {
             spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Stdio, None)
         };
 
-        // Reap what warm-start and lazy starts spawn. Without this the setting
-        // is accepted and validated in stdio mode and then never acted on.
-        // There is no broadcast shutdown channel in stdio mode, so the handle is
-        // kept and aborted explicitly at EOF below.
-        let idle_reaper = spawn_idle_reaper(Arc::clone(&self.backends), None);
+        // Reap what warm-start and lazy starts spawn, and probe backends so a
+        // dead one recovers. Both were HTTP-only or EOF-only before: stdio has
+        // no broadcast shutdown channel, so these guards own the tasks and abort
+        // them on EVERY exit path, not just the one that reaches EOF.
+        let idle_reaper = AbortOnDrop::new(spawn_idle_reaper(Arc::clone(&self.backends), None));
+        let health_loop = AbortOnDrop::new(spawn_health_loop(
+            Arc::clone(&self.backends),
+            &self.config.failsafe.health_check,
+            None,
+        ));
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
@@ -1517,12 +1493,13 @@ impl Gateway {
         }
 
         info!("stdio: EOF reached, shutting down");
-        // Stop sweeping before tearing the backends down. The reaper holds an
-        // Arc on the registry and has no shutdown channel in this mode, so
-        // leaving it running keeps both alive after run_stdio returns. Harmless
-        // when the process exits immediately after; a leak that keeps sweeping
-        // forever when the gateway is embedded or driven from a test.
-        idle_reaper.abort();
+        // Stop sweeping and probing before tearing the backends down. Both tasks
+        // hold an Arc on the registry and have no shutdown channel in this mode,
+        // so leaving either running keeps the registry alive after run_stdio
+        // returns. Dropping the guards here is explicit; they would also fire on
+        // any other exit path, which is the point of them.
+        drop(idle_reaper);
+        drop(health_loop);
         // Awaited, not left to the drop guard: an abort is asynchronous, so a
         // retry task mid-`ensure_started` would otherwise still be starting a
         // backend while `stop_all` drains it — delaying shutdown and logging
@@ -1762,6 +1739,87 @@ fn leaky_single_user_backends(config: &Config) -> Vec<&str> {
 ///
 /// `shutdown` is `None` in stdio mode, where the process exits with its read loop
 /// and there is no broadcast channel to observe.
+/// Aborts the task it owns when dropped.
+///
+/// Stdio mode has no broadcast shutdown channel, so its background tasks are
+/// stopped by aborting their handles. Aborting only on the EOF path is not
+/// enough: an embedded host that cancels `run_stdio` never reaches that line,
+/// and a dropped `JoinHandle` DETACHES its task rather than stopping it. The
+/// task then keeps the backend registry alive and keeps probing backends after
+/// the gateway is gone. Tying the abort to a guard's lifetime makes every exit
+/// path behave the same.
+#[must_use = "dropping this guard aborts the task immediately"]
+pub(crate) struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl AbortOnDrop {
+    pub(crate) const fn new(handle: tokio::task::JoinHandle<()>) -> Self {
+        Self(handle)
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Probe backends periodically so a dead one recovers without operator action.
+///
+/// `shutdown` is `Some` in HTTP mode, which has a broadcast channel; stdio mode
+/// passes `None` and owns the returned handle instead.
+fn spawn_health_loop(
+    backends: Arc<BackendRegistry>,
+    health_config: &crate::config::HealthCheckConfig,
+    shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+) -> tokio::task::JoinHandle<()> {
+    let (enabled, tick, probe_timeout) = (
+        health_config.enabled,
+        health_config.interval,
+        health_config.timeout,
+    );
+    tokio::spawn(async move {
+        if !enabled {
+            return;
+        }
+        let mut shutdown = shutdown;
+        let mut interval = tokio::time::interval(tick);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    for backend in backends.all() {
+                        // Probe running backends (liveness) AND backends whose
+                        // breaker is tripped (recovery). The old guard only
+                        // probed running backends — but a backend that died
+                        // and tripped its breaker reports `is_running()==false`,
+                        // so it was skipped exactly when it needed recovery.
+                        // Cleanly-idle backends (closed breaker, not running)
+                        // are left alone so the idle reaper can shut them down.
+                        if backend.is_running() || backend.is_circuit_tripped() {
+                            // `health_probe` bypasses the breaker, resets it on
+                            // success, and rebuilds the transport on failure —
+                            // the automatic equivalent of gateway_revive_server.
+                            if let Err(e) = backend.health_probe(probe_timeout).await {
+                                warn!(backend = %backend.name, error = %e, "Health check failed");
+                            }
+                        }
+                    }
+                }
+                // `Option::None` never resolves, so stdio mode simply loops
+                // until its handle is aborted.
+                Some(()) = async {
+                    match shutdown.as_mut() {
+                        Some(rx) => rx.recv().await.ok(),
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    break;
+                }
+            }
+        }
+    })
+}
+
 fn spawn_idle_reaper(
     backends: Arc<BackendRegistry>,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
@@ -2371,5 +2429,74 @@ mod tests {
             resolve_provenance_signer("  real key with spaces  ", "gateway").is_some(),
             "a key containing non-whitespace bytes must still yield a signer"
         );
+    }
+
+    // ── Background tasks must stop when the mode that owns them stops ────────
+
+    #[tokio::test]
+    async fn dropping_the_guard_aborts_the_task_it_owns() {
+        // REGRESSION. A dropped JoinHandle DETACHES its task rather than
+        // stopping it, so an embedded host that cancels `run_stdio` before EOF
+        // left the reaper sweeping and the health loop probing forever, both
+        // holding the backend registry alive.
+        let task = tokio::spawn(async { std::future::pending::<()>().await });
+        let probe = task.abort_handle();
+        let guard = super::AbortOnDrop::new(task);
+
+        tokio::task::yield_now().await;
+        assert!(!probe.is_finished(), "the task should still be running");
+
+        drop(guard);
+        tokio::task::yield_now().await;
+
+        assert!(
+            probe.is_finished(),
+            "dropping the guard must abort the task, not detach it"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_health_loop_exits_immediately_when_health_checks_are_disabled() {
+        let config = crate::config::HealthCheckConfig {
+            enabled: false,
+            ..Default::default()
+        };
+
+        let handle = super::spawn_health_loop(
+            Arc::new(crate::backend::BackendRegistry::new()),
+            &config,
+            None,
+        );
+
+        // No shutdown channel is passed, so if the `enabled` early-out were
+        // removed this would hang rather than fail -- the timeout is the assert.
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("a disabled health loop must return instead of idling")
+            .expect("the task must not panic");
+    }
+
+    #[tokio::test]
+    async fn the_health_loop_runs_without_a_shutdown_channel() {
+        // Stdio mode passes None. Before this change stdio had no health loop at
+        // all, so a backend that died there never recovered without a restart.
+        let config = crate::config::HealthCheckConfig {
+            enabled: true,
+            interval: std::time::Duration::from_millis(10),
+            ..Default::default()
+        };
+
+        let handle = super::spawn_health_loop(
+            Arc::new(crate::backend::BackendRegistry::new()),
+            &config,
+            None,
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !handle.is_finished(),
+            "with no shutdown channel the loop must keep probing until aborted"
+        );
+        handle.abort();
     }
 }
