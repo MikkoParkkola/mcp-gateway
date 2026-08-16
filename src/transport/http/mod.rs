@@ -47,6 +47,7 @@ fn same_origin(a: &Url, b: &Url) -> bool {
 /// Extracted from the [`reqwest::redirect::Policy::custom`] closure so the
 /// policy is unit-testable: reqwest's `Attempt` cannot be constructed in a
 /// test, but this pure decision can. See [`evaluate_redirect`].
+
 #[derive(Debug, PartialEq, Eq)]
 enum RedirectDecision {
     /// Hop budget exhausted — stop and surface the last response as-is.

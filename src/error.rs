@@ -77,6 +77,32 @@ pub enum Error {
     #[error("Transport error: {0}")]
     Transport(String),
 
+    /// A transport failure that waiting cannot fix.
+    ///
+    /// `Transport` means "failed, cause unknown, possibly transient", which is
+    /// the honest answer at most of its ~59 construction sites. This variant is
+    /// for the few that genuinely know better: a command path that does not
+    /// exist, a file that is not executable, a request the server calls
+    /// malformed.
+    ///
+    /// The distinction has a caller. Warm-start retries indefinitely while a
+    /// backend's tool cache is empty, so before this a mistyped command path
+    /// produced a respawn attempt once a minute for the whole process lifetime,
+    /// with nothing in the logs saying the configuration was simply wrong.
+    ///
+    /// When in doubt, use `Transport`. An unknown failure retrying is a cost;
+    /// a recoverable failure classified permanent needs a restart to notice.
+    ///
+    /// HTTP status codes are deliberately NOT classified here, and the attempt
+    /// is worth recording. A first pass marked 4xx permanent; two existing
+    /// tests refused it, because this protocol overloads BOTH 404 and 400 to
+    /// mean "your MCP session expired, reinitialise and retry" (#247). A
+    /// status-only classifier is therefore unsafe in this codebase, whatever it
+    /// would mean in a plain REST API. Classifying an HTTP failure needs the
+    /// body, not just the code.
+    #[error("Transport error (permanent): {0}")]
+    TransportPermanent(String),
+
     /// Protocol error
     #[error("Protocol error: {0}")]
     Protocol(String),
@@ -149,7 +175,11 @@ impl Error {
             Self::BackendUnavailable(_)
             | Self::CircuitOpen(_)
             | Self::BackendTimeout(_)
-            | Self::Transport(_) => -32000,
+            | Self::Transport(_)
+            // Same class as `Transport` to a JSON-RPC caller: a backend-side
+            // failure, not a gateway fault. Omitting it reported a missing
+            // backend command as an internal error.
+            | Self::TransportPermanent(_) => -32000,
             _ => -32603, // Internal error
         }
     }
@@ -171,4 +201,24 @@ pub mod rpc_codes {
     pub const SERVER_ERROR_START: i32 = -32000;
     /// Server error range end
     pub const SERVER_ERROR_END: i32 = -32099;
+}
+
+#[cfg(test)]
+mod rpc_code_tests {
+    use super::Error;
+
+    #[test]
+    fn a_permanent_transport_failure_reports_as_a_backend_error() {
+        // Omitting the variant here reported a missing backend command as an
+        // INTERNAL error, blaming the gateway for the operator's typo.
+        assert_eq!(
+            Error::TransportPermanent("Failed to spawn: no such file".to_string()).to_rpc_code(),
+            -32000,
+        );
+        assert_eq!(
+            Error::Transport("connection refused".to_string()).to_rpc_code(),
+            -32000,
+            "the two transport variants must look the same to a JSON-RPC caller"
+        );
+    }
 }

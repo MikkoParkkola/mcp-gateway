@@ -151,6 +151,10 @@ where
 /// Transient network and I/O errors are retryable; protocol/config errors
 /// signal a permanent failure that retrying will not fix.
 fn is_retryable(error: &Error) -> bool {
+    // `TransportPermanent` is deliberately absent: it is the transport saying
+    // the configuration cannot work, and a retry loop is the wrong answer to
+    // that. Plain `Transport` stays retryable, because it means "failed, cause
+    // unknown".
     matches!(
         error,
         Error::Transport(_) | Error::BackendTimeout(_) | Error::Http(_) | Error::Io(_)
@@ -167,6 +171,18 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn a_permanent_transport_failure_is_not_retried() {
+        // Both consumers must agree on the new variant, or a caller's retry
+        // behaviour depends on which helper it happened to use.
+        assert!(!is_retryable(&Error::TransportPermanent(
+            "bad command".to_string()
+        )));
+        assert!(is_retryable(&Error::Transport(
+            "connection refused".to_string()
+        )));
+    }
 
     #[test]
     fn backoff_grows_exponentially() {
