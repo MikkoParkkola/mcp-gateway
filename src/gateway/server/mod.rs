@@ -1231,11 +1231,19 @@ impl Gateway {
 
         // Warm-start backends: connect + prefetch tools into cache
         // If warm_start list is empty, warm ALL backends (makes list/search fast)
-        {
+        // Bound, not discarded: the returned guard aborts the retry tasks when it
+        // drops, so letting it fall out of scope here would cancel warm-start the
+        // instant it began.
+        let _warm_start_tasks = {
             let warm_start_list =
                 build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, true);
-            spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Http);
-        }
+            spawn_warm_start_task(
+                &self.backends,
+                warm_start_list,
+                WarmStartMode::Http,
+                Some(&shutdown_tx),
+            )
+        };
 
         // Start health check task
         let backends_clone = Arc::clone(&self.backends);
@@ -1434,12 +1442,14 @@ impl Gateway {
             meta_mcp.set_playbook_engine(engine);
         }
 
-        // Warm-start backends (same as HTTP mode)
-        {
+        // Warm-start backends (same as HTTP mode). Held for the rest of the
+        // function: dropping the guard aborts the retry tasks, so cancelling
+        // `run_stdio` anywhere cancels them too, not only the EOF path below.
+        let warm_start_tasks = {
             let warm_start_list =
                 build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, false);
-            spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Stdio);
-        }
+            spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Stdio, None)
+        };
 
         // Reap what warm-start and lazy starts spawn. Without this the setting
         // is accepted and validated in stdio mode and then never acted on.
@@ -1513,6 +1523,12 @@ impl Gateway {
         // when the process exits immediately after; a leak that keeps sweeping
         // forever when the gateway is embedded or driven from a test.
         idle_reaper.abort();
+        // Awaited, not left to the drop guard: an abort is asynchronous, so a
+        // retry task mid-`ensure_started` would otherwise still be starting a
+        // backend while `stop_all` drains it — delaying shutdown and logging
+        // starts for a gateway that is on its way out. The guard remains the
+        // backstop for every path that does not reach this line.
+        warm_start_tasks.cancel().await;
         self.backends.stop_all().await;
         Ok(())
     }
