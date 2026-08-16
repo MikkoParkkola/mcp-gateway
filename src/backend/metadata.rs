@@ -31,6 +31,15 @@ impl Backend {
         self.tools_cache.is_fresh(self.cache_ttl)
     }
 
+    /// Forget the cached tool list so the next fetch reaches the backend.
+    ///
+    /// The one caller that needs this is warm-start reconfirming an EMPTY list.
+    /// An empty result is cached with a fresh timestamp like any other, so
+    /// without this a retry re-reads the same empty answer and never re-asks.
+    pub fn invalidate_tools_cache(&self) {
+        self.tools_cache.invalidate();
+    }
+
     /// Return the number of tools in the cache (non-blocking, no network I/O).
     ///
     /// Returns `0` when the cache is empty or has never been populated.

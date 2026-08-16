@@ -81,6 +81,22 @@ impl<T> CachedMetadata<T> {
         state.cached_at = Some(Instant::now());
     }
 
+    /// Forget the cached value so the next call fetches from the backend.
+    ///
+    /// Exists because a cached answer cannot otherwise be re-asked, and one
+    /// answer needs re-asking: an EMPTY tool list. It is stored with a fresh
+    /// timestamp like any other, so a caller that retries reads the same empty
+    /// list back within microseconds and never reaches the backend at all --
+    /// the retry looks like diligence and is a no-op.
+    ///
+    /// Deliberately does NOT cancel an in-flight fetch: that fetch is already
+    /// going to the backend, which is what the caller wanted.
+    pub(super) fn invalidate(&self) {
+        let mut state = self.state.write();
+        state.value = None;
+        state.cached_at = None;
+    }
+
     fn acquire(&self, ttl: Duration) -> CacheFetchState<'_, T> {
         {
             let state = self.state.read();
@@ -143,5 +159,83 @@ impl<T> CachedMetadata<T> {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CachedMetadata;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
+    const LONG_TTL: Duration = Duration::from_secs(300);
+
+    #[tokio::test]
+    async fn an_empty_result_is_cached_like_any_other() {
+        // The behaviour that made a retry meaningless, pinned so the fix below
+        // is understood as deliberate rather than incidental.
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let calls = Arc::new(AtomicU32::new(0));
+
+        for _ in 0..3 {
+            let seen = Arc::clone(&calls);
+            let _ = cache
+                .get_or_fetch_shared(LONG_TTL, || {
+                    let seen = Arc::clone(&seen);
+                    async move {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        Ok(Vec::new())
+                    }
+                })
+                .await;
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "an empty result is served from cache, so retrying never re-asks"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalidate_makes_the_next_call_reach_the_backend() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let calls = Arc::new(AtomicU32::new(0));
+
+        for round in 0..3 {
+            if round > 0 {
+                cache.invalidate();
+            }
+            let seen = Arc::clone(&calls);
+            let _ = cache
+                .get_or_fetch_shared(LONG_TTL, || {
+                    let seen = Arc::clone(&seen);
+                    async move {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        Ok(Vec::new())
+                    }
+                })
+                .await;
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "each invalidated round must actually ask the backend again"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalidate_on_an_empty_cache_is_harmless() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        cache.invalidate();
+
+        let value = cache
+            .get_or_fetch_shared(LONG_TTL, || async { Ok(vec![1u8, 2, 3]) })
+            .await
+            .expect("fetch after a no-op invalidate");
+
+        assert_eq!(*value, vec![1u8, 2, 3]);
     }
 }
