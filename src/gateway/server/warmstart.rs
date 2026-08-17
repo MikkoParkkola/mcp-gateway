@@ -86,18 +86,21 @@ fn gap_before_attempt(policy: &WarmStartPolicy, attempt: u32, elapsed: Duration)
 /// anything not listed here must stop the loop: no amount of waiting turns an
 /// unsupported protocol version into a working backend.
 ///
-/// KNOWN LIMITATION, measured rather than assumed. The transport layer flattens
-/// its failures into `Error::Transport(String)` — `stdio.rs` maps a spawn
-/// failure to `Transport("Failed to spawn: …")` — so a mistyped command path is
-/// indistinguishable here from a port that is not listening yet, and both are
-/// retried. Classifying it properly means preserving typed errors across the
-/// transport boundary, which is a change to every backend call path rather than
-/// to warm-start. Filed, not bodged: string-matching the message would be a
-/// guess that breaks the first time the wording changes.
+/// The transport reports what it knows. `TransportPermanent` is the transport
+/// saying "this cannot work as configured" -- a missing command path, a file
+/// that is not executable, a request the server calls malformed -- and plain
+/// `Transport` remains "failed, cause unknown", which is the honest answer at
+/// most of its construction sites and stays retryable here.
 ///
-/// The `Io` narrowing below therefore protects only the paths that do surface a
-/// typed error today. It is correct, and it is not the whole story.
+/// Not every permanent failure is classified yet: only the sites that
+/// genuinely know map to the permanent variant, and the rest still arrive as
+/// `Transport` and are still retried. That is the safe direction of error --
+/// an unknown failure retrying costs a request a minute, while a recoverable
+/// one wrongly called permanent needs a gateway restart to notice.
 fn is_readiness_error(error: &Error) -> bool {
+    // `TransportPermanent` is deliberately unlisted: it is the transport saying
+    // the configuration cannot work, so retrying respawns a typo once a minute
+    // forever. It falls through to the catch-all below.
     match error {
         Error::Transport(_) | Error::BackendTimeout(_) | Error::BackendUnavailable(_) => true,
         Error::Io(e) => is_transient_io(e.kind()),
@@ -668,6 +671,33 @@ mod tests {
         ] {
             assert!(is_readiness_error(&e), "{e} must be retried");
         }
+    }
+
+    #[test]
+    fn a_transport_failure_the_transport_calls_permanent_stops_the_loop() {
+        // The whole point of the typed variant. Before it, a mistyped command
+        // path arrived as plain `Transport` and was respawned once a minute for
+        // the life of the process, with nothing saying the config was wrong.
+        let e = Error::TransportPermanent("Failed to spawn: no such file".to_string());
+
+        assert!(
+            !is_readiness_error(&e),
+            "a permanent transport failure must stop the loop"
+        );
+    }
+
+    #[test]
+    fn an_unclassified_transport_failure_is_still_retried() {
+        // The safe direction of error: most of the ~59 construction sites do not
+        // know whether their failure is permanent, so they still say `Transport`
+        // and are still retried. A recoverable failure wrongly called permanent
+        // would need a gateway restart to notice.
+        let e = Error::Transport("connection refused".to_string());
+
+        assert!(
+            is_readiness_error(&e),
+            "an unknown transport failure must stay retryable"
+        );
     }
 
     #[test]
