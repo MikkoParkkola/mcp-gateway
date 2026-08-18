@@ -5,7 +5,7 @@
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.95+-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-PolyForm--NC%20%2B%20MIT%20core-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
-[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
+[![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
@@ -129,7 +129,7 @@ mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
 
 #### Option C: hand-write `gateway.yaml`
 
-For the full schema reference, see [docs/QUICKSTART.md#configuration](docs/QUICKSTART.md#configuration). Minimal example:
+For the full schema, see the annotated [examples/gateway-full.yaml](examples/gateway-full.yaml), which covers `env_files`, `server`, `auth`, `meta_mcp`, `streaming`, `failsafe`, `cache`, `capabilities`, and `backends`. The remaining top-level sections (`playbooks`, `security`, `webhooks`, `routing_profiles`, `code_mode`, `mtls`, `key_server`, `agent_auth`, `runtime`, `marketplace`, `control_plane`, `cost_governance`) have no prose reference yet; the `Config` struct in [src/config/mod.rs](src/config/mod.rs) is the authoritative list. Minimal example:
 
 ```yaml
 server:
@@ -208,7 +208,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
-- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, SHA-256 pinning with rug-pull detection protects each capability, and the OWASP Agentic AI Top 10 is covered 10 out of 10. The whole binary is `#![forbid(unsafe_code)]`, with optional mTLS, message signing, and agent identity.
+- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, SHA-256 pinning with rug-pull detection protects each capability, and the OWASP Agentic AI Top 10 is covered 10 out of 10. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
 - **Dual protocol.** MCP plus an A2A (agent-to-agent) transport adapter, so the same gateway routes tool calls and cross-provider agent messages.
@@ -249,6 +249,15 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
 The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
+
+### Code Mode: two tools instead of the meta-tool set
+
+Setting `code_mode.enabled: true` makes `tools/list` return exactly two tools, `gateway_search` and `gateway_execute`, instead of the meta-tool set. Everything else is reached through those two. Tools named in `meta_mcp.surfaced_tools` are not appended in this mode, so the count stays at two however many backends are connected. Code Mode is off by default.
+
+```yaml
+code_mode:
+  enabled: true
+```
 
 
 ## Security
@@ -452,7 +461,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | Document | Contents |
 |----------|----------|
 | [Quick Start](docs/QUICKSTART.md) | Zero to running in 2 minutes |
-| [Configuration Reference](docs/QUICKSTART.md#configuration) | All config options |
+| [Annotated config example](examples/gateway-full.yaml) | Commented `gateway.yaml` covering the most-used config sections |
 | [OAuth Configuration](docs/OAUTH_CONFIG.md) | OAuth 2.0 setup with Slack and Figma examples |
 | [Upgrading to 3.0](docs/UPGRADING-3.0.md) | Per-user OAuth isolation and identity-propagation upgrade path |
 | [Deployment Guide](docs/DEPLOYMENT.md) | Docker, systemd, TLS/mTLS, scaling |
