@@ -39,7 +39,7 @@ This is why `src/gateway/meta_mcp/prompt_cache.rs` exists even though the projec
 
 ## Meta-Tools
 
-The gateway advertises up to 9 meta-tools to connecting clients. The base set of 4 is always present; the rest are conditional on configuration.
+The gateway advertises 14 to 17 meta-tools to connecting clients. The base set of 4 is always present; `gateway_cost_report` is always built at runtime; the rest are conditional on configuration. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
 
 | Tool | Always | Purpose |
 |------|--------|---------|
@@ -48,12 +48,20 @@ The gateway advertises up to 9 meta-tools to connecting clients. The base set of
 | `gateway_search_tools` | yes | Keyword search across all backends with ranked results |
 | `gateway_invoke` | yes | Call any tool on any backend. Handles caching, idempotency, kill switch |
 | `gateway_get_stats` | if stats enabled | Usage stats: invocations, cache hits, token savings, top tools, cost |
+| `gateway_cost_report` | yes | Current session and API-key spend |
 | `gateway_webhook_status` | if webhooks enabled | List webhook endpoints and delivery stats |
 | `gateway_run_playbook` | yes | Execute a multi-step playbook as a single call |
 | `gateway_kill_server` | yes | Operator kill switch: immediately disable routing to a backend |
 | `gateway_revive_server` | yes | Re-enable a killed backend and reset its error budget |
+| `gateway_set_profile` | yes | Switch the active routing profile for this session |
+| `gateway_get_profile` | yes | Show the active routing profile and what it allows or denies |
+| `gateway_list_disabled_capabilities` | yes | List capabilities auto-disabled for a high error rate |
+| `gateway_list_profiles` | yes | List available routing profiles |
+| `gateway_set_state` | yes | Transition the session to a new workflow state |
+| `gateway_reload_config` | if reload enabled | Reload `config.yaml` from disk without restarting |
+| `gateway_reload_capabilities` | yes | Re-read capability YAML files and rebuild the registry |
 
-Defined in `src/gateway/meta_mcp_helpers.rs`, function `build_meta_tools()` (line 347).
+Defined in `src/gateway/meta_mcp_tool_defs.rs`, function `build_meta_tools()` (line 543).
 
 ## Tool Discovery Resolution Order
 
@@ -123,7 +131,8 @@ stateDiagram-v2
     [*] --> Registered: Gateway::new() registers backend
     Registered --> WarmStarting: tokio::spawn warm-start task
     WarmStarting --> Active: backend.start() + get_tools() succeeds
-    WarmStarting --> Failed: start or prefetch fails
+    WarmStarting --> WarmStarting: transient failure, retried with backoff
+    WarmStarting --> Failed: permanent failure, retries stop
     Failed --> Active: manual retry via gateway_list_tools(server=X)
 
     Active --> CircuitOpen: failure_threshold exceeded
@@ -142,9 +151,9 @@ stateDiagram-v2
 
 `Gateway::new()` iterates `config.enabled_backends()`, creates `Backend` instances with transport config and failsafe settings, registers them in `BackendRegistry`.
 
-### Warm-start (`gateway/server.rs:348`)
+### Warm-start (`gateway/server/warmstart.rs`)
 
-A spawned task connects each backend and prefetches its tool list into cache. If `config.meta_mcp.warm_start` is empty, ALL backends are warmed.
+A spawned task connects each backend and prefetches its tool list into cache. If `config.meta_mcp.warm_start` is empty, ALL backends are warmed. An attempt that fails because the backend is not ready yet is retried automatically until the tool cache is populated: gaps double from 2s up to 30s for the first 180s, then settle at 60s. A failure the transport classifies as permanent stops the retries, and that backend then needs a manual `gateway_list_tools(server=X)`.
 
 ### Health check (`gateway/server.rs:397`)
 
@@ -381,4 +390,4 @@ Implemented in `gateway/server.rs:441-491`.
 
 Runtime: `axum` (HTTP), `tokio` (async), `reqwest` (HTTP client), `tower` (middleware), `serde_json` (serialization), `dashmap` (concurrent maps), `parking_lot` (fast locks), `governor` (rate limiting), `notify` (file watching for hot-reload), `figment` (config), `sha2`/`hmac` (hashing/signatures).
 
-No `unsafe` code (enforced via `#![forbid(unsafe_code)]`).
+No `unsafe` code (enforced via `#![deny(unsafe_code)]`).
