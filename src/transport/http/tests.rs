@@ -1017,28 +1017,59 @@ async fn request_does_not_reinitialize_without_a_session() {
     // surface as a plain error (nothing to re-initialize).
 
     let err = transport.request("tools/list", None).await.unwrap_err();
-    assert!(err.to_string().contains("Session not found"));
+    // The marker, not the backend's own wording: the body is redacted at the
+    // boundary now, so "Session not found" never reaches an error string.
+    assert!(err.to_string().contains("session expired"), "{err}");
+    assert!(
+        !err.to_string().contains("-32015"),
+        "the untrusted body must not survive into the error: {err}"
+    );
 
     server.abort();
 }
 
 #[test]
 fn session_expired_detection_matches_known_signatures() {
-    // rust-mcp-sdk shape (hebb-serve, observed live 2026-06-11)
-    assert!(is_session_expired_error(&Error::Transport(
-        "HTTP 400 Bad Request: {\"code\":-32015,\"data\":null,\"message\":\"Bad Request: Session not found\"}".to_string()
-    )));
-    // MCP spec: 404 = session terminated/expired
+    // The raw body no longer reaches the classifier: `safe_http_status_error`
+    // converts it at the HTTP boundary, because the body is backend-controlled
+    // and may echo our own credentials. So the contract under test is the PAIR
+    // — the conversion, then the match. Testing either half alone is how this
+    // broke: the redaction landed without the classifier change and session
+    // recovery stopped, silently, with every other test still green (MIK-7221).
+    let raw_rust_mcp_sdk =
+        "{\"code\":-32015,\"data\":null,\"message\":\"Bad Request: Session not found\"}";
+    let converted = safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, raw_rust_mcp_sdk);
+    assert!(
+        !converted.to_string().contains("-32015"),
+        "the untrusted body must not survive into the error: {converted}"
+    );
+    assert!(
+        is_session_expired_error(&converted),
+        "expiry must still be recognised after redaction: {converted}"
+    );
+
+    // The lowercase-only shape, which is the other half of the boundary check.
+    let converted_lower =
+        safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, "session not found, sorry");
+    assert!(is_session_expired_error(&converted_lower));
+
+    // MCP spec: 404 = session terminated/expired. Reaches the classifier directly.
     assert!(is_session_expired_error(&Error::Transport(
         "HTTP 404 Not Found: ".to_string()
     )));
+
+    // A non-expiry body converts to a bare status and must NOT match. Without
+    // this, a conversion that returned the marker unconditionally would pass.
+    let other = safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, "malformed json");
+    assert!(!is_session_expired_error(&other), "{other}");
+
     // Plain transport failure must not match
     assert!(!is_session_expired_error(&Error::Transport(
         "Request failed: connection refused".to_string()
     )));
     // Non-transport errors must not match
     assert!(!is_session_expired_error(&Error::Protocol(
-        "Session not found".to_string()
+        "session expired".to_string()
     )));
 }
 

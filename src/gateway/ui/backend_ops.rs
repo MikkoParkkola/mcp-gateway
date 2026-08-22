@@ -21,6 +21,17 @@ use crate::{
 // ── Public data types ─────────────────────────────────────────────────────────
 
 /// Structured summary of a single backend, safe to serialise as JSON.
+///
+/// "Safe" is the point of this type, not a description of it. Every field is a
+/// name, a count or a scrubbed URL; no configured VALUE reaches it. Before
+/// 2026-08-22 this carried `command: Option<String>`, `url: Option<String>` and
+/// `env: HashMap<String, String>` verbatim from the config, so `get` and
+/// `list --json` printed API keys in the clear — reproduced on `0373dca0` with
+/// five canary secrets, all five visible (MIK-7221).
+///
+/// Adding a field that holds a configured value re-opens that. If a caller needs
+/// one, it should read the config directly and take responsibility, rather than
+/// widening a type whose contract is that it can be pasted into a bug report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendInfo {
     /// Backend key in the config map.
@@ -31,14 +42,16 @@ pub struct BackendInfo {
     pub transport: String,
     /// Whether the backend is enabled.
     pub enabled: bool,
-    /// Command (stdio only).
+    /// Presence-only command summary (stdio only); arguments are never exposed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// URL (http only).
+    pub command: Option<BackendCommandInfo>,
+    /// URL (http only), stripped of userinfo, query, and fragment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Environment variables.
-    pub env: HashMap<String, String>,
+    /// Sorted environment-variable names; values are never exposed.
+    pub env: Vec<String>,
+    /// Sorted configured-header names; values are never exposed.
+    pub headers: Vec<String>,
     /// Seconds of idleness after which the gateway stops this backend, or
     /// `None` when it is never stopped.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +61,19 @@ pub struct BackendInfo {
     /// but cannot stop the server. The panel should hide or disable the control
     /// rather than let an operator set something that will be refused.
     pub can_stop_when_idle: bool,
+}
+
+/// Secret-safe summary of a configured stdio command.
+///
+/// A command line is a common hiding place for a credential
+/// (`some-server --api-key sk-…`), so the executable is reported and the
+/// arguments are counted, never shown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackendCommandInfo {
+    /// Parsed executable token.
+    pub executable: String,
+    /// Number of configured arguments, whose values are redacted.
+    pub argument_count: usize,
 }
 
 /// Partial update applied by [`update_backend`].
@@ -316,16 +342,28 @@ pub fn import_openapi_from_file(
 fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
     let (transport_kind, command, url) = match &backend.transport {
         TransportConfig::Stdio { command, .. } => {
-            ("stdio".to_string(), Some(command.clone()), None)
+            ("stdio".to_string(), Some(summarize_command(command)), None)
         }
-        TransportConfig::Http { http_url, .. } => {
-            ("http".to_string(), None, Some(http_url.clone()))
-        }
+        TransportConfig::Http { http_url, .. } => (
+            "http".to_string(),
+            None,
+            Some(sanitize_backend_url(http_url)),
+        ),
         #[cfg(feature = "a2a")]
-        TransportConfig::A2a { a2a_url, .. } => ("a2a".to_string(), None, Some(a2a_url.clone())),
+        TransportConfig::A2a { a2a_url, .. } => {
+            ("a2a".to_string(), None, Some(sanitize_backend_url(a2a_url)))
+        }
     };
 
     let can_stop_when_idle = matches!(backend.transport, TransportConfig::Stdio { .. });
+
+    // Names only, sorted. Sorting is not cosmetic: it makes the output stable
+    // between runs, so a diff of two `list --json` runs shows a configuration
+    // change rather than HashMap iteration order.
+    let mut env: Vec<String> = backend.env.keys().cloned().collect();
+    env.sort();
+    let mut headers: Vec<String> = backend.headers.keys().cloned().collect();
+    headers.sort();
 
     BackendInfo {
         name: name.to_string(),
@@ -336,8 +374,41 @@ fn backend_to_info(name: &str, backend: &BackendConfig) -> BackendInfo {
         can_stop_when_idle,
         command,
         url,
-        env: backend.env.clone(),
+        env,
+        headers,
     }
+}
+
+/// Executable plus argument count. Argument values are never returned.
+fn summarize_command(command: &str) -> BackendCommandInfo {
+    match shlex::split(command) {
+        Some(parts) if !parts.is_empty() => BackendCommandInfo {
+            executable: parts[0].clone(),
+            argument_count: parts.len().saturating_sub(1),
+        },
+        // Unparseable input is reported as such rather than echoed. Echoing the
+        // raw string on the error path is the classic way a redaction is undone:
+        // an attacker-shaped command that fails to lex would print in full.
+        _ => BackendCommandInfo {
+            executable: "<invalid-command>".to_string(),
+            argument_count: 0,
+        },
+    }
+}
+
+/// Strip credentials from a URL: userinfo, query and fragment all carry tokens.
+///
+/// Returns a placeholder rather than the input when parsing fails, for the same
+/// reason as above — the failure path must not become the leak.
+fn sanitize_backend_url(raw: &str) -> String {
+    let Ok(mut url) = url::Url::parse(raw) else {
+        return "<invalid-url>".to_string();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -612,7 +683,12 @@ mod tests {
 
         let info = &list_backends(&cfg)[0];
         assert_eq!(info.transport, "stdio");
-        assert_eq!(info.command.as_deref(), Some("npx my-server"));
+        // The executable is reported; the arguments are counted, never shown.
+        // This assertion used to read `Some("npx my-server")` — the whole command
+        // string, which is where an `--api-key` would have been (MIK-7221).
+        let command = info.command.as_ref().expect("stdio backend has a command");
+        assert_eq!(command.executable, "npx");
+        assert_eq!(command.argument_count, 1);
         assert!(info.url.is_none());
     }
 
@@ -743,7 +819,14 @@ mod tests {
         assert!(json.contains("\"name\":\"svc\""));
         assert!(json.contains("\"transport\":\"http\""));
         assert!(json.contains("\"enabled\":true"));
-        assert!(json.contains("\"TOKEN\":\"abc\""));
+        // The name is reported, the value never is. This assertion used to read
+        // `json.contains("\"TOKEN\":\"abc\"")` — it asserted the leak, and passed
+        // for as long as the leak existed (MIK-7221).
+        assert!(json.contains("\"TOKEN\""), "the variable NAME is reported");
+        assert!(
+            !json.contains("abc"),
+            "the VALUE must never be serialised: {json}"
+        );
         // command should not appear for http transport
         assert!(!json.contains("\"command\""));
     }
