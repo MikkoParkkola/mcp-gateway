@@ -36,19 +36,31 @@ use crate::{Error, Result};
 /// Strip credentials from a URL before it reaches a log line or an error string.
 ///
 /// A backend URL routinely carries a token in its userinfo (`https://u:tok@…`),
-/// its query (`?token=…`) or its fragment, and this transport prints the URL on
-/// sixteen paths. Only the origin and path survive; unparseable input becomes a
-/// fixed marker rather than being echoed, because the error path is exactly where
-/// a redaction usually gets undone. (MIK-7221)
+/// its query (`?token=…`), its fragment — or its PATH. Slack and Discord webhooks
+/// put the entire secret in the path, and hosted MCP endpoints sometimes mount a
+/// tenant under one. Keeping the path is the conventional choice and it is wrong
+/// for a value whose contract is "safe to paste into a bug report", so only the
+/// origin survives.
+///
+/// That costs real diagnostic detail: the URL is the sole identifier on these log
+/// lines, so two backends on one host now read alike. Adding the backend name to
+/// the log context would recover it and is worth doing separately; leaking a
+/// webhook token to keep them apart is not the trade to make.
+///
+/// Unparseable input becomes a fixed marker rather than being echoed, because the
+/// error path is exactly where a redaction usually gets undone. (MIK-7221)
 fn sanitize_url_for_diagnostics(raw: &str) -> String {
-    let Ok(mut url) = Url::parse(raw) else {
+    let Ok(url) = Url::parse(raw) else {
         return "<invalid-url>".to_string();
     };
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    url.set_query(None);
-    url.set_fragment(None);
-    url.to_string()
+    match url.host_str() {
+        Some(host) => match url.port() {
+            Some(port) => format!("{}://{host}:{port}", url.scheme()),
+            None => format!("{}://{host}", url.scheme()),
+        },
+        // Schemes without a host (file:, data:) have nowhere safe to truncate.
+        None => format!("{}://<no-host>", url.scheme()),
+    }
 }
 
 /// Categorise a reqwest failure without keeping its Display text.

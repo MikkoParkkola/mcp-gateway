@@ -396,19 +396,29 @@ fn summarize_command(command: &str) -> BackendCommandInfo {
     }
 }
 
-/// Strip credentials from a URL: userinfo, query and fragment all carry tokens.
+/// Reduce a URL to its origin. Userinfo, query, fragment AND path all carry
+/// tokens — Slack and Discord webhooks put the whole secret in the path — and
+/// this value is printed by `get` and serialised by `list --json`, both of which
+/// end up in bug reports.
+///
+/// The operator loses the endpoint path for a backend they configured themselves.
+/// That is a genuine cost, accepted because the output travels: `list --json` is
+/// pasted far more often than it is read locally, and the backend NAME is printed
+/// beside it either way.
 ///
 /// Returns a placeholder rather than the input when parsing fails, for the same
 /// reason as above — the failure path must not become the leak.
 fn sanitize_backend_url(raw: &str) -> String {
-    let Ok(mut url) = url::Url::parse(raw) else {
+    let Ok(url) = url::Url::parse(raw) else {
         return "<invalid-url>".to_string();
     };
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    url.set_query(None);
-    url.set_fragment(None);
-    url.to_string()
+    match url.host_str() {
+        Some(host) => match url.port() {
+            Some(port) => format!("{}://{host}:{port}", url.scheme()),
+            None => format!("{}://{host}", url.scheme()),
+        },
+        None => format!("{}://<no-host>", url.scheme()),
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -665,7 +675,9 @@ mod tests {
 
         let info = &list_backends(&cfg)[0];
         assert_eq!(info.transport, "http");
-        assert_eq!(info.url.as_deref(), Some("https://api.example.com/mcp"));
+        // Origin only. The path is dropped because a webhook-style URL keeps its
+        // whole secret there (MIK-7221).
+        assert_eq!(info.url.as_deref(), Some("https://api.example.com"));
         assert!(info.command.is_none());
     }
 
