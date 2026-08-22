@@ -62,6 +62,8 @@ An unknown without a scheduled check is a defect. Five; one resolved, four outst
 | **U2** | Does hebb's `-32016` session patch survive statelessness, or was it always a workaround for a protocol wart now deleted? | Read the patch, then run hebb's suite against a stateless transport with the patch reverted. | Whether hebb migrates or first de-forks. |
 | ~~U3~~ | ~~Does warm-start exist for protocol or availability reasons?~~ | **RESOLVED 2026-08-22** — see below | ~~Whether `server/discover` retires it~~ |
 | ~~U4~~ | ~~Does `rmcp` 3.x support more than one generation?~~ | **RESOLVED 2026-08-22** — see below | ~~Decisions 1 and 3~~ |
+| **U6** | Does rmcp's *wire behaviour* match its type surface across all three revisions? U4 concluded from an enum and module names, not from bytes on the wire. | Three-revision conformance spike: client, server, transport, discovery, MRTR, caching, removed-session behaviour. | Whether U4's resolution holds. Raised by adversarial review 2026-08-22. |
+| **U7** | What else is keyed by session besides hebb's patch and the list caches — auth, subscriptions, progress, cancellation, backend affinity? | Inventory every session-keyed behaviour across all six surfaces; name each replacement. | Everything. Removing sessions without this is the largest risk in the design. |
 | **U5** | Can rmcp's model types carry a **proxy** pass-through, or do they force a full deserialise-reserialise per hop? | Prototype one gateway route on rmcp 3.1.4; measure added latency and allocations against the current hand-rolled path. | Whether the gateway converges with everything else or stays hand-rolled alone. **Now the load-bearing unknown.** |
 
 ### U3 — RESOLVED: `server/discover` does NOT retire warm-start
@@ -104,12 +106,50 @@ Legacy mode must keep per-connection list responses. Modern mode requires that `
 
 ## Sequencing
 
-1. Resolve U1, U2, U3, U5. Nothing else starts. U5 first — it decides whether the gateway is in scope for convergence at all.
-2. `server/discover` on every surface — additive, no breakage, immediate compatibility benefit.
-3. Shared negotiation crate; gateway first as the reference consumer.
-4. Per-surface adoption behind a flag, legacy mode default until U1's telemetry says otherwise.
-5. Capability adoption (`CacheableResult`, deterministic ordering, OTel `_meta`, Tasks) — separate work, separate review.
+Revised 2026-08-22 after adversarial review found three contradictions in the previous ordering.
 
-## What this design does not answer
+1. **Resolve U1, U2, U5.** Nothing else starts. U5 first — it decides whether the gateway is in scope for convergence at all. (U3 already resolved; U4 resolved but see U6 below.)
+2. **Session-state inventory (U7).** Before removing anything, enumerate every behaviour currently keyed by connection or `Mcp-Session-Id` across all six surfaces — authentication, subscriptions, progress, cancellation, backend affinity — and name each one's stateless replacement. The previous version of this design removed sessions having inventoried only hebb's reconnect patch and the list caches, which is not an inventory.
+3. **`server/discover` on every surface** — additive, no breakage, immediate compatibility benefit.
+4. **`CacheableResult` and deterministic ordering, in the baseline — not deferred.** `ttlMs` and `cacheScope` are **required** by the specification on five endpoints. Deferring them to "capability adoption" while claiming complete 2026-07-28 support is a contradiction: a surface that omits them is non-compliant, not merely unoptimised. Their safe computation (step 5) ships with them.
+5. **Split legacy and modern list-result construction.** Not one path with a flag. Each cache scope is permitted only where the computation is provably invariant within that scope.
+6. **Retry and idempotency rules for side-effecting requests.** SSE resumability is gone, so a broken stream forces the client to re-issue with a new request ID. Without deduplication, that duplicates irreversible tool actions. Define idempotency keys, or route side-effecting operations through Tasks, before enabling 2026-07-28 anywhere.
+7. **MRTR continuation design** — see the open problem below. Blocks the gateway specifically.
+8. **Per-surface adoption behind a flag**, legacy mode default until U1's telemetry says otherwise.
+9. **Remaining capability adoption** (OTel `_meta`, Tasks) — separate work, separate review. This step is genuinely optional; step 4 was not.
 
-MRTR replaces server-initiated requests, which means every elicitation path is a rewrite rather than a port, and this RFC does not describe that rewrite. Whether the gateway can proxy MRTR at all — a client retrying an original request through a stateless proxy, with `requestState` correlation the proxy must not lose — is unexamined and may be the hardest single problem in the migration.
+## Adversarial review, 2026-08-22 — both vendors SHIP-WITH-FIXES
+
+Reviewed before any code existed, which is the only moment this costs a paragraph instead of a branch. GPT returned 7 findings (2 CRITICAL); grok returned 7 findings (2 CRITICAL) and read the gateway source rather than the write-up. **The design was materially wrong in five places.** Confirmed findings below; the sequencing above is already rewritten.
+
+### CONFIRMED AT SOURCE — the proxy drops MRTR fields
+
+`extract_tools_call_params` returns exactly `(name, arguments)`; its own doc comment says *"Extract the `tools/call` parameters (tool name and arguments)"* and returns `("", {})` when fields are absent (`src/gateway/router/helpers.rs:178`, read 2026-08-22). **An MRTR retry carries `inputResponses` and `requestState` as siblings of `name` and `arguments`. The gateway would silently drop both**, so a 2026 client's elicitation never completes and `gateway_kill_server` runs without the human confirmation `src/gateway/destructive_confirmation.rs` exists to enforce.
+
+This is not a gap in the design. It is a defect the design would have shipped.
+
+### The header contract answers U5 without a prototype
+
+Grok's sharpest point, and it inverts the plan. 2026 Streamable HTTP **requires `Mcp-Method` and `Mcp-Name` on every POST** and rejects disagreement as `HeaderMismatch` (-32020) — SEP-2243, which this RFC filed under "minor changes" and never mentioned again.
+
+**Those headers exist so a gateway can route without parsing the body.** U5 asked whether rmcp's types can carry a proxy pass-through without deserialise-reserialise per hop; the specification already answered it by putting the routing key in the headers. Dispatch from `Mcp-Method`/`Mcp-Name`, keep the JSON body opaque except at the Meta-MCP chokepoint, and the question closes without building anything.
+
+### `tools/list` already varies per connection, five ways
+
+The cache hazard is worse than stated. The gateway's list varies by API-key scope, routing profile, session-promoted tools, Code Mode, and spec-preview query (`src/gateway/meta_mcp/mod.rs:999`, `src/gateway/auth.rs:355`). So the modern requirement that lists not vary per connection has two failure modes, not one: emit `cacheScope: "public"` and leak one tenant's filtered view to another, or drop the filters to comply and **leak the full catalog to restricted keys**. The mitigation must be a gateway-owned decision table — private unless the list is the unfiltered meta-tool skeleton — with `ResponseCache` keyed on authorization context.
+
+### Existing idempotency will break MRTR
+
+`src/idempotency.rs:10` keys on `server:tool:hash(arguments)`. An `InputRequired` result would be cached as a completed replayable success, so an MRTR tool either never finishes or a later caller replays another principal's `requestState`. **`InputRequired` is neither cacheable nor an idempotent completion**, and retry keys must include `inputResponses` and `requestState`.
+
+### U3 was incomplete
+
+Warm-start and health probing depend on `initialize` and `ping` (`src/backend/lifecycle.rs:369`, `:1034`) — both removed in 2026. The earlier correction established that the retry *schedule* survives; it did not say how a 2026 backend gets probed at all. It does not, today. `server/discover` replaces the probe, with `initialize` used only where discover reports a pre-2026 peer.
+
+### Session-keyed product features, named
+
+Beyond hebb's patch and the list caches: SSE multiplexer, firewall budgets, session sandbox, projection stickiness, initialize-time profiles and last-event-id resume (`src/gateway/router/handlers.rs:160`, `src/session_sandbox.rs`). Per-request ephemeral sessions reset sandbox and firewall budgets silently. **Rebind to the ADR-008 `Principal`** and treat protocol sessions as a 2025-only transport adapter.
+
+## What this design still does not answer
+
+Mixed-generation MRTR: a 2026 client eliciting through this gateway against a 2025 backend that holds the original RPC open. That cannot be stateless on the backend side, and grok proposes an HMAC-wrapped, `requestState`-keyed in-flight table. **No contract is written yet.** Both reviewers converged on this as the blocking gap, and grok's recommended fail-fast is the cheapest available: run one `gateway_invoke` from a 2026 client against a 2025 backend that elicits, then the reverse pair, before spending anything on rmcp latency measurement.
