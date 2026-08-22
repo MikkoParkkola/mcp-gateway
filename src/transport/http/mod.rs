@@ -33,6 +33,68 @@ use crate::protocol::{
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
+/// Strip credentials from a URL before it reaches a log line or an error string.
+///
+/// A backend URL routinely carries a token in its userinfo (`https://u:tok@…`),
+/// its query (`?token=…`), its fragment — or its PATH. Slack and Discord webhooks
+/// put the entire secret in the path, and hosted MCP endpoints sometimes mount a
+/// tenant under one. Keeping the path is the conventional choice and it is wrong
+/// for a value whose contract is "safe to paste into a bug report", so only the
+/// origin survives.
+///
+/// That costs real diagnostic detail: the URL is the sole identifier on these log
+/// lines, so two backends on one host now read alike. Adding the backend name to
+/// the log context would recover it and is worth doing separately; leaking a
+/// webhook token to keep them apart is not the trade to make.
+///
+/// Unparseable input becomes a fixed marker rather than being echoed, because the
+/// error path is exactly where a redaction usually gets undone. (MIK-7221)
+fn sanitize_url_for_diagnostics(raw: &str) -> String {
+    let Ok(url) = Url::parse(raw) else {
+        return "<invalid-url>".to_string();
+    };
+    match url.host_str() {
+        Some(host) => match url.port() {
+            Some(port) => format!("{}://{host}:{port}", url.scheme()),
+            None => format!("{}://{host}", url.scheme()),
+        },
+        // Schemes without a host (file:, data:) have nowhere safe to truncate.
+        None => format!("{}://<no-host>", url.scheme()),
+    }
+}
+
+/// Categorise a reqwest failure without keeping its Display text.
+///
+/// `reqwest::Error`'s Display embeds the full request URL, so `format!("{e}")`
+/// reintroduces every credential this module is careful to strip. The category
+/// is what a reader needs; the URL is what an attacker needs.
+fn safe_request_error(context: &str, error: &reqwest::Error) -> Error {
+    let category = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_redirect() {
+        "redirect rejected"
+    } else {
+        "request failed"
+    };
+    Error::Transport(format!("{context}: {category}"))
+}
+
+/// Report an HTTP failure status while discarding the response body.
+///
+/// The body comes from the backend, which is not trusted to keep our secrets out
+/// of its error text, and it can be arbitrarily large. Session expiry is the one
+/// signal callers act on, so it is detected and everything else dropped.
+fn safe_http_status_error(status: reqwest::StatusCode, body: &str) -> Error {
+    let lower = body.to_ascii_lowercase();
+    if body.contains("-32015") || lower.contains("session not found") {
+        Error::Transport(format!("HTTP {status}: session expired"))
+    } else {
+        Error::Transport(format!("HTTP {status}"))
+    }
+}
+
 /// Origin equality per WHATWG (scheme + host + effective port). Used to enforce
 /// that an SSE-advertised message endpoint is same-origin as the SSE stream
 /// before any per-user credential is sent to it (SSRF + credential-exfil guard).
@@ -91,10 +153,14 @@ fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> Redirect
 
 /// Detect the session-expiry signature in a transport error (MIK-5982).
 ///
-/// Matches three observed shapes:
-/// - JSON-RPC `-32015` session errors (rust-mcp-sdk servers, e.g. hebb-serve:
-///   `HTTP 400 Bad Request: {"code":-32015,...,"message":"Bad Request: Session not found"}`)
-/// - any body containing "session not found" (case-insensitive)
+/// Matches the safe markers emitted at the HTTP boundary:
+/// - `session expired`, produced by [`safe_http_status_error`] after an untrusted
+///   body contained JSON-RPC `-32015` or a case-insensitive `session not found`.
+///   The classifier reads that marker rather than the body, because the body no
+///   longer reaches an error string — it may echo our own credentials back at us.
+///   These two functions are a pair: change the marker in one and session recovery
+///   silently stops working, which is what the suite caught when this landed
+///   half-applied (MIK-7221).
 /// - bare `HTTP 404` responses, which the MCP Streamable HTTP spec defines as
 ///   "session terminated or expired" (callers gate this on having had a session)
 ///
@@ -107,7 +173,7 @@ fn is_session_expired_error(err: &Error) -> bool {
         return false;
     };
     let lower = msg.to_lowercase();
-    lower.contains("session not found") || msg.contains("-32015") || lower.starts_with("http 404")
+    lower.contains("session expired") || lower.starts_with("http 404")
 }
 
 /// Detect the session-expiry signature in a *successful-transport* JSON-RPC
@@ -243,7 +309,7 @@ impl HttpTransport {
         // `evaluate_redirect`). An unparseable base cannot function as a
         // transport at all, so failing construction here is correct.
         let base_origin = Url::parse(url)
-            .map_err(|e| Error::Transport(format!("Invalid transport base URL {url:?}: {e}")))?;
+            .map_err(|e| Error::Transport(format!("Invalid transport base URL: {e}")))?;
         let client = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(10)
@@ -337,7 +403,7 @@ impl HttpTransport {
 
                 // If we don't have a valid token, trigger authorization flow
                 if !oauth.has_valid_token() {
-                    info!(url = %base_url_for_task, "OAuth required - initiating authorization flow");
+                    info!(url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth required - initiating authorization flow");
                     oauth.authorize().await?;
                 }
 
@@ -370,13 +436,13 @@ impl HttpTransport {
             // Starlette compatibility was the original reason, but it handles both.
             let url = self.base_url.clone();
             *self.message_url.write() = Some(url.clone());
-            info!(url = %url, oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
+            info!(url = %sanitize_url_for_diagnostics(&url), oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
         } else {
             // SSE mode: GET the SSE endpoint to receive the message endpoint
             let message_endpoint = self.establish_sse_connection().await?;
             let full_message_url = self.resolve_message_url(&message_endpoint)?;
             *self.message_url.write() = Some(full_message_url.clone());
-            info!(sse_url = %self.base_url, message_url = %full_message_url, oauth = self.oauth_client.is_some(), "SSE handshake complete");
+            info!(sse_url = %sanitize_url_for_diagnostics(&self.base_url), message_url = %sanitize_url_for_diagnostics(full_message_url.as_str()), oauth = self.oauth_client.is_some(), "SSE handshake complete");
         }
 
         // Send initialize request via the message endpoint
@@ -412,7 +478,7 @@ impl HttpTransport {
                 // Try to extract supported versions from error message
                 if let Some(negotiated_version) = self.negotiate_protocol_version(error_msg).await {
                     warn!(
-                        url = %self.base_url,
+                        url = %sanitize_url_for_diagnostics(&self.base_url),
                         rejected_version = %version,
                         negotiated_version = %negotiated_version,
                         "Server rejected protocol version, retrying with negotiated version"
@@ -446,7 +512,7 @@ impl HttpTransport {
                     }
 
                     // Success with negotiated version
-                    info!(url = %self.base_url, version = %negotiated_version, "Successfully negotiated protocol version");
+                    info!(url = %sanitize_url_for_diagnostics(&self.base_url), version = %negotiated_version, "Successfully negotiated protocol version");
                 } else {
                     return Err(Error::Protocol(format!(
                         "Protocol version negotiation failed: {error_msg}"
@@ -462,11 +528,11 @@ impl HttpTransport {
         // can still use request/response tools in that case, so notification
         // delivery must not make backend startup fail.
         if let Err(error) = self.notify("notifications/initialized", None).await {
-            debug!(url = %self.base_url, error = %error, "Initialized notification failed (ignored)");
+            debug!(url = %sanitize_url_for_diagnostics(&self.base_url), error = %error, "Initialized notification failed (ignored)");
         }
 
         self.connected.store(true, Ordering::Relaxed);
-        debug!(url = %self.base_url, streamable = %self.streamable_http, "HTTP transport initialized");
+        debug!(url = %sanitize_url_for_diagnostics(&self.base_url), streamable = %self.streamable_http, "HTTP transport initialized");
 
         Ok(())
     }
@@ -518,7 +584,7 @@ impl HttpTransport {
             // a clean auth error, never panic the request path (MIK-6909).
             headers.insert(header::AUTHORIZATION, bearer_header_value(&token)?);
             if matches!(mode, HeaderMode::Sse) {
-                debug!(url = %self.base_url, "SSE connection with OAuth token");
+                debug!(url = %sanitize_url_for_diagnostics(&self.base_url), "SSE connection with OAuth token");
             }
         }
 
@@ -589,7 +655,7 @@ impl HttpTransport {
         let supported_versions = parse_supported_versions_from_error(error_msg)?;
 
         debug!(
-            url = %self.base_url,
+            url = %sanitize_url_for_diagnostics(&self.base_url),
             server_versions = ?supported_versions,
             "Negotiating protocol version"
         );
@@ -598,7 +664,7 @@ impl HttpTransport {
 
         if result.is_none() {
             warn!(
-                url = %self.base_url,
+                url = %sanitize_url_for_diagnostics(&self.base_url),
                 server_versions = ?supported_versions,
                 "No compatible protocol version found"
             );
@@ -613,7 +679,7 @@ impl HttpTransport {
 
         let headers = self.build_mcp_headers(HeaderMode::Sse, None).await?;
 
-        debug!(url = %self.base_url, "Establishing SSE connection");
+        debug!(url = %sanitize_url_for_diagnostics(&self.base_url), "Establishing SSE connection");
 
         let response = self
             .client
@@ -621,7 +687,7 @@ impl HttpTransport {
             .headers(headers)
             .send()
             .await
-            .map_err(|e| Error::Transport(format!("SSE connection failed: {e}")))?;
+            .map_err(|e| safe_request_error("SSE connection failed", &e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -642,8 +708,8 @@ impl HttpTransport {
         let max_sse_handshake_buffer: usize = 64 * 1024;
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result
-                .map_err(|e| Error::Transport(format!("Failed to read SSE chunk: {e}")))?;
+            let chunk =
+                chunk_result.map_err(|e| safe_request_error("Failed to read SSE chunk", &e))?;
 
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -802,7 +868,7 @@ impl HttpTransport {
             .json(request)
             .send()
             .await
-            .map_err(|e| Error::Transport(format!("Request failed: {e}")))?;
+            .map_err(|e| safe_request_error("Request failed", &e))?;
 
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
@@ -813,7 +879,7 @@ impl HttpTransport {
             debug!("Using existing session ID for caller bucket");
         } else if let Some(session_id) = response.headers().get("mcp-session-id") {
             if let Ok(id) = session_id.to_str() {
-                info!(session_id = %id, url = %message_url, "Stored session ID from response");
+                info!(session_id = %id, url = %sanitize_url_for_diagnostics(message_url.as_str()), "Stored session ID from response");
                 self.sessions
                     .write()
                     .insert(bucket.to_string(), id.to_string());
@@ -835,7 +901,7 @@ impl HttpTransport {
             }
         } else {
             // Debug: log all headers to find session ID
-            debug!(url = %message_url, "No session ID in response. Headers: {:?}",
+            debug!(url = %sanitize_url_for_diagnostics(message_url.as_str()), "No session ID in response. Headers: {:?}",
                 response.headers().iter()
                     .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("?")))
                     .collect::<Vec<_>>()
@@ -845,7 +911,7 @@ impl HttpTransport {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Transport(format!("HTTP {status}: {body}")));
+            return Err(safe_http_status_error(status, &body));
         }
 
         // Check Content-Type to determine response format
@@ -860,7 +926,7 @@ impl HttpTransport {
             let text = response
                 .text()
                 .await
-                .map_err(|e| Error::Transport(format!("Failed to read SSE response: {e}")))?;
+                .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
 
             // Find the data line and extract JSON
             for line in text.lines() {
@@ -947,7 +1013,7 @@ impl Transport for HttpTransport {
         };
         if had_session && session_expired {
             warn!(
-                url = %self.base_url,
+                url = %sanitize_url_for_diagnostics(&self.base_url),
                 method = %method,
                 "Backend session expired; re-initializing and retrying once"
             );
@@ -1003,7 +1069,7 @@ impl Transport for HttpTransport {
             .json(&notification)
             .send()
             .await
-            .map_err(|e| Error::Transport(format!("Notification failed: {e}")))?;
+            .map_err(|e| safe_request_error("Notification failed", &e))?;
 
         if !response.status().is_success() {
             // Many HTTP backends (e.g. exa, beeper) do not support MCP
@@ -1011,7 +1077,7 @@ impl Transport for HttpTransport {
             // DEBUG so it does not spam the operator logs.
             debug!(
                 status = %response.status(),
-                url = %message_url,
+                url = %sanitize_url_for_diagnostics(message_url.as_str()),
                 method = method,
                 "Notification not supported by backend (ignored)"
             );
@@ -1056,7 +1122,7 @@ impl Transport for HttpTransport {
                 Err(error) => {
                     warn!(
                         error = %error,
-                        url = %message_url,
+                        url = %sanitize_url_for_diagnostics(message_url.as_str()),
                         "Failed to build full close headers; falling back to session header only"
                     );
                     self.client
