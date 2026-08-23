@@ -145,7 +145,9 @@ fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> Redirect
         return RedirectDecision::Reject(format!(
             "redirect target is cross-origin to the transport base URL; \
              refusing to replay per-user credentials to a different origin \
-             (base={base}, target={target})"
+             (base={}, target={})",
+            sanitize_url_for_diagnostics(base.as_str()),
+            sanitize_url_for_diagnostics(target.as_str())
         ));
     }
     RedirectDecision::Follow
@@ -519,7 +521,12 @@ impl HttpTransport {
                     )));
                 }
             } else {
-                return Err(Error::Protocol(format!("Initialize failed: {error:?}")));
+                // Code only. The message and data are backend-controlled and may
+                // quote back credentials the gateway sent.
+                return Err(Error::Protocol(format!(
+                    "Initialize failed: backend error code {}",
+                    error.code
+                )));
             }
         }
 
@@ -879,7 +886,12 @@ impl HttpTransport {
             debug!("Using existing session ID for caller bucket");
         } else if let Some(session_id) = response.headers().get("mcp-session-id") {
             if let Ok(id) = session_id.to_str() {
-                info!(session_id = %id, url = %sanitize_url_for_diagnostics(message_url.as_str()), "Stored session ID from response");
+                // Presence, not value: an MCP session ID is replayable, so a log
+                // reader who sees one can resume another caller's session.
+                info!(
+                    url = %sanitize_url_for_diagnostics(message_url.as_str()),
+                    "Stored session ID from response"
+                );
                 self.sessions
                     .write()
                     .insert(bucket.to_string(), id.to_string());
@@ -901,10 +913,10 @@ impl HttpTransport {
             }
         } else {
             // Debug: log all headers to find session ID
-            debug!(url = %sanitize_url_for_diagnostics(message_url.as_str()), "No session ID in response. Headers: {:?}",
-                response.headers().iter()
-                    .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("?")))
-                    .collect::<Vec<_>>()
+            // Header NAMES only. Values are backend-controlled and routinely
+            // carry `set-cookie`, `authorization` echoes and bearer material.
+            debug!(url = %sanitize_url_for_diagnostics(message_url.as_str()), "No session ID in response. Header names: {:?}",
+                response.headers().keys().map(header::HeaderName::as_str).collect::<Vec<_>>()
             );
         }
 
@@ -942,7 +954,7 @@ impl HttpTransport {
             response
                 .json()
                 .await
-                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
+                .map_err(|e| safe_request_error("Failed to parse response", &e))
         }
     }
 

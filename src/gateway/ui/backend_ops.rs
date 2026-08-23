@@ -23,7 +23,11 @@ use crate::{
 /// Structured summary of a single backend, safe to serialise as JSON.
 ///
 /// "Safe" is the point of this type, not a description of it. Every field is a
-/// name, a count or a scrubbed URL; no configured VALUE reaches it. Before
+/// name, a count or a scrubbed URL — with ONE deliberate exception: `description`
+/// is operator-authored display text and is reproduced verbatim, because a list
+/// of backends without it is unusable. An operator who puts a credential in a
+/// description defeats this type, and no code here can tell that text apart from
+/// the label it is meant to be. Everything else is redacted. Before
 /// 2026-08-22 this carried `command: Option<String>`, `url: Option<String>` and
 /// `env: HashMap<String, String>` verbatim from the config, so `get` and
 /// `list --json` printed API keys in the clear — reproduced on `0373dca0` with

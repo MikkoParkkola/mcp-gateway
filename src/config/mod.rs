@@ -518,7 +518,10 @@ impl Config {
                     }
                     url::Url::parse(http_url).map_err(|e| {
                         Error::ConfigValidation(format!(
-                            "Backend '{name}' has an invalid http_url '{http_url}': {e}"
+                            // The URL is not echoed: a malformed one still carries its
+                            // userinfo and query, and a validation error is printed on
+                            // startup and in support threads (MIK-7221).
+                            "Backend '{name}' has an invalid http_url: {e}"
                         ))
                     })?;
                 }
