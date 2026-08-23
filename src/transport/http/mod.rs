@@ -506,7 +506,10 @@ impl HttpTransport {
                     info!(url = %sanitize_url_for_diagnostics(&self.base_url), version = %negotiated_version, "Successfully negotiated protocol version");
                 } else {
                     return Err(Error::Protocol(format!(
-                        "Protocol version negotiation failed: {error_msg}"
+                        // Code only. `error_msg` is the backend's own text and may
+                        // quote back a credential the gateway sent it.
+                        "Protocol version negotiation failed: backend error code {}",
+                        error.code
                     )));
                 }
             } else {
@@ -597,7 +600,8 @@ impl HttpTransport {
         if let Some(session_id) = session {
             match mode {
                 HeaderMode::Request { method } => {
-                    debug!(session_id = %session_id, method = %method, "Sending request with session ID");
+                    // Presence, not value: a session ID is replayable.
+                    debug!(method = %method, "Sending request with session ID");
                     headers.insert("MCP-Session-Id", session_id.parse().unwrap());
                 }
                 HeaderMode::Notify | HeaderMode::Close => {
@@ -745,7 +749,7 @@ impl HttpTransport {
                                     self.sessions
                                         .write()
                                         .insert(String::new(), value.to_string());
-                                    debug!(session_id = %value, "Extracted session ID");
+                                    debug!("Extracted session ID");
                                 }
                             }
                         }

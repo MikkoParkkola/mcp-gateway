@@ -534,7 +534,9 @@ impl Config {
                     }
                     url::Url::parse(a2a_url).map_err(|e| {
                         Error::ConfigValidation(format!(
-                            "Backend '{name}' has an invalid a2a_url '{a2a_url}': {e}"
+                            // Twin of the http_url line above. Fixing one spelling of a
+                            // leak and not the other is how the first fix stops mattering.
+                            "Backend '{name}' has an invalid a2a_url: {e}"
                         ))
                     })?;
                 }

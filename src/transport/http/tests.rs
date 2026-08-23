@@ -1539,3 +1539,66 @@ fn bearer_header_value_rejects_invalid_bytes_without_panicking() {
         );
     }
 }
+
+/// One canary, every redaction helper. Each site was found by a reviewer AFTER a
+/// previous round claimed the class was closed — five in round one, three more in
+/// round two, including two session-ID logs and a config line that was the twin
+/// of one already fixed. A per-site fix does not generalise; a sweep does.
+#[test]
+fn no_diagnostic_helper_passes_a_canary_through() {
+    const CANARY: &str = "SENTINEL_TRANSPORT_9f3c";
+
+    // URL redaction: the secret in each position a URL can hide one.
+    for raw in [
+        format!("https://user:{CANARY}@svc.example.com/mcp"),
+        format!("https://svc.example.com/services/{CANARY}"),
+        format!("https://svc.example.com/mcp?token={CANARY}"),
+        format!("https://svc.example.com/mcp#{CANARY}"),
+    ] {
+        let out = sanitize_url_for_diagnostics(&raw);
+        assert!(!out.contains(CANARY), "URL redaction leaked: {out}");
+        assert!(
+            out.starts_with("https://svc.example.com"),
+            "origin lost: {out}"
+        );
+    }
+
+    // Unparseable input must not be echoed — the failure path is where a
+    // redaction usually gets undone.
+    let bad = sanitize_url_for_diagnostics(&format!(":://not a url {CANARY}"));
+    assert!(!bad.contains(CANARY), "invalid-URL path leaked: {bad}");
+
+    // A backend error body is untrusted and may quote our own credentials back.
+    for body in [
+        format!("{{\"error\":\"{CANARY}\"}}"),
+        format!("{{\"code\":-32015,\"message\":\"Session not found {CANARY}\"}}"),
+    ] {
+        let err = safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, &body);
+        assert!(
+            !err.to_string().contains(CANARY),
+            "status error leaked: {err}"
+        );
+    }
+
+    // The expiry marker still survives that redaction, or session recovery breaks.
+    let expired = safe_http_status_error(
+        reqwest::StatusCode::BAD_REQUEST,
+        &format!("{{\"code\":-32015,\"message\":\"Session not found {CANARY}\"}}"),
+    );
+    assert!(
+        is_session_expired_error(&expired),
+        "expiry lost to redaction: {expired}"
+    );
+
+    // A cross-origin redirect rejection names both URLs; neither may carry one.
+    let base = Url::parse("https://svc.example.com/mcp").expect("base");
+    let target = Url::parse(&format!("https://evil.example.com/x?t={CANARY}")).expect("target");
+    if let RedirectDecision::Reject(reason) = evaluate_redirect(&base, &target, 0) {
+        assert!(
+            !reason.contains(CANARY),
+            "redirect rejection leaked: {reason}"
+        );
+    } else {
+        panic!("a cross-origin redirect must be rejected");
+    }
+}

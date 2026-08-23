@@ -49,7 +49,8 @@ pub struct BackendInfo {
     /// Presence-only command summary (stdio only); arguments are never exposed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<BackendCommandInfo>,
-    /// URL (http only), stripped of userinfo, query, and fragment.
+    /// URL (http only), reduced to its ORIGIN. The path goes too — a webhook URL
+    /// carries its whole secret there. See `redact_url_for_diagnostics`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Sorted environment-variable names; values are never exposed.
