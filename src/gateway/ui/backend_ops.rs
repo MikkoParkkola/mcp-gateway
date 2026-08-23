@@ -400,29 +400,14 @@ fn summarize_command(command: &str) -> BackendCommandInfo {
     }
 }
 
-/// Reduce a URL to its origin. Userinfo, query, fragment AND path all carry
-/// tokens — Slack and Discord webhooks put the whole secret in the path — and
-/// this value is printed by `get` and serialised by `list --json`, both of which
-/// end up in bug reports.
+/// Reduce a URL to its origin before it is printed or serialised.
 ///
-/// The operator loses the endpoint path for a backend they configured themselves.
-/// That is a genuine cost, accepted because the output travels: `list --json` is
-/// pasted far more often than it is read locally, and the backend NAME is printed
-/// beside it either way.
-///
-/// Returns a placeholder rather than the input when parsing fails, for the same
-/// reason as above — the failure path must not become the leak.
+/// One line, because the rule and its reasoning live in
+/// [`crate::security::sanitize::redact_url_for_diagnostics`]. The operator loses
+/// the endpoint path for a backend they configured themselves; that cost is
+/// accepted there, once, rather than argued in two places.
 fn sanitize_backend_url(raw: &str) -> String {
-    let Ok(url) = url::Url::parse(raw) else {
-        return "<invalid-url>".to_string();
-    };
-    match url.host_str() {
-        Some(host) => match url.port() {
-            Some(port) => format!("{}://{host}:{port}", url.scheme()),
-            None => format!("{}://{host}", url.scheme()),
-        },
-        None => format!("{}://<no-host>", url.scheme()),
-    }
+    crate::security::sanitize::redact_url_for_diagnostics(raw)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

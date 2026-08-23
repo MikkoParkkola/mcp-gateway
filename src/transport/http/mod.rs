@@ -33,34 +33,13 @@ use crate::protocol::{
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
-/// Strip credentials from a URL before it reaches a log line or an error string.
+/// Reduce a URL to its origin before it reaches a log line or an error string.
 ///
-/// A backend URL routinely carries a token in its userinfo (`https://u:tok@…`),
-/// its query (`?token=…`), its fragment — or its PATH. Slack and Discord webhooks
-/// put the entire secret in the path, and hosted MCP endpoints sometimes mount a
-/// tenant under one. Keeping the path is the conventional choice and it is wrong
-/// for a value whose contract is "safe to paste into a bug report", so only the
-/// origin survives.
-///
-/// That costs real diagnostic detail: the URL is the sole identifier on these log
-/// lines, so two backends on one host now read alike. Adding the backend name to
-/// the log context would recover it and is worth doing separately; leaking a
-/// webhook token to keep them apart is not the trade to make.
-///
-/// Unparseable input becomes a fixed marker rather than being echoed, because the
-/// error path is exactly where a redaction usually gets undone. (MIK-7221)
+/// One line, because the rule and its reasoning live in
+/// [`crate::security::sanitize::redact_url_for_diagnostics`]. A second copy of a
+/// security predicate is how one gets fixed and the other does not.
 fn sanitize_url_for_diagnostics(raw: &str) -> String {
-    let Ok(url) = Url::parse(raw) else {
-        return "<invalid-url>".to_string();
-    };
-    match url.host_str() {
-        Some(host) => match url.port() {
-            Some(port) => format!("{}://{host}:{port}", url.scheme()),
-            None => format!("{}://{host}", url.scheme()),
-        },
-        // Schemes without a host (file:, data:) have nowhere safe to truncate.
-        None => format!("{}://<no-host>", url.scheme()),
-    }
+    crate::security::sanitize::redact_url_for_diagnostics(raw)
 }
 
 /// Categorise a reqwest failure without keeping its Display text.
@@ -86,10 +65,20 @@ fn safe_request_error(context: &str, error: &reqwest::Error) -> Error {
 /// The body comes from the backend, which is not trusted to keep our secrets out
 /// of its error text, and it can be arbitrarily large. Session expiry is the one
 /// signal callers act on, so it is detected and everything else dropped.
+/// The one spelling of the expiry signal, shared by the writer below and the
+/// reader in [`is_session_expired_error`].
+///
+/// It was a bare string literal in both. They are a pair — the writer turns an
+/// untrusted body into this marker, the reader acts on it — and landing a change
+/// to one without the other silently disabled session recovery while every other
+/// test stayed green. A shared constant does not make them provably consistent,
+/// but it makes them impossible to diverge by typo, which is how they diverged.
+const SESSION_EXPIRED_MARKER: &str = "session expired";
+
 fn safe_http_status_error(status: reqwest::StatusCode, body: &str) -> Error {
     let lower = body.to_ascii_lowercase();
     if body.contains("-32015") || lower.contains("session not found") {
-        Error::Transport(format!("HTTP {status}: session expired"))
+        Error::Transport(format!("HTTP {status}: {SESSION_EXPIRED_MARKER}"))
     } else {
         Error::Transport(format!("HTTP {status}"))
     }
@@ -175,7 +164,7 @@ fn is_session_expired_error(err: &Error) -> bool {
         return false;
     };
     let lower = msg.to_lowercase();
-    lower.contains("session expired") || lower.starts_with("http 404")
+    lower.contains(SESSION_EXPIRED_MARKER) || lower.starts_with("http 404")
 }
 
 /// Detect the session-expiry signature in a *successful-transport* JSON-RPC
