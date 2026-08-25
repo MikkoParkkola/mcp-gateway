@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Origin validation on the HTTP surface (CWE-346).** Reported by Avishai
+  Gonen, Pluto Security. `mcp-gateway serve` accepted requests on `/mcp`
+  without checking `Origin` or `Host`, and the identity used when
+  authentication is disabled carried admin rights and access to every backend.
+  A web page could therefore reach the gateway's local port and call its tools
+  with whatever credentials the gateway holds.
+
+  Two related gaps were addressed in the same change. The handler accepted a
+  request body without requiring a JSON content type, a session, or a prior
+  `initialize`, so a cross-origin POST could reach `tools/call` without a
+  preflight. Separately, the checks below apply to browsers only; a process
+  running under the same user account is not constrained by them.
+
+  Two changes, both required:
+
+  - `Origin`, `Host`, the HTTP/2 `:authority` and `Sec-Fetch-Site` are checked
+    ahead of authentication, so a cross-site request is refused before an
+    identity is assigned. A request without `Origin` is still accepted, since
+    non-browser MCP clients do not send one. `Sec-Fetch-Site` covers the
+    no-CORS GET, which the Fetch standard omits `Origin` from.
+  - The identity used when authentication is disabled no longer carries admin.
+
+### Changed
+
+- **BREAKING: server management requires a credential.** With `auth.enabled =
+  false`, `gateway_kill_server`, `gateway_revive_server`,
+  `gateway_set_profile`, `gateway_set_state`, `gateway_reload_config`,
+  `gateway_reload_capabilities` and the detailed `/ui`, `/dashboard` and
+  `/ui/api/*` views respond as non-admin. Ordinary tool invocation is
+  unchanged, so local MCP clients are unaffected.
+
+  Set `auth.enabled = true` with a bearer token to restore them; that token
+  carries admin. The startup log states this. Without a credential the gateway
+  cannot distinguish its operator from any other caller that reaches the port,
+  so admin now follows an explicit credential.
+
+- `server.public_url` is re-read on each request, so a configuration reload
+  takes effect without a restart.
+
+- The startup log states what the anonymous identity cannot do and how to
+  restore it, and reports when the gateway binds to a non-loopback address
+  while authentication is disabled.
+
 ## [3.4.0] - 2026-07-27
 
 ### Added

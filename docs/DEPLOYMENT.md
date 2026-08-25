@@ -329,7 +329,7 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
-| `/ui/api/status` | GET | Depends on config | JSON API for dashboards |
+| `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 
 Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testing recovery).
 
@@ -408,7 +408,7 @@ Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) 
 
 ## Authentication for Production
 
-**Never run without auth on a network-accessible port.** Default bind (`127.0.0.1`) limits to localhost. For networked deployments:
+**Never run without auth on a network-accessible port.** Default bind (`127.0.0.1`) limits to localhost, and the gateway warns loudly at startup if it binds anywhere else with auth disabled. For networked deployments:
 
 ```yaml
 server:
@@ -420,6 +420,48 @@ auth:
 ```
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
+
+### Browser access to the gateway port
+
+A loopback bind stops remote callers. It does not stop a web page: a site the
+operator visits can rebind a hostname to `127.0.0.1`, and a cross-origin POST
+reaches a JSON endpoint without a preflight. The gateway therefore refuses a
+request whose `Origin`, `Host` or HTTP/2 `:authority` does not name it, and refuses any request a
+browser marks `Sec-Fetch-Site: cross-site` or `same-site`.
+
+A request with no `Origin` is allowed, because a non-browser MCP client never
+sends one. That is what keeps command-line clients, Prometheus scrapes of
+`/metrics`, and health probes working unchanged.
+
+The allow list is the loopback spellings of the bind address **at the bind
+port**, the configured bind address itself, and the `server.public_url` origin,
+which is re-read on every request so a config reload takes effect at once. A
+page served from `http://localhost:3000` is refused: being local does not make
+it trusted.
+
+There is deliberately no setting for allowing extra browser origins. A
+cross-origin browser client also needs CORS preflight responses, which this
+gateway does not serve, so such a setting would name origins that still could
+not call it. Serve the page from the gateway's own origin, or use a non-browser
+client.
+
+`Host` checking is skipped when the bind is not loopback and no `public_url` is
+set, because such a gateway answers to a name it cannot predict. Rebinding needs
+a loopback bind to be worth mounting, so nothing is lost where the threat lives.
+
+### Admin requires a credential
+
+With `auth.enabled = false` every caller is anonymous and holds **no admin**.
+Ordinary tools work, so a local MCP client needs no configuration. These do not:
+
+- `gateway_kill_server`, `gateway_revive_server`, `gateway_set_profile`,
+  `gateway_set_state`, `gateway_reload_config`, `gateway_reload_capabilities`
+- the full-detail views at `/ui`, `/dashboard` and `/ui/api/*`
+
+Set `auth.enabled = true` with a bearer token to get them back; that token is
+admin. An unauthenticated gateway cannot tell its operator apart from a web page
+or from any other process running as the same user, so admin is a grant that
+follows a credential.
 
 For multi-client setups with per-client tool scoping, see the [README auth section](../README.md#authentication).
 

@@ -22,7 +22,7 @@ If you discover a security vulnerability, please report it responsibly:
 
 ## Security Architecture
 
-MCP Gateway implements defense-in-depth across six attack vectors identified by [Doyensec's MCP security research](https://blog.doyensec.com/2025/04/01/mcp.html):
+MCP Gateway implements defense-in-depth across the six attack vectors identified by [Doyensec's MCP security research](https://blog.doyensec.com/2025/04/01/mcp.html), plus one the gateway's own shape adds: it listens on a local HTTP port, which a web page can reach.
 
 ### Defenses
 
@@ -34,12 +34,17 @@ MCP Gateway implements defense-in-depth across six attack vectors identified by 
 | **Input Injection** | Shell/SQL/path traversal detection, input sanitization | `src/security/firewall/` |
 | **Credential Exposure** | Response redaction (AWS, GitHub, JWT, etc.) | `src/security/firewall/redactor.rs` |
 | **SSRF** | Private IP rejection on all outbound URLs | `src/security/` |
+| **Cross-site access to the local port** | `Origin`, `Host`, HTTP/2 `:authority` and `Sec-Fetch-Site` validation ahead of auth | `src/gateway/router/origin_guard.rs` |
 
 ### Security Practices
 
 - **Zero unsafe code**: `#![deny(unsafe_code)]` enforced at crate level
 - **TLS/mTLS**: Full mutual TLS support with certificate-based access control
 - **Authentication**: Bearer tokens, API keys, OIDC JWT verification, per-client scopes
+- **Admin needs a credential**: with `auth.enabled = false` every caller is an
+  anonymous non-admin. Server management tools and the admin dashboard require
+  an explicit credential, because an unauthenticated gateway cannot tell its
+  operator from a web page that rebound a hostname to loopback
 - **Secrets**: OS keychain integration (macOS Keychain, Linux secret-service) — never stored in config
 - **Circuit breakers**: Per-backend fault isolation prevents cascading failures
 - **Rate limiting**: Token-bucket per-backend rate limiting
