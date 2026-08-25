@@ -445,9 +445,11 @@ gateway does not serve, so such a setting would name origins that still could
 not call it. Serve the page from the gateway's own origin, or use a non-browser
 client.
 
-`Host` checking is skipped when the bind is not loopback and no `public_url` is
-set, because such a gateway answers to a name it cannot predict. Rebinding needs
-a loopback bind to be worth mounting, so nothing is lost where the threat lives.
+When the bind is not loopback and no `public_url` is set, a `Host` naming a
+domain is refused and a numeric address is accepted. Such a gateway answers at
+an address it cannot predict, so the name cannot be checked, but rebinding
+always needs a hostname while a network client dials an address. Set
+`public_url` if clients legitimately reach the gateway by name.
 
 ### Admin requires a credential
 

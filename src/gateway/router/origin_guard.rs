@@ -133,12 +133,22 @@ impl OriginPolicy {
     /// loopback nor the configured public host.
     #[must_use]
     fn host_allowed(&self, host: &str) -> bool {
-        // A public_url set after startup turns gating back on: it names a host
-        // we can now judge, so the "cannot know the name" allowance lapses.
-        if !self.gate_host && self.public_url_parts().is_none() {
-            return true;
-        }
         let bare = strip_port(host);
+
+        // A public_url set after startup turns full gating back on: it names a
+        // host we can now judge, so the "cannot know the name" allowance lapses.
+        if !self.gate_host && self.public_url_parts().is_none() {
+            // A non-loopback bind answers to an address this process cannot
+            // predict, so the name itself cannot be checked. The numeric form
+            // still can be, and that is enough: DNS rebinding requires a
+            // hostname to rebind, while a client reaching a bare gateway over
+            // the network dials an address. Refusing names therefore closes the
+            // rebinding path without refusing legitimate callers, and rebinding
+            // is not a loopback-only threat — it reaches any address the
+            // victim's browser can.
+            return is_numeric_host(bare);
+        }
+
         if is_loopback_host(bare) {
             return true;
         }
@@ -160,6 +170,17 @@ impl OriginPolicy {
     fn fetch_site_allowed(site: &str) -> bool {
         matches!(site, "same-origin" | "none")
     }
+}
+
+/// `true` when `host` is a bare IP address rather than a name.
+///
+/// An IPv6 literal arrives bracketed and parses only once the brackets are off.
+fn is_numeric_host(host: &str) -> bool {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<std::net::IpAddr>().is_ok()
 }
 
 /// Strip a `:port` suffix, leaving an IPv6 literal's brackets intact.
@@ -287,17 +308,39 @@ mod tests {
 
     #[test]
     fn non_loopback_bind_stays_reachable() {
-        // A gateway bound to a wildcard/LAN address is reached by a Host this
-        // process cannot predict. Gating on a name we cannot know would refuse
-        // every request; the rebinding threat this gate exists for needs a
-        // loopback bind in the first place.
+        // A gateway bound to a wildcard address is reached at an address this
+        // process cannot predict, so the numeric form is what can be checked.
+        // A name requires `public_url`; see `non_loopback_bind_refuses_a_named_host`.
         let config = ServerConfig {
             host: "0.0.0.0".to_string(),
             ..ServerConfig::default()
         };
         let p = policy_for(config);
-        for host in ["192.168.1.5:39400", "gateway.internal", "10.0.0.5:39400"] {
+        for host in ["192.168.1.5:39400", "10.0.0.5:39400", "172.16.0.1"] {
             assert!(p.host_allowed(host), "{host} must reach a wildcard bind");
+        }
+    }
+
+    #[test]
+    fn non_loopback_bind_refuses_a_named_host() {
+        // DNS rebinding works against any address a victim's browser can reach,
+        // a LAN address included, so a wildcard bind is not exempt. A rebound
+        // request necessarily carries a NAME; a direct client on the LAN carries
+        // the numeric address it dialled. Refusing names costs nothing and
+        // removes the rebinding path.
+        let config = ServerConfig {
+            host: "0.0.0.0".to_string(),
+            ..ServerConfig::default()
+        };
+        let p = policy_for(config);
+        for host in ["attacker.example", "attacker.example:39400"] {
+            assert!(!p.host_allowed(host), "{host} is a name, not this gateway");
+        }
+        for host in ["192.168.1.5:39400", "10.0.0.5", "[fd00::1]:39400"] {
+            assert!(
+                p.host_allowed(host),
+                "{host} is a numeric address a client dialled"
+            );
         }
     }
 

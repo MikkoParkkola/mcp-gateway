@@ -2075,3 +2075,47 @@ async fn mcp_rejects_foreign_authority_without_host_header() {
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+/// Build router state whose live config binds a wildcard address.
+fn wildcard_bind_app_state() -> Arc<AppState> {
+    let state = test_router_app_state();
+    let mut config = crate::config::Config::default();
+    config.server.host = "0.0.0.0".to_string();
+    state.live_config.set(config);
+    state
+}
+
+#[tokio::test]
+async fn wildcard_bind_refuses_a_rebound_name_through_the_middleware() {
+    // The policy unit tests assert the rule; this asserts the middleware
+    // actually applies it on the real route, so the wildcard allowance cannot
+    // widen back into a rebinding path during a refactor.
+    let router = create_router(wildcard_bind_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn wildcard_bind_admits_a_numeric_host_through_the_middleware() {
+    let router = create_router(wildcard_bind_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "192.168.1.5:39400")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+}
