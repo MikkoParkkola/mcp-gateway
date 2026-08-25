@@ -47,11 +47,28 @@ use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 
-// ── Test helpers ──────────────────────────────────────────────────────────────
+// ── Test helpers ─────────────────────────────────────────────────────────────
+
+/// Bearer token the management tests authenticate with. A bearer token is an
+/// admin credential, which is what these endpoints require.
+const ADMIN_TOKEN: &str = "test-admin-token";
+
+/// Auth config granting admin to [`ADMIN_TOKEN`].
+fn admin_auth_config() -> AuthConfig {
+    AuthConfig {
+        enabled: true,
+        bearer_token: Some(ADMIN_TOKEN.to_string()),
+        ..AuthConfig::default()
+    }
+}
 
 /// Build a minimal `AppState` suitable for unit-testing the UI management
-/// endpoints.  Auth is disabled so `is_admin()` returns `true` for all
-/// requests (anonymous == admin when auth is off).
+/// endpoints.
+///
+/// Auth is ENABLED with [`ADMIN_TOKEN`], because these endpoints are admin-only
+/// and the anonymous identity holds no admin. Requests here go through
+/// [`admin_request`], which presents that token. Auth-disabled callers are
+/// covered separately by `anonymous_is_refused_admin_endpoints`.
 fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>) -> Arc<AppState> {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
@@ -61,8 +78,7 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
 
-    // Disabled auth — all callers become "anonymous" which maps to admin.
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&admin_auth_config()));
 
     let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
@@ -127,7 +143,7 @@ fn make_app_state_with_reload(
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(&admin_auth_config()));
     let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
     let inflight = Arc::new(tokio::sync::Semaphore::new(100));
@@ -193,7 +209,10 @@ async fn send_json(
         None => (Vec::new(), false),
     };
 
-    let mut builder = Request::builder().method(method).uri(uri);
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {ADMIN_TOKEN}"));
     if has_body {
         builder = builder.header("content-type", "application/json");
     }
@@ -223,6 +242,7 @@ async fn send_raw(
     let req = Request::builder()
         .method(method)
         .uri(uri)
+        .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
         .header("content-type", content_type)
         .body(Body::from(body.to_string()))
         .unwrap();
@@ -356,6 +376,7 @@ async fn test_webui_embeds_control_plane_read_only_page() {
     let request = Request::builder()
         .method(Method::GET)
         .uri("/ui")
+        .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
         .body(Body::empty())
         .unwrap();
 
@@ -1031,6 +1052,7 @@ async fn test_capability_create_read_delete_lifecycle() {
     let get_req = Request::builder()
         .method(Method::GET)
         .uri("/ui/api/capabilities/test-cap")
+        .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
         .body(Body::empty())
         .unwrap();
     let get_resp = Router::clone(&router).oneshot(get_req).await.unwrap();
@@ -1129,6 +1151,7 @@ async fn test_capability_path_traversal_rejected() {
         let req = Request::builder()
             .method(Method::GET)
             .uri(&uri)
+            .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
             .body(Body::empty())
             .unwrap();
         let resp = Router::clone(&router).oneshot(req).await.unwrap();
@@ -1364,4 +1387,35 @@ async fn test_import_preview_rejects_neither_url_nor_spec() {
         StatusCode::UNPROCESSABLE_ENTITY,
         "Expected 422 for empty body, got: {body}"
     );
+}
+
+/// The auth-disabled anonymous identity must not reach the management API.
+///
+/// This is the integration-level guard for the CWE-346 fix: every test above
+/// authenticates, so without this case the whole file would pass again if the
+/// anonymous identity were handed admin a second time.
+#[tokio::test]
+async fn anonymous_is_refused_admin_endpoints() {
+    let config = Config::default();
+    assert!(
+        !config.auth.enabled,
+        "this case is about the shipped default"
+    );
+
+    let state = make_app_state_with_auth_config(&config.auth);
+    let router = create_router(state);
+
+    for uri in ["/ui/api/config", "/ui/api/registry", "/ui/api/capabilities"] {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{uri} must refuse an anonymous caller"
+        );
+    }
 }

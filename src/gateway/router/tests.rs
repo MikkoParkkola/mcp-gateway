@@ -1904,3 +1904,174 @@ async fn tools_list_static_code_mode_unaffected_by_absent_param() {
     assert!(names.contains(&"gateway_search"));
     assert!(names.contains(&"gateway_execute"));
 }
+
+// ── Origin / Host validation (CWE-346) ────────────────────────────────────────
+//
+// The gateway binds loopback and, with auth off, treats every caller as an
+// anonymous identity. A web page can therefore reach `/mcp` either by rebinding
+// a hostname to 127.0.0.1 or, because the handler never checks Content-Type, by
+// a preflight-free cross-origin POST. A browser always sends `Origin`; a CLI MCP
+// client never does. That asymmetry is the gate.
+
+fn mcp_request_with(header: Option<(&str, &str)>) -> axum::http::Request<axum::body::Body> {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json");
+    if let Some((name, value)) = header {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn mcp_rejects_foreign_origin() {
+    let router = create_router(test_router_app_state());
+    let response = router
+        .oneshot(mcp_request_with(Some((
+            "origin",
+            "http://attacker.example",
+        ))))
+        .await
+        .unwrap();
+    // Must fail on the gate, not on a parse error: the body above is valid.
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_allows_absent_origin() {
+    let router = create_router(test_router_app_state());
+    let response = router.oneshot(mcp_request_with(None)).await.unwrap();
+    assert_ne!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a CLI MCP client sends no Origin and must keep working"
+    );
+}
+
+#[tokio::test]
+async fn mcp_allows_bind_origin() {
+    let router = create_router(test_router_app_state());
+    let response = router
+        .oneshot(mcp_request_with(Some(("origin", "http://127.0.0.1:39400"))))
+        .await
+        .unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_rejects_foreign_host() {
+    let router = create_router(test_router_app_state());
+    // No Origin at all: this is the rebinding shape, where the browser's own
+    // Origin may be suppressed but Host carries the attacker's name.
+    let response = router
+        .oneshot(mcp_request_with(Some(("host", "attacker.example"))))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn health_ignores_origin_gate() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header("origin", "http://attacker.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "health is a monitoring probe and carries no authority"
+    );
+}
+
+#[test]
+fn anonymous_denied_admin_meta_tools() {
+    use super::authorization::require_admin_tool_access;
+    let anon = crate::gateway::auth::anonymous_client();
+    for tool in [
+        "gateway_kill_server",
+        "gateway_revive_server",
+        "gateway_set_profile",
+        "gateway_set_state",
+        "gateway_reload_config",
+        "gateway_reload_capabilities",
+    ] {
+        assert!(
+            require_admin_tool_access(Some(&anon), tool).is_err(),
+            "anonymous must not reach {tool}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_rejects_no_cors_get_from_a_page() {
+    // The Fetch standard omits `Origin` from a no-CORS GET, so the
+    // absent-Origin allowance would admit it. Fetch Metadata is what catches it.
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/mcp")
+        .header("sec-fetch-site", "cross-site")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_rejects_opaque_origin() {
+    // A sandboxed iframe and a cross-site redirect both send `Origin: null`.
+    let router = create_router(test_router_app_state());
+    let response = router
+        .oneshot(mcp_request_with(Some(("origin", "null"))))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_allows_same_origin_browser_request() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("origin", "http://127.0.0.1:39400")
+        .header("sec-fetch-site", "same-origin")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_rejects_foreign_authority_without_host_header() {
+    // HTTP/2 carries the target in the `:authority` pseudo-header, not `Host`,
+    // so a gate that reads only `Host` is inert over HTTP/2 and the rebinding
+    // refusal disappears on exactly the protocol browsers prefer.
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("http://attacker.example/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    assert!(
+        request.headers().get(axum::http::header::HOST).is_none(),
+        "the case is only meaningful with no Host header present"
+    );
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

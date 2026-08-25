@@ -49,7 +49,24 @@ pub(super) fn log_startup_banner(config: &Config, backends: &BackendRegistry) {
             has_bearer, key_count
         );
     } else {
-        warn!("AUTHENTICATION disabled - gateway is open to all requests");
+        warn!("AUTHENTICATION disabled - every local caller is anonymous");
+        warn!(
+            "  Anonymous holds no admin: gateway_kill_server, gateway_revive_server, \
+             gateway_set_profile, gateway_set_state, gateway_reload_config, \
+             gateway_reload_capabilities and the admin dashboard are unavailable."
+        );
+        warn!("  To use them, set auth.enabled = true with a bearer token.");
+        // A loopback bind keeps this to callers already on the machine. A
+        // wildcard or LAN bind hands the same unauthenticated surface, and the
+        // credentials behind it, to the network.
+        if !crate::gateway::router::is_loopback_bind(&config.server.host) {
+            warn!(
+                host = %config.server.host,
+                "  BIND IS NOT LOOPBACK: unauthenticated callers on the network can \
+                 invoke every configured backend with this gateway's credentials. \
+                 Set auth.enabled = true, or bind 127.0.0.1."
+            );
+        }
     }
 
     if config.meta_mcp.enabled {

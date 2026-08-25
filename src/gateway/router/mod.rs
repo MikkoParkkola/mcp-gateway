@@ -28,6 +28,16 @@ mod authorization;
 mod backend_handlers;
 mod handlers;
 pub(crate) mod helpers;
+mod origin_guard;
+
+/// `true` when `host` names the loopback interface.
+///
+/// Re-exported so startup can warn about a bind that puts the unauthenticated
+/// surface on the network, using the same classifier the Origin gate uses.
+#[must_use]
+pub fn is_loopback_bind(host: &str) -> bool {
+    well_known::is_loopback_host(host)
+}
 mod well_known;
 
 #[cfg(test)]
@@ -135,6 +145,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let startup_config = state.live_config.get();
     let bind_origin =
         well_known::bind_fallback_origin(&startup_config.server.host, startup_config.server.port);
+    let origin_policy = Arc::new(origin_guard::OriginPolicy::from_live(&state.live_config));
     let protected_resource_route =
         Router::new()
             .route(
@@ -186,6 +197,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         ))
         // Authentication middleware (applied before other layers)
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
+        // Origin/Host validation runs OUTSIDE auth, so a cross-site request is
+        // refused before any identity (including the anonymous one) is minted.
+        .layer(middleware::from_fn_with_state(
+            origin_policy,
+            origin_guard::origin_guard_middleware,
+        ))
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

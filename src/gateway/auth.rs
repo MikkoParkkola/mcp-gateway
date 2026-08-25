@@ -393,6 +393,29 @@ impl AuthenticatedClient {
     }
 }
 
+/// The identity every caller holds when authentication is disabled.
+///
+/// Reaches ordinary tools, so a local MCP client works out of the box, and
+/// holds no admin. Admin is an explicit grant that requires a credential
+/// (`auth.enabled = true` with a bearer token): an auth-disabled gateway
+/// cannot tell its operator apart from a web page that rebound a hostname to
+/// loopback, or from any other process running as the same user.
+///
+/// `backends` stays `["*"]` deliberately. [`AuthenticatedClient::can_access_backend`]
+/// treats an EMPTY list as "all", so clearing the vector would grant everything
+/// while reading like a restriction.
+#[must_use]
+pub fn anonymous_client() -> AuthenticatedClient {
+    AuthenticatedClient {
+        name: "anonymous".to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+    }
+}
+
 /// Combined auth state: static config + optional key server.
 #[derive(Clone)]
 pub struct AuthState {
@@ -417,14 +440,7 @@ pub async fn auth_middleware(
 
     // If auth is disabled, pass through with anonymous client
     if !auth_config.enabled {
-        request.extensions_mut().insert(AuthenticatedClient {
-            name: "anonymous".to_string(),
-            rate_limit: 0,
-            backends: vec!["*".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: true,
-        });
+        request.extensions_mut().insert(anonymous_client());
         return next.run(request).await;
     }
 
@@ -556,6 +572,42 @@ fn looks_like_jwt(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Anonymous identity (CWE-346) ──────────────────────────────────────────
+    //
+    // With auth off every caller is anonymous. Anonymous must reach ordinary
+    // tools so a local MCP client keeps working, and must NOT hold admin, so a
+    // local process or a browser that gets past the Origin gate cannot kill
+    // servers, reload config or read the admin dashboard.
+
+    #[test]
+    fn anonymous_is_not_admin() {
+        assert!(!anonymous_client().admin, "admin must require a credential");
+    }
+
+    #[test]
+    fn anonymous_retains_backend_access() {
+        // Asserts reachability, not the field: `can_access_backend` returns
+        // true for an EMPTY list, so a fix that clears the vector grants
+        // everything while looking like a restriction.
+        let anon = anonymous_client();
+        assert!(anon.can_access_backend("any-backend"));
+    }
+
+    #[test]
+    fn bearer_client_remains_admin() {
+        let config = ResolvedAuthConfig {
+            enabled: true,
+            bearer_token: Some("bearer-ADMIN".to_string()),
+            api_keys: vec![],
+            public_paths: vec![],
+            rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
+        };
+        let bearer = config.validate_token("bearer-ADMIN").expect("bearer valid");
+        assert!(bearer.admin, "an explicit credential still grants admin");
+    }
 
     #[test]
     fn looks_like_jwt_accepts_three_base64url_segments() {
