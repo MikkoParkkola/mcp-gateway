@@ -197,12 +197,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         ))
         // Authentication middleware (applied before other layers)
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
-        // Origin/Host validation runs OUTSIDE auth, so a cross-site request is
-        // refused before any identity (including the anonymous one) is minted.
-        .layer(middleware::from_fn_with_state(
-            origin_policy,
-            origin_guard::origin_guard_middleware,
-        ))
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
@@ -231,5 +225,19 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         app = app.merge(super::ui::html_router());
     }
 
-    app
+    // Origin/Host validation wraps the FULLY MERGED router, and does so last so
+    // it runs first. Two properties depend on that placement:
+    //
+    // - it is outside authentication, so a cross-site request is refused before
+    //   any identity, the anonymous one included, is assigned;
+    // - it covers the routes merged above, which sit outside the auth layer and
+    //   would otherwise skip the gate entirely. That set includes the key
+    //   server's token exchange and revocation endpoints.
+    //
+    // Non-browser callers are unaffected: they send no `Origin`, and Prometheus
+    // and health probes reach `/metrics` and `/health` as before.
+    app.layer(middleware::from_fn_with_state(
+        origin_policy,
+        origin_guard::origin_guard_middleware,
+    ))
 }

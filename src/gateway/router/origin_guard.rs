@@ -387,6 +387,24 @@ mod tests {
     }
 
     #[test]
+    fn ipv6_public_url_matches_a_bracketed_host() {
+        // Locks in behaviour a review claimed was broken and is not: the `url`
+        // crate's `host_str` returns an IPv6 literal WITH brackets, the same
+        // form a Host header carries, so the comparison matches. Kept as a
+        // regression guard, since switching to `Url::host()` would return the
+        // unbracketed form and silently lock out every IPv6 operator.
+        let config = ServerConfig {
+            host: "0.0.0.0".to_string(),
+            public_url: Some("http://[fd00::1]:39400".to_string()),
+            ..ServerConfig::default()
+        };
+        let p = policy_for(config);
+        assert!(p.host_allowed("[fd00::1]:39400"));
+        assert!(p.host_allowed("[fd00::1]"));
+        assert!(!p.host_allowed("[fd00::2]"));
+    }
+
+    #[test]
     fn public_url_change_is_picked_up_without_a_restart() {
         // `public_url` is hot-reloadable: the RFC 9728 metadata handler reads it
         // from the live config per request (config_reload/mod.rs:343-349). A gate

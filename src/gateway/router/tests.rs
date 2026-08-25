@@ -2119,3 +2119,29 @@ async fn wildcard_bind_admits_a_numeric_host_through_the_middleware() {
     let response = router.oneshot(request).await.unwrap();
     assert_ne!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn merged_routes_are_behind_the_origin_gate() {
+    // Routes merged after the layer stack would skip the gate entirely. That
+    // set includes the key server's token exchange and revocation endpoints,
+    // JWKS, the protected-resource metadata, /metrics and the UI HTML.
+    let router = create_router(test_router_app_state());
+    for uri in [
+        "/.well-known/jwks.json",
+        "/.well-known/oauth-protected-resource",
+        "/metrics",
+    ] {
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("origin", "http://attacker.example")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{uri} must be refused for a cross-site Origin"
+        );
+    }
+}

@@ -44,9 +44,11 @@ fn uptime_secs() -> u64 {
 
 /// Returns `true` when the caller has admin-level access.
 ///
-/// Admin access is explicit. The auth middleware marks the bearer token and
-/// auth-disabled anonymous client as admin; API keys must opt in with
-/// `admin: true`.
+/// Admin access is explicit and follows a credential. The auth middleware marks
+/// a bearer token as admin; API keys must opt in with `admin: true`. The
+/// identity used when authentication is disabled is NOT admin, because an
+/// unauthenticated gateway cannot tell its operator from any other caller that
+/// reaches the port.
 fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
     client.is_some_and(|c| c.admin)
 }
@@ -89,7 +91,19 @@ async fn index() -> impl IntoResponse {
 }
 
 /// `GET /dashboard` — operator dashboard: self-contained HTML, auto-refreshes every 5 s.
-pub async fn dashboard_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+///
+/// Admin only. The page renders backend names, tool names and call counts,
+/// which is the same inventory `/ui/api/status` redacts for a non-admin caller,
+/// so it follows the same rule rather than serving as a way around it.
+pub async fn dashboard_handler(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+) -> impl IntoResponse {
+    let client = client.map(|Extension(c)| c);
+    if !is_admin(client.as_ref()) {
+        return auth_required(StatusCode::FORBIDDEN).into_response();
+    }
+
     let backends = state.backends.all();
 
     // Collect per-backend health data.
@@ -169,6 +183,7 @@ pub async fn dashboard_handler(State(state): State<Arc<AppState>>) -> impl IntoR
         [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
         html,
     )
+        .into_response()
 }
 
 // ── Dashboard domain types ───────────────────────────────────────────

@@ -1419,3 +1419,21 @@ async fn anonymous_is_refused_admin_endpoints() {
         );
     }
 }
+
+/// `/dashboard` renders backend names, tool names and call counts. It is an
+/// operator view, so it follows the same rule as the rest of the management
+/// surface: admin only.
+#[tokio::test]
+async fn anonymous_is_refused_the_dashboard() {
+    let config = Config::default();
+    let state = make_app_state_with_auth_config(&config.auth);
+    let router = create_router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/dashboard")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
