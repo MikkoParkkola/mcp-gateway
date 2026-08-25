@@ -1437,3 +1437,30 @@ async fn anonymous_is_refused_the_dashboard() {
     let response = router.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+/// The documented split: `/dashboard` and the management endpoints refuse an
+/// anonymous caller outright, while `/ui/api/status` still answers with counts
+/// so health probes and status pages keep working without a credential.
+#[tokio::test]
+async fn anonymous_still_reads_redacted_status() {
+    let config = Config::default();
+    let state = make_app_state_with_auth_config(&config.auth);
+    let router = create_router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/ui/api/status")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body.get("backends").is_none(),
+        "an anonymous caller must not receive backend names: {body}"
+    );
+}

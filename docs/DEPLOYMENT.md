@@ -458,7 +458,8 @@ Ordinary tools work, so a local MCP client needs no configuration. These do not:
 
 - `gateway_kill_server`, `gateway_revive_server`, `gateway_set_profile`,
   `gateway_set_state`, `gateway_reload_config`, `gateway_reload_capabilities`
-- the full-detail views at `/ui`, `/dashboard` and `/ui/api/*`
+- `/dashboard` and the management endpoints under `/ui/api/`, which return
+  `403`. `/ui/api/status` still answers, with counts rather than backend names
 
 Set `auth.enabled = true` with a bearer token to get them back; that token is
 admin. An unauthenticated gateway cannot tell its operator apart from a web page
