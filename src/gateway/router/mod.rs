@@ -117,6 +117,19 @@ pub struct AppState {
 /// Create the router.
 #[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
 pub fn create_router(state: Arc<AppState>) -> Router {
+    create_router_with(state, None)
+}
+
+/// Create the router, folding in routes a caller assembles separately.
+///
+/// Extra routes are merged **here**, before the origin gate is applied, rather
+/// than by the caller afterwards. A layer only covers what is already merged,
+/// so a route merged onto the finished router silently skips the gate. That has
+/// happened twice: first for the routes merged below, then for the webhook
+/// routes merged at the call site. Taking them as a parameter removes the
+/// ordering discipline that failed both times.
+#[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
+pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
     let auth_state = AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
@@ -223,6 +236,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     #[cfg(feature = "webui")]
     {
         app = app.merge(super::ui::html_router());
+    }
+
+    if let Some(extra) = extra {
+        app = app.merge(extra);
     }
 
     // Origin/Host validation wraps the FULLY MERGED router, and does so last so

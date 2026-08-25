@@ -18,7 +18,7 @@ use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
 use super::proxy::ProxyManager;
-use super::router::{AppState, create_router};
+use super::router::{AppState, create_router_with};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
@@ -1158,8 +1158,25 @@ impl Gateway {
             transparency_log,
         });
 
+        // Webhook routes are built BEFORE the router and handed to it, so the
+        // origin gate covers them. Merging them onto the finished router would
+        // put them outside the layer that refuses cross-site requests.
+        let webhook_routes = if self.config.webhooks.enabled {
+            info!(
+                enabled = true,
+                base_path = %self.config.webhooks.base_path,
+                "Webhook receiver enabled"
+            );
+            Some(WebhookRegistry::create_dynamic_routes(
+                Arc::clone(&webhook_registry),
+                Arc::clone(&multiplexer),
+            ))
+        } else {
+            None
+        };
+
         // Create router
-        let mut app = create_router(state);
+        let app = create_router_with(state, webhook_routes);
 
         // Start the config file watcher now that the router has snapshotted its
         // startup bind-origin from `live_config` (still equal to the config the
@@ -1187,20 +1204,6 @@ impl Gateway {
         } else {
             None
         };
-
-        // Add webhook routes if enabled
-        if self.config.webhooks.enabled {
-            let webhook_routes = WebhookRegistry::create_dynamic_routes(
-                Arc::clone(&webhook_registry),
-                Arc::clone(&multiplexer),
-            );
-            app = app.merge(webhook_routes);
-            info!(
-                enabled = true,
-                base_path = %self.config.webhooks.base_path,
-                "Webhook receiver enabled"
-            );
-        }
 
         // Optionally spawn a WebSocket listener alongside the HTTP server.
         if let Some(ws_port) = self.config.server.ws_port {

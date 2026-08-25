@@ -30,9 +30,6 @@ use axum::{
 
 use super::well_known::is_loopback_host;
 
-/// Paths exempt from the gate because they carry no authority.
-const EXEMPT_PATHS: &[&str] = &["/health"];
-
 /// Origins and hosts this gateway answers to, snapshotted at startup.
 ///
 /// `server.host`/`port` are restart-required, so a snapshot cannot drift from
@@ -52,13 +49,14 @@ pub struct OriginPolicy {
     /// reads it live, so snapshotting it here would refuse the very origin the
     /// gateway advertises after an operator reloads a changed value.
     live_config: Arc<crate::config_reload::LiveConfig>,
-    /// Whether `Host` can be judged at all.
+    /// Whether the bind address is loopback. Restart-required, so a snapshot
+    /// cannot drift from the listener.
     ///
-    /// False for a non-loopback bind with no declared public host: such a
-    /// gateway is reached by a name this process cannot predict, so gating on
-    /// it would refuse every request. DNS rebinding needs a loopback bind to be
-    /// worth mounting, so nothing is lost where the threat actually lives.
-    gate_host: bool,
+    /// Whether `Host` can be judged at all is derived from this AND the current
+    /// `public_url`, per request, never snapshotted. A gateway that started with
+    /// a `public_url` and had it removed by a reload would otherwise keep gating
+    /// with nothing left to gate against, and refuse every request.
+    bind_is_loopback: bool,
 }
 
 impl OriginPolicy {
@@ -97,12 +95,10 @@ impl OriginPolicy {
             Vec::new()
         };
 
-        let gate_host = is_loopback_host(&config.host) || config.public_url.is_some();
-
         Self {
             allowed_origins,
             live_config: Arc::clone(live_config),
-            gate_host,
+            bind_is_loopback: is_loopback_host(&config.host),
         }
     }
 
@@ -137,9 +133,11 @@ impl OriginPolicy {
     fn host_allowed(&self, host: &str) -> bool {
         let bare = strip_port(host);
 
-        // A public_url set after startup turns full gating back on: it names a
-        // host we can now judge, so the "cannot know the name" allowance lapses.
-        if !self.gate_host && self.public_url_parts().is_none() {
+        // Derived per request, never snapshotted: a public_url added by a
+        // reload turns full gating on, and one removed returns to the numeric
+        // rule rather than refusing everything.
+        let public = self.public_url_parts();
+        if !self.bind_is_loopback && public.is_none() {
             // A non-loopback bind answers to an address this process cannot
             // predict, so the name itself cannot be checked. The numeric form
             // still can be, and that is enough: DNS rebinding requires a
@@ -154,8 +152,7 @@ impl OriginPolicy {
         if is_loopback_host(bare) {
             return true;
         }
-        self.public_url_parts()
-            .is_some_and(|(public_host, _)| public_host.eq_ignore_ascii_case(bare))
+        public.is_some_and(|(public_host, _)| public_host.eq_ignore_ascii_case(bare))
     }
 
     /// `true` when a browser's `Sec-Fetch-Site` value describes a request this
@@ -200,10 +197,6 @@ pub async fn origin_guard_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if EXEMPT_PATHS.contains(&request.uri().path()) {
-        return next.run(request).await;
-    }
-
     let headers = request.headers();
 
     // A header that is not valid UTF-8 cannot be compared, so it is refused
@@ -412,6 +405,33 @@ mod tests {
         assert!(
             p.origin_allowed("http://127.0.0.2:39400"),
             "the configured bind address must name an allowed origin"
+        );
+    }
+
+    #[test]
+    fn removing_public_url_by_reload_does_not_lock_everyone_out() {
+        // gate_host was computed once at startup. A gateway that started WITH a
+        // public_url and then had it removed kept gating, but had nothing left
+        // to gate against, so every non-loopback host was refused.
+        let config = crate::config::Config {
+            server: ServerConfig {
+                host: "0.0.0.0".to_string(),
+                public_url: Some("https://mcp.example.com".to_string()),
+                ..ServerConfig::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let live = Arc::new(crate::config_reload::LiveConfig::new(config));
+        let p = OriginPolicy::from_live(&live);
+        assert!(p.host_allowed("mcp.example.com"));
+
+        let mut without = crate::config::Config::default();
+        without.server.host = "0.0.0.0".to_string();
+        live.set(without);
+
+        assert!(
+            p.host_allowed("192.168.1.5:39400"),
+            "removing public_url must fall back to the numeric rule, not refuse everything"
         );
     }
 

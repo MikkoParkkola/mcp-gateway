@@ -5,7 +5,7 @@ use super::helpers::{
     build_http_error_response, build_json_response, extract_request_id, extract_tools_call_params,
     is_notification_method, parse_elicitation_params, parse_request,
 };
-use super::{AppState, create_router};
+use super::{AppState, create_router, create_router_with};
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{
     ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig, StreamingConfig, SurfacedToolConfig,
@@ -1976,19 +1976,31 @@ async fn mcp_rejects_foreign_host() {
 }
 
 #[tokio::test]
-async fn health_ignores_origin_gate() {
+async fn health_is_reachable_by_a_probe_and_refused_cross_site() {
+    // No exemption. A monitoring probe sends no Origin and passes on the
+    // general rules; a web page sends one and is refused like anywhere else,
+    // so the boundary is the whole port with no special cases to audit.
     let router = create_router(test_router_app_state());
-    let request = axum::http::Request::builder()
+
+    let probe = axum::http::Request::builder()
+        .method("GET")
+        .uri("/health")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(probe).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let page = axum::http::Request::builder()
         .method("GET")
         .uri("/health")
         .header("origin", "http://attacker.example")
         .body(axum::body::Body::empty())
         .unwrap();
-    let response = router.oneshot(request).await.unwrap();
     assert_eq!(
-        response.status(),
-        StatusCode::OK,
-        "health is a monitoring probe and carries no authority"
+        router.oneshot(page).await.unwrap().status(),
+        StatusCode::FORBIDDEN
     );
 }
 
@@ -2144,4 +2156,24 @@ async fn merged_routes_are_behind_the_origin_gate() {
             "{uri} must be refused for a cross-site Origin"
         );
     }
+}
+
+#[tokio::test]
+async fn a_route_merged_after_create_router_is_still_gated() {
+    // Round 4 fixed merges INSIDE create_router; a merge OUTSIDE it reopened
+    // the same hole for the webhook routes. The guard is therefore applied to
+    // extra routes handed in, not to whatever happened to be merged by then.
+    let extra = axum::Router::new().route(
+        "/webhooks/test",
+        axum::routing::post(|| async { axum::http::StatusCode::OK }),
+    );
+    let router = create_router_with(test_router_app_state(), Some(extra));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/webhooks/test")
+        .header("origin", "http://attacker.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

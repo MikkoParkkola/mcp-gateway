@@ -90,6 +90,16 @@ async fn index() -> impl IntoResponse {
     )
 }
 
+/// Served in place of the dashboard when the caller holds no admin credential.
+const DASHBOARD_ADMIN_REQUIRED_HTML: &str = "<!doctype html><meta charset=utf-8>\
+<title>Admin required</title>\
+<body style=\"font:16px/1.5 system-ui;margin:4rem auto;max-width:34rem\">\
+<h1>Admin required</h1>\
+<p>This dashboard shows backend names, tool names and call counts, so it needs \
+an admin credential.</p>\
+<p>Set <code>auth.enabled = true</code> with a bearer token in your gateway \
+config, then open <a href=\"/ui\">/ui</a>, which can present the token.</p>";
+
 /// `GET /dashboard` — operator dashboard: self-contained HTML, auto-refreshes every 5 s.
 ///
 /// Admin only. The page renders backend names, tool names and call counts,
@@ -101,7 +111,16 @@ pub async fn dashboard_handler(
 ) -> impl IntoResponse {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return auth_required(StatusCode::FORBIDDEN).into_response();
+        // HTML, not JSON. A browser navigating here cannot attach an
+        // Authorization header, so a bare 403 would leave an operator staring at
+        // a JSON-RPC error with no way forward. The page says what is missing
+        // and points at `/ui`, which is a script that can send the header.
+        return (
+            StatusCode::FORBIDDEN,
+            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            DASHBOARD_ADMIN_REQUIRED_HTML,
+        )
+            .into_response();
     }
 
     let backends = state.backends.all();

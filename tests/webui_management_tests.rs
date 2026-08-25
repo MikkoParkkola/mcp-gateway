@@ -1436,6 +1436,24 @@ async fn anonymous_is_refused_the_dashboard() {
         .unwrap();
     let response = router.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // HTML, not JSON: a browser cannot attach an Authorization header to a
+    // navigation, so the refusal has to tell a human what to do next.
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        content_type.starts_with("text/html"),
+        "expected an HTML explanation, got {content_type}"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(body.contains("/ui"), "the page must point somewhere usable");
 }
 
 /// The documented split: `/dashboard` and the management endpoints refuse an
