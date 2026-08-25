@@ -1916,9 +1916,22 @@ impl MetaMcp {
         &self,
         args: &Value,
         session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let include_all_sessions = extract_bool_or(args, "include_all_sessions", false);
         let include_all_keys = extract_bool_or(args, "include_all_keys", false);
+
+        // Both are documented in this tool's own schema as an admin view, and
+        // were read straight from the arguments. Refusing beats quietly
+        // narrowing the report: a caller that asked for every session and got
+        // one has no way to tell that it was scoped rather than empty.
+        if (include_all_sessions || include_all_keys) && !caller.is_admin {
+            return Err(crate::Error::Config(
+                "include_all_sessions and include_all_keys are admin views and require an \
+                 admin credential"
+                    .to_string(),
+            ));
+        }
 
         // Resolve target session (explicit arg or current session)
         let target_session_id = extract_optional_str(args, "session_id").or(session_id);

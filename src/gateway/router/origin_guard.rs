@@ -76,19 +76,27 @@ impl OriginPolicy {
             // loopback bind, including the configured address itself: a bind on
             // 127.0.0.2 is served at 127.0.0.2, and its own page is same-origin
             // only there.
+            // Both schemes: the listener may be TLS, and a page served over
+            // https carries an https Origin. A hardcoded http list refuses the
+            // gateway's own page.
             let mut origins = vec![
                 format!("http://127.0.0.1:{port}"),
+                format!("https://127.0.0.1:{port}"),
                 format!("http://localhost:{port}"),
+                format!("https://localhost:{port}"),
                 format!("http://[::1]:{port}"),
+                format!("https://[::1]:{port}"),
             ];
             let bracketed = if config.host.contains(':') && !config.host.starts_with('[') {
                 format!("[{}]", config.host)
             } else {
                 config.host.clone()
             };
-            let configured = format!("http://{bracketed}:{port}").to_ascii_lowercase();
-            if !origins.contains(&configured) {
-                origins.push(configured);
+            for scheme in ["http", "https"] {
+                let configured = format!("{scheme}://{bracketed}:{port}").to_ascii_lowercase();
+                if !origins.contains(&configured) {
+                    origins.push(configured);
+                }
             }
             origins
         } else {
@@ -102,7 +110,12 @@ impl OriginPolicy {
         }
     }
 
-    /// Host and origin of `server.public_url` as it stands right now.
+    /// Host and origin of `server.public_url` in one live snapshot.
+    ///
+    /// Taken ONCE per request and handed to both checks. Reading it separately
+    /// per check lets a reload land between them, so `Origin` would be judged
+    /// against the old value and `Host` against the new — a window in which
+    /// neither answer describes a configuration that ever existed.
     fn public_url_parts(&self) -> Option<(String, String)> {
         let config = self.live_config.get();
         let url = config.server.public_url.as_deref()?;
@@ -116,13 +129,25 @@ impl OriginPolicy {
 
     /// `true` when a browser-supplied `Origin` value is one this gateway answers to.
     #[must_use]
-    fn origin_allowed(&self, origin: &str) -> bool {
+    fn origin_allowed(&self, origin: &str, public: Option<&(String, String)>) -> bool {
         let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
         if self.allowed_origins.contains(&candidate) {
             return true;
         }
-        self.public_url_parts()
-            .is_some_and(|(_, public_origin)| public_origin == candidate)
+        if public.is_some_and(|(_, public_origin)| *public_origin == candidate) {
+            return true;
+        }
+
+        // A page served by this gateway on a non-loopback bind carries an
+        // Origin naming the address it was fetched from, which no startup list
+        // can enumerate. Admit a numeric one on the same terms as a numeric
+        // Host: an attacker page cannot claim it, because the browser sets
+        // Origin from where the page actually came.
+        !self.bind_is_loopback
+            && url::Url::parse(&candidate)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+                .is_some_and(|h| is_numeric_host(&h))
     }
 
     /// `true` when a `Host` value names this gateway.
@@ -130,13 +155,20 @@ impl OriginPolicy {
     /// A rebound name arrives here as the attacker's hostname, which is neither
     /// loopback nor the configured public host.
     #[must_use]
-    fn host_allowed(&self, host: &str) -> bool {
+    fn host_allowed(&self, host: &str, public: Option<&(String, String)>) -> bool {
         let bare = strip_port(host);
+
+        // A numeric host always reaches a non-loopback bind, whether or not a
+        // public name is declared. An orchestrator probes a pod by address, and
+        // a pod it cannot probe gets drained. Rebinding needs a NAME, so
+        // admitting addresses costs nothing the gate was built to stop.
+        if !self.bind_is_loopback && is_numeric_host(bare) {
+            return true;
+        }
 
         // Derived per request, never snapshotted: a public_url added by a
         // reload turns full gating on, and one removed returns to the numeric
         // rule rather than refusing everything.
-        let public = self.public_url_parts();
         if !self.bind_is_loopback && public.is_none() {
             // A non-loopback bind answers to an address this process cannot
             // predict, so the name itself cannot be checked. The numeric form
@@ -202,10 +234,12 @@ pub async fn origin_guard_middleware(
     // A header that is not valid UTF-8 cannot be compared, so it is refused
     // rather than skipped: an unreadable value must not read as absent.
     let path = request.uri().path().to_string();
+    // One snapshot for the whole request. See `public_url_parts`.
+    let public = policy.public_url_parts();
 
     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
         match origin.to_str() {
-            Ok(value) if policy.origin_allowed(value) => {}
+            Ok(value) if policy.origin_allowed(value, public.as_ref()) => {}
             other => {
                 // Logged because a silent refusal is indistinguishable from a
                 // broken client: an operator seeing 403 needs the reason, and a
@@ -252,7 +286,7 @@ pub async fn origin_guard_middleware(
 
     match target {
         None => {}
-        Some(Ok(value)) if policy.host_allowed(&value) => {}
+        Some(Ok(value)) if policy.host_allowed(&value, public.as_ref()) => {}
         other => {
             warn!(
                 path = %path,
@@ -295,6 +329,16 @@ mod tests {
         policy_for(ServerConfig::default())
     }
 
+    /// Test shim: take the live snapshot the middleware would take.
+    impl OriginPolicy {
+        fn host_ok(&self, host: &str) -> bool {
+            self.host_allowed(host, self.public_url_parts().as_ref())
+        }
+        fn origin_ok(&self, origin: &str) -> bool {
+            self.origin_allowed(origin, self.public_url_parts().as_ref())
+        }
+    }
+
     #[test]
     fn allows_loopback_host_spellings() {
         let p = policy();
@@ -308,7 +352,7 @@ mod tests {
             "[::1]:39400",
             "127.0.0.2:39400",
         ] {
-            assert!(p.host_allowed(host), "{host} names the loopback interface");
+            assert!(p.host_ok(host), "{host} names the loopback interface");
         }
     }
 
@@ -316,7 +360,7 @@ mod tests {
     fn rejects_rebound_host() {
         let p = policy();
         for host in ["attacker.example", "attacker.example:39400", "10.0.0.5"] {
-            assert!(!p.host_allowed(host), "{host} is not this gateway");
+            assert!(!p.host_ok(host), "{host} is not this gateway");
         }
     }
 
@@ -339,7 +383,7 @@ mod tests {
         };
         let p = policy_for(config);
         for host in ["192.168.1.5:39400", "10.0.0.5:39400", "172.16.0.1"] {
-            assert!(p.host_allowed(host), "{host} must reach a wildcard bind");
+            assert!(p.host_ok(host), "{host} must reach a wildcard bind");
         }
     }
 
@@ -356,11 +400,11 @@ mod tests {
         };
         let p = policy_for(config);
         for host in ["attacker.example", "attacker.example:39400"] {
-            assert!(!p.host_allowed(host), "{host} is a name, not this gateway");
+            assert!(!p.host_ok(host), "{host} is a name, not this gateway");
         }
         for host in ["192.168.1.5:39400", "10.0.0.5", "[fd00::1]:39400"] {
             assert!(
-                p.host_allowed(host),
+                p.host_ok(host),
                 "{host} is a numeric address a client dialled"
             );
         }
@@ -376,8 +420,8 @@ mod tests {
             ..ServerConfig::default()
         };
         let p = policy_for(config);
-        assert!(p.host_allowed("mcp.example.com"));
-        assert!(!p.host_allowed("attacker.example"));
+        assert!(p.host_ok("mcp.example.com"));
+        assert!(!p.host_ok("attacker.example"));
     }
 
     #[test]
@@ -403,8 +447,51 @@ mod tests {
         };
         let p = policy_for(config);
         assert!(
-            p.origin_allowed("http://127.0.0.2:39400"),
+            p.origin_ok("http://127.0.0.2:39400"),
             "the configured bind address must name an allowed origin"
+        );
+    }
+
+    #[test]
+    fn the_gateways_own_page_is_same_origin_on_any_bind() {
+        // Two ways an operator gets refused by their own gateway: a LAN bind,
+        // where the page is served from an address no allow-list names; and a
+        // TLS listener, where the page's Origin is https and the list is built
+        // with a hardcoded http scheme.
+        let lan = policy_for(ServerConfig {
+            host: "0.0.0.0".to_string(),
+            ..ServerConfig::default()
+        });
+        assert!(
+            lan.origin_ok("http://192.168.1.5:39400"),
+            "the gateway's own LAN page"
+        );
+        assert!(!lan.origin_ok("http://attacker.example"), "still a name");
+
+        let tls = policy_for(ServerConfig::default());
+        assert!(
+            tls.origin_ok("https://127.0.0.1:39400"),
+            "the gateway's own page over TLS"
+        );
+    }
+
+    #[test]
+    fn a_numeric_probe_reaches_a_proxied_gateway() {
+        // A gateway behind a reverse proxy declares public_url, and its
+        // orchestrator still probes it by pod IP. Gating solely on the public
+        // name refuses that probe, and an orchestrator that cannot health-check
+        // a pod drains or restarts it.
+        let config = ServerConfig {
+            host: "0.0.0.0".to_string(),
+            public_url: Some("https://mcp.example.com".to_string()),
+            ..ServerConfig::default()
+        };
+        let p = policy_for(config);
+        assert!(p.host_ok("mcp.example.com"), "the declared name");
+        assert!(p.host_ok("10.42.0.7:39400"), "the orchestrator's probe");
+        assert!(
+            !p.host_ok("attacker.example"),
+            "a name that is neither is still refused"
         );
     }
 
@@ -423,14 +510,14 @@ mod tests {
         };
         let live = Arc::new(crate::config_reload::LiveConfig::new(config));
         let p = OriginPolicy::from_live(&live);
-        assert!(p.host_allowed("mcp.example.com"));
+        assert!(p.host_ok("mcp.example.com"));
 
         let mut without = crate::config::Config::default();
         without.server.host = "0.0.0.0".to_string();
         live.set(without);
 
         assert!(
-            p.host_allowed("192.168.1.5:39400"),
+            p.host_ok("192.168.1.5:39400"),
             "removing public_url must fall back to the numeric rule, not refuse everything"
         );
     }
@@ -448,9 +535,13 @@ mod tests {
             ..ServerConfig::default()
         };
         let p = policy_for(config);
-        assert!(p.host_allowed("[fd00::1]:39400"));
-        assert!(p.host_allowed("[fd00::1]"));
-        assert!(!p.host_allowed("[fd00::2]"));
+        assert!(p.host_ok("[fd00::1]:39400"));
+        assert!(p.host_ok("[fd00::1]"));
+        // A different literal is also admitted, because every numeric host
+        // reaches a non-loopback bind by design: rebinding needs a NAME. What
+        // public_url gates is names.
+        assert!(p.host_ok("[fd00::2]"));
+        assert!(!p.host_ok("attacker.example"));
     }
 
     #[test]
@@ -463,14 +554,14 @@ mod tests {
             crate::config::Config::default(),
         ));
         let p = OriginPolicy::from_live(&live);
-        assert!(!p.host_allowed("mcp.example.com"));
+        assert!(!p.host_ok("mcp.example.com"));
 
         let mut changed = crate::config::Config::default();
         changed.server.public_url = Some("https://mcp.example.com".to_string());
         live.set(changed);
 
         assert!(
-            p.host_allowed("mcp.example.com"),
+            p.host_ok("mcp.example.com"),
             "a reloaded public_url must be honored without a restart"
         );
     }
@@ -478,9 +569,9 @@ mod tests {
     #[test]
     fn origin_matching_is_case_and_slash_insensitive() {
         let p = policy();
-        assert!(p.origin_allowed("http://127.0.0.1:39400"));
-        assert!(p.origin_allowed("HTTP://127.0.0.1:39400/"));
-        assert!(!p.origin_allowed("http://127.0.0.1:39401"));
-        assert!(!p.origin_allowed("http://attacker.example"));
+        assert!(p.origin_ok("http://127.0.0.1:39400"));
+        assert!(p.origin_ok("HTTP://127.0.0.1:39400/"));
+        assert!(!p.origin_ok("http://127.0.0.1:39401"));
+        assert!(!p.origin_ok("http://attacker.example"));
     }
 }

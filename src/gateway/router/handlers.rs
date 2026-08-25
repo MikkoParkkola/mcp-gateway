@@ -623,6 +623,7 @@ pub(super) async fn meta_mcp_handler(
                         agent_id,
                         grant_subject,
                         verified_identity: verified_identity.as_ref(),
+                        is_admin: client.as_ref().is_some_and(|c| c.admin),
                     },
                 )
                 .await;

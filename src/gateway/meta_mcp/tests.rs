@@ -2193,3 +2193,27 @@ mod attestation_wiring {
         assert!(validator.verify_result_provenance(&signed));
     }
 }
+
+/// `gateway_cost_report`'s own schema calls `include_all_sessions` an "admin
+/// view". It read the flag straight from the arguments, so any caller got the
+/// cross-session report, including the anonymous identity used when
+/// authentication is disabled.
+#[tokio::test]
+async fn cost_report_refuses_the_admin_view_for_a_non_admin() {
+    let meta = make_meta_mcp();
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    assert!(!caller.is_admin, "the default caller holds no admin");
+
+    for flag in ["include_all_sessions", "include_all_keys"] {
+        let args = json!({ flag: true });
+        let result = meta.get_cost_report(&args, None, &caller).await;
+        assert!(
+            result.is_err(),
+            "{flag} is documented as an admin view and must be refused"
+        );
+    }
+
+    // The ordinary, caller-scoped report still works without a credential.
+    let plain = meta.get_cost_report(&json!({}), None, &caller).await;
+    assert!(plain.is_ok(), "the caller's own report needs no admin");
+}

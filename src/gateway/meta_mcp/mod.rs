@@ -114,6 +114,10 @@ pub struct MetaMcpCallerContext<'a> {
     /// `grant_subject`) so the backend-invoke boundary can propagate the real
     /// user to a backend that requires it (MIK-6704 / ADR-007 R2).
     pub verified_identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    /// Whether the caller holds admin. Carried here because meta-tools with
+    /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
+    /// `router::authorization`, which only knows whole tools.
+    pub is_admin: bool,
 }
 
 // ============================================================================
@@ -1177,7 +1181,7 @@ impl MetaMcp {
                 .await
             }
             "gateway_get_stats" => self.get_stats(&arguments).await,
-            "gateway_cost_report" => self.get_cost_report(&arguments, session_id).await,
+            "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
             "gateway_webhook_status" => self.webhook_status(),
             "gateway_run_playbook" => self.run_playbook(&arguments).await,
             "gateway_kill_server" => self.kill_server(&arguments),
