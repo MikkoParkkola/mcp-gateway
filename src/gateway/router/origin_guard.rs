@@ -18,6 +18,8 @@
 
 use std::sync::Arc;
 
+use tracing::warn;
+
 use axum::{
     body::Body,
     extract::State,
@@ -206,17 +208,37 @@ pub async fn origin_guard_middleware(
 
     // A header that is not valid UTF-8 cannot be compared, so it is refused
     // rather than skipped: an unreadable value must not read as absent.
+    let path = request.uri().path().to_string();
+
     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
         match origin.to_str() {
             Ok(value) if policy.origin_allowed(value) => {}
-            _ => return forbidden("Origin not allowed").into_response(),
+            other => {
+                // Logged because a silent refusal is indistinguishable from a
+                // broken client: an operator seeing 403 needs the reason, and a
+                // real cross-site attempt should leave a trace. Header values
+                // are attacker-supplied but carry no secret.
+                warn!(
+                    path = %path,
+                    origin = other.unwrap_or("<invalid utf-8>"),
+                    "Request blocked: Origin does not name this gateway"
+                );
+                return forbidden("Origin not allowed").into_response();
+            }
         }
     }
 
     if let Some(site) = headers.get("sec-fetch-site") {
         match site.to_str() {
             Ok(value) if OriginPolicy::fetch_site_allowed(value) => {}
-            _ => return forbidden("Cross-site request not allowed").into_response(),
+            other => {
+                warn!(
+                    path = %path,
+                    sec_fetch_site = other.unwrap_or("<invalid utf-8>"),
+                    "Request blocked: browser reports a cross-site request"
+                );
+                return forbidden("Cross-site request not allowed").into_response();
+            }
         }
     }
 
@@ -238,7 +260,14 @@ pub async fn origin_guard_middleware(
     match target {
         None => {}
         Some(Ok(value)) if policy.host_allowed(&value) => {}
-        _ => return forbidden("Host not allowed").into_response(),
+        other => {
+            warn!(
+                path = %path,
+                host = other.and_then(Result::ok).unwrap_or_else(|| "<invalid utf-8>".to_string()),
+                "Request blocked: Host does not name this gateway"
+            );
+            return forbidden("Host not allowed").into_response();
+        }
     }
 
     next.run(request).await
