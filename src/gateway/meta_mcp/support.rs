@@ -150,17 +150,21 @@ pub(super) fn ranked_results_to_code_mode_json(
 /// Bridges `MetaMcp::invoke_tool` to the `ToolInvoker` trait for playbook execution.
 pub(super) struct MetaMcpInvoker<'a> {
     pub(super) meta: &'a MetaMcp,
+    /// Admin of the caller that invoked the playbook, so its steps face the
+    /// same check that caller would face directly.
+    pub(super) caller_is_admin: bool,
 }
 
 #[async_trait::async_trait]
 impl ToolInvoker for MetaMcpInvoker<'_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         let args = internal_invoke_args(server, tool, arguments);
-        // Playbook steps are internal invocations with no caller agent, and no
-        // admin either: a playbook must not be a way around a check the caller
-        // would have faced directly.
+        // Playbook steps inherit the invoking caller's admin. Hard-coding
+        // non-admin meant an operator's own playbook failed on a step they
+        // could run directly, which is a regression rather than a control: a
+        // playbook is not a way AROUND a check, so it should face the same one.
         self.meta
-            .invoke_tool(&args, None, None, None, None, None, false)
+            .invoke_tool(&args, None, None, None, None, None, self.caller_is_admin)
             .await
     }
 }

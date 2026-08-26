@@ -1182,10 +1182,10 @@ impl MetaMcp {
                 )
                 .await
             }
-            "gateway_get_stats" => self.get_stats(&arguments).await,
+            "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
             "gateway_webhook_status" => self.webhook_status(),
-            "gateway_run_playbook" => self.run_playbook(&arguments).await,
+            "gateway_run_playbook" => self.run_playbook(&arguments, caller.is_admin).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_list_disabled_capabilities" => self.list_disabled_capabilities(),

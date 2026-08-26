@@ -39,12 +39,33 @@ pub(super) fn log_startup_banner(
     config: &Config,
     backends: &BackendRegistry,
     bootstrap: Option<&DashboardBootstrap>,
+    config_path: Option<&std::path::Path>,
 ) {
     info!("============================================================");
     info!("MCP GATEWAY v{}", env!("CARGO_PKG_VERSION"));
     info!("============================================================");
     info!(host = %config.server.host, port = %config.server.port, "Listening");
     info!(backends = backends.all().len(), "Backends registered");
+
+    // An existing config predates the 0600 write path, so it may still be
+    // readable by other local accounts — and it now carries a generated admin
+    // credential. Reported, not silently changed: re-permissioning a file the
+    // operator owns is the kind of surprise that starts the next report.
+    #[cfg(unix)]
+    if let Some(path) = config_path {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                warn!(
+                    path = %path.display(),
+                    mode = format!("{mode:o}"),
+                    "CONFIG READABLE BY OTHER LOCAL USERS: it holds this gateway's \
+                     credentials. Fix with: chmod 600 <path>"
+                );
+            }
+        }
+    }
 
     if config.auth.enabled {
         // Print the dashboard link. A browser navigation carries no
@@ -59,8 +80,11 @@ pub(super) fn log_startup_banner(
         {
             info!(
                 "DASHBOARD (opens once, then remembered in this browser): \
-                 http://{}:{}/dashboard?bootstrap={}",
-                config.server.host, config.server.port, value
+                 {}://{}:{}/dashboard?bootstrap={}",
+                if config.mtls.enabled { "https" } else { "http" },
+                config.server.host,
+                config.server.port,
+                value
             );
         }
 

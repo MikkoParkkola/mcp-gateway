@@ -508,6 +508,17 @@ and requiring a credential there would take an ordinary tool away for no gain.
 A capability added later inherits the rule rather than needing to be remembered
 on a list.
 
+### An existing config written before this release
+
+Config files are created `0600` now, but one written by an earlier version may
+still be readable by other local accounts — and it can hold a bearer token or
+API keys. The gateway reports it at startup rather than changing a file you own:
+
+```
+CONFIG READABLE BY OTHER LOCAL USERS: it holds this gateway's credentials.
+Fix with: chmod 600 <path>
+```
+
 ### Inbound webhooks
 
 Webhook deliveries pass the same Host check as everything else, and a delivery

@@ -1257,6 +1257,7 @@ impl Gateway {
             &self.config,
             &self.backends,
             Some(dashboard_bootstrap.as_ref()),
+            self.config_path.as_deref(),
         );
 
         // Warm-start backends: connect + prefetch tools into cache

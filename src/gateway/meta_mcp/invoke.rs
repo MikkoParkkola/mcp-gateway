@@ -2013,7 +2013,7 @@ impl MetaMcp {
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.
     #[allow(clippy::unused_async)]
-    pub(super) async fn get_stats(&self, args: &Value) -> Result<Value> {
+    pub(super) async fn get_stats(&self, args: &Value, caller_is_admin: bool) -> Result<Value> {
         let price_per_million = extract_price_per_million(args);
 
         let stats = self
@@ -2056,7 +2056,9 @@ impl MetaMcp {
             map.insert("circuit_breakers".to_string(), Value::Array(cb_stats));
         }
 
-        // Inject cost governance section when enabled
+        // Cost governance is cross-tenant: budgets and spend for every caller.
+        #[cfg(feature = "cost-governance")]
+        let include_costs = caller_is_admin;
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
             let snap = enforcer.snapshot();
@@ -2067,7 +2069,7 @@ impl MetaMcp {
                 "tool_daily_limits": snap.tool_limits,
                 "key_daily_spend": snap.key_daily,
             });
-            if let Value::Object(ref mut map) = response {
+            if include_costs && let Value::Object(ref mut map) = response {
                 map.insert("cost_governance".to_string(), cost_section);
             }
             if let Some(ref registry) = self.cost_registry {
@@ -2223,7 +2225,7 @@ impl MetaMcp {
     }
 
     /// `gateway_run_playbook` — run a named playbook.
-    pub(super) async fn run_playbook(&self, args: &Value) -> Result<Value> {
+    pub(super) async fn run_playbook(&self, args: &Value, caller_is_admin: bool) -> Result<Value> {
         let name = extract_required_str(args, "name")?;
         let arguments = parse_tool_arguments(args)?;
 
@@ -2237,7 +2239,10 @@ impl MetaMcp {
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
 
-        let invoker = MetaMcpInvoker { meta: self };
+        let invoker = MetaMcpInvoker {
+            meta: self,
+            caller_is_admin,
+        };
 
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);
