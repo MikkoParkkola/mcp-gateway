@@ -82,7 +82,7 @@ pub(super) fn authorize_tool_target(
         && !client.can_access_backend(target.server)
     {
         return Err(AuthorizationError::forbidden(
-            crate::gateway::authz::FORBIDDEN_RPC_CODE,
+            -32003,
             format!(
                 "Client '{}' not authorized for backend '{}'",
                 client.name, target.server

@@ -133,6 +133,28 @@ pub struct MetaMcpCallerContext<'a> {
 // MetaMcp struct
 // ============================================================================
 
+/// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
+/// status when the error is an authorization refusal.
+///
+/// The refusal already knows its status; every other error does not carry one
+/// and gets the caller's default. The status rides in the error's optional
+/// `data` because that is the only channel that survives this conversion —
+/// `JsonRpcResponse` has no status of its own, and re-deriving one at the HTTP
+/// boundary from the JSON-RPC code cannot work: eight of the nine refusal
+/// branches emit the generic `-32600`, and `-32003` already means something
+/// else elsewhere.
+fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
+    let mut response = JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string());
+    if let crate::Error::Forbidden { status, .. } = error
+        && let Some(ref mut rpc_error) = response.error
+    {
+        rpc_error.data = Some(serde_json::json!({
+            crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
+        }));
+    }
+    response
+}
+
 /// Meta-MCP handler — the central dispatcher for all gateway meta-tools.
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
@@ -1156,7 +1178,7 @@ impl MetaMcp {
                 // (which spec-compliant clients such as Open WebUI require when the
                 // tool advertises an `outputSchema`).
                 Ok(content) => JsonRpcResponse::success_serialized(id, content),
-                Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+                Err(e) => error_response_preserving_status(id, &e),
             };
         }
 
@@ -1219,7 +1241,7 @@ impl MetaMcp {
                 let has_output_schema = tool_name == "gateway_search_tools";
                 wrap_tool_success(id, &content, has_output_schema)
             }
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+            Err(e) => error_response_preserving_status(id, &e),
         }
     }
 }

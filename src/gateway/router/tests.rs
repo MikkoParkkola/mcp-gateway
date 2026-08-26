@@ -2419,16 +2419,9 @@ async fn authz_playbook_denial_answers_forbidden_over_http() {
         "the step must be refused: {}",
         response_text(&response)
     );
-    assert_eq!(
-        response.error.as_ref().map(|e| e.code),
-        Some(crate::gateway::authz::FORBIDDEN_RPC_CODE),
-        "a refusal must carry the code the HTTP layer maps to 403, or the \
-         status mapping silently stops applying"
-    );
-
-    // Asserted against the mapping the handler applies, not against a status
-    // handed to `build_response` by the test — passing one in would prove only
-    // that `build_response` uses its argument.
+    // Asserted through the mapping the handler applies, which reads the status
+    // the dispatch layer stamped onto the error. Handing a status to
+    // `build_response` instead would prove only that it uses its argument.
     assert_eq!(
         super::handlers::refusal_status(&response),
         Some(StatusCode::FORBIDDEN),
@@ -2439,19 +2432,99 @@ async fn authz_playbook_denial_answers_forbidden_over_http() {
     assert_eq!(http.status(), StatusCode::FORBIDDEN);
 }
 
-/// The mapping must not reclassify anything that is not a refusal.
+/// The mapping must not reclassify an error that is not a refusal.
+///
+/// Choosing the control took two attempts, and both failures are worth
+/// recording. An unreachable backend does not work: dispatch returns a
+/// SUCCESSFUL envelope carrying `isError`, so no JSON-RPC error exists and the
+/// row could not fail whatever the mapping did. An invalid tool name does not
+/// work either, for a more interesting reason — `authorize_tool_target`
+/// validates the name first and returns a refusal, so a malformed name IS a
+/// refusal in this codebase's model and the router gate has always answered it
+/// 403. That is pre-existing behaviour and out of scope here; it is recorded
+/// because it looks like a bug in the mapping and is not.
+///
+/// An unknown playbook name is the control: a genuine JSON-RPC error, raised
+/// before any authorizer sees anything, so this row fails if the stamp were
+/// ever applied to every error rather than to refusals alone.
 #[tokio::test]
-async fn authz_ordinary_error_still_answers_its_own_status() {
+async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
     let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
-    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+    let client = scoped_client("scoped", vec![], None);
 
-    // Permitted target, unreachable backend: an ordinary failure, not a refusal.
-    let response = run_step_as(&state, &client, "alpha", "read").await;
+    let authorizer = super::authorization::RouterAuthorizer {
+        state: state.as_ref(),
+        client: Some(&client),
+        oauth_agent_identity: None,
+        cert_identity: None,
+        principal: super::authorization::refusal_principal(Some(&client), None, None),
+    };
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &authorizer,
+        api_key_name: Some(client.name.as_str()),
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    };
+    let response = state
+        .meta_mcp
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
+            None,
+            caller,
+        )
+        .await;
+
+    assert!(
+        response.error.is_some(),
+        "the control must actually produce a JSON-RPC error, or it cannot \
+         fail: {}",
+        response_text(&response)
+    );
     assert_eq!(
         super::handlers::refusal_status(&response),
         None,
-        "only an authorization refusal may be mapped to 403; a dispatch \
-         failure must keep its own status"
+        "only an authorization refusal may be mapped to 403: {}",
+        response_text(&response)
+    );
+}
+
+/// Every refusal branch must carry the stamp, not just the backend-scope one.
+///
+/// The claim "a refusal answers 403" is only as good as the narrowest branch
+/// that carries it. Tool-scope and global-policy refusals are minted in
+/// different places from backend-scope, so each is pinned here — otherwise a
+/// branch could return a refusal that silently answered 200.
+#[tokio::test]
+async fn authz_every_refusal_branch_carries_the_status() {
+    let scoped_state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+
+    let tool_scoped = scoped_client(
+        "scoped",
+        vec!["alpha".to_string()],
+        Some(vec!["safe_*".to_string()]),
+    );
+    let tool_refusal = run_step_as(&scoped_state, &tool_scoped, "alpha", "danger_tool").await;
+    assert_eq!(
+        super::handlers::refusal_status(&tool_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "a tool-allowlist refusal must answer 403: {}",
+        response_text(&tool_refusal)
+    );
+
+    let backend_scoped = scoped_client("scoped", vec!["alpha".to_string()], None);
+    let backend_state =
+        test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let backend_refusal = run_step_as(&backend_state, &backend_scoped, "beta", "read").await;
+    assert_eq!(
+        super::handlers::refusal_status(&backend_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "a backend-scope refusal must answer 403: {}",
+        response_text(&backend_refusal)
     );
 }
 
@@ -2514,5 +2587,57 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
         None,
         "a permitted tool must reach dispatch rather than be refused: {}",
         response_text(&response)
+    );
+}
+
+/// A refusal must be attributed to whichever identity authenticated the caller.
+///
+/// The audit line exists so an incident responder can say who was refused.
+/// Reporting only the API-key name labels an agent-authenticated or
+/// certificate-authenticated caller as unauthenticated — precisely the
+/// refusals most worth attributing. Unwired from any assertion until now.
+#[test]
+fn authz_refusal_principal_names_the_authenticated_identity() {
+    use crate::gateway::oauth::AgentIdentity;
+    use crate::mtls::CertIdentity;
+
+    let api_key = scoped_client("keyed", vec![], None);
+    assert_eq!(
+        super::authorization::refusal_principal(Some(&api_key), None, None).as_deref(),
+        Some("keyed"),
+        "an API-key caller is named by its client name"
+    );
+
+    let agent = AgentIdentity {
+        client_id: "cid".to_string(),
+        agent_name: "runner".to_string(),
+        scopes: Vec::new(),
+        raw_scopes: Vec::new(),
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(None, Some(&agent), None).as_deref(),
+        Some("agent:runner"),
+        "an agent caller must not be reported as unauthenticated"
+    );
+
+    let cert = CertIdentity {
+        display_name: "machine-7".to_string(),
+        ..CertIdentity::default()
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(None, None, Some(&cert)).as_deref(),
+        Some("cert:machine-7"),
+        "a certificate caller must not be reported as unauthenticated"
+    );
+
+    let anonymous = AuthenticatedClient {
+        authenticated: false,
+        ..scoped_client("public", vec![], None)
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(Some(&anonymous), None, None),
+        None,
+        "an identity that presented no credential is genuinely unattributed, \
+         and must not borrow the name of a configured client"
     );
 }

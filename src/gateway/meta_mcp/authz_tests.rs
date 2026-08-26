@@ -401,6 +401,11 @@ steps:
 }
 
 /// Under `continue`, a denied step is recorded and the run carries on.
+///
+/// Both steps are denied here, because `DenyAll` denies everything — and that
+/// is the point of the assertion below: the run must reach the SECOND step at
+/// all. A terminal-refusal implementation stops at the first and reports one
+/// failure, not two.
 #[tokio::test]
 async fn authz_18_continue_records_and_carries_on() {
     let (registry, _calls) = counted_backend("alpha");
@@ -410,7 +415,7 @@ async fn authz_18_continue_records_and_carries_on() {
         &meta,
         r"
 name: continuing
-description: one denied step, then one allowed step
+description: two steps, both denied, to prove the run reaches the second
 on_error: continue
 steps:
   - name: denied

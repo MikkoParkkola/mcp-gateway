@@ -24,7 +24,6 @@ use super::helpers::{
     parse_elicitation_params, parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::authz::FORBIDDEN_RPC_CODE;
 use crate::gateway::destructive_confirmation::{
     ConfirmationOutcome, is_destructive_meta_tool, require_destructive_confirmation,
 };
@@ -853,12 +852,19 @@ pub(super) async fn meta_mcp_handler(
 /// The HTTP status a response deserves when it carries an authorization
 /// refusal, or `None` for anything else.
 ///
-/// Keyed on the JSON-RPC code the chokepoint stamps, which is the only part of
-/// the refusal that survives into the response envelope. A code the gateway
-/// does not use for refusals returns `None`, so nothing else is reclassified.
+/// Reads the status the dispatch layer stamped, rather than inferring one from
+/// the JSON-RPC code — see `HTTP_STATUS_DATA_KEY` for why inference is wrong
+/// here. An error with no stamp is not a refusal and keeps its own status, so
+/// nothing else is reclassified.
 pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
-    let code = response.error.as_ref()?.code;
-    (code == FORBIDDEN_RPC_CODE).then_some(StatusCode::FORBIDDEN)
+    let raw = response
+        .error
+        .as_ref()?
+        .data
+        .as_ref()?
+        .get(crate::gateway::authz::HTTP_STATUS_DATA_KEY)?
+        .as_u64()?;
+    StatusCode::from_u16(u16::try_from(raw).ok()?).ok()
 }
 
 // ── destructive-confirmation helpers ─────────────────────────────────────────

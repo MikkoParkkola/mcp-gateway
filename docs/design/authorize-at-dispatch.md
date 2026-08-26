@@ -123,8 +123,11 @@ task (verified above).
    a second copy — two definitions of a target type is how two layers drift.
 2. `MetaMcpCallerContext<'a>` gains `authorizer: &'a (dyn ToolAuthorizer + Sync)`
    and **loses its `Default` impl**, so no site can acquire an authorizer by
-   omission. Cost, counted: 19 construction sites — 17 in `meta_mcp/tests.rs`,
-   one in `invoke.rs`, one in `server/mod.rs`.
+   omission. Cost, counted after the change landed: 20 construction sites — 17 in
+   `meta_mcp/tests.rs`, one in `invoke.rs`, and the two production sites,
+   `server/mod.rs` for stdio and `router/handlers.rs` for HTTP. The count
+   before the change was 19 and omitted the HTTP site, which did not exist
+   yet; recorded correctly here because the count is the audit.
    The audit line the chokepoint owes names a **transport**, which nothing
    carries today. It is `fn transport(&self) -> Transport` **on the
    `ToolAuthorizer` trait**, not a second field beside the authorizer: a field

@@ -18,12 +18,19 @@ use axum::http::StatusCode;
 use serde_json::Value;
 use tracing::warn;
 
-/// The JSON-RPC code every authorization refusal carries.
+/// The key under which a refusal carries its HTTP status in the JSON-RPC
+/// error's `data`.
 ///
-/// Named once because two places key on it: the authorizers that mint a
-/// refusal, and the HTTP layer that maps a refusal to 403. Two literals would
-/// drift, and the drift would be silent — a refusal answering 200.
-pub const FORBIDDEN_RPC_CODE: i32 = -32003;
+/// Carried, not inferred. An earlier repair mapped 403 by matching the
+/// JSON-RPC code, which was wrong twice over: eight of the nine refusal
+/// branches emit the generic `-32600`, so most refusals would still have
+/// answered 200, and `-32003` is already used elsewhere for budget exhaustion,
+/// so that one would have been reclassified as forbidden. A code is not an
+/// identity. The status is stamped by the one place that mints a refusal and
+/// read by the one place that answers HTTP, and nothing else is touched —
+/// changing the eight existing codes would be a client-visible break for no
+/// gain here.
+pub const HTTP_STATUS_DATA_KEY: &str = "gateway_http_status";
 
 /// A backend tool invocation, owned.
 pub(crate) struct OwnedToolTarget {
