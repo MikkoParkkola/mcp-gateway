@@ -223,21 +223,20 @@ than a gap: the gap is visible and can be closed, the overstatement is not.
 | 15, 15a, 22 | `server::tests` — the stdio transport |
 | the 403 mapping and its non-reclassification control | `router::tests` |
 | 12, 12a, 20 — pre-dispatch ordering | `meta_mcp::authz_tests`, against a live cache and a live nonce store |
+| 10, 10a, 11, 11a — certificate and agent scope | `router::tests`, each carrying its identity through the real authorizer |
 
 **Not implemented.** Named honestly rather than folded into the list above:
 
 | rows | why not, and what it would take |
 |---|---|
 | 14a, 14b, 23 — the audit line | no log-capture harness exists; see the section below |
-| 10, 10a, 11, 11a — mTLS and agent scope | each needs a certificate or agent-identity fixture the router tests do not have today. The checks themselves are unchanged code inside `authorize_tool_target`, reached through the same call the covered rows exercise |
 | 7, 7a, 7b, 20a, 20b, 20c — the remaining side effects | idempotency in-flight state, per-user credential minting and budget consultation each need a live subsystem wired into a meta-level fixture. Placement is read, not tested: the check sits at `invoke.rs:551`, above `:750`, `:861` |
 | 8, 8a, 16, 21 — message and route regressions | pin literal strings and the direct route; guard against a future refactor rather than demonstrate this change |
 | 13a — surfaced tool | the one dispatch shape without its own case; 13b-13e cover the other four |
 
-**What that leaves unproven, precisely**: that the audit lines fire; that mTLS
-and agent-scope denials propagate through the chokepoint as the covered checks
-do; and that idempotency, credential minting and budget consultation do not
-precede the check.
+**What that leaves unproven, precisely**: that the audit lines fire, and that
+idempotency, credential minting and budget consultation do not precede the
+check.
 
 The cache and the nonce — the two that mattered most, because a wrong order
 there either serves another caller's data or lets a refusal deny service to the
@@ -266,6 +265,7 @@ unexpectedly is evidence about the plan, not just about the code.
 | stdio authorizer permits everything | 15 → **red**, 15a and 22 green |
 | check moved below the nonce registration | 20 → **red** (a refused call burned the nonce, so the honest retry was rejected as a replay); 12 stayed green, correctly — the cache read is further down still. 17b also went red, because the check then sits below tool-name validation and is never consulted |
 | check moved below the cache read | 12 → **red**: the refused caller was served the cached payload |
+| certificate and agent identities dropped at the authorizer | the ALLOW halves of 10 and 11 → **red**; both DENY halves stayed green. That is the fail-closed trap demonstrated live: `evaluate(None)` denies, and agent auth with no identity denies, so each refusal row alone would have passed with the identity never arriving. The allow half is the entire proof of propagation |
 
 Two results corrected the plan rather than the code:
 

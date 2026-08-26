@@ -2256,6 +2256,58 @@ fn scoped_client(
     }
 }
 
+/// As [`run_step_as`], but carrying a certificate or agent identity.
+///
+/// Separate rather than a fourth parameter on `run_step_as`, so the many cases
+/// that have no such identity are not obliged to say `None, None` and mean it.
+async fn run_step_with_identity(
+    state: &Arc<AppState>,
+    client: &AuthenticatedClient,
+    cert_identity: Option<&crate::mtls::CertIdentity>,
+    oauth_agent_identity: Option<&crate::gateway::oauth::AgentIdentity>,
+    server: &str,
+    tool: &str,
+) -> JsonRpcResponse {
+    let yaml = format!(
+        "name: scoped\ndescription: one step\non_error: abort\nsteps:\n  - name: step\n    server: {server}\n    tool: {tool}\n"
+    );
+    let definition: crate::playbook::PlaybookDefinition =
+        serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(definition);
+    state.meta_mcp.set_playbook_engine(engine);
+
+    let authorizer = super::authorization::RouterAuthorizer {
+        state: state.as_ref(),
+        client: Some(client),
+        oauth_agent_identity,
+        cert_identity,
+        principal: super::authorization::refusal_principal(
+            Some(client),
+            oauth_agent_identity,
+            cert_identity,
+        ),
+    };
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &authorizer,
+        api_key_name: Some(client.name.as_str()),
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: client.admin,
+    };
+    state
+        .meta_mcp
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            serde_json::json!({ "name": "scoped", "arguments": {} }),
+            None,
+            caller,
+        )
+        .await
+}
+
 /// Run a one-step playbook through the production path, with the real router
 /// authorizer built exactly as `handlers.rs` builds it.
 async fn run_step_as(
@@ -2639,5 +2691,123 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
         None,
         "an identity that presented no credential is genuinely unattributed, \
          and must not borrow the name of a configured client"
+    );
+}
+
+/// AUTHZ.10 / 10a — certificate policy reaches a playbook step.
+///
+/// The allow row is not decoration. `MtlsPolicy::evaluate` returns `Deny` for a
+/// `None` identity once the policy is enabled, so the refusal row stays green
+/// even if the certificate identity were dropped on the way to the chokepoint
+/// and never consulted. Only a certificate the policy PERMITS proves the
+/// identity actually arrived.
+#[tokio::test]
+async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
+    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    use crate::mtls::{CertIdentity, MtlsPolicy};
+
+    let policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig {
+        enabled: true,
+        policies: vec![PolicyRuleConfig {
+            match_criteria: CertMatchConfig {
+                cn: Some("trusted-machine".to_string()),
+                ..CertMatchConfig::default()
+            },
+            allow: ToolScopeConfig {
+                backends: vec!["alpha".to_string()],
+                tools: vec!["permitted".to_string()],
+            },
+            deny: ToolScopeConfig::default(),
+        }],
+        ..MtlsConfig::default()
+    }));
+
+    let mut state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        state_mut.mtls_policy = Arc::clone(&policy);
+    }
+    let client = scoped_client("scoped", vec![], None);
+    let cert = CertIdentity {
+        common_name: Some("trusted-machine".to_string()),
+        display_name: "trusted-machine".to_string(),
+        ..CertIdentity::default()
+    };
+
+    let refused =
+        run_step_with_identity(&state, &client, Some(&cert), None, "alpha", "blocked").await;
+    assert_eq!(
+        super::handlers::refusal_status(&refused),
+        Some(StatusCode::FORBIDDEN),
+        "a tool outside the certificate's allowed scope must be refused: {}",
+        response_text(&refused)
+    );
+
+    let permitted =
+        run_step_with_identity(&state, &client, Some(&cert), None, "alpha", "permitted").await;
+    assert_eq!(
+        super::handlers::refusal_status(&permitted),
+        None,
+        "a tool the certificate permits must reach dispatch — without this the \
+         refusal above passes with the identity dropped entirely: {}",
+        response_text(&permitted)
+    );
+}
+
+/// AUTHZ.11 / 11a — agent scope reaches a playbook step.
+///
+/// Same fail-closed trap as the certificate case, and worse: with agent auth
+/// enabled, a MISSING identity is refused outright, so the deny row alone stays
+/// green even if the identity never reaches the chokepoint. The allow row is
+/// what proves it arrives.
+#[tokio::test]
+async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
+    use crate::gateway::oauth::{AgentIdentity, Scope};
+
+    let mut state = test_router_app_state_with_agent_auth_enabled();
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        let _ = state_mut
+            .backends
+            .register(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    }
+    let client = scoped_client("scoped", vec![], None);
+
+    // Scoped to one tool on one backend.
+    let agent = AgentIdentity {
+        client_id: "agent-1".to_string(),
+        agent_name: "runner".to_string(),
+        scopes: vec![Scope::parse("tools:alpha:permitted:*").expect("scope must parse")],
+        raw_scopes: vec!["tools:alpha:permitted:*".to_string()],
+    };
+
+    let refused =
+        run_step_with_identity(&state, &client, None, Some(&agent), "alpha", "blocked").await;
+    assert_eq!(
+        super::handlers::refusal_status(&refused),
+        Some(StatusCode::FORBIDDEN),
+        "a tool outside the agent's scope must be refused: {}",
+        response_text(&refused)
+    );
+
+    let permitted =
+        run_step_with_identity(&state, &client, None, Some(&agent), "alpha", "permitted").await;
+    assert_eq!(
+        super::handlers::refusal_status(&permitted),
+        None,
+        "a tool the agent's scope permits must reach dispatch — without this \
+         the refusal above passes with the identity dropped entirely: {}",
+        response_text(&permitted)
+    );
+
+    // And with NO agent identity at all, agent auth being enabled must refuse:
+    // the check is fail-closed, and this pins that it still is.
+    let anonymous = run_step_with_identity(&state, &client, None, None, "alpha", "permitted").await;
+    assert_eq!(
+        super::handlers::refusal_status(&anonymous),
+        Some(StatusCode::FORBIDDEN),
+        "agent auth enabled with no agent identity must refuse: {}",
+        response_text(&anonymous)
     );
 }
