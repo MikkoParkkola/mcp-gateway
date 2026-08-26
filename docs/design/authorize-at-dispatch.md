@@ -432,6 +432,15 @@ whether or not the identity reached it:
 - MIK.AUTHZ.20c An allowed call **consumes** its nonce, so replaying it is
   rejected. Proves the nonce was on the path at all, without which AUTHZ.20's
   "still registrable" is green for the wrong reason.
+- MIK.AUTHZ.7b With an exhausted budget AND an unauthorized target, the error
+  returned is the authorization refusal, not the budget error. This is how
+  ordering against the budget gate is observable at all: `BudgetEnforcer` is a
+  concrete type, so consultations cannot be counted, and `record_spend` is
+  post-invoke and success-only, so a spend assertion is vacuous.
+- MIK.AUTHZ.18b An ordinary failure under `on_error: retry`, attempts
+  exhausted, also lands in `step_errors`. The `!succeeded` arm null-fills for
+  both strategies, so covering `Continue` alone leaves retry callers
+  unexplained.
 - MIK.AUTHZ.15a A stdio playbook step hitting a **permitted** tool succeeds. A
   stdio authorizer that denied every backend target would otherwise satisfy
   AUTHZ.15 and AUTHZ.16 on its own.

@@ -60,9 +60,10 @@ result fields, never authorizer consultations.
 | AC | case | L | why it can fail |
 |---|---|---|---|
 | 17 | `on_error: retry`, `max_retries: 3`, an invoker returning the denial error → **`ToolInvoker::invoke` called once**, name in `steps_failed`, reason in `step_errors`, later steps still run | E | an ordinary `Err` is retried three times, so the count fails. Stated as invoker calls because the engine cannot see an authorizer |
-| 17a | the same playbook driven at meta level with a **real** `DenyAll` → the authorizer is consulted once and the backend zero times | U | 17 uses a synthetic error; only this row proves a production refusal is converted to the non-retry variant. It is at U because that is where an authorizer exists to count |
+| 17a | the same playbook driven at meta level with a **counting wrapper over `DenyAll`** → the authorizer is consulted exactly once | U | 17 uses a synthetic error; only this row proves a production refusal is converted to the non-retry variant. It is at U because that is where an authorizer exists to count |
 | 18 | `on_error: continue`, a denied step then an allowed step → run completes, allowed step ran, name in `steps_failed`, reason in `step_errors` | E | fails terminal-refusal and fails silent-null; the two fields separate them |
 | 18a | `on_error: continue`, an ordinary **backend** failure → its message also lands in `step_errors` | E | fails a fix recording refusals only, leaving ordinary failures unexplained |
+| 18b | `on_error: retry` with attempts exhausted by an ordinary failure → its message also lands in `step_errors` | E | the `!succeeded` arm null-fills for `Continue` **and** `Retry` (`engine/mod.rs:206`); 18a covers only the first, so a fix populating one arm passes it and leaves retry callers unexplained |
 | 19 | `on_error: abort`, a denied step → the run returns **the denial's own code and message**, and no later step runs | E | asserting only "aborted" passes for any error; the code pins it to a denial |
 | 17b | `on_error: retry`, `max_retries: 3`, an invoker returning an **ordinary** error → `ToolInvoker::invoke` called **three** times | E | without this control, an implementation that disables retrying altogether satisfies 17 and 17a. This is the row that says only *denials* stop retrying |
 
@@ -74,8 +75,9 @@ write or a budget spend.
 
 | AC | case | L | why it can fail |
 |---|---|---|---|
-| 7 | a refused meta-level `gateway_invoke` → **backend counter 0**, **no new response-cache entry for that key**, and **`BudgetEnforcer::check` never consulted** | U | a check placed after the cache write at `:1231` passes a backend-only assertion. The budget clause is stated as *consultation*, not spend: `record_spend` (`:960`) is post-invoke and runs only when `dispatch_result.is_ok()`, so "a refused call records no spend" is true of any implementation and could never fail. `check` at `:861` is the call a refusal must precede |
-| 7a | the same call allowed → backend counter 1, a cache entry present, `check` consulted once, and a spend recorded | U | makes 7's three zeros meaningful; without it an unreachable code path scores three passes |
+| 7 | a refused meta-level `gateway_invoke`, cache starting **empty** → **backend counter 0** and **no cache entry written** for that key | U | a check placed after the cache write at `:1231` passes a backend-only assertion. The empty start matters: with a primed cache a hit at `:799` returns early and produces the same two zeros without proving anything |
+| 7b | an **exhausted** budget AND an unauthorized target → the error returned is the **authorization refusal**, not the budget error | U | this is how budget ordering is observable at all. `BudgetEnforcer` is a concrete `Arc<BudgetEnforcer>` (`meta_mcp/mod.rs:182`), not a trait, so no counting wrapper can be injected; and a spend assertion is vacuous because `record_spend` (`:960`) is post-invoke and success-only. Two competing gates and one returned error is the discriminator: authorization below `check` at `:861` yields the budget message |
+| 7a | the same call allowed → backend counter 1 and a cache entry present | U | makes 7's zeros meaningful; without it an unreachable code path scores two passes |
 | 12 | prime the response cache for `alpha:tool` as an allowed caller, then drive the same target with `DenyAll` → refused, and the cached value is **not** returned | U | a check after the cache read returns the cached payload. The cache must be genuinely primed |
 | 12a | the same primed target with `AllowAll` → the cached value **is** returned | U | proves the fixture's cache is real, so 12's refusal is not just an empty cache |
 | 20 | a refused call carrying a fresh top-level `nonce` against a live `NonceStore` → refused, and the same nonce is **still registrable** afterwards | U | a check below `:634` consumes the nonce |
@@ -160,12 +162,12 @@ therefore says what it makes fail.
 | rows | probe | why this one, and not another |
 |---|---|---|
 | 1, 2, 3, 10, 11, 15 | restore pre-fix production source | the strongest probe: the mechanism is genuinely absent, and these assertions name no new API, so the tree still compiles |
-| 7, 12, 13a-13e, 14a, 20, 20a | make the chokepoint's authorization call a **no-op**, one line, every type left in place | the refusal disappears and each row's assertion goes red. Restoring the source instead leaves these test files uncompilable, and a compile error is not a falsification |
+| 7, 7b, 12, 13a-13e, 20, 20a | make the chokepoint's authorization call a **no-op**, one line, every type left in place | the refusal disappears and each row's assertion goes red. Restoring the source instead leaves these test files uncompilable, and a compile error is not a falsification |
 | 23 | remove the `audit_refusal` call from the **router** gate | 23 runs the full router path, which refuses and returns *before* the chokepoint — the chokepoint no-op leaves its line intact and the row green. Sabotaging the gate that actually emits it takes the count from one to zero |
 | 6a, 17a | the same no-op | consultation counts drop to zero, so the row fails. A deny-all probe cannot falsify them: the authorizer is consulted once whatever verdict it returns |
-| 17, 18, 18a | revert the **engine** change — restore the retry loop without the denial break, and stop populating `step_errors` | 17's single invoker call becomes three, and `step_errors` disappears. These run at engine level against a synthetic invoker, so a chokepoint no-op would leave every assertion untouched |
+| 17, 18, 18a, 18b | revert the **engine** change — restore the retry loop without the denial break, and stop populating `step_errors` | 17's single invoker call becomes three, and `step_errors` disappears. These run at engine level against a synthetic invoker, so a chokepoint no-op would leave every assertion untouched |
 | 17b | widen the denial break to match **every** error, not only a denial | 17b asserts pre-existing behaviour — ordinary errors retried three times — so the engine revert restores exactly what it expects and cannot fail it. The risk 17b guards is an over-broad non-retry, so that is the sabotage: ordinary errors then stop after one call and the row goes red |
-| 14b | swap the stdio authorizer for `AllowAll` at its construction site | the refusal and its audit line disappear and the row goes red. *Removing* it does not compile — `MetaMcpCallerContext` has no `Default` and the field is mandatory, by this design — and a compile error is not a falsification |
+| 14a, 14b | remove the `audit_refusal` call from the **chokepoint**, leaving the refusal itself intact | these rows assert that the *chokepoint* owns the emission, so the probe must remove the emitter and nothing else. A probe that removes the refusal takes the line with it and would pass equally against an implementation where some other layer emits — proving the refusal fired, which is not the claim |
 | 1a, 2a, 3a, 7a, 10a, 11a, 12a, 15a, 20b, 20c | invert the relevant authorizer to **deny everything** — the stdio one for 15a | the permitted call is refused and the row goes red. A no-op probe makes an allow row pass and cannot falsify one; nor can removing an authorizer, since a permitted call succeeds either way |
 
 Rows on the honesty list get no probe: they are expected to pass before and
@@ -191,6 +193,10 @@ name is a gap a grep finds.
 - **7 and 7a** need a live enforcer AND a tool whose `cost_for` is non-zero.
   A free tool records nothing, so 7a's "a spend recorded" would fail for a
   reason that has nothing to do with authorization.
-- **12** needs a genuinely primed cache, not a mock returning a hit.
+- **12** needs a genuinely primed cache, not a mock returning a hit. **7** needs
+  the opposite — an empty one — so a cache hit cannot manufacture its zeros.
+- **20a** reads its two oracles *after* the refusal returns. It does not pause
+  the backend the way 20b must: there is no in-flight window to inspect on a
+  call that never dispatches, and waiting for one would hang.
 - **8 and 8a** pin literal message strings as constants in the test, so a
   reworded refusal fails loudly rather than silently passing a `contains` check.
