@@ -51,13 +51,19 @@ became the de facto mode.
 | Does stdio mode need a credential at all? | Read `build_gateway_entry` | No. The client spawns the gateway as a subprocess. No port, no header, nothing to leak | Made stdio the recommended shape for a single authenticated user |
 | Is `bearer_token: "auto"` the mechanism? | Read `config/features/auth.rs:111-121` | No. It mints a fresh token on every call and never persists or prints it | Required real storage rather than reuse |
 
-**Deferred unknown**: whether the Claude Code header report is current.
-Owner: this ticket. Resolution: configure a gateway with auth on, point Claude
-Code at it in proxy mode, and observe whether the header arrives. When: before
-the proxy-mode path is documented as supported. If it resolves badly: proxy
-mode with authentication is documented as unsupported for that client and stdio
-is the only recommended shape for it. **Nothing that depends on this answer is
-implemented until it is run.**
+**The deferred unknown is closed, by becoming irrelevant.** It asked whether a
+particular client attaches configured headers, because the design assumed a
+proxy-mode client would need to present a credential.
+
+It does not. The generated config lists `/mcp` under `auth.public_paths`, so
+ordinary tool invocation needs no credential in any mode, and the exporter has
+no header to write. Whether a client would have attached one no longer decides
+anything, and nothing was built on the assumption.
+
+The question returns only if tool invocation is ever put behind authentication,
+which is explicitly out of scope above. Recorded here so that change knows to
+answer it first: an operator who sets it today must present the token to their
+client themselves, and whether their client can is unverified.
 
 ## Decision A — stdio carries no admin, and the design said otherwise
 
