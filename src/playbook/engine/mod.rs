@@ -133,6 +133,9 @@ impl PlaybookEngine {
         let mut steps_completed = Vec::new();
         let mut steps_skipped = Vec::new();
         let mut steps_failed = Vec::new();
+        // Why each failed step failed. Populated for the strategies that carry
+        // on past a failure, so a partial result explains itself.
+        let mut step_errors = std::collections::BTreeMap::new();
 
         for step in &definition.steps {
             // Check timeout
@@ -186,8 +189,19 @@ impl PlaybookEngine {
                         break;
                     }
                     Err(e) => {
-                        warn!(step = %step.name, error = %e, "Step failed");
+                        // A refusal is not a flaky backend. Retrying it cannot
+                        // change the answer, and `max_retries` would turn one
+                        // denial into N identical ones — waste that reads like
+                        // a brute-force attempt in the audit log. Ordinary
+                        // errors keep retrying: that distinction is the whole
+                        // reason the refusal carries its own variant instead of
+                        // arriving as an opaque error.
+                        let refused = matches!(e, crate::Error::Forbidden { .. });
+                        warn!(step = %step.name, error = %e, refused, "Step failed");
                         last_error = Some(e);
+                        if refused {
+                            break;
+                        }
                     }
                 }
             }
@@ -204,6 +218,12 @@ impl PlaybookEngine {
                         }));
                     }
                     ErrorStrategy::Continue | ErrorStrategy::Retry => {
+                        // Both arms null-fill and carry on, so both must say
+                        // why: a null with no reason is how a caller ends up
+                        // with a partial result that reads like a success.
+                        if let Some(ref e) = last_error {
+                            step_errors.insert(step.name.clone(), e.to_string());
+                        }
                         // Already retried if Retry; continue to next step.
                         ctx.step_results.insert(step.name.clone(), Value::Null);
                     }
@@ -221,6 +241,7 @@ impl PlaybookEngine {
             steps_completed,
             steps_skipped,
             steps_failed,
+            step_errors,
             duration_ms,
         })
     }

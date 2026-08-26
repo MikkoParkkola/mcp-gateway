@@ -1328,3 +1328,7 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "authz_tests.rs"]
+mod authz_tests;
