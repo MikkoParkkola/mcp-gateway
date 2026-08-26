@@ -188,6 +188,35 @@ impl ToolAuthorizer for DenyAll {
     }
 }
 
+/// Denies one named tool and permits everything else. Test-only.
+///
+/// `DenyAll` cannot express "the run carried on to a step it WAS allowed to
+/// take", because it denies that step too — so a case asserting a successor
+/// executes needs a selective verdict or it asserts nothing about success.
+#[cfg(test)]
+pub(crate) struct DenyOne {
+    pub(crate) tool: &'static str,
+}
+
+#[cfg(test)]
+impl ToolAuthorizer for DenyOne {
+    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
+        if target.tool == self.tool {
+            return Err(AuthorizationError::forbidden(
+                -32003,
+                format!("denied by test authorizer: '{}'", target.tool),
+            ));
+        }
+        Ok(())
+    }
+    fn transport(&self) -> Transport {
+        Transport::Test
+    }
+    fn caller_name(&self) -> Option<&str> {
+        None
+    }
+}
+
 /// Counts consultations, delegating the verdict. Test-only.
 ///
 /// Counts per `(server, tool)` rather than in total: a whole-run count is

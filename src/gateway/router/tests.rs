@@ -2421,15 +2421,23 @@ async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
     );
 }
 
-/// A refusal only the chokepoint can see must still answer 403.
+/// A refusal only the chokepoint can see maps to 403.
 ///
 /// The router gate answers 403 for the shapes it inspects. A playbook step is
 /// not one of them — its targets never appear in the request — so before the
 /// status travelled on the refusal, a denied playbook came back HTTP 200 with
 /// the refusal buried in the body, telling every caller and intermediary that
 /// the call had succeeded.
+///
+/// NOT end to end, and the name no longer claims it is. This drives the meta
+/// dispatch and asserts the mapping `refusal_status` performs; it does not
+/// drive the axum handler, so it would stay green if the handler stopped
+/// calling that mapping. The handler's use of it is one line
+/// (`let status = refusal_status(&response).unwrap_or(StatusCode::OK)`), and
+/// its control is code review, which is stated here rather than implied by a
+/// test name.
 #[tokio::test]
-async fn authz_playbook_denial_answers_forbidden_over_http() {
+async fn authz_playbook_denial_maps_to_forbidden() {
     let state = test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
     let client = scoped_client("scoped", vec!["alpha".to_string()], None);
 
@@ -2512,14 +2520,16 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
     );
 }
 
-/// Every refusal branch must carry the stamp, not just the backend-scope one.
+/// Four refusal branches carry the stamp: backend scope, tool scope, global
+/// policy and invalid tool name.
 ///
 /// The claim "a refusal answers 403" is only as good as the narrowest branch
-/// that carries it. Tool-scope and global-policy refusals are minted in
-/// different places from backend-scope, so each is pinned here — otherwise a
-/// branch could return a refusal that silently answered 200.
+/// that carries it, and each of these is minted in a different place. The
+/// certificate and agent-scope branches are pinned by `authz_10` and
+/// `authz_11`, which assert `refusal_status` directly; the SSRF branch has no
+/// case, and the name says four rather than "every" so that gap is visible.
 #[tokio::test]
-async fn authz_every_refusal_branch_carries_the_status() {
+async fn authz_four_refusal_branches_carry_the_status() {
     let scoped_state =
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
 

@@ -227,7 +227,7 @@ listing rows as untested two sections after recording their probe results. That
 is what incremental edits to an inventory produce, so this is generated from
 `rg "fn authz_"` and kept that way.
 
-**33 tests exist.** By area:
+**34 tests exist**, counted by `rg -o "fn authz_" | wc -l`. By area:
 
 | area | tests |
 |---|---|
@@ -239,7 +239,7 @@ is what incremental edits to an inventory produce, so this is generated from
 | denial semantics (`meta_mcp::authz_tests`) | `authz_17`, `authz_17b`, `authz_18`, `authz_18a`, `authz_19`, `authz_24` |
 | condition skip (`meta_mcp::authz_tests`) | `authz_6a` |
 | pre-dispatch ordering (`meta_mcp::authz_tests`) | `authz_12` (cache), `authz_20` (nonce) |
-| HTTP status and attribution (`router::tests`) | `authz_playbook_denial_answers_forbidden_over_http`, `authz_every_refusal_branch_carries_the_status`, `authz_ordinary_error_is_not_reclassified_as_forbidden`, `authz_refusal_principal_names_the_authenticated_identity` |
+| HTTP status and attribution (`router::tests`) | `authz_playbook_denial_maps_to_forbidden`, `authz_four_refusal_branches_carry_the_status`, `authz_ordinary_error_is_not_reclassified_as_forbidden`, `authz_ordinary_error_carries_no_status_stamp`, `authz_refusal_principal_names_the_authenticated_identity` |
 | stdio (`server::tests`) | `authz_15`, `authz_15a`, `authz_22` |
 
 **On the naming convention.** The plan proposed `authz_<row>_<slug>`, one test
@@ -258,6 +258,16 @@ letting the pair drift. The cost is real and is stated here rather than hidden:
 | 7, 7a, 7b — budget ordering | needs a live budget enforcer with a priced tool. Placement is read, not tested: the check sits at `invoke.rs:551`, above `:861` |
 | 20a, 20b — idempotency and credential minting | needs a live idempotency store and an identity-propagating backend, with the backend gated so the in-flight entry can be observed while it exists |
 | 8, 8a, 16, 21 — message and route regressions | pin literal strings and the direct route; guard a future refactor rather than demonstrate this change |
+
+**Two test names were corrected rather than left flattering.**
+`authz_playbook_denial_answers_forbidden_over_http` claimed an end-to-end HTTP
+assertion it does not make — it drives the meta dispatch and asserts the
+mapping, not the axum handler that calls it — and is now
+`authz_playbook_denial_maps_to_forbidden`.
+`authz_every_refusal_branch_carries_the_status` covered four branches, not
+every one, and is now `authz_four_refusal_branches_carry_the_status`. A test
+name is a claim, and a name that overstates is the same defect as a test that
+cannot fail: it reports coverage that is not there.
 
 **A limitation of the identity tests, stated.** `authz_10` and `authz_11` build
 `RouterAuthorizer` and the caller context themselves rather than driving

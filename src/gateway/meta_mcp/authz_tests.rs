@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
-use crate::gateway::authz::{AllowAll, CountingAuthorizer, DenyAll, ToolAuthorizer};
+use crate::gateway::authz::{AllowAll, CountingAuthorizer, DenyAll, DenyOne, ToolAuthorizer};
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::RequestId;
 use crate::transport::Transport;
@@ -400,46 +400,71 @@ steps:
     );
 }
 
-/// Under `continue`, a denied step is recorded and the run carries on.
+/// Under `continue`, a denied step is recorded and the run carries on to a
+/// step it IS allowed to take.
 ///
-/// Both steps are denied here, because `DenyAll` denies everything — and that
-/// is the point of the assertion below: the run must reach the SECOND step at
-/// all. A terminal-refusal implementation stops at the first and reports one
-/// failure, not two.
+/// The authorizer is selective on purpose. `DenyAll` would deny the successor
+/// too, so the case could show only that the run did not abort — never that a
+/// permitted step afterwards actually executed, which is the whole promise of
+/// `continue`. The backend counter is what proves it.
 #[tokio::test]
-async fn authz_18_continue_records_and_carries_on() {
-    let (registry, _calls) = counted_backend("alpha");
+async fn authz_18_continue_records_and_runs_the_permitted_successor() {
+    let (registry, calls) = counted_backend("alpha");
     let meta = MetaMcp::new(registry);
 
     let value = run_playbook_yaml(
         &meta,
         r"
 name: continuing
-description: two steps, both denied, to prove the run reaches the second
+description: a denied step, then one the caller is allowed to take
 on_error: continue
 steps:
   - name: denied
     server: alpha
-    tool: read
-  - name: also_denied
+    tool: blocked
+  - name: allowed
     server: alpha
-    tool: write
+    tool: read
 ",
-        &ctx(&DenyAll),
+        &ctx(&DenyOne { tool: "blocked" }),
     )
     .await
     .expect("continue must not abort the run");
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the permitted successor must actually have run — without this the \
+         case shows only that the run did not abort"
+    );
 
     let failed = value
         .get("steps_failed")
         .and_then(Value::as_array)
         .expect("steps_failed must be present");
-    assert_eq!(failed.len(), 2, "both steps ran and both were refused");
+    assert_eq!(failed.len(), 1, "only the denied step failed: {value}");
+    assert!(
+        failed.iter().any(|s| s == "denied"),
+        "and it is the one that was denied: {value}"
+    );
+
+    let completed = value
+        .get("steps_completed")
+        .and_then(Value::as_array)
+        .expect("steps_completed must be present");
+    assert!(
+        completed.iter().any(|s| s == "allowed"),
+        "the successor must be recorded as completed: {value}"
+    );
 
     let errors = value.get("step_errors").expect("reasons must be recorded");
     assert!(
-        errors.get("denied").is_some() && errors.get("also_denied").is_some(),
+        errors.get("denied").is_some(),
         "a partial run must explain itself, or it reads as a success: {errors}"
+    );
+    assert!(
+        errors.get("allowed").is_none(),
+        "and must not blame a step that succeeded: {errors}"
     );
 }
 
