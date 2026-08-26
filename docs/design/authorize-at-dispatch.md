@@ -362,18 +362,23 @@ Behaviour that must not change:
 
 Ordering and coverage:
 
-- MIK.AUTHZ.7 A refused step performs no backend call, writes no cache entry
-  and spends no budget.
-- MIK.AUTHZ.12 A refused target already present in the response or idempotency
-  cache is still refused — authorization precedes the cache read.
-- MIK.AUTHZ.20 A refused call registers no idempotency in-flight entry, mints
-  no per-user credential, and **consumes no nonce**: a denied call carrying a
-  fresh nonce leaves that nonce still registrable afterwards. Nonce
-  check-and-register sits at `invoke.rs:634`, so the authorization call must be
-  placed above it, not merely "before dispatch". The fixture uses a live
-  `NonceStore` and a top-level `nonce` on the invoke envelope — a nonce placed
-  in a playbook step's arguments is never read by that code and would make the
-  criterion pass vacuously.
+- MIK.AUTHZ.7 A refused step performs no backend call and spends no budget. The
+  cache clause is withdrawn — see below.
+- MIK.AUTHZ.12 **Withdrawn as unobservable.** No shape both reaches the
+  chokepoint and uses the cache: every internal call injects `_full` via
+  `internal_invoke_args`, and `_full` skips the response cache
+  (`invoke.rs:799`, `:1231`) and idempotency (`:750`) outright, while
+  router-covered shapes that do cache are refused before the chokepoint runs.
+  The property holds — the router gate enforces it for cached shapes — but no
+  test can fail for the right reason. Live again if internal calls stop
+  injecting `_full`.
+- MIK.AUTHZ.20 A refused call mints no per-user credential. The nonce and
+  idempotency clauses are **withdrawn as unobservable**: `internal_invoke_args`
+  puts no `nonce` on the envelope and `_full` skips idempotency, so a playbook
+  step cannot exercise either, and a direct `gateway_invoke` is refused at the
+  router first. Placement above the nonce block (`invoke.rs:634`) remains
+  required by this design and is justified by reading, not by a test — stated
+  here rather than hidden behind a green row.
 - MIK.AUTHZ.13 Every meta-layer dispatch shape — surfaced tool,
   `gateway_invoke`, code-mode single, code-mode chain step, playbook step — is
   refused when the authorizer denies, driven at the meta layer with a denying
@@ -400,6 +405,26 @@ Transport:
   `gateway_invoke` behaviour after the inline block is deleted.
 - MIK.AUTHZ.22 With mTLS rules configured, stdio calls are **not** refused —
   the stdio authorizer does not evaluate a policy stdio cannot satisfy.
+
+Criteria added when the plan was reviewed, because a fail-closed policy refuses
+whether or not the identity reached it:
+
+- MIK.AUTHZ.1a/2a/3a A client restricted by backend, tool allow-list or global
+  policy still succeeds on a target it IS permitted.
+- MIK.AUTHZ.10a A certificate the mTLS policy ALLOWS succeeds. Without it,
+  AUTHZ.10 stays green with the certificate identity dropped entirely.
+- MIK.AUTHZ.11a An in-scope agent identity succeeds. Same trap as 10a.
+- MIK.AUTHZ.17a A **real** chokepoint denial, not an injected one, becomes the
+  engine's non-retry variant. 17-19 run at engine level and would otherwise
+  cover the branches without testing the conversion.
+- MIK.AUTHZ.18a An ordinary backend failure's message also lands in
+  `step_errors`, since the field records every failed step.
+- MIK.AUTHZ.8a The code-mode chain's refusal message, split from AUTHZ.8 so one
+  row cannot hide a regression in either shape.
+- MIK.AUTHZ.14a/14b The audit line proven on a router-uncovered shape for
+  `Http` and at stdio level for `Stdio`.
+- MIK.AUTHZ.24 A playbook that denies nothing serialises without a
+  `step_errors` key.
 
 MIK.AUTHZ.9 is withdrawn: removing `Default` and gating `AllowAll` behind
 `#[cfg(test)]` makes it a property of the types, and a test that greps for a
