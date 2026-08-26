@@ -82,6 +82,19 @@ const SCRATCH_ATTEMPTS: u64 = 8;
 /// This path is deliberately not platform-gated. An earlier version wrote in
 /// place on Windows, so the one platform without a crash-safe write was also
 /// the one no test covered.
+/// Write pre-rendered config text through the same secure path as [`write_config`].
+///
+/// Exposed for `init`, which renders a starter config as text rather than
+/// serialising a `Config`. It must not use `std::fs::write`: the starter config
+/// carries a generated admin credential.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be created or replaced.
+pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
+    write_yaml(path, yaml)
+}
+
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
 

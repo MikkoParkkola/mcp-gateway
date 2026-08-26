@@ -465,6 +465,20 @@ impl Default for DashboardBootstrap {
 /// address bar, the history, or a `Referer`.
 pub const SESSION_COOKIE: &str = "mcp_gateway_session";
 
+/// The credential a request presents, from the session cookie or a bearer header.
+fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
+    session_cookie_value(headers).or_else(|| {
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| {
+                v.strip_prefix("Bearer ")
+                    .or_else(|| v.strip_prefix("bearer "))
+            })
+            .map(ToString::to_string)
+    })
+}
+
 /// The `bootstrap` query parameter, if present.
 fn bootstrap_param(query: &str) -> Option<String> {
     query
@@ -542,6 +556,18 @@ pub async fn auth_middleware(
 
     let path = request.uri().path();
 
+    // A public path skips the credential REQUIREMENT, not the credential. An
+    // operator who presents their admin token to `/mcp` — a public path on the
+    // starter config, so ordinary tools stay open — was handed the public
+    // identity and lost the management tools their token pays for.
+    if auth_config.is_public_path(path)
+        && let Some(presented) = presented_credential(request.headers())
+        && let Some(client) = auth_config.validate_token(&presented)
+    {
+        request.extensions_mut().insert(client);
+        return next.run(request).await;
+    }
+
     // Check if path is public
     if auth_config.is_public_path(path) {
         debug!(path = %path, "Public path, skipping auth");
@@ -590,17 +616,7 @@ pub async fn auth_middleware(
         ));
     }
 
-    let token = session_cookie_value(request.headers()).or_else(|| {
-        request
-            .headers()
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| {
-                v.strip_prefix("Bearer ")
-                    .or_else(|| v.strip_prefix("bearer "))
-            })
-            .map(ToString::to_string)
-    });
+    let token = presented_credential(request.headers());
 
     let Some(token) = token else {
         warn!(path = %path, "Missing credential");

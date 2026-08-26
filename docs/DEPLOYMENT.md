@@ -498,9 +498,12 @@ credential. It needs no readable response to be useful, so the browser and
 network gates do not constrain it. Those capabilities require an admin
 credential.
 
-The rule is derived from each capability's own definition: a mutating method
-plus a caller-supplied destination parameter. A capability added later inherits
-it rather than needing to be remembered on a list.
+The rule is derived from each capability's own definition: it registers a
+callback, and takes a caller-supplied destination. Posting a URL as data —
+archiving a page, attaching a link — is not covered, because nothing calls back
+and requiring a credential there would take an ordinary tool away for no gain.
+A capability added later inherits the rule rather than needing to be remembered
+on a list.
 
 ### Opening the dashboard
 

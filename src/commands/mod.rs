@@ -270,7 +270,11 @@ fn write_init_files(
         }
     }
 
-    std::fs::write(output, config_content)?;
+    // Through the config writer, not `std::fs::write`: this file now carries a
+    // generated admin credential, and a plain write leaves it at the umask for
+    // any other local account to read.
+    mcp_gateway::config_persistence::write_config_text(output, config_content)
+        .map_err(std::io::Error::other)?;
 
     for (path, content) in sample_files {
         std::fs::write(path, content)?;
@@ -613,6 +617,23 @@ async fn tool_completions(
 #[cfg(test)]
 mod admin_credential_tests {
     use super::{InitProfile, build_init_config, generate_admin_token};
+
+    #[test]
+    #[cfg(unix)]
+    fn the_generated_config_is_not_readable_by_other_users() {
+        // The starter config now carries a generated admin credential. Writing
+        // it with `std::fs::write` left it at the umask, so the very file the
+        // 0600 work was done for was the one that missed it.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let code = super::run_init_command(&path, false, InitProfile::Local);
+        assert_eq!(code, std::process::ExitCode::SUCCESS, "init must succeed");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "credential file wrote mode {mode:o}");
+    }
 
     #[test]
     fn ordinary_tool_calls_still_work_without_the_credential() {

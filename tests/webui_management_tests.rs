@@ -1724,3 +1724,40 @@ async fn the_starter_posture_keeps_tools_open_and_admin_closed() {
         .unwrap();
     assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::OK);
 }
+
+/// A public path drops the credential REQUIREMENT, not the credential.
+///
+/// `/mcp` is public on the starter config so ordinary tools stay open. An
+/// operator presenting their admin token there must still be admin, or the
+/// management tools their token pays for are unreachable.
+#[tokio::test]
+async fn a_credential_presented_on_a_public_path_still_counts() {
+    let auth = AuthConfig {
+        enabled: true,
+        bearer_token: Some(ADMIN_TOKEN.to_string()),
+        public_paths: vec!["/health".to_string(), "/mcp".to_string()],
+        ..AuthConfig::default()
+    };
+    let state = make_app_state_with_auth_config(&auth);
+    let router = create_router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/health")
+        .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    // The redacted view is `{"count": N, "all_healthy": bool}`. Anything else
+    // is the admin view, which is what the credential must still buy.
+    assert!(
+        body["backends"].get("count").is_none(),
+        "an admin credential must still grant the admin view, got the redacted one: {body}"
+    );
+}

@@ -1113,11 +1113,25 @@ pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bo
     else {
         return false;
     };
+    // Narrow deliberately. "Mutating, and takes a URL" is too broad: archiving a
+    // page or attaching a link posts a URL as DATA, and blocking those behind
+    // admin would take ordinary tools away from the single-user client for no
+    // security gain. What matters is REGISTERING an address the third party
+    // will later deliver to.
+    let registers_a_callback = def.name.to_ascii_lowercase().contains("webhook")
+        || def.name.to_ascii_lowercase().contains("subscribe")
+        || def.name.to_ascii_lowercase().contains("callback");
+    if !registers_a_callback {
+        return false;
+    }
+
     props.iter().any(|(name, spec)| {
-        let looks_like_a_destination = name.eq_ignore_ascii_case("url")
-            || name.to_ascii_lowercase().ends_with("_url")
-            || name.eq_ignore_ascii_case("callback")
-            || name.eq_ignore_ascii_case("webhook");
+        let lower = name.to_ascii_lowercase();
+        let looks_like_a_destination = lower == "url"
+            || lower.ends_with("_url")
+            || lower == "callback"
+            || lower == "webhook"
+            || lower == "endpoint";
         let declared_uri = spec.get("format").and_then(|f| f.as_str()) == Some("uri");
         looks_like_a_destination || declared_uri
     })
@@ -1128,8 +1142,12 @@ mod caller_addressed_state_tests {
     use super::*;
 
     fn def(method: &str, input: &serde_json::Value) -> CapabilityDefinition {
+        named_def("create_webhook", method, input)
+    }
+
+    fn named_def(name: &str, method: &str, input: &serde_json::Value) -> CapabilityDefinition {
         let yaml = format!(
-            "fulcrum: \"1.0\"\nname: t\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\n",
+            "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\n",
             serde_json::to_string(input).unwrap()
         );
         serde_yaml::from_str(&yaml).expect("definition parses")
@@ -1198,6 +1216,19 @@ mod caller_addressed_state_tests {
         // created and nothing calls back.
         let d = def(
             "GET",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        assert!(!creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn posting_a_url_as_data_is_not_registering_an_address() {
+        // wayback_save posts a URL to be archived. Nothing calls back, and
+        // requiring admin would take an ordinary tool away from a single-user
+        // client for no gain.
+        let d = named_def(
+            "wayback_save",
+            "POST",
             &serde_json::json!({"properties": {"url": {"type": "string"}}}),
         );
         assert!(!creates_caller_addressed_external_state(&d));

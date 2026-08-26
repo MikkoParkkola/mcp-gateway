@@ -410,10 +410,23 @@ mod tests {
 /// snapshotted into the router at construction and never replaced by a reload.
 #[must_use]
 pub fn network_bind_refusal(config: &Config) -> Option<String> {
-    if config.auth.enabled
-        || config.server.allow_unauthenticated_network_bind
+    if config.server.allow_unauthenticated_network_bind
         || crate::gateway::router::is_loopback_bind(&config.server.host)
     {
+        return None;
+    }
+
+    // `auth.enabled` alone is not the question. What matters is whether a
+    // caller can invoke tools without a credential: a public path covering the
+    // MCP endpoint leaves every backend reachable with the gateway's keys,
+    // whatever the auth flag says. `/health` carries no authority and does not
+    // count.
+    let tools_are_public = config
+        .auth
+        .public_paths
+        .iter()
+        .any(|p| p != "/health" && !p.is_empty());
+    if config.auth.enabled && !tools_are_public {
         return None;
     }
     Some(format!(
@@ -437,6 +450,26 @@ mod network_bind_tests {
         c.auth.enabled = auth;
         c.server.allow_unauthenticated_network_bind = override_set;
         c
+    }
+
+    #[test]
+    fn auth_enabled_is_not_enough_when_tools_are_public() {
+        // Two changes that are each right and together are not: the starter
+        // config enables auth AND lists /mcp as a public path so tools stay
+        // open. `auth.enabled` alone then reads as safe, while every backend
+        // stays reachable without a credential — on a network address.
+        let mut c = config("0.0.0.0", true, false);
+        c.auth.public_paths = vec!["/health".to_string(), "/mcp".to_string()];
+        let refusal = network_bind_refusal(&c);
+        assert!(
+            refusal.is_some(),
+            "tools open to the network with no credential must be refused"
+        );
+
+        // Health alone is fine: it carries no authority.
+        let mut probe_only = config("0.0.0.0", true, false);
+        probe_only.auth.public_paths = vec!["/health".to_string()];
+        assert!(network_bind_refusal(&probe_only).is_none());
     }
 
     #[test]
