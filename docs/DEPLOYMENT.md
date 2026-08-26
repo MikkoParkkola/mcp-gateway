@@ -508,6 +508,19 @@ and requiring a credential there would take an ordinary tool away for no gain.
 A capability added later inherits the rule rather than needing to be remembered
 on a list.
 
+### What the setup wizard writes into your client
+
+`mcp-gateway setup export` writes the gateway entry into each AI client's own
+config. Ordinary tools need no credential, so the entry works as-is. The admin
+credential is added as an `Authorization` header **only** for clients whose
+config lives in your home directory — Claude Code, Claude Desktop, Windsurf,
+Zed. Cursor, VS Code and Cline keep their config in the working tree, where a
+credential would be committed, so those get the URL alone and manage the gateway
+through the dashboard instead.
+
+A `bearer_token` written as `env:VAR` stays a reference: resolving it into a
+client config would copy the secret out of the indirection you chose.
+
 ### Opening the dashboard
 
 `mcp-gateway init` generates an admin credential for the install and writes it

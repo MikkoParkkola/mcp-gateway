@@ -1106,18 +1106,27 @@ pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bo
     // read-only capability cannot register anything, so that flag is the
     // transport-independent question, with the method as a fallback where the
     // flag was left at its default.
-    let mutating = !def.metadata.read_only
-        || def
-            .providers
-            .named
-            .values()
-            .chain(def.providers.fallback.iter())
-            .any(|p| {
-                matches!(
-                    p.config.method.to_ascii_uppercase().as_str(),
-                    "POST" | "PUT" | "PATCH"
-                )
-            });
+    // An explicit `read_only: true` settles it. The previous form OR'd the
+    // provider method in, so a capability that declared itself read-only but
+    // reached its API with POST — which plenty do — was treated as mutating,
+    // and an unauthenticated laptop client lost a tool it should have.
+    if def.metadata.read_only {
+        return false;
+    }
+    let mutating = def
+        .providers
+        .named
+        .values()
+        .chain(def.providers.fallback.iter())
+        .any(|p| {
+            matches!(
+                p.config.method.to_ascii_uppercase().as_str(),
+                "POST" | "PUT" | "PATCH"
+            )
+        })
+        // A CLI-backed capability has no HTTP method; not being read-only is
+        // what makes it mutating there.
+        || def.providers.named.values().any(|p| p.service == "cli");
     if !mutating {
         return false;
     }

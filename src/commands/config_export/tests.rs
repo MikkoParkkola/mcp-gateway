@@ -23,7 +23,7 @@ fn default_config() -> Config {
 fn build_gateway_entry_proxy_mode() {
     // GIVEN: default config (host=127.0.0.1, port=39400) and Proxy mode
     let cfg = default_config();
-    let entry = build_gateway_entry(&cfg, None, ConnectionMode::Proxy);
+    let entry = build_gateway_entry(&cfg, None, ConnectionMode::Proxy, None);
 
     // THEN: produces {"url": "http://127.0.0.1:39400/mcp"}
     assert_eq!(entry["url"], "http://127.0.0.1:39400/mcp");
@@ -34,7 +34,7 @@ fn build_gateway_entry_proxy_mode() {
 fn build_gateway_entry_stdio_mode() {
     // GIVEN: default config and Stdio mode, no config path
     let cfg = default_config();
-    let entry = build_gateway_entry(&cfg, None, ConnectionMode::Stdio);
+    let entry = build_gateway_entry(&cfg, None, ConnectionMode::Stdio, None);
 
     // THEN: produces {"command": "mcp-gateway", "args": ["serve", "--stdio"]}
     assert_eq!(entry["command"], "mcp-gateway");
@@ -49,7 +49,7 @@ fn build_gateway_entry_stdio_with_config() {
     // GIVEN: Stdio mode with a config path supplied
     let cfg = default_config();
     let config_path = Path::new("/etc/mcp-gateway/gateway.yaml");
-    let entry = build_gateway_entry(&cfg, Some(config_path), ConnectionMode::Stdio);
+    let entry = build_gateway_entry(&cfg, Some(config_path), ConnectionMode::Stdio, None);
 
     // THEN: -c flag and path are appended to args
     let args = entry["args"].as_array().unwrap();
