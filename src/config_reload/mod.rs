@@ -327,6 +327,39 @@ mod restart_required_tests {
     }
 
     #[test]
+    fn every_tracked_section_is_covered() {
+        // The classifier used to name eight sections while the diff tracked
+        // seventeen, so a change to one of the other nine reported as applied
+        // while nothing read it — the hand-list this was meant to replace.
+        let running = Config::default();
+        let mut wanted = Config::default();
+        wanted.meta_mcp.enabled = !wanted.meta_mcp.enabled;
+        let pending = super::pending_restart_fields(&running, &wanted);
+        assert!(
+            pending.contains(&"meta_mcp"),
+            "a tracked section outside the original list must be reported: {pending:?}"
+        );
+
+        let names: Vec<&str> = super::tracked_sections(&running, &running)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        for expected in [
+            "auth",
+            "mtls",
+            "key_server",
+            "capabilities",
+            "playbooks",
+            "cache",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "{expected} must be tracked: {names:?}"
+            );
+        }
+    }
+
+    #[test]
     fn no_pending_restart_when_the_file_matches_the_running_process() {
         let live = LiveConfig::new(with_auth(false));
         live.set(with_auth(false));
@@ -350,31 +383,62 @@ fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str
     if running.server.host != wanted.server.host || running.server.port != wanted.server.port {
         pending.push("server.host/server.port");
     }
-    if canonical_json(&running.server.allow_unauthenticated_network_bind)
-        != canonical_json(&wanted.server.allow_unauthenticated_network_bind)
+    if running.server.allow_unauthenticated_network_bind
+        != wanted.server.allow_unauthenticated_network_bind
     {
         pending.push("server.allow_unauthenticated_network_bind");
     }
-    if canonical_json(&running.auth) != canonical_json(&wanted.auth) {
-        pending.push("auth");
-    }
-    if canonical_json(&running.mtls) != canonical_json(&wanted.mtls) {
-        pending.push("mtls");
-    }
-    if canonical_json(&running.key_server) != canonical_json(&wanted.key_server) {
-        pending.push("key_server");
-    }
-    if canonical_json(&running.agent_auth) != canonical_json(&wanted.agent_auth) {
-        pending.push("agent_auth");
-    }
-    if canonical_json(&running.security) != canonical_json(&wanted.security) {
-        pending.push("security");
-    }
-    if canonical_json(&running.webhooks) != canonical_json(&wanted.webhooks) {
-        pending.push("webhooks");
+
+    // Everything else is compared WHOLESALE and reported by name. An earlier
+    // version listed the sections it knew about, which is the hand-list this
+    // was supposed to replace: a section added later reported as applied while
+    // nothing read it. Subtracting the live readers from the whole is the only
+    // form that stays true as the config grows.
+    for (name, differs) in tracked_sections(running, wanted) {
+        if differs {
+            pending.push(name);
+        }
     }
 
     pending
+}
+
+/// Every tracked section, paired with whether the file differs from the running
+/// process. Live-applied sections are excluded by name, and that list is short
+/// enough to check: `backends` is applied by the reload itself,
+/// `server.public_url` and `control_plane.role_mapping` are re-read per request
+/// (see `router::well_known`, `router::origin_guard`, `ui::control_plane`).
+fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, bool)> {
+    // A macro rather than sixteen hand-written comparisons: the point is that
+    // the list is exhaustive, and a shape that makes adding one a single line
+    // is the shape that stays exhaustive.
+    macro_rules! sections {
+        ($($name:literal => $field:ident),* $(,)?) => {
+            vec![$((
+                $name,
+                canonical_json(&running.$field) != canonical_json(&wanted.$field),
+            )),*]
+        };
+    }
+
+    sections![
+        "auth" => auth,
+        "mtls" => mtls,
+        "key_server" => key_server,
+        "agent_auth" => agent_auth,
+        "security" => security,
+        "webhooks" => webhooks,
+        "meta_mcp" => meta_mcp,
+        "capabilities" => capabilities,
+        "playbooks" => playbooks,
+        "routing_profiles" => routing_profiles,
+        "code_mode" => code_mode,
+        "marketplace" => marketplace,
+        "streaming" => streaming,
+        "failsafe" => failsafe,
+        "cache" => cache,
+        "runtime" => runtime,
+    ]
 }
 
 /// Returns `true` when the TCP-listener address differs.

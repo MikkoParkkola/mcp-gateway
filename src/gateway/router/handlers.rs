@@ -126,6 +126,25 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
+/// A stable owner key for a session.
+///
+/// Not the display name: `name` is operator-configured and two API keys may
+/// share one, which would let them attach to each other's sessions. The key
+/// records whether a credential was actually validated, so an API key named
+/// "anonymous" cannot claim the unauthenticated identity's sessions.
+fn session_owner(client: Option<&AuthenticatedClient>) -> String {
+    client.map_or_else(
+        || "unauthenticated:anonymous".to_string(),
+        |c| {
+            if c.authenticated {
+                format!("credential:{}:{}", c.admin, c.name)
+            } else {
+                format!("unauthenticated:{}", c.name)
+            }
+        },
+    )
+}
+
 pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
@@ -175,7 +194,7 @@ pub(super) async fn mcp_sse_handler(
         // The identity that owns the session. Every caller is "anonymous"
         // when authentication is off, so a single-user gateway behaves
         // exactly as before.
-        client.as_ref().map_or("anonymous", |c| c.name.as_str()),
+        &session_owner(client.as_ref()),
     );
 
     info!(session_id = %session_id, "Client connected to SSE stream");
@@ -429,7 +448,7 @@ pub(super) async fn meta_mcp_handler(
         // The identity that owns the session. Every caller is "anonymous"
         // when authentication is off, so a single-user gateway behaves
         // exactly as before.
-        client.as_ref().map_or("anonymous", |c| c.name.as_str()),
+        &session_owner(client.as_ref()),
     );
 
     // Optionally sanitize input

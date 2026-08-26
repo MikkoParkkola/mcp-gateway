@@ -952,10 +952,15 @@ async fn test_reload_endpoint_returns_structured_outcome_for_profile_change() {
 
     assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["restart_required"], false);
+    // A routing-profile change is NOT applied by a reload: nothing re-reads
+    // `routing_profiles` or `default_routing_profile` at request time, and
+    // `apply_patch` handles backends only. This assertion previously read
+    // `false`, which is what the operator was told while the change sat
+    // unapplied — the defect this reporting exists to remove.
+    assert_eq!(body["restart_required"], true);
     assert!(
-        body["restart_reason"].is_null(),
-        "expected no restart reason: {body}"
+        body["restart_reason"].is_string(),
+        "a restart-required outcome must say why: {body}"
     );
     assert!(
         body["changes"]

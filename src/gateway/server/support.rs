@@ -429,12 +429,25 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     if config.auth.enabled && !tools_are_public {
         return None;
     }
+    // The message names the condition that actually fired. Saying only
+    // "authentication is disabled" invited the wrong fix: an operator turns auth
+    // on, keeps /mcp public, and the tools stay open to the network.
+    let cause = if config.auth.enabled {
+        "tools are reachable without a credential (auth.public_paths covers more than /health)"
+    } else {
+        "authentication is disabled"
+    };
+    let remedy = if config.auth.enabled {
+        "Remove the tool paths from auth.public_paths, or bind 127.0.0.1."
+    } else {
+        "Set auth.enabled = true and keep auth.public_paths to /health, or bind 127.0.0.1."
+    };
     Some(format!(
-        "refusing to serve HTTP on {}: authentication is disabled, so any caller \
-         that reaches this address can invoke every configured backend with this \
-         gateway's credentials. Set auth.enabled = true, or bind 127.0.0.1. If \
-         authentication terminates in front of this gateway (a sidecar, a service \
-         mesh, or a reverse proxy), set server.allow_unauthenticated_network_bind = true.",
+        "refusing to serve HTTP on {}: {cause}, so any caller that reaches this \
+         address can invoke every configured backend with this gateway's \
+         credentials. {remedy} If authentication terminates in front of this \
+         gateway (a sidecar, a service mesh, or a reverse proxy), set \
+         server.allow_unauthenticated_network_bind = true.",
         config.server.host
     ))
 }
@@ -465,6 +478,11 @@ mod network_bind_tests {
             refusal.is_some(),
             "tools open to the network with no credential must be refused"
         );
+        let msg = refusal.unwrap();
+        assert!(
+            msg.contains("public_paths"),
+            "the message must name the condition that fired, not a stale one: {msg}"
+        );
 
         // Health alone is fine: it carries no authority.
         let mut probe_only = config("0.0.0.0", true, false);
@@ -479,6 +497,10 @@ mod network_bind_tests {
             assert!(refusal.is_some(), "{host} with auth off must be refused");
             let msg = refusal.unwrap();
             assert!(msg.contains("auth.enabled"), "must name the remedy: {msg}");
+            assert!(
+                msg.contains("authentication is disabled"),
+                "must name the condition that fired: {msg}"
+            );
             assert!(
                 msg.contains("127.0.0.1"),
                 "must name the other remedy: {msg}"
