@@ -2184,6 +2184,124 @@ mod tests {
         assert_eq!(response["error"]["message"], "Missing id");
     }
 
+    // ── MIK-7252: stdio authorization ──────────────────────────────────────
+    //
+    // Before this change stdio checked the tool policy for `gateway_invoke`
+    // alone, so a stdio playbook or code-mode step reached a backend with no
+    // policy check at all. The inline check is replaced by an authorizer at the
+    // dispatch chokepoint, which every shape passes through.
+
+    /// A policy that denies one tool by name.
+    fn policy_denying(tool: &str) -> Arc<ToolPolicy> {
+        Arc::new(ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec![tool.to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ))
+    }
+
+    /// Register a one-step playbook on a meta instance and return it.
+    fn meta_with_step(server: &str, tool: &str) -> Arc<MetaMcp> {
+        let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let yaml = format!(
+            "name: p\ndescription: one step\non_error: abort\nsteps:\n  - name: s\n    server: {server}\n    tool: {tool}\n"
+        );
+        let definition: crate::playbook::PlaybookDefinition =
+            serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
+        let mut engine = crate::playbook::PlaybookEngine::new();
+        engine.register(definition);
+        meta.set_playbook_engine(engine);
+        Arc::new(meta)
+    }
+
+    fn run_playbook_over_stdio(
+        meta: &Arc<MetaMcp>,
+        policy: &Arc<ToolPolicy>,
+        mtls: &Arc<MtlsPolicy>,
+    ) -> serde_json::Value {
+        futures::executor::block_on(Gateway::dispatch_single(
+            meta,
+            policy,
+            mtls,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_run_playbook",
+                    "arguments": { "name": "p", "arguments": {} }
+                }
+            }),
+            "stdio-session",
+        ))
+        .expect("a tools/call must produce a response")
+    }
+
+    /// AUTHZ.15 — a stdio playbook step hitting a policy-denied tool is
+    /// refused. There was no coverage of this before: the inline check ran for
+    /// `gateway_invoke` only, so this step reached dispatch unchecked.
+    #[tokio::test]
+    async fn authz_15_stdio_playbook_step_denied_by_tool_policy() {
+        let meta = meta_with_step("alpha", "blocked_tool");
+        let response =
+            run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &test_mtls_policy());
+
+        let text = response.to_string();
+        assert!(
+            response["error"].is_object(),
+            "a policy-denied stdio step must be refused: {text}"
+        );
+        assert!(
+            text.contains("blocked_tool"),
+            "the refusal must name the tool: {text}"
+        );
+    }
+
+    /// AUTHZ.15a — a permitted tool is not refused. Without this, a stdio
+    /// authorizer that denied every backend target would pass AUTHZ.15 and
+    /// AUTHZ.16 on its own.
+    #[tokio::test]
+    async fn authz_15a_stdio_playbook_step_permitted_is_not_refused() {
+        let meta = meta_with_step("alpha", "permitted_tool");
+        let response =
+            run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &test_mtls_policy());
+
+        // The backend does not exist, so the step fails at dispatch. What must
+        // not appear is a policy refusal: the check ran and let it through.
+        let text = response.to_string();
+        assert!(
+            !text.contains("blocked by policy") && !text.contains("denied by policy"),
+            "a permitted tool must not be refused by the stdio authorizer: {text}"
+        );
+    }
+
+    /// AUTHZ.22 — with certificate rules configured, stdio calls are still not
+    /// refused.
+    ///
+    /// `MtlsPolicy::evaluate` returns `Deny` for a `None` identity once the
+    /// policy is enabled, and stdio presents no certificate. An implementation
+    /// that handed stdio the certificate policy would therefore refuse every
+    /// call — this is the row that catches it.
+    #[tokio::test]
+    async fn authz_22_stdio_is_not_refused_by_certificate_policy() {
+        let meta = meta_with_step("alpha", "permitted_tool");
+        let mtls = Arc::new(MtlsPolicy::from_config(&MtlsConfig {
+            enabled: true,
+            ..MtlsConfig::default()
+        }));
+
+        let response = run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &mtls);
+
+        let text = response.to_string();
+        assert!(
+            !text.contains("certificate policy"),
+            "stdio has no certificate to present, so a configured mTLS policy \
+             must not refuse it: {text}"
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_batch_returns_invalid_request_for_empty_batch() {
         let responses = Gateway::dispatch_batch(
