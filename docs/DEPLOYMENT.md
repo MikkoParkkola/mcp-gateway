@@ -508,18 +508,29 @@ and requiring a credential there would take an ordinary tool away for no gain.
 A capability added later inherits the rule rather than needing to be remembered
 on a list.
 
-### What the setup wizard writes into your client
+### Managing the gateway from your MCP client
 
 `mcp-gateway setup export` writes the gateway entry into each AI client's own
-config. Ordinary tools need no credential, so the entry works as-is. The admin
-credential is added as an `Authorization` header **only** for clients whose
-config lives in your home directory — Claude Code, Claude Desktop, Windsurf,
-Zed. Cursor, VS Code and Cline keep their config in the working tree, where a
-credential would be committed, so those get the URL alone and manage the gateway
-through the dashboard instead.
+config. Ordinary tools need no credential, so the entry works as written.
 
-A `bearer_token` written as `env:VAR` stays a reference: resolving it into a
-client config would copy the secret out of the indirection you chose.
+Management tools do need one, and the exporter deliberately writes no
+credential. Three of the supported clients keep their config inside a working
+tree — Cursor, VS Code and Cline — and an exporter that writes a secret into
+some destinations and not others gets that decision wrong the first time
+somebody exports to all of them at once. It also has to print what it wrote.
+
+So management runs through the dashboard, or through stdio, where the client
+spawns the gateway itself and is the operator by construction.
+
+To manage from a proxy-mode client anyway, add the header yourself to a config
+that is not in a working tree:
+
+```json
+{ "mcpServers": { "gateway": {
+    "url": "http://127.0.0.1:39400/mcp",
+    "headers": { "Authorization": "Bearer <the token in gateway.yaml>" }
+} } }
+```
 
 ### Opening the dashboard
 

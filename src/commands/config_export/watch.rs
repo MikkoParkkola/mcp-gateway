@@ -80,7 +80,7 @@ pub(super) async fn run_watch_loop(
 
             match Config::load(Some(config_path)) {
                 Ok(config) => {
-                    let entry = build_gateway_entry(&config, Some(config_path), mode, Some(target));
+                    let entry = build_gateway_entry(&config, Some(config_path), mode);
                     let specs = client_specs(target);
                     let mut updated = 0usize;
                     for spec in specs {

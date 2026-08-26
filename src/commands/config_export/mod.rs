@@ -93,64 +93,20 @@ const BACKUP_MARKER: &str = ".mcp-gateway.bak.";
 
 // ── Core logic ────────────────────────────────────────────────────────────────
 
-/// `true` for a client whose config file lives in a working tree.
-///
-/// A credential written there is a credential committed.
-fn target_is_workspace_relative(target: Option<ExportTarget>) -> bool {
-    matches!(
-        target,
-        Some(ExportTarget::Cursor | ExportTarget::VsCodeCopilot | ExportTarget::Cline)
-    )
-}
-
-/// The admin credential to export, when one is configured as a literal.
-///
-/// An `env:` reference is left alone: resolving it here would copy the secret
-/// out of the indirection the operator chose.
-fn admin_token_for_export(config: &Config) -> Option<String> {
-    if !config.auth.enabled {
-        return None;
-    }
-    config
-        .auth
-        .bearer_token
-        .as_deref()
-        .filter(|t| !t.starts_with("env:") && *t != "auto")
-        .map(ToString::to_string)
-}
-
 /// Build the JSON entry to insert for this gateway instance.
 ///
-/// Proxy mode produces `{"url": "http://host:port/mcp"}`, plus an
-/// `Authorization` header for clients whose config is not committed.
+/// Proxy mode produces `{"url": "http://host:port/mcp"}`.
 /// Stdio mode produces `{"command": "mcp-gateway", "args": ["serve", "--stdio", ...]}`.
 pub fn build_gateway_entry(
     config: &Config,
     config_path: Option<&Path>,
     mode: ConnectionMode,
-    target: Option<ExportTarget>,
 ) -> Value {
     match resolve_mode(mode, config) {
         ConnectionMode::Proxy | ConnectionMode::Auto => {
-            let mut entry = json!({
+            json!({
                 "url": format!("http://{}:{}/mcp", config.server.host, config.server.port)
-            });
-            // Ordinary tools need no credential, but the management tools do,
-            // and without one the operator's own client cannot manage the
-            // gateway it is pointed at. The token goes only into per-user
-            // config files: `.cursor/mcp.json`, `.vscode/mcp.json` and
-            // `.cline/mcp_servers.json` sit in a working tree and get
-            // committed.
-            if let Some(token) = admin_token_for_export(config)
-                && !target_is_workspace_relative(target)
-                && let Some(obj) = entry.as_object_mut()
-            {
-                obj.insert(
-                    "headers".to_string(),
-                    json!({ "Authorization": format!("Bearer {token}") }),
-                );
-            }
-            entry
+            })
         }
         ConnectionMode::Stdio => {
             let mut args = vec!["serve".to_string(), "--stdio".to_string()];
@@ -554,7 +510,7 @@ pub async fn run_config_export(
         ConnectionMode::Proxy | ConnectionMode::Auto => "proxy",
         ConnectionMode::Stdio => "stdio",
     };
-    let entry = build_gateway_entry(&config, Some(config_path), resolved, Some(target));
+    let entry = build_gateway_entry(&config, Some(config_path), resolved);
 
     if target == ExportTarget::Generic {
         // Generic: print JSON to stdout.
@@ -730,72 +686,5 @@ fn export_one_detailed(
             }
             Err(e) => (ExportAction::Failed(e), None),
         }
-    }
-}
-
-#[cfg(test)]
-mod credential_export_tests {
-    use super::{ConnectionMode, ExportTarget, build_gateway_entry};
-    use mcp_gateway::config::Config;
-
-    fn config_with_token() -> Config {
-        let mut c = Config::default();
-        c.auth.enabled = true;
-        c.auth.bearer_token = Some("mcpgw_test".to_string());
-        c
-    }
-
-    #[test]
-    fn a_per_user_client_gets_the_credential() {
-        // Without it the operator's own client can reach tools but cannot
-        // manage the gateway it is pointed at — a capability they had before.
-        let entry = build_gateway_entry(
-            &config_with_token(),
-            None,
-            ConnectionMode::Proxy,
-            Some(ExportTarget::ClaudeCode),
-        );
-        assert_eq!(
-            entry["headers"]["Authorization"], "Bearer mcpgw_test",
-            "expected the credential: {entry}"
-        );
-    }
-
-    #[test]
-    fn a_workspace_relative_client_does_not() {
-        // `.cursor/mcp.json` lives in a working tree. A credential written
-        // there is a credential committed.
-        for target in [
-            ExportTarget::Cursor,
-            ExportTarget::VsCodeCopilot,
-            ExportTarget::Cline,
-        ] {
-            let entry = build_gateway_entry(
-                &config_with_token(),
-                None,
-                ConnectionMode::Proxy,
-                Some(target),
-            );
-            assert!(
-                entry.get("headers").is_none(),
-                "{target:?} config is committed and must carry no secret: {entry}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_env_reference_is_not_resolved_into_the_export() {
-        let mut c = config_with_token();
-        c.auth.bearer_token = Some("env:MCP_GATEWAY_TOKEN".to_string());
-        let entry = build_gateway_entry(
-            &c,
-            None,
-            ConnectionMode::Proxy,
-            Some(ExportTarget::ClaudeCode),
-        );
-        assert!(
-            entry.get("headers").is_none(),
-            "an env reference must stay a reference: {entry}"
-        );
     }
 }
