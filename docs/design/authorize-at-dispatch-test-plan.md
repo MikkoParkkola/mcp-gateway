@@ -206,3 +206,38 @@ name is a gap a grep finds.
   call that never dispatches, and waiting for one would hang.
 - **8 and 8a** pin literal message strings as constants in the test, so a
   reworded refusal fails loudly rather than silently passing a `contains` check.
+
+## What the probes actually found
+
+Run against the implemented change. Recorded because a probe that behaves
+unexpectedly is evidence about the plan, not just about the code.
+
+| probe | result |
+|---|---|
+| chokepoint no-op, meta rows | 13b/13c/13d/13e denied → **red**; both allow rows stayed green. The three-way probe split is confirmed empirically: a no-op cannot falsify an allow row |
+| chokepoint no-op, router rows | AUTHZ.1 and AUTHZ.2 → **red**, 1a and 2a green. These use the real `RouterAuthorizer` over a real `AuthenticatedClient`, so this is the row that demonstrates the defect is closed under production policy rather than under a double |
+| engine revert | 17 and 18 → **red**, 24 green |
+| deny-all inversion | every allow row → **red** |
+| stdio authorizer permits everything | 15 → **red**, 15a and 22 green |
+
+Two results corrected the plan rather than the code:
+
+- **AUTHZ.17b is not a pure control.** The plan filed it on the honesty list as
+  passing against unfixed code. It asserts two things — the retry count, which
+  is pre-existing, and that an ordinary failure lands in `step_errors`, which is
+  not — so it went red under the engine revert as well as under its own probe.
+  It is falsifiable two ways, which is stronger than planned, and it also
+  discharges AUTHZ.18b.
+- **The first stdio probe was invalid and the compiler said so.** Substituting
+  `AllowAll` into the production construction site did not build, because that
+  double is `#[cfg(test)]`. That failure is the withdrawn AUTHZ.9 demonstrated:
+  the permissive authorizer genuinely cannot be reached from a release build,
+  proven by the type system rather than by a test. The valid probe makes the
+  real stdio authorizer permit everything.
+
+One finding about the system, not about this change: **a missing backend does
+not produce an error.** It returns a success envelope carrying `isError: true`,
+so the engine records the step as COMPLETED and the retry path never engages.
+The first draft of AUTHZ.17b used a missing backend and could not have failed
+for the right reason. Any future test that means "the step failed" must pick a
+failure that is genuinely an `Err`.
