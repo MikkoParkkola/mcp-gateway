@@ -128,8 +128,10 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 /// We implement the full streaming support.
 pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
+    client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let client = client.map(|axum::Extension(c)| c);
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
         return build_http_error_response(
@@ -168,9 +170,13 @@ pub(super) async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state
-        .multiplexer
-        .get_or_create_session(existing_session_id.as_deref());
+    let (session_id, _rx) = state.multiplexer.get_or_create_session_for(
+        existing_session_id.as_deref(),
+        // The identity that owns the session. Every caller is "anonymous"
+        // when authentication is off, so a single-user gateway behaves
+        // exactly as before.
+        client.as_ref().map_or("anonymous", |c| c.name.as_str()),
+    );
 
     info!(session_id = %session_id, "Client connected to SSE stream");
 
@@ -418,9 +424,13 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state
-        .multiplexer
-        .get_or_create_session(existing_session_id.as_deref());
+    let (session_id, _rx) = state.multiplexer.get_or_create_session_for(
+        existing_session_id.as_deref(),
+        // The identity that owns the session. Every caller is "anonymous"
+        // when authentication is off, so a single-user gateway behaves
+        // exactly as before.
+        client.as_ref().map_or("anonymous", |c| c.name.as_str()),
+    );
 
     // Optionally sanitize input
     let request = if state.sanitize_input {

@@ -55,6 +55,14 @@ struct ClientSession {
     subscribed_backends: RwLock<Vec<String>>,
     /// Timestamp of session creation (for TTL-based reaping)
     created_at: Instant,
+    /// The identity that created this session.
+    ///
+    /// A session id arrives in a header the caller controls, so without this a
+    /// per-session check compares one caller-supplied value against another. A
+    /// caller presenting an id it does not own gets a session of its own rather
+    /// than the owner's, which keeps resumption working for the owner and
+    /// leaks nothing to anyone else.
+    owner: String,
 }
 
 /// Notification Multiplexer
@@ -148,13 +156,44 @@ impl NotificationMultiplexer {
         &self,
         session_id: Option<&str>,
     ) -> (String, broadcast::Receiver<TaggedNotification>) {
+        self.get_or_create_session_for(session_id, "anonymous")
+    }
+
+    /// Create or resume a session belonging to `owner`.
+    ///
+    /// Resumption is for the owner only. A caller presenting an id owned by
+    /// someone else is given a fresh session under a fresh id: refusing would
+    /// break a client that legitimately collides, while adopting would hand it
+    /// another identity's stream.
+    pub fn get_or_create_session_for(
+        &self,
+        session_id: Option<&str>,
+        owner: &str,
+    ) -> (String, broadcast::Receiver<TaggedNotification>) {
         let id = session_id.map_or_else(|| format!("gw-{}", Uuid::new_v4()), String::from);
 
         let mut sessions = self.sessions.write();
 
         if let Some(session) = sessions.get(&id) {
-            // Existing session - return new receiver
-            return (id, session.tx.subscribe());
+            if session.owner == owner {
+                // The owner resuming: same stream.
+                return (id, session.tx.subscribe());
+            }
+            // Someone else's id. Issue a fresh one rather than joining it.
+            let fresh = format!("gw-{}", Uuid::new_v4());
+            let (tx, rx) = broadcast::channel(self.config.buffer_size);
+            sessions.insert(
+                fresh.clone(),
+                Arc::new(ClientSession {
+                    id: fresh.clone(),
+                    tx,
+                    last_event_id: RwLock::new(None),
+                    subscribed_backends: RwLock::new(Vec::new()),
+                    created_at: Instant::now(),
+                    owner: owner.to_string(),
+                }),
+            );
+            return (fresh, rx);
         }
 
         // New session
@@ -165,6 +204,7 @@ impl NotificationMultiplexer {
             last_event_id: RwLock::new(None),
             subscribed_backends: RwLock::new(Vec::new()),
             created_at: Instant::now(),
+            owner: owner.to_string(),
         });
 
         sessions.insert(id.clone(), session);
@@ -346,6 +386,53 @@ pub fn create_sse_response(
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
+}
+
+#[cfg(test)]
+mod session_ownership_tests {
+    use super::*;
+    use crate::config::StreamingConfig;
+
+    fn mux() -> NotificationMultiplexer {
+        NotificationMultiplexer::new(
+            Arc::new(crate::backend::BackendRegistry::new()),
+            StreamingConfig::default(),
+        )
+    }
+
+    #[test]
+    fn a_caller_cannot_join_another_identity_session() {
+        // A session id travels in a header the caller controls. Without
+        // ownership, a per-session check compares one caller-supplied value
+        // against another, and one client can name another's session.
+        let m = mux();
+        let (alice_id, _rx) = m.get_or_create_session_for(None, "alice");
+
+        let (given, _rx2) = m.get_or_create_session_for(Some(&alice_id), "mallory");
+        assert_ne!(
+            given, alice_id,
+            "presenting another identity's session id must not join it"
+        );
+    }
+
+    #[test]
+    fn the_owner_resumes_the_same_session() {
+        // Resumption after a dropped stream is a real flow and must keep working.
+        let m = mux();
+        let (id, _rx) = m.get_or_create_session_for(None, "alice");
+        let (again, _rx2) = m.get_or_create_session_for(Some(&id), "alice");
+        assert_eq!(again, id, "the owner must resume its own session");
+    }
+
+    #[test]
+    fn one_anonymous_identity_is_unaffected() {
+        // The single-user case: authentication off, every caller anonymous, so
+        // every session has the same owner and nothing changes.
+        let m = mux();
+        let (id, _rx) = m.get_or_create_session(None);
+        let (again, _rx2) = m.get_or_create_session(Some(&id));
+        assert_eq!(again, id);
+    }
 }
 
 #[cfg(test)]
