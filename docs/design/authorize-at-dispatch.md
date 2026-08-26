@@ -210,8 +210,13 @@ The replacement keeps what was actually right about the concern and drops the
 override:
 
 1. **A denial is a distinct error, not a backend failure.** Authorization
-   refusal gets its own variant so it is classifiable, rather than arriving as
-   an opaque `Err` indistinguishable from a timeout.
+   refusal gets its own `Error` variant carrying the `AuthorizationError`'s
+   code, status and message, so the playbook engine can ask "is this a denial?"
+   without string-matching. Its `to_rpc_code` returns the same code the router's
+   envelope already returns for that refusal, so a caller sees one
+   classification whichever gate rejected. Without a distinct variant the
+   non-retry rule below is unimplementable — the engine cannot tell a denial
+   from a timeout, and a timeout **should** be retried.
 2. **A denial is never retried.** The attempt loop
    (`playbook/engine/mod.rs:172-192`) breaks immediately on that variant, so
    `max_retries` cannot turn one refusal into `n` identical denials — waste
@@ -236,6 +241,12 @@ override:
    - **The wire is unchanged for successful runs.** Serialized with
      `skip_serializing_if` on empty, so a playbook that denies nothing produces
      byte-identical JSON to today.
+   - **It records every failed step, not only refusals.** A denial's entry is
+     its refusal reason; a backend failure's entry is the same string `Abort`
+     would already have returned to the same caller, so nothing newly reaches
+     anyone. Recording only refusals would make an unexplained null under
+     `Continue` still possible for ordinary failures — the defect this field
+     exists to close, left half-open.
    - **Keyed by step name, like everything else.** `step_results` is already
      `HashMap<String, Value>` keyed by name (`playbook.rs:154`), and `$step.path`
      interpolation resolves by name too. Two steps sharing a name are therefore
@@ -243,13 +254,21 @@ override:
      inventing a second identity scheme. Disambiguating step names is a separate
      change and is out of scope here.
 
-### Refusals are observable, and one layer owns saying so
+### Refusals are observable, and one helper owns saying so
 
-A chokepoint refusal is the first signal of an attempted scope bypass through
-an orchestration path. **The chokepoint emits the audit line, not the
-authorizer**, so a silent or third-party `ToolAuthorizer` implementation cannot
-omit it: caller, server, tool and transport are recorded at the point the
-refusal is observed, from data the chokepoint already holds.
+A refusal is the first signal of an attempted scope bypass. An earlier revision
+said the chokepoint emits the audit line — which cannot work, and the reason is
+worth keeping: the router's pre-check **returns** the error response
+(`handlers.rs:554`) without entering the meta layer at all, so for every
+router-covered shape the chokepoint is never reached and the line would never
+fire. The design would have promised an audit record for exactly the HTTP scope
+denials that most need one.
+
+So a single `audit_refusal` helper owns the line, and **both** authorization
+gates call it — the router pre-check and the chokepoint. The authorizer never
+emits it, so a silent or third-party `ToolAuthorizer` cannot omit it, and one
+emitter means one format. Caller, server, tool and transport come from data each
+gate already holds.
 
 ### What the authorizer is NOT asked
 
@@ -280,6 +299,16 @@ outside both authorization points. It is not reachable from any live route
 today, which is why this change does not gate it. It is recorded here because
 the moment a route adopts the provider layer it becomes a third unguarded path,
 and the person wiring that route is the one who needs to know.
+
+## Deferred, with reasons
+
+- **Doubled agent-scope ALLOW audits.** `authorize_tool_target` now runs twice
+  on router-covered paths, so an ALLOW audit fires twice per invocation there
+  and once on the playbook path. Deduplicating means either phase-labelling both
+  emissions or suppressing one, and the honest fix touches the audit contract
+  rather than this change. Filed, not folded in: an audit consumer counting
+  invocations from ALLOW lines is already reading a signal that was never an
+  invocation counter. Refusals are unaffected — MIK.AUTHZ.23 pins them at one.
 
 ## Residual risk, stated
 
@@ -355,8 +384,11 @@ Ordering and coverage:
   `Stdio` through the stdio one — not merely on the four keys being present, and
   not on the sentence. Ownership is proved with an authorizer that logs nothing.
 - MIK.AUTHZ.23 On a router-covered shape such as `gateway_invoke`, a denied call
-  emits **exactly one** refusal line. The design records that ALLOW audits double
-  on those paths; refusals must not.
+  emits **exactly one** refusal line, exercised through the full router path
+  rather than at the meta layer — the router refuses and returns before the
+  chokepoint, so a meta-level fixture would prove nothing about the path that
+  actually runs. The design records that ALLOW audits double on those paths;
+  refusals must not.
 - MIK.AUTHZ.21 The direct `/mcp/{name}` route keeps its existing refusal
   behaviour, proving the outer check was not removed as redundant.
 
