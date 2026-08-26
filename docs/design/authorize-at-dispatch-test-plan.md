@@ -60,7 +60,7 @@ result fields, never authorizer consultations.
 | AC | case | L | why it can fail |
 |---|---|---|---|
 | 17 | `on_error: retry`, `max_retries: 3`, an invoker returning the denial error → **`ToolInvoker::invoke` called once**, name in `steps_failed`, reason in `step_errors`, later steps still run | E | an ordinary `Err` is retried three times, so the count fails. Stated as invoker calls because the engine cannot see an authorizer |
-| 17a | the same playbook driven at meta level with a **counting wrapper over `DenyAll`** → the authorizer is consulted exactly once | U | 17 uses a synthetic error; only this row proves a production refusal is converted to the non-retry variant. It is at U because that is where an authorizer exists to count |
+| 17a | a **single-step** playbook, `on_error: retry`, `max_retries: 3`, driven at meta level with a counting wrapper over `DenyAll` → the authorizer is consulted exactly once **for that step** | U | 17 uses a synthetic error; only this row proves a production refusal is converted to the non-retry variant. It is at U because that is where an authorizer exists to count |
 | 18 | `on_error: continue`, a denied step then an allowed step → run completes, allowed step ran, name in `steps_failed`, reason in `step_errors` | E | fails terminal-refusal and fails silent-null; the two fields separate them |
 | 18a | `on_error: continue`, an ordinary **backend** failure → its message also lands in `step_errors` | E | fails a fix recording refusals only, leaving ordinary failures unexplained |
 | 18b | `on_error: retry` with attempts exhausted by an ordinary failure → its message also lands in `step_errors` | E | the `!succeeded` arm null-fills for `Continue` **and** `Retry` (`engine/mod.rs:206`); 18a covers only the first, so a fix populating one arm passes it and leaves retry callers unexplained |
@@ -122,7 +122,7 @@ between the gates, and the chokepoint must refuse before the cache is read.
 | 15 | a stdio playbook step hits a policy-denied tool → refused | S | no coverage today; fails against pre-fix source |
 | 15a | a stdio playbook step hitting a **permitted** tool → succeeds | S | a stdio authorizer that denies every backend target passes 15 and 16 on its own; this row is what refuses that |
 | 16 | stdio keeps admin standing and its `gateway_invoke` refusal after the inline block is deleted | S | guards the deletion |
-| 22 | with mTLS rules configured, stdio calls are **not** refused | S | fails an implementation that hands stdio the mTLS policy, which would deny everything |
+| 22 | with mTLS rules configured, a stdio call to **an actual backend tool** is not refused | S | fails an implementation that hands stdio the mTLS policy, which would deny everything |
 
 `MIK.AUTHZ.9` remains withdrawn from design time: the types prove it, and a test
 that greps for a symbol is a lint wearing a test's clothes.
@@ -190,9 +190,15 @@ name is a gap a grep finds.
 - **20b** needs the backend gated — paused mid-call — so the idempotency
   in-flight entry can be observed while it exists. Inspecting after completion
   sees an entry that has already been cleared, and reads as absent.
-- **7 and 7a** need a live enforcer AND a tool whose `cost_for` is non-zero.
-  A free tool records nothing, so 7a's "a spend recorded" would fail for a
-  reason that has nothing to do with authorization.
+- **7b** needs the enforcer *enabled* and a tool whose `cost_for` is non-zero.
+  A disabled enforcer or a free tool never produces the budget error, so the
+  discriminator has only one arm and the row passes whatever the ordering. (This
+  note previously sat on 7/7a, whose spend oracle no longer exists.)
+- **20a** cannot use the no-op probe for its in-flight half: with authorization
+  removed the call dispatches successfully, and the in-flight entry becomes a
+  completed one rather than staying absent. Only the credential half fails under
+  that probe, so **the in-flight assertion is carried by 20b**, whose gated
+  backend can observe the entry while it exists.
 - **12** needs a genuinely primed cache, not a mock returning a hit. **7** needs
   the opposite — an empty one — so a cache hit cannot manufacture its zeros.
 - **20a** reads its two oracles *after* the refusal returns. It does not pause
