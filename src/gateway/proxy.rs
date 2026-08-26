@@ -152,7 +152,7 @@ impl ProxyManager {
     /// - [`SamplingError::Cancelled`] if the oneshot channel is dropped unexpectedly.
     pub async fn forward_sampling_with_response(
         &self,
-        _session_id: &str,
+        session_id: &str,
         params: &SamplingCreateMessageParams,
         timeout: Duration,
     ) -> Result<Value, SamplingError> {
@@ -174,9 +174,14 @@ impl ProxyManager {
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        // Broadcast to ALL sessions — first Claude Code instance to respond wins.
-        self.multiplexer.broadcast(notification);
-        debug!(%id, "Broadcast sampling/createMessage as MCP message to all sessions");
+        // To the originating session only. Broadcasting let any connected client
+        // see another's prompt and answer on their behalf — including the
+        // destructive-action confirmation, which made that gate a lottery
+        // rather than a control on a gateway with more than one client.
+        if !self.multiplexer.send_to_session(session_id, notification) {
+            return Err(SamplingError::NoSession);
+        }
+        debug!(%id, %session_id, "Sent sampling/createMessage to the originating session");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {
@@ -201,10 +206,10 @@ impl ProxyManager {
 
     /// Forward an `elicitation/create` request and wait for the client response.
     ///
-    /// Same bidirectional broadcast pattern as [`Self::forward_sampling_with_response`].
+    /// Same session-targeted pattern as [`Self::forward_sampling_with_response`].
     pub async fn forward_elicitation_with_response(
         &self,
-        _session_id: &str,
+        session_id: &str,
         params: &ElicitationCreateParams,
         timeout: Duration,
     ) -> Result<Value, SamplingError> {
@@ -227,8 +232,12 @@ impl ProxyManager {
         };
 
         // Broadcast to ALL sessions — first Claude Code instance to respond wins.
-        self.multiplexer.broadcast(notification);
-        debug!(%id, "Broadcast elicitation/create as MCP message to all sessions");
+        // To the originating session only, for the same reason as sampling: a
+        // confirmation another client can answer is not a confirmation.
+        if !self.multiplexer.send_to_session(session_id, notification) {
+            return Err(SamplingError::NoSession);
+        }
+        debug!(%id, %session_id, "Sent elicitation/create to the originating session");
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {

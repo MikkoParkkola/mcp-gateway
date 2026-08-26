@@ -401,6 +401,42 @@ mod session_ownership_tests {
     }
 
     #[test]
+    fn a_request_reaches_only_its_own_session() {
+        // Sampling and elicitation went to every connected session, so one
+        // client saw another's prompt and could answer on their behalf. The
+        // destructive-action confirmation runs through this path.
+        let m = mux();
+        let (alice, mut alice_rx) = m.get_or_create_session_for(None, "alice");
+        let (_bob, mut bob_rx) = m.get_or_create_session_for(None, "bob");
+
+        let note = TaggedNotification {
+            source: "gw".to_string(),
+            event_type: "sampling/createMessage".to_string(),
+            data: serde_json::json!({"jsonrpc": "2.0"}),
+            event_id: None,
+        };
+        assert!(m.send_to_session(&alice, note));
+
+        assert!(
+            alice_rx.try_recv().is_ok(),
+            "the originating session receives it"
+        );
+        assert!(
+            bob_rx.try_recv().is_err(),
+            "another session must not see another client's prompt"
+        );
+
+        // An unknown session is a refusal, not a broadcast.
+        let note2 = TaggedNotification {
+            source: "gw".to_string(),
+            event_type: "sampling/createMessage".to_string(),
+            data: serde_json::json!({"jsonrpc": "2.0"}),
+            event_id: None,
+        };
+        assert!(!m.send_to_session("gw-not-a-session", note2));
+    }
+
+    #[test]
     fn a_caller_cannot_join_another_identity_session() {
         // A session id travels in a header the caller controls. Without
         // ownership, a per-session check compares one caller-supplied value
