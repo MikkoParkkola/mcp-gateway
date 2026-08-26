@@ -151,14 +151,22 @@ This table is the only list of which rows earn a probe. An earlier draft kept a
 separate prose list, and the two disagreed — four rows were named there and
 appeared in no probe row.
 
+**A probe is chosen per row by one question: what sabotage turns THIS row red?**
+Not which section the row lives in. An earlier draft assigned by section and got
+three rows wrong in the same way — a probe that leaves the assertion green is
+not a weak probe, it is no probe, and it certifies nothing. Each class below
+therefore says what it makes fail.
+
 | rows | probe | why this one, and not another |
 |---|---|---|
 | 1, 2, 3, 10, 11, 15 | restore pre-fix production source | the strongest probe: the mechanism is genuinely absent, and these assertions name no new API, so the tree still compiles |
-| 7, 12, 13, 14a, 20, 20a, 23 | make the chokepoint's authorization call a **no-op**, one line, every type left in place | restoring the source leaves these test files uncompilable, and a compile error is not a falsification |
+| 7, 12, 13, 14a, 20, 20a | make the chokepoint's authorization call a **no-op**, one line, every type left in place | the refusal disappears and each row's assertion goes red. Restoring the source instead leaves these test files uncompilable, and a compile error is not a falsification |
+| 23 | remove the `audit_refusal` call from the **router** gate | 23 runs the full router path, which refuses and returns *before* the chokepoint — the chokepoint no-op leaves its line intact and the row green. Sabotaging the gate that actually emits it takes the count from one to zero |
 | 6a, 17a | the same no-op | consultation counts drop to zero, so the row fails. A deny-all probe cannot falsify them: the authorizer is consulted once whatever verdict it returns |
-| 17, 17b, 18, 18a | revert the **engine** change — restore the retry loop without the denial break, and stop populating `step_errors` | these run at engine level against a synthetic invoker, so a chokepoint no-op leaves every assertion untouched. The mechanism they test lives in the engine, so that is what the probe must remove |
-| 14b, 15a | remove the stdio authorizer from `dispatch_single` | the chokepoint no-op does not reach the stdio construction site |
-| 1a, 2a, 3a, 7a, 10a, 11a, 12a, 20b, 20c | invert the authorizer to **deny everything** | a no-op probe makes an allow row pass, so it cannot falsify one. Only forcing a denial proves the row watches the allow path |
+| 17, 18, 18a | revert the **engine** change — restore the retry loop without the denial break, and stop populating `step_errors` | 17's single invoker call becomes three, and `step_errors` disappears. These run at engine level against a synthetic invoker, so a chokepoint no-op would leave every assertion untouched |
+| 17b | widen the denial break to match **every** error, not only a denial | 17b asserts pre-existing behaviour — ordinary errors retried three times — so the engine revert restores exactly what it expects and cannot fail it. The risk 17b guards is an over-broad non-retry, so that is the sabotage: ordinary errors then stop after one call and the row goes red |
+| 14b | remove the stdio authorizer from `dispatch_single` | the refusal and its audit line disappear. The chokepoint no-op does not reach the stdio construction site |
+| 1a, 2a, 3a, 7a, 10a, 11a, 12a, 15a, 20b, 20c | invert the relevant authorizer to **deny everything** — the stdio one for 15a | the permitted call is refused and the row goes red. A no-op probe makes an allow row pass and cannot falsify one; nor can removing an authorizer, since a permitted call succeeds either way |
 
 Rows on the honesty list get no probe: they are expected to pass before and
 after, and a probe that "fails" one would be reporting the guard working, not
