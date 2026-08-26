@@ -1239,7 +1239,7 @@ mod caller_addressed_state_tests {
         // Every shipped registration, not only the one that prompted this.
         // `gws_gmail_watch` registers a Pub/Sub topic: no "webhook" in the name
         // and no URL in the schema, and the first version missed it.
-        for expected in ["linear_create_webhook", "gws_gmail_watch", "bus_subscribe"] {
+        for expected in ["linear_create_webhook", "gws_gmail_watch"] {
             assert!(
                 flagged.contains(&expected.to_string()),
                 "{expected} registers a delivery destination and must be caught: {flagged:?}"
@@ -1252,6 +1252,9 @@ mod caller_addressed_state_tests {
             "wayback_save",
             "linear_attach_url",
             "notion_create_page",
+            // Named for a subscription, but its body returns a timestamp and
+            // registers nothing. A name is a hint, never the evidence.
+            "bus_subscribe",
         ] {
             assert!(
                 !flagged.contains(&ordinary.to_string()),

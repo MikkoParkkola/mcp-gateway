@@ -508,6 +508,24 @@ and requiring a credential there would take an ordinary tool away for no gain.
 A capability added later inherits the rule rather than needing to be remembered
 on a list.
 
+### Inbound webhooks
+
+Webhook deliveries pass the same Host check as everything else, and a delivery
+arriving through a tunnel carries the tunnel's hostname. On a loopback bind that
+name is neither loopback nor declared, so it is refused.
+
+Declare the address the provider actually posts to:
+
+```yaml
+server:
+  public_url: "https://your-tunnel.example.com"
+```
+
+The Host check already admits `public_url`, and it is re-read on each request,
+so a reload applies it without a restart. Without it the provider sees a `403`
+and the gateway logs `Request blocked: Host does not name this gateway`, naming
+the hostname it refused.
+
 ### Managing the gateway from your MCP client
 
 `mcp-gateway setup export` writes the gateway entry into each AI client's own

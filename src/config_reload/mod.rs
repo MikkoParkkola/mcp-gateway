@@ -454,6 +454,17 @@ fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str
     if server_without_public_url(running) != server_without_public_url(wanted) {
         pending.push("server");
     }
+    // `control_plane` the same way as `server`: `role_mapping` IS re-read per
+    // request (`ui::control_plane`), so comparing the section whole would tell
+    // an operator to restart for a change that already took effect.
+    let control_plane_without_role_mapping = |c: &Config| {
+        let mut cp = c.control_plane.clone();
+        cp.role_mapping = crate::control_plane::ControlPlaneRoleMappingConfig::default();
+        canonical_json(&cp)
+    };
+    if control_plane_without_role_mapping(running) != control_plane_without_role_mapping(wanted) {
+        pending.push("control_plane");
+    }
     if canonical_json(&running.env_files) != canonical_json(&wanted.env_files) {
         pending.push("env_files");
     }
@@ -510,7 +521,6 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "failsafe" => failsafe,
         "cache" => cache,
         "runtime" => runtime,
-        "control_plane" => control_plane,
         "cost_governance" => cost_governance,
     ]
 }

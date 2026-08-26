@@ -66,8 +66,8 @@ metadata:
     - surrealdb
   cost_category: free
   execution_time: fast
-  # Not a read: it registers a topic pattern and an agent id, and the bus then
-  # delivers to that subscriber. Marked read-only in error, which excluded it
-  # from the rule that requires admin to register a delivery destination.
-  read_only: false
+  # A read despite the name: the body is `RETURN time::now();`, which returns a
+  # cursor timestamp. No subscription is created, no destination is registered,
+  # and the parameters are not interpolated into the query at all.
+  read_only: true
   docs: /tmp/c-agent-bus-design.md

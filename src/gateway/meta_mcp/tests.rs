@@ -2217,9 +2217,17 @@ async fn cost_report_refuses_the_admin_view_for_a_non_admin() {
         );
     }
 
-    // The ordinary, caller-scoped report still works without a credential.
-    let plain = meta.get_cost_report(&json!({}), None, &caller).await;
-    assert!(plain.is_ok(), "the caller's own report needs no admin");
+    // The ordinary, caller-scoped report still works without a credential —
+    // but the gateway-wide total is every caller's spend combined, which is the
+    // same cross-tenant view the flags above are gated on.
+    let plain = meta
+        .get_cost_report(&json!({}), None, &caller)
+        .await
+        .expect("the caller's own report needs no admin");
+    assert!(
+        plain["aggregate"].is_null(),
+        "a non-admin caller must not receive the gateway-wide total: {plain}"
+    );
 }
 
 /// A non-admin caller could name any session id and read its spend, because the

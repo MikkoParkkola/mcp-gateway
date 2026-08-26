@@ -679,6 +679,30 @@ mod tests {
     }
 
     #[test]
+    fn a_tunnel_hostname_is_admitted_once_declared() {
+        // Inbound webhook deliveries arrive through a tunnel and carry its
+        // hostname, which on a loopback bind is neither loopback nor known.
+        // Declaring it as public_url admits them, and is read live so a reload
+        // applies it.
+        let live = Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        ));
+        let p = OriginPolicy::from_live(&live);
+        assert!(
+            !p.host_ok("your-tunnel.example.com"),
+            "undeclared is refused"
+        );
+
+        let mut declared = crate::config::Config::default();
+        declared.server.public_url = Some("https://your-tunnel.example.com".to_string());
+        live.set(declared);
+        assert!(
+            p.host_ok("your-tunnel.example.com"),
+            "a declared public_url must admit the provider's delivery"
+        );
+    }
+
+    #[test]
     fn ipv6_public_url_matches_a_bracketed_host() {
         // Locks in behaviour a review claimed was broken and is not: the `url`
         // crate's `host_str` returns an IPv6 literal WITH brackets, the same

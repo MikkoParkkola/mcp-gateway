@@ -1994,7 +1994,14 @@ impl MetaMcp {
             json!(null)
         };
 
-        let aggregate = serde_json::to_value(self.cost_tracker.aggregate()).unwrap_or(json!(null));
+        // The gateway-wide total is every caller's spend combined, which is the
+        // same cross-tenant view the explicit flags are gated on. Gating those
+        // and leaving this open would have made the check cosmetic.
+        let aggregate = if caller.is_admin {
+            serde_json::to_value(self.cost_tracker.aggregate()).unwrap_or(json!(null))
+        } else {
+            json!(null)
+        };
 
         Ok(json!({
             "session": session_report,
