@@ -49,7 +49,7 @@ The default is `Abort`, and an `Abort` fixture passes whether or not the rule ho
 | AC | case | L | why it can fail |
 |---|---|---|---|
 | 17 | `on_error: retry`, `max_retries: 3`, denied step → authorizer consulted **once**, backend zero times, name in `steps_failed`, reason in `step_errors`, later steps still run | E | a denial routed as an ordinary `Err` is retried three times |
-| 17a | **a real chokepoint denial, not a synthetic one, produces the engine's non-retry variant** | I | 17-19 run at engine level with an injected error; without this row nothing proves a production authorizer refusal is converted to that variant, and the branches are covered while the conversion is untested |
+| 17a | a **real** chokepoint denial reaching the engine through a playbook with `on_error: retry, max_retries: 3` → the authorizer is consulted once and the backend zero times | U | 17-19 inject a synthetic error at engine level, so nothing there proves a production refusal is converted to the non-retry variant. Asserted on observable counts rather than the variant's type, which is not nameable at integration level — a conversion that fails produces three consultations |
 | 18 | `on_error: continue`, denied step then an allowed step → run completes, allowed step ran, name in `steps_failed`, reason in `step_errors` | E | fails terminal-refusal and fails silent-null; the two fields separate them |
 | 18a | `on_error: continue`, an ordinary **backend** failure → its message also lands in `step_errors` | E | fails a fix recording refusals only, leaving ordinary failures unexplained |
 | 19 | `on_error: abort`, denied step → the run returns **the denial's own code and message**, and no later step runs | E | asserting only "aborted" passes for any error; the code is what pins it to a denial |
@@ -84,43 +84,61 @@ The default is `Abort`, and an `Abort` fixture passes whether or not the rule ho
 | 16 | stdio keeps admin standing and its `gateway_invoke` refusal after the inline block is deleted | S | guards the deletion. Passes against unfixed code |
 | 22 | with mTLS rules configured, stdio calls are **not** refused | S | fails an implementation that hands stdio the mTLS policy, which would deny everything. Passes against unfixed code |
 
-## Criteria that cannot be observed today, and why
+## Ordering criteria, and the shape that can observe them
 
-Withdrawn rather than written as cases that would run green and prove nothing.
-Each names the condition that would make it live again.
+An earlier draft of this plan withdrew these as unobservable, reasoning that
+every internal call injects `_full` — which skips the response cache
+(`invoke.rs:799`, `:1231`) and idempotency (`:750`) — while router-covered
+shapes are refused before the chokepoint. The first half is true and the
+conclusion was wrong: `_full` is injected **only** by `internal_invoke_args`
+(`support.rs:204`). A client's `gateway_invoke` carries none, so it reaches the
+chokepoint (`mod.rs:1174`) through the full cache, idempotency and nonce paths.
 
-- **MIK.AUTHZ.12 (a cached result is not served to a refused caller)** and the
-  cache clause of **MIK.AUTHZ.7**. No shape both reaches the chokepoint and uses
-  the cache. Every internal call injects `_full` via `internal_invoke_args`, and
-  `_full` skips the response cache (`invoke.rs:799`, `:1231`) and idempotency
-  (`:750`) outright — "a `_full` request is always a fresh, uncached dispatch",
-  in the code's own words. Router-covered shapes do use the cache, but the
-  router refuses them before the chokepoint runs. The property still holds — it
-  is enforced by the router gate for cached shapes — but it is not observable at
-  the chokepoint. **Live again if** internal calls stop injecting `_full`.
-- **The nonce and idempotency clauses of MIK.AUTHZ.20.** `internal_invoke_args`
-  puts no `nonce` on the envelope, and `_full` skips idempotency, so a playbook
-  step cannot exercise either; a direct `gateway_invoke` is refused at the
-  router first. The credential-mint clause survives and stays in 20.
-- **MIK.AUTHZ.9** was withdrawn at design time: the types prove it, and a test
-  that greps for a symbol is a lint wearing a test's clothes.
+That is not a contrived shape. It is the case the design already names as the
+reason the chokepoint is authoritative: the router allowed the call, policy
+changed between the two checks, and the chokepoint must refuse it **before** the
+cached value is served.
 
-The placement of the check above the cache read and the nonce block is still
-required by the design. It is currently justified by reading, not by a test,
-and that is stated here rather than hidden behind a green row.
+| AC | case | L | why it can fail |
+|---|---|---|---|
+| 12 | prime the response cache for `alpha:tool` as an allowed caller, then drive a meta-level `gateway_invoke` for the same target with `DenyAll` → refused, and the cached value is **not** returned | U | a check placed after the cache read returns the cached payload and fails. The cache must be genuinely primed; a mocked hit proves nothing |
+| 12a | the same primed target with `AllowAll` → the cached value **is** returned | U | proves the fixture's cache is real and reachable, so 12's refusal is not just an empty cache |
+| 7 | a refused call performs no backend call **and records no budget spend** — counting backend at zero AND the budget enforcer's recorded spend unchanged | U | the backend mock alone cannot fail an implementation that authorizes after the spend at `:861`; the enforcer is the oracle for that half |
+| 7a | the same call allowed → backend count 1 and a spend recorded | U | makes 7's zeros meaningful, the same pairing row 6 uses |
+| 20 | a refused call carrying a fresh top-level `nonce` against a live `NonceStore` → refused, and the same nonce is still registrable afterwards | U | a check below `:634` consumes the nonce and fails this |
+| 20a | a refused call registers no idempotency in-flight entry and mints no per-user credential for an identity-propagating backend | U | this is AUTHZ.20's surviving clause, which had no row at all in the previous draft |
+
+`MIK.AUTHZ.9` remains withdrawn from design time: the types prove it, and a test
+that greps for a symbol is a lint wearing a test's clothes.
 
 ## Honesty list — rows that pass against unfixed code by design
 
-4, 5, 8, 8a, 16, 21, 22, and weakly 19. They are regression guards: their job
-is to fail if this change breaks something, not to demonstrate it works. A
-coverage tool scores them as covering the new mechanism; they do not. The rows
-that actually demonstrate the mechanism are 1, 2, 3, 10, 11, 13, 15, 17, 17a,
-18, 23 and 14a/14b.
+4, 5, 8, 8a, 16, 21, 22, 23, 24, and weakly 19. They are regression guards:
+their job is to fail if this change breaks something, not to demonstrate it
+works. A coverage tool scores them as covering the new mechanism; they do not.
+23 and 24 belong here because a single refusal line and an absent
+`step_errors` key are both true of the code before this change.
+
+The rows that demonstrate the mechanism, and therefore earn a falsifier probe:
+1, 1a, 2, 2a, 3, 3a, 6, 7, 7a, 10, 10a, 11, 11a, 12, 12a, 13, 14a, 14b, 15, 17,
+17a, 18, 18a, 20, 20a.
 
 ## Falsifier probes
 
-Every row in the demonstrating set gets a probe against pre-fix content, per
-development-process.md §P2: copy the file, restore under a trap, confirm the
-failure is the intended assertion and not a compile error, then confirm the
-test goes green again after restoring. The restore is verified by re-running the
-test, never by `git status`.
+Every row in the demonstrating set gets a probe, per development-process.md §P2:
+copy the file, restore under a trap, confirm the failure is the intended
+assertion and not a compile error, then confirm the test goes green again. The
+restore is verified by re-running the test, never by `git status`.
+
+**Restoring pre-fix production source does not work for most of these rows.**
+Their assertions name APIs this change introduces — `step_errors` (17, 18, 18a),
+the authorizer constructor and `DenyAll` (12, 13, 20), the denial variant
+(17a) — so reverting the source leaves the test file uncompilable, and a
+compile error is not a falsification.
+
+The probe for those rows reverts **behaviour, not source**: under the same trap,
+make the chokepoint's authorization call a no-op — one line — leaving every
+type in place. The row must then fail on its own assertion. That is the same
+proof (the mechanism, removed, and the test notices) obtained without breaking
+the build. Rows whose assertions touch no new API (1, 2, 3, 10, 11, 15) can use
+the ordinary pre-fix restore, and should, because it is the stronger probe.
