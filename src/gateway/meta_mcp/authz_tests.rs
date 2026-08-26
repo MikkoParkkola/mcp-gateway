@@ -82,7 +82,7 @@ fn counted_backend(name: &str) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
 /// authorizer is the only thing that varies. A fixture that assembled the
 /// context some other way would prove the double works rather than that the
 /// chokepoint is reached.
-fn ctx<'a>(authorizer: &'a (dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'a> {
+fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
     MetaMcpCallerContext {
         authorizer,
         api_key_name: Some("test-caller"),

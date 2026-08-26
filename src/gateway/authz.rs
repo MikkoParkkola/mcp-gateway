@@ -203,15 +203,6 @@ impl<A: ToolAuthorizer> CountingAuthorizer<A> {
             .copied()
             .unwrap_or(0)
     }
-
-    /// Consultations recorded for every target.
-    pub(crate) fn total(&self) -> usize {
-        self.counts
-            .lock()
-            .expect("counting authorizer mutex poisoned")
-            .values()
-            .sum()
-    }
 }
 
 #[cfg(test)]

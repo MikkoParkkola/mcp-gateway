@@ -2275,10 +2275,7 @@ impl MetaMcp {
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
 
-        let invoker = MetaMcpInvoker {
-            meta: self,
-            caller,
-        };
+        let invoker = MetaMcpInvoker { meta: self, caller };
 
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);

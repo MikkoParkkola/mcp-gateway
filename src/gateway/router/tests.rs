@@ -2226,3 +2226,176 @@ async fn a_numeric_origin_must_match_the_request_authority() {
         "the gateway's own page must still work"
     );
 }
+
+// ===========================================================================
+// MIK-7252 — a playbook step faces the invoking caller's real scope.
+//
+// The meta-layer cases in `meta_mcp::authz_tests` prove the chokepoint is
+// reached, using a test authorizer. These prove the thing that actually
+// matters: the REAL policy — `RouterAuthorizer` over an `AuthenticatedClient`
+// — refuses a playbook step, which no test double can demonstrate.
+// ===========================================================================
+
+use crate::gateway::auth::AuthenticatedClient;
+
+/// A client restricted to one backend, with optional tool scoping.
+fn scoped_client(
+    name: &str,
+    backends: Vec<String>,
+    allowed_tools: Option<Vec<String>>,
+) -> AuthenticatedClient {
+    AuthenticatedClient {
+        name: name.to_string(),
+        rate_limit: 0,
+        backends,
+        allowed_tools,
+        denied_tools: None,
+        admin: false,
+        principal: format!("principal-{name}"),
+        authenticated: true,
+    }
+}
+
+/// Run a one-step playbook through the production path, with the real router
+/// authorizer built exactly as `handlers.rs` builds it.
+async fn run_step_as(
+    state: &Arc<AppState>,
+    client: &AuthenticatedClient,
+    server: &str,
+    tool: &str,
+) -> JsonRpcResponse {
+    let yaml = format!(
+        "name: scoped\ndescription: one step\non_error: abort\nsteps:\n  - name: step\n    server: {server}\n    tool: {tool}\n"
+    );
+    let definition: crate::playbook::PlaybookDefinition =
+        serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(definition);
+    state.meta_mcp.set_playbook_engine(engine);
+
+    let authorizer = super::authorization::RouterAuthorizer {
+        state: state.as_ref(),
+        client: Some(client),
+        oauth_agent_identity: None,
+        cert_identity: None,
+    };
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &authorizer,
+        api_key_name: Some(client.name.as_str()),
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: client.admin,
+    };
+    // Driven through the production dispatch entry point rather than a
+    // test-only door into the playbook runner, so what is exercised is the
+    // path a real request takes.
+    state
+        .meta_mcp
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            serde_json::json!({ "name": "scoped", "arguments": {} }),
+            None,
+            caller,
+        )
+        .await
+}
+
+/// The text a dispatch came back with, whether it succeeded or failed.
+///
+/// A refusal surfaces as a JSON-RPC error; a network failure surfaces inside a
+/// successful envelope. Both are strings to assert against, and conflating them
+/// would be wrong only if a test asserted "it failed" rather than "it was
+/// refused, and here is what it said" — which none below does.
+fn response_text(response: &JsonRpcResponse) -> String {
+    response.error.as_ref().map_or_else(
+        || {
+            response
+                .result
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        },
+        |e| e.message.clone(),
+    )
+}
+
+#[tokio::test]
+async fn authz_1_playbook_step_outside_client_backend_scope_is_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+
+    let response = run_step_as(&state, &client, "beta", "read").await;
+
+    let msg = response_text(&response);
+    assert!(
+        response.error.is_some(),
+        "a step outside the client's backend scope must be refused: {msg}"
+    );
+    assert!(
+        msg.contains("beta"),
+        "the refusal must name the backend it refused: {msg}"
+    );
+    assert!(
+        msg.contains("scoped"),
+        "and the client it refused for: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn authz_1a_playbook_step_inside_client_backend_scope_is_not_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+
+    let response = run_step_as(&state, &client, "alpha", "read").await;
+
+    // The backend is unreachable, so this fails at the network — deliberately.
+    // What must NOT appear is an authorization refusal: the point is that the
+    // scope check passed and the call proceeded to dispatch.
+    let msg = response_text(&response);
+    assert!(
+        !msg.contains("not authorized for backend"),
+        "a permitted backend must not be refused: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn authz_2_playbook_step_outside_client_tool_scope_is_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client(
+        "scoped",
+        vec!["alpha".to_string()],
+        Some(vec!["safe_*".to_string()]),
+    );
+
+    let response = run_step_as(&state, &client, "alpha", "danger_tool").await;
+
+    let msg = response_text(&response);
+    assert!(
+        response.error.is_some(),
+        "a step outside the client's tool allowlist must be refused: {msg}"
+    );
+    assert!(
+        msg.contains("danger_tool"),
+        "the refusal must name the tool: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client(
+        "scoped",
+        vec!["alpha".to_string()],
+        Some(vec!["safe_*".to_string()]),
+    );
+
+    let response = run_step_as(&state, &client, "alpha", "safe_read").await;
+
+    let msg = response_text(&response);
+    assert!(
+        !msg.contains("not in the allowlist"),
+        "a permitted tool must not be refused: {msg}"
+    );
+}
