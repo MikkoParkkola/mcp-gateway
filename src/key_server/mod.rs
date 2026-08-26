@@ -95,6 +95,9 @@ impl KeyServer {
 
         let client = AuthenticatedClient {
             name: oidc_client_identity_key(&temp.identity),
+            // A temporary token identifies one principal; its own key is the
+            // stable identifier.
+            principal: crate::gateway::auth::principal_of(&temp.token),
             rate_limit: temp.scopes.rate_limit,
             backends: temp.scopes.backends.clone(),
             allowed_tools: if temp.scopes.tools.is_empty() {
@@ -147,6 +150,8 @@ impl KeyServer {
             .resolve_scopes(&identity, &RequestedScopes::default())?;
 
         let client = AuthenticatedClient {
+            // The verified subject identifies this principal.
+            principal: crate::gateway::auth::principal_of(&oidc_client_identity_key(&identity)),
             name: oidc_client_identity_key(&identity),
             rate_limit: scopes.rate_limit,
             backends: scopes.backends.clone(),

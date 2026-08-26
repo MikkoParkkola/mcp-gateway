@@ -15,6 +15,7 @@ use mcp_gateway::gateway::auth::AuthenticatedClient;
 #[test]
 fn test_no_tool_restrictions() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "unrestricted".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -34,6 +35,7 @@ fn test_no_tool_restrictions() {
 #[test]
 fn test_allowlist_exact_match() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "frontend".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -72,6 +74,7 @@ fn test_allowlist_exact_match() {
 #[test]
 fn test_allowlist_glob_patterns() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "search_only".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -101,6 +104,7 @@ fn test_allowlist_glob_patterns() {
 #[test]
 fn test_denylist_exact_match() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "no_writes".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -142,6 +146,7 @@ fn test_denylist_exact_match() {
 #[test]
 fn test_denylist_glob_patterns() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "no_filesystem".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -174,6 +179,7 @@ fn test_denylist_glob_patterns() {
 #[test]
 fn test_qualified_name_matching() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "specific_server".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -207,6 +213,7 @@ fn test_qualified_name_matching() {
 #[test]
 fn test_allowlist_and_denylist_combination() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "complex".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -268,6 +275,7 @@ fn test_api_key_config_with_tool_scopes() {
 #[test]
 fn test_empty_allowlist() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "deny_all".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -286,6 +294,7 @@ fn test_empty_allowlist() {
 #[test]
 fn test_empty_denylist() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "allow_all".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -304,6 +313,7 @@ fn test_empty_denylist() {
 #[test]
 fn test_pattern_matching_edge_cases() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "edge_cases".to_string(),
         rate_limit: 0,
         backends: vec![],

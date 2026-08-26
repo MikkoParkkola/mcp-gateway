@@ -35,6 +35,10 @@ type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 ///
 /// Returns the first 12 hex chars of the SHA-256 digest — enough to correlate
 /// which credential is active across logs, useless as a credential itself.
+pub(crate) fn principal_of(token: &str) -> String {
+    bearer_token_fingerprint(token)
+}
+
 fn bearer_token_fingerprint(token: &str) -> String {
     crate::hashing::sha256_hex(token.as_bytes())[..12].to_string()
 }
@@ -202,6 +206,7 @@ impl ResolvedAuthConfig {
         {
             return Some(AuthenticatedClient {
                 name: "bearer".to_string(),
+                principal: principal_of(token),
                 rate_limit: 0,
                 backends: vec!["*".to_string()],
                 allowed_tools: None,
@@ -216,6 +221,7 @@ impl ResolvedAuthConfig {
             if token.as_bytes().ct_eq(key.key.as_bytes()).into() {
                 return Some(AuthenticatedClient {
                     name: key.name.clone(),
+                    principal: principal_of(&key.key),
                     rate_limit: key.rate_limit,
                     backends: key.backends.clone(),
                     allowed_tools: key.allowed_tools.clone(),
@@ -337,6 +343,13 @@ pub struct AuthenticatedClient {
     pub denied_tools: Option<Vec<String>>,
     /// Admin-level UI and management tool access.
     pub admin: bool,
+    /// Stable identifier for the principal behind this identity.
+    ///
+    /// A digest of the validated secret, not the display name: `name` is
+    /// operator-chosen and two API keys may share one, which would let them
+    /// attach to each other's sessions. Empty for an identity that presented
+    /// no credential.
+    pub principal: String,
     /// Whether a credential was actually presented and validated.
     ///
     /// False for the anonymous identity used when authentication is disabled,
@@ -572,6 +585,7 @@ fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option
 fn dashboard_client() -> AuthenticatedClient {
     AuthenticatedClient {
         name: "dashboard".to_string(),
+        principal: "dashboard-session".to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,
@@ -633,6 +647,7 @@ pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {
 pub fn anonymous_client() -> AuthenticatedClient {
     AuthenticatedClient {
         name: "anonymous".to_string(),
+        principal: String::new(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,
@@ -702,6 +717,7 @@ pub async fn auth_middleware(
         debug!(path = %path, "Public path, skipping auth");
         request.extensions_mut().insert(AuthenticatedClient {
             name: "public".to_string(),
+            principal: String::new(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
             allowed_tools: None,
@@ -1094,6 +1110,7 @@ mod tests {
     #[test]
     fn test_backend_access_control() {
         let client_restricted = AuthenticatedClient {
+            principal: String::new(),
             name: "restricted".to_string(),
             rate_limit: 0,
             backends: vec!["tavily".to_string(), "brave".to_string()],
@@ -1104,6 +1121,7 @@ mod tests {
         };
 
         let client_unrestricted = AuthenticatedClient {
+            principal: String::new(),
             name: "unrestricted".to_string(),
             rate_limit: 0,
             backends: vec![], // empty = all access
@@ -1114,6 +1132,7 @@ mod tests {
         };
 
         let client_wildcard = AuthenticatedClient {
+            principal: String::new(),
             name: "wildcard".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
@@ -1140,6 +1159,7 @@ mod tests {
     #[test]
     fn test_tool_scope_no_restrictions() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "unrestricted".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1157,6 +1177,7 @@ mod tests {
     #[test]
     fn test_tool_scope_allowlist_exact_match() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "restricted".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1178,6 +1199,7 @@ mod tests {
     #[test]
     fn test_tool_scope_allowlist_glob_pattern() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "search_only".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1205,6 +1227,7 @@ mod tests {
     #[test]
     fn test_tool_scope_denylist_exact_match() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "no_writes".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1226,6 +1249,7 @@ mod tests {
     #[test]
     fn test_tool_scope_denylist_glob_pattern() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "no_filesystem".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1257,6 +1281,7 @@ mod tests {
     #[test]
     fn test_tool_scope_qualified_name_match() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "specific_server".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1280,6 +1305,7 @@ mod tests {
     #[test]
     fn test_tool_scope_both_allow_and_deny() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "complex".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1319,6 +1345,7 @@ mod tests {
     #[test]
     fn test_tool_scope_error_messages() {
         let client_allow = AuthenticatedClient {
+            principal: String::new(),
             name: "frontend".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -1337,6 +1364,7 @@ mod tests {
         assert!(err.contains("frontend"));
 
         let client_deny = AuthenticatedClient {
+            principal: String::new(),
             name: "restricted_bot".to_string(),
             rate_limit: 0,
             backends: vec![],

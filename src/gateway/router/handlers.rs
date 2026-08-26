@@ -136,8 +136,12 @@ fn session_owner(client: Option<&AuthenticatedClient>) -> String {
     client.map_or_else(
         || "unauthenticated:anonymous".to_string(),
         |c| {
-            if c.authenticated {
-                format!("credential:{}:{}", c.admin, c.name)
+            if c.authenticated && !c.principal.is_empty() {
+                // A digest of the validated secret. Two API keys configured
+                // with the same display name are different principals, and
+                // keying on the name would let either attach to the other's
+                // sessions.
+                format!("credential:{}", c.principal)
             } else {
                 format!("unauthenticated:{}", c.name)
             }

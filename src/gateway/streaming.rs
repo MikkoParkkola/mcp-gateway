@@ -416,6 +416,16 @@ mod session_ownership_tests {
     }
 
     #[test]
+    fn two_keys_sharing_a_display_name_are_different_owners() {
+        // `name` is operator-chosen and not unique. Keying ownership on it let
+        // one API key attach to another's session.
+        let m = mux();
+        let (a, _rx) = m.get_or_create_session_for(None, "credential:aaa111");
+        let (given, _rx2) = m.get_or_create_session_for(Some(&a), "credential:bbb222");
+        assert_ne!(given, a, "a different credential is a different owner");
+    }
+
+    #[test]
     fn the_owner_resumes_the_same_session() {
         // Resumption after a dropped stream is a real flow and must keep working.
         let m = mux();

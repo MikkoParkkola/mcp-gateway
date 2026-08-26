@@ -136,7 +136,17 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
-        tls_enabled: state.live_config.get().mtls.enabled,
+        tls_enabled: {
+            let c = state.live_config.get();
+            // Also when a proxy terminates TLS in front: the browser speaks
+            // HTTPS even though this listener does not, and without `Secure` a
+            // downgrade puts the operator's session on the wire.
+            c.mtls.enabled
+                || c.server
+                    .public_url
+                    .as_deref()
+                    .is_some_and(|u| u.starts_with("https://"))
+        },
     };
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).

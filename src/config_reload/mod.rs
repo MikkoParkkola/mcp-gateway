@@ -340,6 +340,18 @@ mod restart_required_tests {
             "a tracked section outside the original list must be reported: {pending:?}"
         );
 
+        // Top-level scalars too: they sit outside every section and were
+        // reported as applied while nothing re-read them.
+        let profile_change = Config {
+            default_routing_profile: "research".to_string(),
+            ..Config::default()
+        };
+        assert!(
+            super::pending_restart_fields(&running, &profile_change)
+                .contains(&"default_routing_profile"),
+            "a top-level field must be reported too"
+        );
+
         let names: Vec<&str> = super::tracked_sections(&running, &running)
             .into_iter()
             .map(|(n, _)| n)
@@ -387,6 +399,12 @@ fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str
         != wanted.server.allow_unauthenticated_network_bind
     {
         pending.push("server.allow_unauthenticated_network_bind");
+    }
+    if running.server.max_body_size != wanted.server.max_body_size {
+        pending.push("server.max_body_size");
+    }
+    if running.default_routing_profile != wanted.default_routing_profile {
+        pending.push("default_routing_profile");
     }
 
     // Everything else is compared WHOLESALE and reported by name. An earlier
@@ -438,6 +456,8 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "failsafe" => failsafe,
         "cache" => cache,
         "runtime" => runtime,
+        "control_plane" => control_plane,
+        "cost_governance" => cost_governance,
     ]
 }
 

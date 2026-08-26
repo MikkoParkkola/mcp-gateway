@@ -1358,6 +1358,7 @@ mod role_wiring_tests {
 
     fn client(admin: bool) -> AuthenticatedClient {
         AuthenticatedClient {
+            principal: String::new(),
             name: "c".to_string(),
             rate_limit: 0,
             backends: Vec::new(),

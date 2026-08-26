@@ -51,7 +51,12 @@ pub(super) fn log_startup_banner(
         // Authorization header, so without this an operator with a perfectly
         // good credential still cannot open the dashboard. The value is
         // single-use and is not the credential itself.
-        if let Some(value) = bootstrap.and_then(DashboardBootstrap::peek) {
+        // Loopback only. The link carries an admin-granting value and the log
+        // it is printed to may be shipped elsewhere; on a network listener the
+        // reader of that log would not even need to be on the machine.
+        if crate::gateway::router::is_loopback_bind(&config.server.host)
+            && let Some(value) = bootstrap.and_then(DashboardBootstrap::peek)
+        {
             info!(
                 "DASHBOARD (opens once, then remembered in this browser): \
                  http://{}:{}/dashboard?bootstrap={}",
