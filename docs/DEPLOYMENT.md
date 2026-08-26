@@ -474,6 +474,21 @@ an address it cannot predict, so the name cannot be checked, but rebinding
 always needs a hostname while a network client dials an address. Set
 `public_url` if clients legitimately reach the gateway by name.
 
+### What a config reload applies
+
+Most settings are read once at startup. A reload reports which changed fields
+are **not yet applied** and keeps reporting them on every reload until the
+process is restarted, rather than saying so once and forgetting.
+
+Enabling `auth.enabled` is the case that matters: it takes effect on restart, so
+a reload reports `NOT YET APPLIED, restart required for: auth`. Fields are
+treated as restart-required unless proven otherwise, so an occasional needless
+restart is possible; being told a security change took effect when it did not
+is not.
+
+Applied without a restart: backends, `server.public_url`, and
+`control_plane.role_mapping`.
+
 ### Admin requires a credential
 
 With `auth.enabled = false` every caller is anonymous and holds **no admin**.

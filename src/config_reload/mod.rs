@@ -200,15 +200,48 @@ impl ReloadOutcome {
 /// pointer-width CAS.
 pub struct LiveConfig {
     inner: RwLock<Arc<Config>>,
+    /// What the running process actually applied, fixed at startup.
+    ///
+    /// Kept apart from `inner` because the diff compares the file against the
+    /// published snapshot: publishing a restart-only edit into that snapshot
+    /// makes the next reload see no difference, so the warning fires once and
+    /// never again. Comparing against what is RUNNING keeps it true until a
+    /// restart makes the two agree.
+    running: Arc<Config>,
 }
 
 impl LiveConfig {
     /// Create a new `LiveConfig` seeded with the startup configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
+        let running = Arc::new(config);
         Self {
-            inner: RwLock::new(Arc::new(config)),
+            inner: RwLock::new(Arc::clone(&running)),
+            running,
         }
+    }
+
+    /// The configuration this process is actually running.
+    #[must_use]
+    pub fn running(&self) -> &Config {
+        &self.running
+    }
+
+    /// `true` when the file asks for something only a restart can apply.
+    ///
+    /// Fail-closed: every tracked field counts unless it is on the allow-list of
+    /// fields proven to be re-read on the request path. A field wrongly counted
+    /// tells an operator to restart when they need not, which is the safe
+    /// direction; the reverse tells them a change took effect when it did not.
+    #[must_use]
+    pub fn restart_required(&self) -> bool {
+        !pending_restart_fields(&self.running, &self.get()).is_empty()
+    }
+
+    /// Which fields the file asks for that the running process has not applied.
+    #[must_use]
+    pub fn pending_restart_fields(&self) -> Vec<&'static str> {
+        pending_restart_fields(&self.running, &self.get())
     }
 
     /// Clone the current active configuration snapshot.
@@ -254,6 +287,94 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigPatch {
     classify_backends(old, new, &mut patch);
 
     patch
+}
+
+#[cfg(test)]
+mod restart_required_tests {
+    use super::LiveConfig;
+    use crate::config::Config;
+
+    fn with_auth(enabled: bool) -> Config {
+        let mut c = Config::default();
+        c.auth.enabled = enabled;
+        c
+    }
+
+    #[test]
+    fn a_restart_only_change_keeps_reporting_until_a_restart() {
+        // The diff compares the file against the published snapshot. Publishing
+        // a restart-only edit into that snapshot makes the NEXT reload see no
+        // difference, so the warning appears once and never again: an operator
+        // who enables authentication, sees the warning, and later edits
+        // something unrelated is told everything is fine while authentication
+        // has never been on.
+        let live = LiveConfig::new(with_auth(false));
+
+        live.set(with_auth(true));
+        assert!(
+            live.restart_required(),
+            "the first reload must report that a restart is needed"
+        );
+
+        // An unrelated later edit. Authentication is still not running.
+        let mut later = with_auth(true);
+        later.server.max_body_size = 1234;
+        live.set(later);
+        assert!(
+            live.restart_required(),
+            "it must keep reporting until a restart makes the running process agree"
+        );
+    }
+
+    #[test]
+    fn no_pending_restart_when_the_file_matches_the_running_process() {
+        let live = LiveConfig::new(with_auth(false));
+        live.set(with_auth(false));
+        assert!(!live.restart_required());
+    }
+}
+
+/// Fields the file changes that only a restart can apply.
+///
+/// The allow-list below names every field proven to be re-read on the request
+/// path; everything else is restart-required by default. Each entry carries the
+/// consumer that reads it, so a reader can check the claim rather than trust it.
+///
+/// - `server.public_url` — `router/well_known.rs`, `router/origin_guard.rs`
+/// - `control_plane.role_mapping` — `ui/control_plane.rs`
+fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str> {
+    let mut pending = Vec::new();
+
+    // Per FIELD, not per section: `server` holds both kinds, so reporting the
+    // section either way is false half the time.
+    if running.server.host != wanted.server.host || running.server.port != wanted.server.port {
+        pending.push("server.host/server.port");
+    }
+    if canonical_json(&running.server.allow_unauthenticated_network_bind)
+        != canonical_json(&wanted.server.allow_unauthenticated_network_bind)
+    {
+        pending.push("server.allow_unauthenticated_network_bind");
+    }
+    if canonical_json(&running.auth) != canonical_json(&wanted.auth) {
+        pending.push("auth");
+    }
+    if canonical_json(&running.mtls) != canonical_json(&wanted.mtls) {
+        pending.push("mtls");
+    }
+    if canonical_json(&running.key_server) != canonical_json(&wanted.key_server) {
+        pending.push("key_server");
+    }
+    if canonical_json(&running.agent_auth) != canonical_json(&wanted.agent_auth) {
+        pending.push("agent_auth");
+    }
+    if canonical_json(&running.security) != canonical_json(&wanted.security) {
+        pending.push("security");
+    }
+    if canonical_json(&running.webhooks) != canonical_json(&wanted.webhooks) {
+        pending.push("webhooks");
+    }
+
+    pending
 }
 
 /// Returns `true` when the TCP-listener address differs.
@@ -1060,7 +1181,13 @@ impl ReloadContext {
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let Some((new_config, patch)) = load_config_patch(&self.config_path, &self.live_config)?
         else {
-            return Ok(ReloadOutcome::no_changes());
+            // No difference from the published snapshot does not mean nothing is
+            // outstanding: a restart-only edit was published on an earlier
+            // reload and the running process still has not applied it.
+            return Ok(with_pending_restart(
+                ReloadOutcome::no_changes(),
+                &self.live_config,
+            ));
         };
 
         let outcome = patch.outcome();
@@ -1082,8 +1209,34 @@ impl ReloadContext {
 
         self.live_config.set(new_config);
 
-        Ok(outcome)
+        Ok(with_pending_restart(outcome, &self.live_config))
     }
+}
+
+/// Fold outstanding restart-only fields into a reload outcome.
+///
+/// Reported on every reload while they remain outstanding, not once. The diff
+/// alone cannot carry this: publishing a restart-only edit into the snapshot
+/// removes it from every later diff, so the operator who enables authentication
+/// and is distracted would never be told again.
+fn with_pending_restart(mut outcome: ReloadOutcome, live: &LiveConfig) -> ReloadOutcome {
+    let pending = live.pending_restart_fields();
+    if pending.is_empty() {
+        return outcome;
+    }
+    outcome.restart_required = true;
+    // Never overwrite an existing reason: it is documented as stable and
+    // machine-readable, so a consumer keying on `server_address_changed` must
+    // keep seeing it. Only fill it in when the patch had none.
+    outcome.restart_reason = outcome
+        .restart_reason
+        .or(Some("config changed in fields that only a restart applies"));
+    outcome.changes = format!(
+        "{} — NOT YET APPLIED, restart required for: {}",
+        outcome.changes,
+        pending.join(", ")
+    );
+    outcome
 }
 
 /// How long a config write waits for the reload lock before reporting busy.
