@@ -721,7 +721,14 @@ fn local_policy_rows(state: &AppState) -> Vec<crate::control_plane::ControlPlane
 }
 
 fn can_view_backend(client: Option<&AuthenticatedClient>, backend_name: &str) -> bool {
-    client.is_some_and(|client| client.admin || client.can_access_backend(backend_name))
+    client.is_some_and(|client| {
+        // Backend ACCESS is not inventory VISIBILITY. The anonymous identity
+        // used when authentication is disabled carries `backends: ["*"]` so
+        // that ordinary tool invocation keeps working, which handed it the
+        // whole control-plane inventory through `can_access_backend`. A scoped
+        // API key still sees the backends it is scoped to.
+        client.admin || (client.authenticated && client.can_access_backend(backend_name))
+    })
 }
 
 fn server_status_from_backend(status: &crate::backend::BackendStatus) -> ControlPlaneServerStatus {
@@ -1333,6 +1340,7 @@ mod role_wiring_tests {
             allowed_tools: None,
             denied_tools: None,
             admin,
+            authenticated: true,
         }
     }
 

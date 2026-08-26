@@ -2177,3 +2177,45 @@ async fn a_route_merged_after_create_router_is_still_gated() {
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn a_numeric_origin_must_match_the_request_authority() {
+    // Round 6 admitted ANY numeric Origin on a non-loopback bind, reasoning
+    // that a browser sets Origin from where the page came so an attacker
+    // cannot claim one. An attacker can: host the page on a public IP and the
+    // browser sends that address as the Origin. It is only safe when it names
+    // the gateway the request is actually addressed to.
+    let router = create_router(wildcard_bind_app_state());
+
+    let attacker = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "192.168.1.5:39400")
+        .header("origin", "http://203.0.113.5")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(attacker).await.unwrap().status(),
+        StatusCode::FORBIDDEN,
+        "a numeric Origin naming another host must be refused"
+    );
+
+    let own_page = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "192.168.1.5:39400")
+        .header("origin", "http://192.168.1.5:39400")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    assert_ne!(
+        router.oneshot(own_page).await.unwrap().status(),
+        StatusCode::FORBIDDEN,
+        "the gateway's own page must still work"
+    );
+}

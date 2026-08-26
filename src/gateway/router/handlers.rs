@@ -279,11 +279,13 @@ pub(super) async fn health_handler(
     let capability_healthy = capability_status.as_ref().is_none_or(|s| s.healthy);
     let healthy = backends_overall_healthy(&statuses) && capability_healthy;
 
-    // Check if the caller is an authenticated (non-public) client
+    // Admin is a grant, not a name. Comparing against "public"/"anonymous"
+    // gave full backend detail to every authenticated non-admin key the moment
+    // an operator removed /health from `auth.public_paths`.
     let is_admin = request
         .extensions()
         .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.name != "public" && c.name != "anonymous");
+        .is_some_and(|c| c.admin);
 
     let backends_json = if is_admin {
         // Full details for authenticated clients

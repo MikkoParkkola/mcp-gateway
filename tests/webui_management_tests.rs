@@ -1482,3 +1482,87 @@ async fn anonymous_still_reads_redacted_status() {
         "an anonymous caller must not receive backend names: {body}"
     );
 }
+
+/// Three surfaces gated by something other than `.admin`, all reachable by the
+/// anonymous identity used when authentication is disabled.
+#[tokio::test]
+async fn anonymous_is_refused_every_inventory_surface() {
+    let config = Config::default();
+    let state = make_app_state_with_auth_config(&config.auth);
+    let router = create_router(state);
+
+    // /api/costs has no projection model: spend per session and per API key is
+    // admin data or nothing, so it refuses.
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/costs")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN,
+        "/api/costs exposes cross-tenant spend and must require admin"
+    );
+
+    // The control plane DOES project by role, so the property is what it shows,
+    // not the status. An anonymous caller must see no backend names.
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/ui/api/control-plane")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(
+        !body.contains("backend:"),
+        "an anonymous caller must not see the backend inventory: {body}"
+    );
+}
+
+/// `/health` computed a variable named `is_admin` from a client-NAME test, so
+/// any authenticated API key received full backend detail whether or not it
+/// held admin.
+#[tokio::test]
+async fn a_non_admin_api_key_gets_the_redacted_health_view() {
+    let auth = AuthConfig {
+        enabled: true,
+        // /health is a public path by default, so the middleware assigns the
+        // "public" identity before validating any credential and the handler
+        // never sees the key. Removing it is what puts the API key on this path
+        // at all; without this the case passes without exercising anything.
+        public_paths: vec![],
+        api_keys: vec![ApiKeyConfig {
+            key: "scoped-key".to_string(),
+            name: "scoped".to_string(),
+            rate_limit: 0,
+            backends: vec![],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+        }],
+        ..AuthConfig::default()
+    };
+    let state = make_app_state_with_auth_config(&auth);
+    let router = create_router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/health")
+        .header("authorization", "Bearer scoped-key")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["backends"].as_array().is_none(),
+        "a non-admin key must not receive backend names: {body}"
+    );
+}

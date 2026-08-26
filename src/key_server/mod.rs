@@ -104,6 +104,7 @@ impl KeyServer {
             },
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         let ev = AuditEvent::used(&temp, None);
@@ -156,6 +157,7 @@ impl KeyServer {
             },
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
         Some((client, identity))
     }

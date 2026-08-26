@@ -207,6 +207,7 @@ impl ResolvedAuthConfig {
                 allowed_tools: None,
                 denied_tools: None,
                 admin: true,
+                authenticated: true,
             });
         }
 
@@ -220,6 +221,7 @@ impl ResolvedAuthConfig {
                     allowed_tools: key.allowed_tools.clone(),
                     denied_tools: key.denied_tools.clone(),
                     admin: key.admin,
+                    authenticated: true,
                 });
             }
         }
@@ -335,6 +337,14 @@ pub struct AuthenticatedClient {
     pub denied_tools: Option<Vec<String>>,
     /// Admin-level UI and management tool access.
     pub admin: bool,
+    /// Whether a credential was actually presented and validated.
+    ///
+    /// False for the anonymous identity used when authentication is disabled,
+    /// and for the identity given to a public path. Authorization must test
+    /// this rather than compare `name` against `"public"` or `"anonymous"`: a
+    /// name is data, and a rule written against one silently admits any client
+    /// configured with a different name.
+    pub authenticated: bool,
 }
 
 impl AuthenticatedClient {
@@ -413,6 +423,7 @@ pub fn anonymous_client() -> AuthenticatedClient {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        authenticated: false,
     }
 }
 
@@ -456,6 +467,7 @@ pub async fn auth_middleware(
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: false,
         });
         return next.run(request).await;
     }
@@ -845,6 +857,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         let client_unrestricted = AuthenticatedClient {
@@ -854,6 +867,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         let client_wildcard = AuthenticatedClient {
@@ -863,6 +877,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Restricted client
@@ -888,6 +903,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // No restrictions = all tools allowed (fallback to global policy)
@@ -904,6 +920,7 @@ mod tests {
             allowed_tools: Some(vec!["search_web".to_string(), "read_file".to_string()]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Tools in allowlist
@@ -924,6 +941,7 @@ mod tests {
             allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Tools matching glob patterns
@@ -950,6 +968,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: Some(vec!["write_file".to_string(), "delete_file".to_string()]),
             admin: false,
+            authenticated: true,
         };
 
         // Tools in denylist
@@ -970,6 +989,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
             admin: false,
+            authenticated: true,
         };
 
         // Tools matching deny glob patterns
@@ -1003,6 +1023,7 @@ mod tests {
             ]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Qualified match: only filesystem:read_file allowed, not other servers
@@ -1025,6 +1046,7 @@ mod tests {
                 "filesystem_delete".to_string(),
             ]),
             admin: false,
+            authenticated: true,
         };
 
         // In allowlist and NOT in denylist
@@ -1060,6 +1082,7 @@ mod tests {
             allowed_tools: Some(vec!["search_*".to_string()]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         let err = client_allow
@@ -1077,6 +1100,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: Some(vec!["exec_*".to_string()]),
             admin: false,
+            authenticated: true,
         };
 
         let err = client_deny

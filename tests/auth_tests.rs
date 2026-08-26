@@ -169,6 +169,7 @@ fn test_resolved_client_rate_limit_creates_identity_bucket() {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
 
     assert!(resolved.check_authenticated_client_rate_limit(&temporary_client));
@@ -242,6 +243,7 @@ fn test_client_backend_access_patterns() {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
     assert!(wildcard_client.can_access_backend("anything"));
     assert!(wildcard_client.can_access_backend("tavily"));
@@ -254,6 +256,7 @@ fn test_client_backend_access_patterns() {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
     assert!(all_access_client.can_access_backend("anything"));
 
@@ -265,6 +268,7 @@ fn test_client_backend_access_patterns() {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
     assert!(restricted_client.can_access_backend("backend-a"));
     assert!(restricted_client.can_access_backend("backend-b"));

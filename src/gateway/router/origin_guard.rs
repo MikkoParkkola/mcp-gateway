@@ -129,7 +129,12 @@ impl OriginPolicy {
 
     /// `true` when a browser-supplied `Origin` value is one this gateway answers to.
     #[must_use]
-    fn origin_allowed(&self, origin: &str, public: Option<&(String, String)>) -> bool {
+    fn origin_allowed(
+        &self,
+        origin: &str,
+        public: Option<&(String, String)>,
+        request_authority: Option<&str>,
+    ) -> bool {
         let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
         if self.allowed_origins.contains(&candidate) {
             return true;
@@ -138,16 +143,42 @@ impl OriginPolicy {
             return true;
         }
 
-        // A page served by this gateway on a non-loopback bind carries an
-        // Origin naming the address it was fetched from, which no startup list
-        // can enumerate. Admit a numeric one on the same terms as a numeric
-        // Host: an attacker page cannot claim it, because the browser sets
-        // Origin from where the page actually came.
-        !self.bind_is_loopback
-            && url::Url::parse(&candidate)
-                .ok()
-                .and_then(|u| u.host_str().map(str::to_string))
-                .is_some_and(|h| is_numeric_host(&h))
+        // A page served by this gateway on a non-loopback bind carries an Origin
+        // naming the address it was fetched from, which no startup list can
+        // enumerate. Admit a numeric one ONLY when it names the gateway this
+        // request is addressed to.
+        //
+        // Admitting any numeric Origin does not work: an attacker can serve the
+        // page from a public IP address, and the browser then sends that address
+        // as the Origin. Matching it against the request's own authority is what
+        // makes "the page this gateway served" checkable.
+        if self.bind_is_loopback {
+            return false;
+        }
+        let Some(authority) = request_authority else {
+            return false;
+        };
+        let Ok(parsed) = url::Url::parse(&candidate) else {
+            return false;
+        };
+        let Some(origin_host) = parsed.host_str() else {
+            return false;
+        };
+        if !is_numeric_host(origin_host) {
+            return false;
+        }
+        // Compare host AND port: a different port on the same address is a
+        // different origin and a different server.
+        let origin_port = parsed.port().map_or_else(
+            || if parsed.scheme() == "https" { 443 } else { 80 },
+            u16::from,
+        );
+        let auth_host = strip_port(authority);
+        let auth_port = authority
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse::<u16>().ok());
+        origin_host.eq_ignore_ascii_case(strip_brackets(auth_host))
+            && auth_port.is_some_and(|p| p == origin_port)
     }
 
     /// `true` when a `Host` value names this gateway.
@@ -203,6 +234,13 @@ impl OriginPolicy {
     }
 }
 
+/// Strip the brackets from an IPv6 literal, leaving anything else alone.
+fn strip_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
+}
+
 /// `true` when `host` is a bare IP address rather than a name.
 ///
 /// An IPv6 literal arrives bracketed and parses only once the brackets are off.
@@ -237,9 +275,23 @@ pub async fn origin_guard_middleware(
     // One snapshot for the whole request. See `public_url_parts`.
     let public = policy.public_url_parts();
 
+    // The authority this request is addressed to: HTTP/2 carries it on the URI,
+    // HTTP/1.1 in `Host`. Needed by the Origin check, so it is resolved first.
+    let request_authority: Option<String> = request
+        .uri()
+        .authority()
+        .map(|a| a.as_str().to_string())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .map(ToString::to_string)
+        });
+
     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
         match origin.to_str() {
-            Ok(value) if policy.origin_allowed(value, public.as_ref()) => {}
+            Ok(value)
+                if policy.origin_allowed(value, public.as_ref(), request_authority.as_deref()) => {}
             other => {
                 // Logged because a silent refusal is indistinguishable from a
                 // broken client: an operator seeing 403 needs the reason, and a
@@ -335,7 +387,10 @@ mod tests {
             self.host_allowed(host, self.public_url_parts().as_ref())
         }
         fn origin_ok(&self, origin: &str) -> bool {
-            self.origin_allowed(origin, self.public_url_parts().as_ref())
+            self.origin_allowed(origin, self.public_url_parts().as_ref(), None)
+        }
+        fn origin_ok_at(&self, origin: &str, authority: &str) -> bool {
+            self.origin_allowed(origin, self.public_url_parts().as_ref(), Some(authority))
         }
     }
 
@@ -463,10 +518,18 @@ mod tests {
             ..ServerConfig::default()
         });
         assert!(
-            lan.origin_ok("http://192.168.1.5:39400"),
+            lan.origin_ok_at("http://192.168.1.5:39400", "192.168.1.5:39400"),
             "the gateway's own LAN page"
         );
         assert!(!lan.origin_ok("http://attacker.example"), "still a name");
+        assert!(
+            !lan.origin_ok_at("http://203.0.113.5", "192.168.1.5:39400"),
+            "an attacker page served from a public address is still numeric"
+        );
+        assert!(
+            !lan.origin_ok_at("http://192.168.1.5:8080", "192.168.1.5:39400"),
+            "a different port is a different origin"
+        );
 
         let tls = policy_for(ServerConfig::default());
         assert!(
