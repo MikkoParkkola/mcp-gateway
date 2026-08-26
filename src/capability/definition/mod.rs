@@ -1076,3 +1076,139 @@ mod cwe532_debug_redaction {
         );
     }
 }
+
+/// `true` when this capability hands a caller-chosen destination to a third
+/// party that will later call it.
+///
+/// Such a call creates persistent state outside this gateway, addressed by the
+/// caller and authorised by the operator's credential — an out-of-band channel
+/// that needs no readable response. `linear_create_webhook` is the shape:
+/// a URL parameter, posted to Linear, which then delivers events to it.
+///
+/// Derived from the definition rather than a hand-kept list, so a capability
+/// added later inherits the rule instead of needing to be remembered. The
+/// ticket that filed this recorded a hand count of six URL-taking capabilities;
+/// the count was wrong, which is the argument for deriving it.
+#[must_use]
+pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bool {
+    let mutating = def
+        .providers
+        .named
+        .values()
+        .chain(def.providers.fallback.iter())
+        .any(|p| {
+            matches!(
+                p.config.method.to_ascii_uppercase().as_str(),
+                "POST" | "PUT" | "PATCH"
+            )
+        });
+    if !mutating {
+        return false;
+    }
+    let Some(props) = def
+        .schema
+        .input
+        .get("properties")
+        .and_then(|p| p.as_object())
+    else {
+        return false;
+    };
+    props.iter().any(|(name, spec)| {
+        let looks_like_a_destination = name.eq_ignore_ascii_case("url")
+            || name.to_ascii_lowercase().ends_with("_url")
+            || name.eq_ignore_ascii_case("callback")
+            || name.eq_ignore_ascii_case("webhook");
+        let declared_uri = spec.get("format").and_then(|f| f.as_str()) == Some("uri");
+        looks_like_a_destination || declared_uri
+    })
+}
+
+#[cfg(test)]
+mod caller_addressed_state_tests {
+    use super::*;
+
+    fn def(method: &str, input: &serde_json::Value) -> CapabilityDefinition {
+        let yaml = format!(
+            "fulcrum: \"1.0\"\nname: t\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\n",
+            serde_json::to_string(input).unwrap()
+        );
+        serde_yaml::from_str(&yaml).expect("definition parses")
+    }
+
+    #[test]
+    fn the_shipped_capabilities_classify_as_expected() {
+        // Run against the real files, not synthetic ones: the hand count that
+        // justified deferring this was wrong, so the classifier has to be shown
+        // against what actually ships.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        if !root.exists() {
+            return;
+        }
+        let mut flagged = Vec::new();
+        let mut walked = 0usize;
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "yaml") {
+                    walked += 1;
+                    let Ok(text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    if let Ok(def) = serde_yaml::from_str::<CapabilityDefinition>(&text)
+                        && creates_caller_addressed_external_state(&def)
+                    {
+                        flagged.push(def.name);
+                    }
+                }
+            }
+        }
+        assert!(
+            walked > 100,
+            "expected the full capability set, walked {walked}"
+        );
+        flagged.sort();
+        assert!(
+            flagged.contains(&"linear_create_webhook".to_string()),
+            "the known case must be caught: {flagged:?}"
+        );
+        assert!(
+            !flagged.contains(&"wayback_availability".to_string()),
+            "a read must not be flagged: {flagged:?}"
+        );
+    }
+
+    #[test]
+    fn a_posted_caller_url_creates_external_state() {
+        let d = def(
+            "POST",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        assert!(creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn a_read_of_a_caller_url_does_not() {
+        // wayback_availability asks a third party ABOUT a URL. Nothing is
+        // created and nothing calls back.
+        let d = def(
+            "GET",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        assert!(!creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn a_post_without_a_destination_does_not() {
+        let d = def(
+            "POST",
+            &serde_json::json!({"properties": {"title": {"type": "string"}}}),
+        );
+        assert!(!creates_caller_addressed_external_state(&d));
+    }
+}

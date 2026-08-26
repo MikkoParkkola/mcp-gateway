@@ -482,6 +482,7 @@ impl MetaMcp {
             caller.agent_id,
             caller.grant_subject.clone(),
             caller.verified_identity,
+            caller.is_admin,
         )
         .await
     }
@@ -534,6 +535,7 @@ impl MetaMcp {
                     caller.agent_id,
                     caller.grant_subject.clone(),
                     caller.verified_identity,
+                    caller.is_admin,
                 )
                 .await
             {

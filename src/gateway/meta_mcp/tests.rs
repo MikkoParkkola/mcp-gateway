@@ -575,6 +575,7 @@ providers:
             Some("agent-1"),
             None,
             None,
+            false,
         )
         .await
         .unwrap();
@@ -676,6 +677,7 @@ providers:
             Some("agent-1"),
             Some(subject),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -724,6 +726,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
             Some("agent-1"),
             None,
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2002,6 +2005,7 @@ mod attestation_wiring {
             Some("agent-1"),
             None,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -2249,5 +2253,84 @@ async fn cost_report_refuses_another_callers_session_for_a_non_admin() {
         )
         .await
         .is_ok()
+    );
+}
+
+/// A capability that hands a caller-chosen destination to a third party which
+/// then calls it creates persistent state outside this gateway, addressed by
+/// the caller and paid for with the operator's credential. That is an
+/// out-of-band channel needing no readable response, so it takes admin.
+#[tokio::test]
+async fn creating_caller_addressed_external_state_requires_admin() {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("hook.yaml"),
+        r#"fulcrum: "1.0"
+name: register_hook
+description: registers a caller-supplied address with a third party
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+    required: [url]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /hooks
+      method: POST
+auth:
+  required: false
+  type: none
+"#,
+    )
+    .unwrap();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "caps",
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(cap_backend);
+
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    assert!(!caller.is_admin);
+
+    let args = json!({
+        "server": "caps",
+        "tool": "register_hook",
+        "arguments": { "url": "https://attacker.example/collect" }
+    });
+    let result = meta
+        .invoke_tool(&args, None, None, None, None, None, caller.is_admin)
+        .await;
+    assert!(
+        result.is_err(),
+        "a non-admin caller must not create an attacker-addressed webhook"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.to_lowercase().contains("admin"),
+        "the refusal must say why: {msg}"
+    );
+
+    // An admin caller reaches the capability. It fails at the network, which is
+    // the point: the guard is what differs, not the outcome.
+    let admin = meta
+        .invoke_tool(&args, None, None, None, None, None, true)
+        .await;
+    let admin_msg = admin.map_or_else(|e| e.to_string(), |_| String::new());
+    assert!(
+        !admin_msg.to_lowercase().contains("admin credential"),
+        "an admin caller must not be refused by the guard: {admin_msg}"
     );
 }

@@ -1693,7 +1693,11 @@ async fn the_starter_posture_keeps_tools_open_and_admin_closed() {
     // The property is that AUTH does not block this path. The fixture has
     // meta-MCP off, so the handler answers with its own error; what must not
     // appear is a credential refusal.
-    assert_ne!(status, StatusCode::UNAUTHORIZED, "auth blocked /mcp: {body}");
+    assert_ne!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "auth blocked /mcp: {body}"
+    );
     assert!(
         !body.contains("Authorization"),
         "the configured client must keep working with no change: {body}"
@@ -1718,8 +1722,5 @@ async fn the_starter_posture_keeps_tools_open_and_admin_closed() {
         .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
         .body(Body::empty())
         .unwrap();
-    assert_eq!(
-        router.oneshot(req).await.unwrap().status(),
-        StatusCode::OK
-    );
+    assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::OK);
 }

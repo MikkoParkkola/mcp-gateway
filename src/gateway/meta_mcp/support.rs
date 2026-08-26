@@ -156,9 +156,11 @@ pub(super) struct MetaMcpInvoker<'a> {
 impl ToolInvoker for MetaMcpInvoker<'_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         let args = internal_invoke_args(server, tool, arguments);
-        // Playbook steps are internal invocations with no caller agent.
+        // Playbook steps are internal invocations with no caller agent, and no
+        // admin either: a playbook must not be a way around a check the caller
+        // would have faced directly.
         self.meta
-            .invoke_tool(&args, None, None, None, None, None)
+            .invoke_tool(&args, None, None, None, None, None, false)
             .await
     }
 }

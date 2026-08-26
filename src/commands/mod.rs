@@ -631,7 +631,10 @@ mod admin_credential_tests {
             .as_sequence()
             .expect("public_paths must be a list");
         let paths: Vec<&str> = paths.iter().filter_map(|v| v.as_str()).collect();
-        assert!(paths.contains(&"/mcp"), "tools open, admin closed: {paths:?}");
+        assert!(
+            paths.contains(&"/mcp"),
+            "tools open, admin closed: {paths:?}"
+        );
         assert!(paths.contains(&"/health"), "probes keep working: {paths:?}");
     }
 

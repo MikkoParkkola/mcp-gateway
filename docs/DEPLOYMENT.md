@@ -489,6 +489,19 @@ is not.
 Applied without a restart: backends, `server.public_url`, and
 `control_plane.role_mapping`.
 
+### Capabilities that register an address with a third party
+
+A capability that hands a caller-chosen destination to a third party which then
+calls it — a webhook registration is the shape — creates persistent state
+outside the gateway, addressed by the caller and authorised by the operator's
+credential. It needs no readable response to be useful, so the browser and
+network gates do not constrain it. Those capabilities require an admin
+credential.
+
+The rule is derived from each capability's own definition: a mutating method
+plus a caller-supplied destination parameter. A capability added later inherits
+it rather than needing to be remembered on a list.
+
 ### Opening the dashboard
 
 `mcp-gateway init` generates an admin credential for the install and writes it

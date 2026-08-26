@@ -1144,6 +1144,7 @@ impl MetaMcp {
                     caller.agent_id,
                     caller.grant_subject.clone(),
                     caller.verified_identity,
+                    caller.is_admin,
                 )
                 .await;
             return match result {
@@ -1177,6 +1178,7 @@ impl MetaMcp {
                     caller.agent_id,
                     caller.grant_subject,
                     caller.verified_identity,
+                    caller.is_admin,
                 )
                 .await
             }

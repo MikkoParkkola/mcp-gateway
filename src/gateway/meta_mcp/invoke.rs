@@ -417,6 +417,10 @@ impl MetaMcp {
     /// idempotency, error-budget tracking, and predictive prefetch.
     ///
     /// `agent_id` identifies the calling agent for audit logging (OWASP ASI03).
+    // Eight parameters: the caller's identity is threaded through rather than
+    // rebuilt, and collapsing them into a struct would touch every call site
+    // for no behavioural gain.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn invoke_tool(
         &self,
         args: &Value,
@@ -425,6 +429,7 @@ impl MetaMcp {
         agent_id: Option<&str>,
         caller_identity: Option<GrantSubject>,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        caller_is_admin: bool,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
@@ -432,6 +437,7 @@ impl MetaMcp {
             self.invoke_tool_traced(
                 args,
                 session_id,
+                caller_is_admin,
                 api_key_name,
                 agent_id,
                 caller_identity.as_ref(),
@@ -530,10 +536,12 @@ impl MetaMcp {
     /// render guard cannot be bypassed at the chokepoint (MIK-6690).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     #[allow(clippy::too_many_arguments)] // Caller context threaded explicitly (identity, keys, trace)
+    #[allow(clippy::too_many_arguments)]
     async fn invoke_tool_traced(
         &self,
         args: &Value,
         session_id: Option<&str>,
+        caller_is_admin: bool,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
@@ -542,6 +550,26 @@ impl MetaMcp {
     ) -> Result<GuardedValue> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
+
+        // A capability that hands a caller-chosen destination to a third party
+        // which then calls it creates persistent state outside this gateway,
+        // addressed by the caller and authorised by the operator's credential.
+        // That is an out-of-band channel needing no readable response, so it is
+        // an admin action. Derived from the definition, so one added later
+        // inherits the rule.
+        if !caller_is_admin
+            && let Some(capabilities) = self.get_capabilities()
+            && server == capabilities.name
+            && let Some(def) = capabilities.get(tool)
+            && crate::capability::definition::creates_caller_addressed_external_state(&def)
+        {
+            return Err(crate::Error::Config(format!(
+                "'{tool}' registers a caller-supplied address with a third party, which \
+                 then delivers to it using this gateway's credential. That requires an \
+                 admin credential."
+            )));
+        }
+
         let mut arguments = parse_tool_arguments(args)?;
         // `_full` is a gateway directive (opt out of response projection), not
         // an upstream parameter. Capture and strip it BEFORE the argument hash
