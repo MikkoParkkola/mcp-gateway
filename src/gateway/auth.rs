@@ -412,9 +412,37 @@ impl AuthenticatedClient {
 #[derive(Debug)]
 pub struct DashboardBootstrap {
     value: std::sync::Mutex<Option<String>>,
+    /// Opaque handles issued to browsers, valid for this process only.
+    sessions: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl DashboardBootstrap {
+    /// Mint an opaque session for a browser that presented the bootstrap value.
+    ///
+    /// The cookie carries THIS, never the admin credential. A bearer token in a
+    /// cookie is long-lived and, without TLS, recoverable from the wire; an
+    /// opaque handle is meaningless anywhere but this process and expires with
+    /// it. Kept in memory: a dashboard session is not worth persisting, and
+    /// nothing on disk means nothing to steal from disk.
+    pub fn issue_session(&self) -> String {
+        use rand::RngExt;
+        let bytes: [u8; 32] = rand::rng().random();
+        let handle =
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.insert(handle.clone());
+        }
+        handle
+    }
+
+    /// `true` when this handle was issued by this process and is still valid.
+    #[must_use]
+    pub fn session_is_valid(&self, handle: &str) -> bool {
+        self.sessions
+            .lock()
+            .is_ok_and(|sessions| sessions.contains(handle))
+    }
+
     /// Mint a fresh single-use value.
     #[must_use]
     pub fn new() -> Self {
@@ -424,6 +452,7 @@ impl DashboardBootstrap {
             base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
         Self {
             value: std::sync::Mutex::new(Some(value)),
+            sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -456,6 +485,33 @@ impl Default for DashboardBootstrap {
     }
 }
 
+#[cfg(test)]
+mod dashboard_session_tests {
+    use super::DashboardBootstrap;
+
+    #[test]
+    fn a_handle_is_only_valid_if_this_process_issued_it() {
+        let b = DashboardBootstrap::new();
+        let handle = b.issue_session();
+        assert!(b.session_is_valid(&handle));
+        assert!(!b.session_is_valid("guessed"));
+
+        // A handle from another process is meaningless here, which is the
+        // point of an opaque session over a bearer token in a cookie.
+        let other = DashboardBootstrap::new();
+        assert!(!other.session_is_valid(&handle));
+    }
+
+    #[test]
+    fn handles_are_not_guessable_and_not_reused() {
+        let b = DashboardBootstrap::new();
+        let a = b.issue_session();
+        let c = b.issue_session();
+        assert_ne!(a, c);
+        assert!(a.len() >= 42, "32 random bytes, base64url: {a}");
+    }
+}
+
 /// Name of the browser session cookie the dashboard bootstrap sets.
 ///
 /// A browser cannot attach an `Authorization` header to a navigation, so a
@@ -465,9 +521,71 @@ impl Default for DashboardBootstrap {
 /// address bar, the history, or a `Referer`.
 pub const SESSION_COOKIE: &str = "mcp_gateway_session";
 
+/// Exchange a dashboard bootstrap link for a session, if this is one.
+///
+/// Split out of the middleware so the credential path stays readable; a
+/// browser navigation is the one place a value arrives in the URL, and that is
+/// worth being able to see in one screen.
+fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option<Response> {
+    if request.uri().path() != "/dashboard" {
+        return None;
+    }
+    let candidate = request.uri().query().and_then(bootstrap_param)?;
+    {
+        if !state.dashboard_bootstrap.consume(&candidate) {
+            warn!("Dashboard bootstrap rejected: wrong or already-used value");
+            return Some(bearer_unauthorized_response(
+                "Bootstrap link is invalid or already used",
+            ));
+        }
+        // Hand the browser the credential in an HttpOnly cookie and redirect.
+        // Done here rather than in the handler so the token never leaves this
+        // module, and so the address bar keeps nothing after the redirect.
+        if state.auth_config.bearer_token.is_none() {
+            return Some(bearer_unauthorized_response(
+                "No admin credential is configured",
+            ));
+        }
+        let handle = state.dashboard_bootstrap.issue_session();
+        // `Secure` whenever this listener speaks TLS. Without it a downgrade
+        // puts the cookie on the wire; with a plain-HTTP loopback listener the
+        // attribute would stop the cookie being sent at all, so it is
+        // conditional rather than unconditional.
+        let secure = if state.tls_enabled { " Secure;" } else { "" };
+        Some(axum::response::IntoResponse::into_response((
+            axum::http::StatusCode::SEE_OTHER,
+            [
+                (axum::http::header::LOCATION, "/dashboard".to_string()),
+                (
+                    axum::http::header::SET_COOKIE,
+                    format!(
+                        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; \
+                         Path=/; Max-Age=86400"
+                    ),
+                ),
+            ],
+        )))
+    }
+}
+
+/// The identity a validated dashboard session carries.
+fn dashboard_client() -> AuthenticatedClient {
+    AuthenticatedClient {
+        name: "dashboard".to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: true,
+        authenticated: true,
+    }
+}
+
 /// The credential a request presents, from the session cookie or a bearer header.
 fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
-    session_cookie_value(headers).or_else(|| {
+    // The session cookie is NOT a credential: it is an opaque handle checked
+    // against this process's store, above.
+    {
         headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
@@ -476,7 +594,7 @@ fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
                     .or_else(|| v.strip_prefix("bearer "))
             })
             .map(ToString::to_string)
-    })
+    }
 }
 
 /// The `bootstrap` query parameter, if present.
@@ -533,6 +651,8 @@ pub struct AuthState {
     pub key_server: Option<Arc<KeyServer>>,
     /// Single-use value that opens the dashboard from a printed link.
     pub dashboard_bootstrap: Arc<DashboardBootstrap>,
+    /// Whether this listener speaks TLS, so the session cookie can be `Secure`.
+    pub tls_enabled: bool,
 }
 
 /// Authentication middleware
@@ -560,6 +680,15 @@ pub async fn auth_middleware(
     // operator who presents their admin token to `/mcp` — a public path on the
     // starter config, so ordinary tools stay open — was handed the public
     // identity and lost the management tools their token pays for.
+    // An opaque dashboard session, validated against this process's store
+    // rather than treated as a credential.
+    if let Some(handle) = session_cookie_value(request.headers())
+        && state.dashboard_bootstrap.session_is_valid(&handle)
+    {
+        request.extensions_mut().insert(dashboard_client());
+        return next.run(request).await;
+    }
+
     if auth_config.is_public_path(path)
         && let Some(presented) = presented_credential(request.headers())
         && let Some(client) = auth_config.validate_token(&presented)
@@ -589,31 +718,8 @@ pub async fn auth_middleware(
     // The dashboard bootstrap link. A browser navigation carries no header and
     // no cookie yet, so this is the one path where a credential arrives in the
     // URL — which is why the value is single-use and is not the admin token.
-    if request.uri().path() == "/dashboard"
-        && let Some(candidate) = request.uri().query().and_then(bootstrap_param)
-    {
-        if !state.dashboard_bootstrap.consume(&candidate) {
-            warn!("Dashboard bootstrap rejected: wrong or already-used value");
-            return bearer_unauthorized_response("Bootstrap link is invalid or already used");
-        }
-        // Hand the browser the credential in an HttpOnly cookie and redirect.
-        // Done here rather than in the handler so the token never leaves this
-        // module, and so the address bar keeps nothing after the redirect.
-        let Some(token) = auth_config.bearer_token.clone() else {
-            return bearer_unauthorized_response("No admin credential is configured");
-        };
-        return axum::response::IntoResponse::into_response((
-            axum::http::StatusCode::SEE_OTHER,
-            [
-                (axum::http::header::LOCATION, "/dashboard".to_string()),
-                (
-                    axum::http::header::SET_COOKIE,
-                    format!(
-                        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400"
-                    ),
-                ),
-            ],
-        ));
+    if let Some(response) = try_dashboard_bootstrap(&state, &request) {
+        return response;
     }
 
     let token = presented_credential(request.headers());

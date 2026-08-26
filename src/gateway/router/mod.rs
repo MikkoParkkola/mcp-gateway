@@ -136,6 +136,7 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
+        tls_enabled: state.live_config.get().mtls.enabled,
     };
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).

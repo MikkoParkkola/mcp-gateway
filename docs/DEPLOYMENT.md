@@ -525,8 +525,11 @@ credential — a query string reaches this gateway's own request log, which
 outlives the browser tab. It works once and dies with the process, so a link
 left in a shell history is spent.
 
-The cookie is `HttpOnly` and `SameSite=Strict`: script cannot read it and it is
-never sent cross-site.
+The cookie carries an opaque handle, never the admin credential: a bearer token
+in a cookie is long-lived and recoverable from the wire without TLS, while a
+handle means nothing outside the running process and dies with it. It is
+`HttpOnly` and `SameSite=Strict`, so script cannot read it and it is never sent
+cross-site, and it is marked `Secure` when the listener speaks TLS.
 
 ### Admin requires a credential
 
