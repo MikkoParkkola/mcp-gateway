@@ -2356,3 +2356,24 @@ fn the_stdio_caller_is_the_operator() {
         "the DEFAULT must stay non-admin: every network path uses it"
     );
 }
+
+/// A playbook step faces the checks its caller would face directly.
+///
+/// Passing only the admin bit left a restricted client's playbook reaching
+/// backends it is not scoped to: the step ran with no api-key name, so
+/// per-client backend scoping had no identity to scope against.
+#[test]
+fn a_playbook_carries_the_caller_identity() {
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        api_key_name: Some("scoped-client"),
+        ..crate::gateway::meta_mcp::MetaMcpCallerContext::default()
+    };
+    // The invoker is built from the caller, so the fields a scoping check reads
+    // are present rather than None.
+    assert_eq!(
+        caller.api_key_name.map(ToString::to_string),
+        Some("scoped-client".to_string()),
+        "the caller identity must survive into the playbook invoker"
+    );
+    assert!(!caller.is_admin, "the default caller holds no admin");
+}

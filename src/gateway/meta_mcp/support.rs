@@ -150,9 +150,17 @@ pub(super) fn ranked_results_to_code_mode_json(
 /// Bridges `MetaMcp::invoke_tool` to the `ToolInvoker` trait for playbook execution.
 pub(super) struct MetaMcpInvoker<'a> {
     pub(super) meta: &'a MetaMcp,
-    /// Admin of the caller that invoked the playbook, so its steps face the
-    /// same check that caller would face directly.
+    /// The caller that invoked the playbook. Its steps face exactly the checks
+    /// that caller would face directly: admin, backend scope, and per-client
+    /// tool lists. Passing only the admin bit left a restricted client's
+    /// playbook reaching backends it is not scoped to.
     pub(super) caller_is_admin: bool,
+    /// API-key name of the invoking caller, for per-client backend scoping.
+    pub(super) api_key_name: Option<String>,
+    /// Agent id of the invoking caller.
+    pub(super) agent_id: Option<String>,
+    /// Verified grant subject of the invoking caller.
+    pub(super) grant_subject: Option<crate::identity_grants::GrantSubject>,
 }
 
 #[async_trait::async_trait]
@@ -164,7 +172,15 @@ impl ToolInvoker for MetaMcpInvoker<'_> {
         // could run directly, which is a regression rather than a control: a
         // playbook is not a way AROUND a check, so it should face the same one.
         self.meta
-            .invoke_tool(&args, None, None, None, None, None, self.caller_is_admin)
+            .invoke_tool(
+                &args,
+                None,
+                self.api_key_name.as_deref(),
+                self.agent_id.as_deref(),
+                self.grant_subject.clone(),
+                None,
+                self.caller_is_admin,
+            )
             .await
     }
 }

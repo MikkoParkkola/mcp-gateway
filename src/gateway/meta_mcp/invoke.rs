@@ -2225,7 +2225,11 @@ impl MetaMcp {
     }
 
     /// `gateway_run_playbook` — run a named playbook.
-    pub(super) async fn run_playbook(&self, args: &Value, caller_is_admin: bool) -> Result<Value> {
+    pub(super) async fn run_playbook(
+        &self,
+        args: &Value,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
         let name = extract_required_str(args, "name")?;
         let arguments = parse_tool_arguments(args)?;
 
@@ -2241,7 +2245,10 @@ impl MetaMcp {
 
         let invoker = MetaMcpInvoker {
             meta: self,
-            caller_is_admin,
+            caller_is_admin: caller.is_admin,
+            api_key_name: caller.api_key_name.map(ToString::to_string),
+            agent_id: caller.agent_id.map(ToString::to_string),
+            grant_subject: caller.grant_subject.clone(),
         };
 
         let mut temp_engine = PlaybookEngine::new();
