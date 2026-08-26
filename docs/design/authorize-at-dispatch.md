@@ -122,9 +122,12 @@ task (verified above).
    `router::authorization` uses them rather than defining its own. A move, not
    a second copy — two definitions of a target type is how two layers drift.
 2. `MetaMcpCallerContext<'a>` gains `authorizer: &'a (dyn ToolAuthorizer + Sync)`
-   and **loses its `Default` impl**, so no site can acquire an authorizer by
-   omission. Cost, counted: 19 construction sites — 17 in `meta_mcp/tests.rs`,
-   one in `invoke.rs`, one in `server/mod.rs`.
+   and a `transport: Transport` (`Http` | `Stdio`), and **loses its `Default`
+   impl**, so no site can acquire either by omission. The transport is not
+   decoration: the audit line the chokepoint owes (below) names the transport,
+   and nothing in the context carries it today, so the criterion would be
+   unimplementable without it. Cost, counted: 19 construction sites — 17 in
+   `meta_mcp/tests.rs`, one in `invoke.rs`, one in `server/mod.rs`.
 3. `ToolAuthorizer` takes the **whole `ToolTarget`**, matching
    `authorize_tool_target`'s signature so the two cannot drift as policy grows
    to read arguments.
@@ -192,10 +195,15 @@ override:
 3. **`on_error` is then honoured unchanged.** `Abort` aborts, `Continue`
    records the step in `steps_failed` and proceeds to the next step. No new
    control flow, no new strategy.
-4. **A denial is never silent.** Under `Continue` the step is recorded as
-   failed with its refusal reason, so a partial run is visibly partial. The
-   null-filled apparent success that motivated the original decision is closed
-   by making the denial visible, not by aborting the run.
+4. **A denial is never silent — and today there is nowhere to say why.**
+   `PlaybookResult` (`playbook.rs:342-353`) carries `steps_failed:
+   Vec<String>`: names, no reasons. An earlier revision of this design said a
+   denial would be "recorded in `steps_failed` with its reason", which the type
+   cannot express. `PlaybookResult` therefore gains `step_errors: BTreeMap<String,
+   String>`, populated for **both** `Continue` and `Retry` — the `!succeeded`
+   arm (`engine/mod.rs:206`) null-fills for both, so covering only `Continue`
+   leaves a `Retry` caller with an unexplained partial result. `steps_failed`
+   keeps its shape and meaning, so no existing consumer breaks.
 
 ### Refusals are observable, and one layer owns saying so
 
@@ -227,6 +235,14 @@ recorded rather than discovered later:
   not read doubled allows as doubled invocations. The playbook path, which the
   router never covered, audits once.
 
+### A third path exists and is dormant
+
+`src/provider/mcp_provider.rs:88` issues `tools/call` straight at a backend,
+outside both authorization points. It is not reachable from any live route
+today, which is why this change does not gate it. It is recorded here because
+the moment a route adopts the provider layer it becomes a third unguarded path,
+and the person wiring that route is the one who needs to know.
+
 ## Residual risk, stated
 
 `AllowAll` being test-only closes the "satisfy the type permissively" route in
@@ -254,8 +270,9 @@ Denial semantics — the fixtures must set `on_error` explicitly, because the
 default is `Abort` and an `Abort` fixture passes whether or not the rule holds:
 
 - MIK.AUTHZ.17 `on_error: retry`, `max_retries: 3`, a denied step: the
-  authorizer is consulted **once** and the backend zero times. A retried denial
-  fails this.
+  authorizer is consulted **once**, the backend zero times, and `step_errors`
+  carries the refusal reason. A retried denial fails the first assertion; a
+  reasonless null-filled partial result fails the third.
 - MIK.AUTHZ.18 `on_error: continue`, a denied step followed by an allowed step:
   the run completes, the allowed step executes, and the denied step appears in
   `steps_failed` carrying its refusal reason. A terminal-refusal implementation
@@ -280,15 +297,19 @@ Ordering and coverage:
   and spends no budget.
 - MIK.AUTHZ.12 A refused target already present in the response or idempotency
   cache is still refused — authorization precedes the cache read.
-- MIK.AUTHZ.20 A refused call registers no idempotency in-flight entry and
-  mints no per-user credential.
+- MIK.AUTHZ.20 A refused call registers no idempotency in-flight entry, mints
+  no per-user credential, and **consumes no nonce**: a denied call carrying a
+  fresh nonce leaves that nonce still registrable afterwards. Nonce
+  check-and-register sits at `invoke.rs:627`, so the authorization call must be
+  placed above it, not merely "before dispatch".
 - MIK.AUTHZ.13 Every meta-layer dispatch shape — surfaced tool,
   `gateway_invoke`, code-mode single, code-mode chain step, playbook step — is
   refused when the authorizer denies, driven at the meta layer with a denying
   authorizer built through the same caller context production builds.
 - MIK.AUTHZ.14 A refusal emits an audit line carrying caller, server, tool and
   transport, emitted by the chokepoint rather than the authorizer. Asserted on
-  the presence of the four fields, not on a sentence.
+  the presence of the four fields, not on a sentence, and exercised through
+  **both** production transport constructors.
 - MIK.AUTHZ.21 The direct `/mcp/{name}` route keeps its existing refusal
   behaviour, proving the outer check was not removed as redundant.
 
