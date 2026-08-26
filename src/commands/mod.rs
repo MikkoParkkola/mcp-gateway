@@ -162,15 +162,20 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "\n",
             "# Admin credential, generated for this install.\n",
             "#\n",
-            "# Tools work without it. Managing the gateway and reading the\n",
-            "# dashboard need it, because an unauthenticated gateway cannot tell\n",
-            "# its operator from anything else that reaches the port.\n",
+            "# Tools stay open on the endpoints listed under public_paths, so the\n",
+            "# MCP client you already configured keeps working with no change.\n",
+            "# Managing the gateway and reading the dashboard need this token,\n",
+            "# because an unauthenticated gateway cannot tell its operator from\n",
+            "# anything else that reaches the port.\n",
             "#\n",
             "# This file is written readable only by you. Do not commit it.\n",
             "auth:\n",
             "  enabled: true\n",
             "  bearer_token: \"{admin_token}\"\n",
             "  single_user: true\n",
+            "  public_paths:\n",
+            "    - \"/health\"\n",
+            "    - \"/mcp\"\n",
             "\n",
             "# Meta-MCP mode - exposes a compact gateway tool surface\n",
             "# Common deployment: 14 tools (12 minimum, 15 with webhooks)\n",
@@ -608,6 +613,27 @@ async fn tool_completions(
 #[cfg(test)]
 mod admin_credential_tests {
     use super::{InitProfile, build_init_config, generate_admin_token};
+
+    #[test]
+    fn ordinary_tool_calls_still_work_without_the_credential() {
+        // Enabling authentication gates EVERY path, not just admin ones. A
+        // starter config that turns it on without exempting the MCP endpoint
+        // breaks the client the operator already configured — a worse
+        // regression than the missing dashboard it set out to fix.
+        let config = build_init_config(true, InitProfile::Local);
+        assert!(
+            config.contains("/mcp"),
+            "the MCP endpoint must stay reachable without a credential: {config}"
+        );
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("the starter config must parse");
+        let paths = parsed["auth"]["public_paths"]
+            .as_sequence()
+            .expect("public_paths must be a list");
+        let paths: Vec<&str> = paths.iter().filter_map(|v| v.as_str()).collect();
+        assert!(paths.contains(&"/mcp"), "tools open, admin closed: {paths:?}");
+        assert!(paths.contains(&"/health"), "probes keep working: {paths:?}");
+    }
 
     #[test]
     fn a_new_install_has_an_admin_credential() {

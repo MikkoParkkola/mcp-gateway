@@ -1658,3 +1658,68 @@ async fn the_dashboard_bootstrap_link_opens_the_dashboard() {
         );
     }
 }
+
+/// The shipped starter posture, end to end: tools open, admin closed.
+///
+/// A config test shows the file; this shows the behaviour. The regression it
+/// guards against is enabling authentication and gating the MCP endpoint with
+/// it, which breaks the client the operator already configured.
+#[tokio::test]
+async fn the_starter_posture_keeps_tools_open_and_admin_closed() {
+    let auth = AuthConfig {
+        enabled: true,
+        bearer_token: Some(ADMIN_TOKEN.to_string()),
+        public_paths: vec!["/health".to_string(), "/mcp".to_string()],
+        ..AuthConfig::default()
+    };
+    let state = make_app_state_with_auth_config(&auth);
+    let router = create_router(state);
+
+    // An MCP client with no credential still lists tools.
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}).to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&bytes).to_string();
+    // The property is that AUTH does not block this path. The fixture has
+    // meta-MCP off, so the handler answers with its own error; what must not
+    // appear is a credential refusal.
+    assert_ne!(status, StatusCode::UNAUTHORIZED, "auth blocked /mcp: {body}");
+    assert!(
+        !body.contains("Authorization"),
+        "the configured client must keep working with no change: {body}"
+    );
+
+    // The same caller cannot manage the gateway.
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/ui/api/config")
+        .body(Body::empty())
+        .unwrap();
+    let status = router.clone().oneshot(req).await.unwrap().status();
+    assert!(
+        status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN,
+        "management needs the credential, got {status}"
+    );
+
+    // The credential opens management.
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/ui/api/config")
+        .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.oneshot(req).await.unwrap().status(),
+        StatusCode::OK
+    );
+}
