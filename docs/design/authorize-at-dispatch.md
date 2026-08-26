@@ -425,6 +425,16 @@ whether or not the identity reached it:
   `Http` and at stdio level for `Stdio`.
 - MIK.AUTHZ.24 A playbook that denies nothing serialises without a
   `step_errors` key.
+- MIK.AUTHZ.17b An **ordinary** error under `on_error: retry` is still retried
+  `max_retries` times. Without this control, an implementation that stops
+  retrying everything satisfies 17 — the rule is that *denials* do not retry,
+  not that nothing does.
+- MIK.AUTHZ.20c An allowed call **consumes** its nonce, so replaying it is
+  rejected. Proves the nonce was on the path at all, without which AUTHZ.20's
+  "still registrable" is green for the wrong reason.
+- MIK.AUTHZ.15a A stdio playbook step hitting a **permitted** tool succeeds. A
+  stdio authorizer that denied every backend target would otherwise satisfy
+  AUTHZ.15 and AUTHZ.16 on its own.
 
 MIK.AUTHZ.9 is withdrawn: removing `Default` and gating `AllowAll` behind
 `#[cfg(test)]` makes it a property of the types, and a test that greps for a

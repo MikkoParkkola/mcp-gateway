@@ -64,6 +64,7 @@ result fields, never authorizer consultations.
 | 18 | `on_error: continue`, a denied step then an allowed step → run completes, allowed step ran, name in `steps_failed`, reason in `step_errors` | E | fails terminal-refusal and fails silent-null; the two fields separate them |
 | 18a | `on_error: continue`, an ordinary **backend** failure → its message also lands in `step_errors` | E | fails a fix recording refusals only, leaving ordinary failures unexplained |
 | 19 | `on_error: abort`, a denied step → the run returns **the denial's own code and message**, and no later step runs | E | asserting only "aborted" passes for any error; the code pins it to a denial |
+| 17b | `on_error: retry`, `max_retries: 3`, an invoker returning an **ordinary** error → `ToolInvoker::invoke` called **three** times | E | without this control, an implementation that disables retrying altogether satisfies 17 and 17a. This is the row that says only *denials* stop retrying |
 
 ## No side effect before the check
 
@@ -78,6 +79,7 @@ write or a budget spend.
 | 12 | prime the response cache for `alpha:tool` as an allowed caller, then drive the same target with `DenyAll` → refused, and the cached value is **not** returned | U | a check after the cache read returns the cached payload. The cache must be genuinely primed |
 | 12a | the same primed target with `AllowAll` → the cached value **is** returned | U | proves the fixture's cache is real, so 12's refusal is not just an empty cache |
 | 20 | a refused call carrying a fresh top-level `nonce` against a live `NonceStore` → refused, and the same nonce is **still registrable** afterwards | U | a check below `:634` consumes the nonce |
+| 20c | the same call **allowed** → the nonce is consumed, and replaying it is rejected | U | proves the nonce was on the path at all. Without it, a nonce in the wrong place — or never read — leaves 20 green for the wrong reason |
 | 20a | a refused call against a live idempotency cache and an identity-propagating backend → **no in-flight entry for that key**, **no minted credential** | U | both need live subsystems on the path; with neither configured the row passes vacuously, which is why 20b exists |
 | 20b | the same call allowed → an in-flight entry appears and a credential is minted | U | proves both subsystems were reachable, so 20a's zeros mean something |
 
@@ -116,6 +118,7 @@ between the gates, and the chokepoint must refuse before the cache is read.
 | AC | case | L | why it can fail |
 |---|---|---|---|
 | 15 | a stdio playbook step hits a policy-denied tool → refused | S | no coverage today; fails against pre-fix source |
+| 15a | a stdio playbook step hitting a **permitted** tool → succeeds | S | a stdio authorizer that denies every backend target passes 15 and 16 on its own; this row is what refuses that |
 | 16 | stdio keeps admin standing and its `gateway_invoke` refusal after the inline block is deleted | S | guards the deletion |
 | 22 | with mTLS rules configured, stdio calls are **not** refused | S | fails an implementation that hands stdio the mTLS policy, which would deny everything |
 
@@ -124,28 +127,51 @@ that greps for a symbol is a lint wearing a test's clothes.
 
 ## Honesty list — rows that pass against unfixed code by design
 
-4, 5, 8, 8a, 16, 21, 22, 23, 24, and weakly 19. They are regression guards:
-their job is to fail if this change breaks something, not to demonstrate that it
+4, 5, 6, 8, 8a, 16, 21, 22, 24, and weakly 19. They are regression guards: their
+job is to fail if this change breaks something, not to demonstrate that it
 works. A coverage tool scores them as covering the new mechanism; they do not.
-23 and 24 are here because one refusal line and an absent `step_errors` key are
-both true of the code before this change.
+6 is here because engine-level condition-skip behaviour predates this change;
+its meta-level pair 6a is what demonstrates anything.
 
-Rows that demonstrate the mechanism, and therefore earn a probe: 1, 1a, 2, 2a,
-3, 3a, 6, 6a, 7, 7a, 10, 10a, 11, 11a, 12, 12a, 13, 14a, 14b, 15, 17, 17a, 18,
-18a, 20, 20a, 20b.
+**Row 23 is NOT on this list**, and an earlier draft put it there wrongly. On
+unfixed code the router emits **zero** lines of the new refusal helper, so
+"exactly one" is false, not true. Reading it as a regression guard invites
+`count <= 1`, which a helper omitted from the router path would satisfy — on the
+one path that actually runs for HTTP callers. It asserts exactly one line **of
+the shared helper**, and it fails today.
 
-## Falsifier probes — three kinds, because one does not fit all
+## Falsifier probes
 
 Per development-process.md §P2: copy the file, restore under a trap, confirm the
 failure is the intended assertion and not a compile error, then confirm the test
 goes green again. The restore is verified by re-running the test, never by
 `git status`.
 
-| rows | probe | why this one |
+This table is the only list of which rows earn a probe. An earlier draft kept a
+separate prose list, and the two disagreed — four rows were named there and
+appeared in no probe row.
+
+| rows | probe | why this one, and not another |
 |---|---|---|
-| refusal rows touching no new API — 1, 2, 3, 10, 11, 15 | restore pre-fix production source | the strongest probe: the mechanism is genuinely absent |
-| refusal rows naming change-introduced APIs — 12, 13, 17a, 20, 20a, and 17/18/18a via `step_errors` | make the chokepoint's authorization call a **no-op**, one line, leaving every type in place | restoring the source leaves the test file uncompilable, and a compile error is not a falsification |
-| **allow** rows — 1a, 2a, 3a, 6a, 7a, 10a, 11a, 12a, 20b | invert the authorizer to **deny everything** | a no-op probe makes an allow row pass, so it cannot falsify one. Only forcing a denial proves the row is watching the allow path |
+| 1, 2, 3, 10, 11, 15 | restore pre-fix production source | the strongest probe: the mechanism is genuinely absent, and these assertions name no new API, so the tree still compiles |
+| 7, 12, 13, 14a, 20, 20a, 23 | make the chokepoint's authorization call a **no-op**, one line, every type left in place | restoring the source leaves these test files uncompilable, and a compile error is not a falsification |
+| 6a, 17a | the same no-op | consultation counts drop to zero, so the row fails. A deny-all probe cannot falsify them: the authorizer is consulted once whatever verdict it returns |
+| 17, 17b, 18, 18a | revert the **engine** change — restore the retry loop without the denial break, and stop populating `step_errors` | these run at engine level against a synthetic invoker, so a chokepoint no-op leaves every assertion untouched. The mechanism they test lives in the engine, so that is what the probe must remove |
+| 14b, 15a | remove the stdio authorizer from `dispatch_single` | the chokepoint no-op does not reach the stdio construction site |
+| 1a, 2a, 3a, 7a, 10a, 11a, 12a, 20b, 20c | invert the authorizer to **deny everything** | a no-op probe makes an allow row pass, so it cannot falsify one. Only forcing a denial proves the row watches the allow path |
+
+Rows on the honesty list get no probe: they are expected to pass before and
+after, and a probe that "fails" one would be reporting the guard working, not
+the mechanism.
 
 A row whose probe does not produce the expected failure is not evidence of a
 correct implementation. It is evidence the row is not testing what it claims.
+
+## Fixture notes that are easy to get wrong
+
+- **20b** needs the backend gated — paused mid-call — so the idempotency
+  in-flight entry can be observed while it exists. Inspecting after completion
+  sees an entry that has already been cleared, and reads as absent.
+- **12** needs a genuinely primed cache, not a mock returning a hit.
+- **8 and 8a** pin literal message strings as constants in the test, so a
+  reworded refusal fails loudly rather than silently passing a `contains` check.
