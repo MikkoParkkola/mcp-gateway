@@ -340,6 +340,58 @@ mod restart_required_tests {
             "a tracked section outside the original list must be reported: {pending:?}"
         );
 
+        // Every restart-only server field, not a hand-picked few: `ws_port`,
+        // `request_timeout` and `shutdown_timeout` were all omitted before.
+        for (label, changed) in [
+            (
+                "ws_port",
+                Config {
+                    server: crate::config::ServerConfig {
+                        ws_port: Some(9),
+                        ..Config::default().server
+                    },
+                    ..Config::default()
+                },
+            ),
+            (
+                "request_timeout",
+                Config {
+                    server: crate::config::ServerConfig {
+                        request_timeout: std::time::Duration::from_secs(7),
+                        ..Config::default().server
+                    },
+                    ..Config::default()
+                },
+            ),
+            (
+                "env_files",
+                Config {
+                    env_files: vec!["x.env".to_string()],
+                    ..Config::default()
+                },
+            ),
+        ] {
+            let pending = super::pending_restart_fields(&running, &changed);
+            assert!(
+                !pending.is_empty(),
+                "a change to {label} must be reported as needing a restart"
+            );
+        }
+
+        // `public_url` is the one server field that IS re-read per request, so
+        // changing it alone must NOT demand a restart.
+        let public_url_only = Config {
+            server: crate::config::ServerConfig {
+                public_url: Some("https://mcp.example.com".to_string()),
+                ..Config::default().server
+            },
+            ..Config::default()
+        };
+        assert!(
+            super::pending_restart_fields(&running, &public_url_only).is_empty(),
+            "a hot-reloadable field must not demand a restart"
+        );
+
         // Top-level scalars too: they sit outside every section and were
         // reported as applied while nothing re-read them.
         let profile_change = Config {
@@ -390,18 +442,20 @@ mod restart_required_tests {
 fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str> {
     let mut pending = Vec::new();
 
-    // Per FIELD, not per section: `server` holds both kinds, so reporting the
-    // section either way is false half the time.
-    if running.server.host != wanted.server.host || running.server.port != wanted.server.port {
-        pending.push("server.host/server.port");
+    // `server` wholesale, minus the one field that IS re-read per request.
+    // Listing the restart-only fields by hand is how `ws_port`,
+    // `request_timeout` and `shutdown_timeout` went unreported: subtracting the
+    // single live field from the whole cannot drift as fields are added.
+    let server_without_public_url = |c: &Config| {
+        let mut server = c.server.clone();
+        server.public_url = None;
+        canonical_json(&server)
+    };
+    if server_without_public_url(running) != server_without_public_url(wanted) {
+        pending.push("server");
     }
-    if running.server.allow_unauthenticated_network_bind
-        != wanted.server.allow_unauthenticated_network_bind
-    {
-        pending.push("server.allow_unauthenticated_network_bind");
-    }
-    if running.server.max_body_size != wanted.server.max_body_size {
-        pending.push("server.max_body_size");
+    if canonical_json(&running.env_files) != canonical_json(&wanted.env_files) {
+        pending.push("env_files");
     }
     if running.default_routing_profile != wanted.default_routing_profile {
         pending.push("default_routing_profile");
