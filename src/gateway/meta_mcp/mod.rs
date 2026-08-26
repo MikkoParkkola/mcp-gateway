@@ -145,12 +145,19 @@ pub struct MetaMcpCallerContext<'a> {
 /// else elsewhere.
 fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
     let mut response = JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string());
-    if let crate::Error::Forbidden { status, .. } = error
-        && let Some(ref mut rpc_error) = response.error
-    {
-        rpc_error.data = Some(serde_json::json!({
-            crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
-        }));
+    if let Some(ref mut rpc_error) = response.error {
+        // Written unconditionally, so this function is the sole authority on
+        // the field. `JsonRpcResponse::error` starts it at `None` and nothing
+        // else in the gateway writes it today, but a future path that forwarded
+        // a backend's error data could otherwise hand a backend the power to
+        // choose the gateway's HTTP status. Assigning both arms closes that
+        // without depending on the audit staying true.
+        rpc_error.data = match error {
+            crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
+                crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
+            })),
+            _ => None,
+        };
     }
     response
 }

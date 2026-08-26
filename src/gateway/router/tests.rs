@@ -2310,57 +2310,23 @@ async fn run_step_with_identity(
 
 /// Run a one-step playbook through the production path, with the real router
 /// authorizer built exactly as `handlers.rs` builds it.
+///
+/// Most cases carry no certificate or agent identity, so [`run_step_as`] wraps
+/// this and passes `None` for both rather than making every call site say so.
 async fn run_step_as(
     state: &Arc<AppState>,
     client: &AuthenticatedClient,
     server: &str,
     tool: &str,
 ) -> JsonRpcResponse {
-    let yaml = format!(
-        "name: scoped\ndescription: one step\non_error: abort\nsteps:\n  - name: step\n    server: {server}\n    tool: {tool}\n"
-    );
-    let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
-    let mut engine = crate::playbook::PlaybookEngine::new();
-    engine.register(definition);
-    state.meta_mcp.set_playbook_engine(engine);
-
-    let authorizer = super::authorization::RouterAuthorizer {
-        state: state.as_ref(),
-        client: Some(client),
-        oauth_agent_identity: None,
-        cert_identity: None,
-        principal: super::authorization::refusal_principal(Some(client), None, None),
-    };
-    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
-        authorizer: &authorizer,
-        api_key_name: Some(client.name.as_str()),
-        agent_id: None,
-        grant_subject: None,
-        verified_identity: None,
-        is_admin: client.admin,
-    };
-    // Driven through the production dispatch entry point rather than a
-    // test-only door into the playbook runner, so what is exercised is the
-    // path a real request takes.
-    state
-        .meta_mcp
-        .handle_tools_call(
-            RequestId::Number(1),
-            "gateway_run_playbook",
-            serde_json::json!({ "name": "scoped", "arguments": {} }),
-            None,
-            caller,
-        )
-        .await
+    run_step_with_identity(state, client, None, None, server, tool).await
 }
 
 /// The text a dispatch came back with, whether it succeeded or failed.
 ///
 /// A refusal surfaces as a JSON-RPC error; a network failure surfaces inside a
-/// successful envelope. Both are strings to assert against, and conflating them
-/// would be wrong only if a test asserted "it failed" rather than "it was
-/// refused, and here is what it said" — which none below does.
+/// successful envelope. Both are strings to assert against — every case below
+/// asserts what the response WAS, not merely that it failed.
 fn response_text(response: &JsonRpcResponse) -> String {
     response.error.as_ref().map_or_else(
         || {
@@ -2579,6 +2545,39 @@ async fn authz_every_refusal_branch_carries_the_status() {
         Some(StatusCode::FORBIDDEN),
         "a backend-scope refusal must answer 403: {}",
         response_text(&backend_refusal)
+    );
+
+    // Global policy is minted in a third place, and an invalid tool name in a
+    // fourth. The test's name claims EVERY branch, so it has to mean it.
+    let mut policy_state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut policy_state).expect("sole owner during setup");
+        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec!["globally_blocked".to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ));
+    }
+    let unrestricted = scoped_client("scoped", vec![], None);
+    let policy_refusal =
+        run_step_as(&policy_state, &unrestricted, "alpha", "globally_blocked").await;
+    assert_eq!(
+        super::handlers::refusal_status(&policy_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "a global-policy refusal must answer 403: {}",
+        response_text(&policy_refusal)
+    );
+
+    let name_refusal = run_step_as(&policy_state, &unrestricted, "alpha", "bad/name").await;
+    assert_eq!(
+        super::handlers::refusal_status(&name_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "an invalid tool name is refused by the authorizer, so it answers 403 \
+         like any other refusal: {}",
+        response_text(&name_refusal)
     );
 }
 
@@ -2811,5 +2810,52 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
         Some(StatusCode::FORBIDDEN),
         "agent auth enabled with no agent identity must refuse: {}",
         response_text(&anonymous)
+    );
+}
+
+/// An ordinary error must not carry the HTTP-status stamp.
+///
+/// The stamp is a plain JSON key on the error's `data`. Today nothing but the
+/// gateway writes that field — `JsonRpcResponse::error` starts it at `None` —
+/// but a future path forwarding a backend's error data would otherwise let a
+/// backend choose the gateway's HTTP status. The response builder assigns both
+/// arms, and this pins that: a non-refusal comes back with no `data` at all.
+#[tokio::test]
+async fn authz_ordinary_error_carries_no_status_stamp() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec![], None);
+
+    let authorizer = super::authorization::RouterAuthorizer {
+        state: state.as_ref(),
+        client: Some(&client),
+        oauth_agent_identity: None,
+        cert_identity: None,
+        principal: super::authorization::refusal_principal(Some(&client), None, None),
+    };
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &authorizer,
+        api_key_name: Some(client.name.as_str()),
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    };
+    let response = state
+        .meta_mcp
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
+            None,
+            caller,
+        )
+        .await;
+
+    let error = response.error.as_ref().expect("the control must error");
+    assert!(
+        error.data.is_none(),
+        "an ordinary error must carry no data, so nothing can be mistaken for \
+         a status stamp: {:?}",
+        error.data
     );
 }

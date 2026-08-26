@@ -159,9 +159,16 @@ three rows wrong in the same way — a probe that leaves the assertion green is
 not a weak probe, it is no probe, and it certifies nothing. Each class below
 therefore says what it makes fail.
 
+**No row restores the pre-fix source.** Every demonstrating test names
+something this change introduced — the authorizer, `step_errors`, the status
+mapping — so a source restore breaks compilation. Behaviour is reverted
+instead: a weaker probe honestly labelled, rather than a stronger one falsely
+claimed.
+
 | rows | probe | why this one, and not another |
 |---|---|---|
-| 1, 2, 3, 10, 11, 15 | restore pre-fix production source | the strongest probe: the mechanism is genuinely absent, and these assertions name no new API, so the tree still compiles |
+| 1, 2, 3, 10, 11 | disable the chokepoint's authorization call, one line, every type left in place | an earlier version of this row said "restore pre-fix production source, because these assertions name no new API". That was wrong, and was never what ran: these tests construct `RouterAuthorizer`, set the `authorizer` field and call `refusal_status`, all introduced by this change, so restoring the source breaks the build — and this plan's own rule is that a build error falsifies nothing |
+| 15 | make the real stdio authorizer permit everything | substituting `AllowAll` does not compile: it is `#[cfg(test)]`, which is the guarantee working rather than a probe |
 | 7, 7b, 12, 13a-13e, 20, 20a | make the chokepoint's authorization call a **no-op**, one line, every type left in place | the refusal disappears and each row's assertion goes red. Restoring the source instead leaves these test files uncompilable, and a compile error is not a falsification |
 | 23 | remove the `audit_refusal` call from the **router** gate | 23 runs the full router path, which refuses and returns *before* the chokepoint — the chokepoint no-op leaves its line intact and the row green. Sabotaging the gate that actually emits it takes the count from one to zero |
 | 6a, 17a | the same no-op | consultation counts drop to zero, so the row fails. A deny-all probe cannot falsify them: the authorizer is consulted once whatever verdict it returns |
