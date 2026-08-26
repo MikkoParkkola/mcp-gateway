@@ -362,23 +362,23 @@ Behaviour that must not change:
 
 Ordering and coverage:
 
-- MIK.AUTHZ.7 A refused step performs no backend call and spends no budget. The
-  cache clause is withdrawn — see below.
-- MIK.AUTHZ.12 **Withdrawn as unobservable.** No shape both reaches the
-  chokepoint and uses the cache: every internal call injects `_full` via
-  `internal_invoke_args`, and `_full` skips the response cache
-  (`invoke.rs:799`, `:1231`) and idempotency (`:750`) outright, while
-  router-covered shapes that do cache are refused before the chokepoint runs.
-  The property holds — the router gate enforces it for cached shapes — but no
-  test can fail for the right reason. Live again if internal calls stop
-  injecting `_full`.
-- MIK.AUTHZ.20 A refused call mints no per-user credential. The nonce and
-  idempotency clauses are **withdrawn as unobservable**: `internal_invoke_args`
-  puts no `nonce` on the envelope and `_full` skips idempotency, so a playbook
-  step cannot exercise either, and a direct `gateway_invoke` is refused at the
-  router first. Placement above the nonce block (`invoke.rs:634`) remains
-  required by this design and is justified by reading, not by a test — stated
-  here rather than hidden behind a green row.
+- MIK.AUTHZ.7 A refused call performs no backend call, writes no cache entry and
+  records no budget spend. The budget half needs the enforcer as its oracle: a
+  backend mock alone cannot fail an implementation that authorizes after the
+  spend at `invoke.rs:861`.
+- MIK.AUTHZ.12 A refused target already present in the response cache is still
+  refused, and the cached value is not returned. Observable on a client
+  `gateway_invoke`, which carries no `_full` — that directive is injected only
+  by `internal_invoke_args` (`support.rs:204`) — and so reaches the chokepoint
+  through the live cache path. This is the reload case above: the router
+  allowed the call, policy changed, and the chokepoint must refuse before the
+  cache is read.
+- MIK.AUTHZ.20 A refused call consumes no nonce — a fresh nonce on the envelope
+  is still registrable afterwards — registers no idempotency in-flight entry,
+  and mints no per-user credential. Same shape as AUTHZ.12: a client
+  `gateway_invoke` carries a top-level `nonce` and no `_full`, so
+  check-and-register at `invoke.rs:634` is on its path and the criterion can
+  fail.
 - MIK.AUTHZ.13 Every meta-layer dispatch shape — surfaced tool,
   `gateway_invoke`, code-mode single, code-mode chain step, playbook step — is
   refused when the authorizer denies, driven at the meta layer with a denying
