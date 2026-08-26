@@ -82,7 +82,7 @@ pub(super) fn authorize_tool_target(
         && !client.can_access_backend(target.server)
     {
         return Err(AuthorizationError::forbidden(
-            -32003,
+            crate::gateway::authz::FORBIDDEN_RPC_CODE,
             format!(
                 "Client '{}' not authorized for backend '{}'",
                 client.name, target.server
@@ -251,6 +251,15 @@ pub(super) struct RouterAuthorizer<'a> {
     pub(super) client: Option<&'a AuthenticatedClient>,
     pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     pub(super) cert_identity: Option<&'a CertIdentity>,
+    /// The principal a refusal is recorded against, resolved once at
+    /// construction.
+    ///
+    /// Resolved and stored rather than derived in `caller_name`, which returns
+    /// a borrow and so could only ever hand back the API-key name. An
+    /// agent-authenticated or certificate-authenticated caller would otherwise
+    /// be audited as unauthenticated — and those are the refusals an incident
+    /// responder most needs to attribute.
+    pub(super) principal: Option<String>,
 }
 
 impl ToolAuthorizer for RouterAuthorizer<'_> {
@@ -269,11 +278,6 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
     }
 
     fn caller_name(&self) -> Option<&str> {
-        // Borrowed, so this reports only the API-key client. The router gate
-        // uses `refusal_principal` for the fuller answer; the chokepoint sees
-        // whatever this returns, which is why the two are kept adjacent.
-        self.client
-            .filter(|c| c.authenticated)
-            .map(|c| c.name.as_str())
+        self.principal.as_deref()
     }
 }

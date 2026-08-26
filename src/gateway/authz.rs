@@ -18,6 +18,13 @@ use axum::http::StatusCode;
 use serde_json::Value;
 use tracing::warn;
 
+/// The JSON-RPC code every authorization refusal carries.
+///
+/// Named once because two places key on it: the authorizers that mint a
+/// refusal, and the HTTP layer that maps a refusal to 403. Two literals would
+/// drift, and the drift would be silent — a refusal answering 200.
+pub const FORBIDDEN_RPC_CODE: i32 = -32003;
+
 /// A backend tool invocation, owned.
 pub(crate) struct OwnedToolTarget {
     pub server: String,

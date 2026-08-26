@@ -466,3 +466,132 @@ steps:
          this field existed: {value}"
     );
 }
+
+/// AUTHZ.19 — under `abort`, the run returns the denial's own code, and no
+/// later step runs.
+///
+/// Asserting only "the run aborted" would pass for any error; the code is what
+/// pins it to a refusal.
+#[tokio::test]
+async fn authz_19_abort_returns_the_denial_itself() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+
+    let result = run_playbook_yaml(
+        &meta,
+        r"
+name: aborting
+description: a denied step followed by one that must not run
+on_error: abort
+steps:
+  - name: denied
+    server: alpha
+    tool: read
+  - name: never_runs
+    server: alpha
+    tool: write
+",
+        &ctx(&DenyAll),
+    )
+    .await;
+
+    let err = result.expect_err("abort must surface the failure");
+    assert!(
+        matches!(err, crate::Error::Forbidden { .. }),
+        "the run must return the denial, not a generic failure: {err:?}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "neither the denied step nor the one after it may dispatch"
+    );
+}
+
+/// AUTHZ.18a — an ordinary failure is explained too, not only a refusal.
+///
+/// A fix that recorded refusals alone would leave a `continue` caller with an
+/// unexplained null for every other kind of failure, which is the defect
+/// `step_errors` exists to close.
+#[tokio::test]
+async fn authz_18a_ordinary_failure_is_also_recorded() {
+    let registry = Arc::new(BackendRegistry::new());
+    let meta = MetaMcp::new(registry);
+
+    let value = run_playbook_yaml(
+        &meta,
+        r"
+name: continuing_ordinary
+description: an ordinary failure under continue
+on_error: continue
+steps:
+  - name: bad
+    server: alpha
+    tool: 'bad/name'
+",
+        &ctx(&AllowAll),
+    )
+    .await
+    .expect("continue must not abort the run");
+
+    let errors = value
+        .get("step_errors")
+        .expect("an ordinary failure must be explained");
+    assert!(
+        errors.get("bad").is_some(),
+        "and recorded under the step's own name: {errors}"
+    );
+}
+
+/// AUTHZ.6 / 6a — a step skipped by its condition is never authorized.
+///
+/// The counting authorizer carries both halves: zero consultations for the
+/// skipped step AND exactly one for the step that runs. A zero on its own is
+/// satisfied by an authorizer that is never called at all.
+#[tokio::test]
+async fn authz_6a_skipped_step_is_never_authorized() {
+    let (registry, _calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let counting = CountingAuthorizer::new(AllowAll);
+
+    let value = run_playbook_yaml(
+        &meta,
+        r"
+name: conditional
+description: one skipped step and one that runs
+on_error: continue
+steps:
+  - name: skipped
+    server: forbidden_backend
+    tool: never
+    condition: 'false'
+  - name: runs
+    server: alpha
+    tool: read
+",
+        &ctx(&counting),
+    )
+    .await
+    .expect("the run must complete");
+
+    assert_eq!(
+        counting.count_for("forbidden_backend", "never"),
+        0,
+        "a step whose condition excluded it must never be authorized — \
+         refusing a playbook for a step that would not have run is a \
+         regression invented by the fix"
+    );
+    assert_eq!(
+        counting.count_for("alpha", "read"),
+        1,
+        "and the step that does run must be authorized exactly once"
+    );
+
+    let skipped = value
+        .get("steps_skipped")
+        .and_then(Value::as_array)
+        .expect("steps_skipped must be present");
+    assert!(
+        skipped.iter().any(|s| s == "skipped"),
+        "the step must actually have been skipped, not merely absent: {value}"
+    );
+}

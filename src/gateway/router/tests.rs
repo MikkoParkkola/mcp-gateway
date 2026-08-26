@@ -2278,6 +2278,7 @@ async fn run_step_as(
         client: Some(client),
         oauth_agent_identity: None,
         cert_identity: None,
+        principal: super::authorization::refusal_principal(Some(client), None, None),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         authorizer: &authorizer,
@@ -2397,5 +2398,121 @@ async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
     assert!(
         !msg.contains("not in the allowlist"),
         "a permitted tool must not be refused: {msg}"
+    );
+}
+
+/// A refusal only the chokepoint can see must still answer 403.
+///
+/// The router gate answers 403 for the shapes it inspects. A playbook step is
+/// not one of them — its targets never appear in the request — so before the
+/// status travelled on the refusal, a denied playbook came back HTTP 200 with
+/// the refusal buried in the body, telling every caller and intermediary that
+/// the call had succeeded.
+#[tokio::test]
+async fn authz_playbook_denial_answers_forbidden_over_http() {
+    let state = test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+
+    let response = run_step_as(&state, &client, "beta", "read").await;
+    assert!(
+        response.error.is_some(),
+        "the step must be refused: {}",
+        response_text(&response)
+    );
+    assert_eq!(
+        response.error.as_ref().map(|e| e.code),
+        Some(crate::gateway::authz::FORBIDDEN_RPC_CODE),
+        "a refusal must carry the code the HTTP layer maps to 403, or the \
+         status mapping silently stops applying"
+    );
+
+    // Asserted against the mapping the handler applies, not against a status
+    // handed to `build_response` by the test — passing one in would prove only
+    // that `build_response` uses its argument.
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        Some(StatusCode::FORBIDDEN),
+        "a refused dispatch must not answer 200"
+    );
+
+    let http = super::helpers::build_response(response, "sess-authz", StatusCode::FORBIDDEN);
+    assert_eq!(http.status(), StatusCode::FORBIDDEN);
+}
+
+/// The mapping must not reclassify anything that is not a refusal.
+#[tokio::test]
+async fn authz_ordinary_error_still_answers_its_own_status() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+
+    // Permitted target, unreachable backend: an ordinary failure, not a refusal.
+    let response = run_step_as(&state, &client, "alpha", "read").await;
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "only an authorization refusal may be mapped to 403; a dispatch \
+         failure must keep its own status"
+    );
+}
+
+/// AUTHZ.3 — a playbook step hitting a tool denied by GLOBAL policy is
+/// refused.
+///
+/// Distinct from AUTHZ.1 and AUTHZ.2 on purpose: the policy lives on
+/// `AppState`, not on the client, so a fix that threaded only the caller's
+/// identity into the chokepoint passes those two and fails this one.
+#[tokio::test]
+async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
+    let mut state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec!["globally_blocked".to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ));
+    }
+    let client = scoped_client("scoped", vec![], None);
+
+    let response = run_step_as(&state, &client, "alpha", "globally_blocked").await;
+
+    let msg = response_text(&response);
+    assert!(
+        response.error.is_some(),
+        "a globally denied tool must be refused even for an unrestricted client: {msg}"
+    );
+    assert!(
+        msg.contains("globally_blocked"),
+        "the refusal must name the tool: {msg}"
+    );
+}
+
+/// AUTHZ.3a — the same policy must not refuse a permitted tool.
+#[tokio::test]
+async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
+    let mut state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec!["globally_blocked".to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ));
+    }
+    let client = scoped_client("scoped", vec![], None);
+
+    let response = run_step_as(&state, &client, "alpha", "permitted").await;
+
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "a permitted tool must reach dispatch rather than be refused: {}",
+        response_text(&response)
     );
 }

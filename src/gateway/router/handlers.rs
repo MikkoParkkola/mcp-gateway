@@ -24,6 +24,7 @@ use super::helpers::{
     parse_elicitation_params, parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::authz::FORBIDDEN_RPC_CODE;
 use crate::gateway::destructive_confirmation::{
     ConfirmationOutcome, is_destructive_meta_tool, require_destructive_confirmation,
 };
@@ -672,6 +673,11 @@ pub(super) async fn meta_mcp_handler(
                 client: client.as_ref(),
                 oauth_agent_identity: oauth_agent_identity.as_ref(),
                 cert_identity: cert_identity.as_ref(),
+                principal: refusal_principal(
+                    client.as_ref(),
+                    oauth_agent_identity.as_ref(),
+                    cert_identity.as_ref(),
+                ),
             };
 
             let mut call_response = state
@@ -835,8 +841,24 @@ pub(super) async fn meta_mcp_handler(
         }
     }
 
-    // Return response with session ID header
-    build_response(response, &session_id, StatusCode::OK)
+    // A refusal the router gate caught already answered 403 above. A refusal
+    // only the dispatch chokepoint can see — a playbook step, whose targets the
+    // router never inspects — arrives here as a JSON-RPC error, and answering
+    // it 200 tells every caller and intermediary the call succeeded. The status
+    // travels on the error precisely so this line can honour it.
+    let status = refusal_status(&response).unwrap_or(StatusCode::OK);
+    build_response(response, &session_id, status)
+}
+
+/// The HTTP status a response deserves when it carries an authorization
+/// refusal, or `None` for anything else.
+///
+/// Keyed on the JSON-RPC code the chokepoint stamps, which is the only part of
+/// the refusal that survives into the response envelope. A code the gateway
+/// does not use for refusals returns `None`, so nothing else is reclassified.
+pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
+    let code = response.error.as_ref()?.code;
+    (code == FORBIDDEN_RPC_CODE).then_some(StatusCode::FORBIDDEN)
 }
 
 // ── destructive-confirmation helpers ─────────────────────────────────────────

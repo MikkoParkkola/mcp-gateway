@@ -207,6 +207,42 @@ name is a gap a grep finds.
 - **8 and 8a** pin literal message strings as constants in the test, so a
   reworded refusal fails loudly rather than silently passing a `contains` check.
 
+## Coverage, stated exactly
+
+A review round found this section claiming probe results for rows that have no
+test. Corrected below, because a coverage claim that overstates itself is worse
+than a gap: the gap is visible and can be closed, the overstatement is not.
+
+**Implemented and probed** — 25 tests:
+
+| rows | where |
+|---|---|
+| 1, 1a, 2, 2a, 3, 3a | `router::tests` — the real `RouterAuthorizer` over a real `AuthenticatedClient` |
+| 13b, 13c, 13d, 13e and their allow counterparts | `meta_mcp::authz_tests` — every meta dispatch shape |
+| 6a, 17, 17b, 18, 18a, 19, 24 | `meta_mcp::authz_tests` — denial semantics and the playbook engine |
+| 15, 15a, 22 | `server::tests` — the stdio transport |
+| the 403 mapping and its non-reclassification control | `router::tests` |
+
+**Not implemented.** Named honestly rather than folded into the list above:
+
+| rows | why not, and what it would take |
+|---|---|
+| 14a, 14b, 23 — the audit line | no log-capture harness exists; see the section below |
+| 10, 10a, 11, 11a — mTLS and agent scope | each needs a certificate or agent-identity fixture the router tests do not have today. The checks themselves are unchanged code inside `authorize_tool_target`, reached through the same call the covered rows exercise |
+| 7, 7a, 7b, 12, 12a, 20, 20a, 20b, 20c — pre-dispatch side effects | each needs a live cache, idempotency store, nonce store or budget enforcer wired into a meta-level fixture. The ordering they assert is currently justified by reading: the check sits at `invoke.rs:551`, above every one of those at `:634`, `:750`, `:799`, `:861` |
+| 8, 8a, 16, 21 — message and route regressions | pin literal strings and the direct route; guard against a future refactor rather than demonstrate this change |
+| 13a — surfaced tool | the one dispatch shape without its own case; 13b-13e cover the other four |
+
+**What that leaves unproven, precisely**: that the audit lines fire; that mTLS
+and agent-scope denials propagate through the chokepoint as the covered checks
+do; and that no pre-dispatch side effect precedes the check. The last is the
+one worth watching, because reading proves placement and not behaviour.
+
+**What IS proven, by probe rather than assertion**: a playbook step targeting a
+backend or tool outside the caller's scope, or denied by global policy, is
+refused under the real production policy — and is NOT refused when the
+chokepoint is disabled. That is the defect this change exists to close.
+
 ## What the probes actually found
 
 Run against the implemented change. Recorded because a probe that behaves
@@ -214,7 +250,7 @@ unexpectedly is evidence about the plan, not just about the code.
 
 | probe | result |
 |---|---|
-| chokepoint no-op, meta rows | 13b/13c/13d/13e denied → **red**; both allow rows stayed green. The three-way probe split is confirmed empirically: a no-op cannot falsify an allow row |
+| chokepoint no-op, meta rows | 13b/13c/13d/13e denied → **red**; both allow rows stayed green. The three-way probe split is confirmed empirically: a no-op cannot falsify an allow row. Rows 7, 12, 20 and 20a appear in the probe table above but have no test yet, so no probe ran for them |
 | chokepoint no-op, router rows | AUTHZ.1 and AUTHZ.2 → **red**, 1a and 2a green. These use the real `RouterAuthorizer` over a real `AuthenticatedClient`, so this is the row that demonstrates the defect is closed under production policy rather than under a double |
 | engine revert | 17 and 18 → **red**, 24 green |
 | deny-all inversion | every allow row → **red** |
