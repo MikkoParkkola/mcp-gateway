@@ -222,6 +222,7 @@ than a gap: the gap is visible and can be closed, the overstatement is not.
 | 6a, 17, 17b, 18, 18a, 19, 24 | `meta_mcp::authz_tests` — denial semantics and the playbook engine |
 | 15, 15a, 22 | `server::tests` — the stdio transport |
 | the 403 mapping and its non-reclassification control | `router::tests` |
+| 12, 12a, 20 — pre-dispatch ordering | `meta_mcp::authz_tests`, against a live cache and a live nonce store |
 
 **Not implemented.** Named honestly rather than folded into the list above:
 
@@ -229,14 +230,22 @@ than a gap: the gap is visible and can be closed, the overstatement is not.
 |---|---|
 | 14a, 14b, 23 — the audit line | no log-capture harness exists; see the section below |
 | 10, 10a, 11, 11a — mTLS and agent scope | each needs a certificate or agent-identity fixture the router tests do not have today. The checks themselves are unchanged code inside `authorize_tool_target`, reached through the same call the covered rows exercise |
-| 7, 7a, 7b, 12, 12a, 20, 20a, 20b, 20c — pre-dispatch side effects | each needs a live cache, idempotency store, nonce store or budget enforcer wired into a meta-level fixture. The ordering they assert is currently justified by reading: the check sits at `invoke.rs:551`, above every one of those at `:634`, `:750`, `:799`, `:861` |
+| 7, 7a, 7b, 20a, 20b, 20c — the remaining side effects | idempotency in-flight state, per-user credential minting and budget consultation each need a live subsystem wired into a meta-level fixture. Placement is read, not tested: the check sits at `invoke.rs:551`, above `:750`, `:861` |
 | 8, 8a, 16, 21 — message and route regressions | pin literal strings and the direct route; guard against a future refactor rather than demonstrate this change |
 | 13a — surfaced tool | the one dispatch shape without its own case; 13b-13e cover the other four |
 
 **What that leaves unproven, precisely**: that the audit lines fire; that mTLS
 and agent-scope denials propagate through the chokepoint as the covered checks
-do; and that no pre-dispatch side effect precedes the check. The last is the
-one worth watching, because reading proves placement and not behaviour.
+do; and that idempotency, credential minting and budget consultation do not
+precede the check.
+
+The cache and the nonce — the two that mattered most, because a wrong order
+there either serves another caller's data or lets a refusal deny service to the
+next honest request — are now tested rather than read. Each was probed by the
+specific mis-ordering it guards, and neither falls to the other's probe: moving
+the check below the nonce store leaves AUTHZ.12 green, and only moving it below
+the cache read turns it red. A single "wrong order" probe would have certified
+one of them falsely.
 
 **What IS proven, by probe rather than assertion**: a playbook step targeting a
 backend or tool outside the caller's scope, or denied by global policy, is
@@ -255,6 +264,8 @@ unexpectedly is evidence about the plan, not just about the code.
 | engine revert | 17 and 18 → **red**, 24 green |
 | deny-all inversion | every allow row → **red** |
 | stdio authorizer permits everything | 15 → **red**, 15a and 22 green |
+| check moved below the nonce registration | 20 → **red** (a refused call burned the nonce, so the honest retry was rejected as a replay); 12 stayed green, correctly — the cache read is further down still. 17b also went red, because the check then sits below tool-name validation and is never consulted |
+| check moved below the cache read | 12 → **red**: the refused caller was served the cached payload |
 
 Two results corrected the plan rather than the code:
 

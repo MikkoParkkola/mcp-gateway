@@ -600,3 +600,112 @@ steps:
         "the step must actually have been skipped, not merely absent: {value}"
     );
 }
+
+// ===========================================================================
+// AUTHZ.7 / 12 / 20 — nothing happens before the check.
+//
+// These were previously justified by reading: the check sits at the top of
+// `invoke_tool_traced`, above the nonce store, the cache and the budget. That
+// proves PLACEMENT, not behaviour. A client `gateway_invoke` is the shape that
+// can prove behaviour, because it carries no `_full` — that directive is
+// injected only by `internal_invoke_args`, and it skips the cache and
+// idempotency entirely, so a playbook step could never exercise them.
+// ===========================================================================
+
+/// AUTHZ.12 — a refused caller is not served a cached result.
+///
+/// The scenario the design calls authoritative: the router allowed a call,
+/// policy changed, and the chokepoint must refuse before the cache is read.
+#[tokio::test]
+async fn authz_12_refused_caller_is_not_served_a_cached_result() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+
+    // Prime the cache as a permitted caller.
+    let primed = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(primed.is_ok(), "priming call must succeed: {primed:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the backend was called once"
+    );
+
+    // AUTHZ.12a — the cache is real and reachable, so the refusal below is not
+    // just an empty cache.
+    let hit = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(hit.is_ok(), "a second permitted call must succeed");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "and must be served from cache — if it reaches the backend again the \
+         cache is not primed and AUTHZ.12 proves nothing"
+    );
+
+    // Now refuse the same target.
+    let refused = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
+        .await;
+    assert!(
+        refused.is_err(),
+        "a refused caller must not be served the cached payload: {refused:?}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "and must not dispatch either"
+    );
+}
+
+/// AUTHZ.20 — a refused call consumes no nonce.
+///
+/// The nonce store is consulted at `invoke.rs:634`, below the chokepoint. If
+/// the order were reversed, a refused call would burn the caller's nonce and
+/// the legitimate retry below would be rejected as a replay — a refusal
+/// causing a denial of service on the next honest request.
+#[tokio::test]
+async fn authz_20_refused_call_consumes_no_nonce() {
+    let (registry, _calls) = counted_backend("alpha");
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"a-test-secret-of-sufficient-length".to_vec(),
+            None,
+            "test-key".to_string(),
+        ),
+        Duration::from_secs(300),
+        false,
+    );
+
+    let mut args = invoke_args("alpha", "read");
+    args["nonce"] = json!("nonce-used-once");
+
+    let refused = meta.invoke_tool(&args, None, &ctx(&DenyAll)).await;
+    assert!(refused.is_err(), "the call must be refused");
+
+    // The same nonce must still be usable: the refusal happened before it was
+    // registered.
+    let allowed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    assert!(
+        allowed.is_ok(),
+        "a refused call must not burn the nonce — the honest retry is being \
+         rejected as a replay: {allowed:?}"
+    );
+
+    // And the nonce IS a real one: replaying it now must fail.
+    let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    assert!(
+        replayed.is_err(),
+        "the nonce store must actually be live, or the assertion above passes \
+         for the wrong reason"
+    );
+}
