@@ -408,7 +408,11 @@ Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) 
 
 ## Authentication for Production
 
-**Never run without auth on a network-accessible port.** Default bind (`127.0.0.1`) limits to localhost, and the gateway warns loudly at startup if it binds anywhere else with auth disabled. For networked deployments:
+**The gateway refuses to start without auth on a network-accessible port.** The
+default bind (`127.0.0.1`) limits it to the local machine. Binding anywhere else
+with `auth.enabled = false` is refused before a listener is opened, because any
+caller reaching that address could invoke every configured backend with the
+gateway's credentials. For networked deployments:
 
 ```yaml
 server:
@@ -420,6 +424,25 @@ auth:
 ```
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
+
+If authentication terminates in front of the gateway — a sidecar, a service
+mesh, or a reverse proxy that authenticates before forwarding — the gateway
+itself may serve unauthenticated on a network address:
+
+```yaml
+server:
+  host: "0.0.0.0"
+  allow_unauthenticated_network_bind: true
+```
+
+This is logged at WARN on every start while it remains set. Set it only when
+that fronting layer exists; without one it restores the exposure the refusal
+prevents.
+
+Config files are written with mode `0600` on Unix, including the temporary file
+used during the write, since a config can hold a bearer token or API keys. An
+existing config with wider permissions is reported at startup and is tightened
+by the next write that replaces it.
 
 ### Browser access to the gateway port
 

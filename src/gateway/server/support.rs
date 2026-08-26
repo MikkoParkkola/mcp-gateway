@@ -380,3 +380,75 @@ mod tests {
         }
     }
 }
+
+/// Why an unauthenticated gateway must not serve HTTP on this bind, if it must not.
+///
+/// Returned as a message rather than logged, so the caller refuses before
+/// binding a listener and a test can assert the decision without starting a
+/// server. `None` means the configuration may serve.
+///
+/// A once-at-startup check is sufficient because neither half of the forbidden
+/// state can be reached later: `server.host` is restart-required
+/// (`config_reload::ConfigPatch::server_changed`), and the running auth state is
+/// snapshotted into the router at construction and never replaced by a reload.
+#[must_use]
+pub fn network_bind_refusal(config: &Config) -> Option<String> {
+    if config.auth.enabled
+        || config.server.allow_unauthenticated_network_bind
+        || crate::gateway::router::is_loopback_bind(&config.server.host)
+    {
+        return None;
+    }
+    Some(format!(
+        "refusing to serve HTTP on {}: authentication is disabled, so any caller \
+         that reaches this address can invoke every configured backend with this \
+         gateway's credentials. Set auth.enabled = true, or bind 127.0.0.1. If \
+         authentication terminates in front of this gateway (a sidecar, a service \
+         mesh, or a reverse proxy), set server.allow_unauthenticated_network_bind = true.",
+        config.server.host
+    ))
+}
+
+#[cfg(test)]
+mod network_bind_tests {
+    use super::network_bind_refusal;
+    use crate::config::Config;
+
+    fn config(host: &str, auth: bool, override_set: bool) -> Config {
+        let mut c = Config::default();
+        c.server.host = host.to_string();
+        c.auth.enabled = auth;
+        c.server.allow_unauthenticated_network_bind = override_set;
+        c
+    }
+
+    #[test]
+    fn an_unauthenticated_network_bind_is_refused() {
+        for host in ["0.0.0.0", "192.168.1.5", "::"] {
+            let refusal = network_bind_refusal(&config(host, false, false));
+            assert!(refusal.is_some(), "{host} with auth off must be refused");
+            let msg = refusal.unwrap();
+            assert!(msg.contains("auth.enabled"), "must name the remedy: {msg}");
+            assert!(
+                msg.contains("127.0.0.1"),
+                "must name the other remedy: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_loopback_bind_serves_without_authentication() {
+        for host in ["127.0.0.1", "localhost", "::1"] {
+            assert!(
+                network_bind_refusal(&config(host, false, false)).is_none(),
+                "{host} is the documented default and must keep working"
+            );
+        }
+    }
+
+    #[test]
+    fn authentication_or_the_override_permits_a_network_bind() {
+        assert!(network_bind_refusal(&config("0.0.0.0", true, false)).is_none());
+        assert!(network_bind_refusal(&config("0.0.0.0", false, true)).is_none());
+    }
+}

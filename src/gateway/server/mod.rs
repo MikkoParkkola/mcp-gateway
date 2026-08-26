@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::{MetaMcp, MetaMcpCallerContext};
@@ -1224,6 +1224,22 @@ impl Gateway {
                 host = %self.config.server.host,
                 port = ws_port,
                 "WebSocket listener spawned"
+            );
+        }
+
+        // Refuse BEFORE binding, so a configuration that must not serve never
+        // opens a port at all. Only this path reaches it; stdio mode has no
+        // listener and is untouched.
+        if let Some(reason) = support::network_bind_refusal(&self.config) {
+            error!("{reason}");
+            return Err(Error::Config(reason));
+        }
+        if self.config.server.allow_unauthenticated_network_bind && !self.config.auth.enabled {
+            warn!(
+                host = %self.config.server.host,
+                "server.allow_unauthenticated_network_bind is set: this gateway serves \
+                 unauthenticated callers on the network. Authentication is expected to \
+                 terminate in front of it."
             );
         }
 

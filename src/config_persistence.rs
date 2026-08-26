@@ -116,11 +116,18 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
 fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, PathBuf), String> {
     for seed in first..first.wrapping_add(SCRATCH_ATTEMPTS) {
         let candidate = scratch_candidate(path, seed);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        // Set the mode AT CREATION, not on the finished file. A config can hold
+        // a bearer token, and the scratch file sits next to it for the whole
+        // write; creating it at the umask and tightening afterwards leaves the
+        // window open. `rename` preserves the mode, so the config inherits it.
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&candidate) {
             Ok(file) => return Ok((file, candidate)),
             // Someone else's scratch file. Not ours to write to, and not ours
             // to delete either.
@@ -196,6 +203,38 @@ mod tests {
         let config = load_existing_or_default(&path).unwrap();
 
         assert!(config.backends.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_written_config_is_not_readable_by_other_users() {
+        // A config can hold a bearer token and API keys. Loopback isolates
+        // machines, not users, so another account on the same host can already
+        // reach the port; it must not also be able to read the credential.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        write_config(&path, &Config::default()).expect("write");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config wrote mode {mode:o}, expected 600");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_scratch_file_is_not_readable_by_other_users_either() {
+        // The scratch file exists next to the config for the duration of the
+        // write. Creating it at the umask and tightening the final file after
+        // the rename leaves exactly the window this is meant to close.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let (file, scratch) = create_scratch_exclusive(&path, 1).expect("scratch");
+        let mode = file.metadata().expect("stat").permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&scratch);
+        assert_eq!(mode, 0o600, "scratch wrote mode {mode:o}, expected 600");
     }
 
     #[test]

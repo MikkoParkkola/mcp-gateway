@@ -698,6 +698,19 @@ pub struct ServerConfig {
     /// metadata endpoint returns `503` until it is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
+    /// Serve HTTP on a non-loopback address with authentication disabled.
+    ///
+    /// Default false, and the gateway refuses to start in that combination:
+    /// every caller that reaches the address can invoke each configured backend
+    /// with the credentials this gateway holds.
+    ///
+    /// Set this only where authentication terminates in front of the gateway —
+    /// a sidecar, a service mesh, or a reverse proxy that authenticates before
+    /// forwarding. Naming that use makes the setting reviewable: a reader can
+    /// ask whether the fronting layer actually exists. It is logged at WARN on
+    /// every start while it remains set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_unauthenticated_network_bind: bool,
 }
 
 impl Default for ServerConfig {
@@ -710,6 +723,7 @@ impl Default for ServerConfig {
             shutdown_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
             public_url: None,
+            allow_unauthenticated_network_bind: false,
         }
     }
 }
