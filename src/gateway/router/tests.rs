@@ -2406,10 +2406,11 @@ async fn authz_1a_playbook_step_inside_client_backend_scope_is_not_refused() {
     // The backend is unreachable, so this fails at the network — deliberately.
     // What must NOT appear is an authorization refusal: the point is that the
     // scope check passed and the call proceeded to dispatch.
-    let msg = response_text(&response);
-    assert!(
-        !msg.contains("not authorized for backend"),
-        "a permitted backend must not be refused: {msg}"
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "a permitted backend must reach dispatch rather than be refused: {}",
+        response_text(&response)
     );
 }
 
@@ -2446,10 +2447,11 @@ async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
 
     let response = run_step_as(&state, &client, "alpha", "safe_read").await;
 
-    let msg = response_text(&response);
-    assert!(
-        !msg.contains("not in the allowlist"),
-        "a permitted tool must not be refused: {msg}"
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "a permitted tool must reach dispatch rather than be refused: {}",
+        response_text(&response)
     );
 }
 

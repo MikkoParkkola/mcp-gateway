@@ -655,9 +655,10 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
     let refused = meta
         .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
         .await;
+    let refusal = refused.expect_err("a refused caller must not be served the cached payload");
     assert!(
-        refused.is_err(),
-        "a refused caller must not be served the cached payload: {refused:?}"
+        matches!(refusal, crate::Error::Forbidden { .. }),
+        "and must be refused AS a denial, not fail for some other reason: {refusal:?}"
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -703,9 +704,76 @@ async fn authz_20_refused_call_consumes_no_nonce() {
 
     // And the nonce IS a real one: replaying it now must fail.
     let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    let replay_error = replayed.expect_err("a replayed nonce must be rejected");
     assert!(
-        replayed.is_err(),
-        "the nonce store must actually be live, or the assertion above passes \
-         for the wrong reason"
+        replay_error.to_string().to_lowercase().contains("nonce")
+            || replay_error.to_string().to_lowercase().contains("replay"),
+        "and rejected AS a replay — any other error would mean the nonce store \
+         is not live and the assertion above passed for the wrong reason: \
+         {replay_error}"
+    );
+}
+
+/// AUTHZ.13a — a surfaced tool is refused when the authorizer denies.
+///
+/// The fifth dispatch shape, and the last one without a case. A surfaced tool
+/// is dispatched by its bare name rather than through `gateway_invoke`, so it
+/// takes a different branch at the top of `handle_tools_call` — covering the
+/// other four proves nothing about this one.
+#[tokio::test]
+async fn authz_13a_surfaced_tool_denied() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta =
+        MetaMcp::new(registry).with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+            server: "alpha".to_string(),
+            tool: "surfaced_read".to_string(),
+        }]);
+
+    let response = meta
+        .handle_tools_call(
+            crate::protocol::RequestId::Number(1),
+            "surfaced_read",
+            json!({}),
+            None,
+            ctx(&DenyAll),
+        )
+        .await;
+
+    assert!(
+        response.error.is_some(),
+        "a denied surfaced tool must be refused: {response:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "no backend call");
+}
+
+/// The allow counterpart, without which 13a passes if surfaced dispatch never
+/// reaches a backend for some unrelated reason.
+#[tokio::test]
+async fn authz_13a_surfaced_tool_allowed_reaches_the_backend() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta =
+        MetaMcp::new(registry).with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+            server: "alpha".to_string(),
+            tool: "surfaced_read".to_string(),
+        }]);
+
+    let response = meta
+        .handle_tools_call(
+            crate::protocol::RequestId::Number(1),
+            "surfaced_read",
+            json!({}),
+            None,
+            ctx(&AllowAll),
+        )
+        .await;
+
+    assert!(
+        response.error.is_none(),
+        "an allowed surfaced tool must run: {response:?}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "and must actually reach the backend"
     );
 }

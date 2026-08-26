@@ -179,11 +179,16 @@ correct implementation. It is evidence the row is not testing what it claims.
 
 ## Test names
 
-One convention, so a row and its test are findable from each other without a
-41-entry table that would drift: `authz_<row>_<slug>`, where `<row>` is the row
-label in lower case. Row 10a becomes `authz_10a_allowed_certificate_succeeds`;
-row 13e becomes `authz_13e_playbook_step_denied`. A row with no test of that
-name is a gap a grep finds.
+`authz_<row>_<slug>`, where `<row>` is the row label in lower case — so
+`authz_13e_playbook_step_denied`. The intent was that a grep for a row label
+finds its test, or finds a gap.
+
+That holds for most rows and NOT for four of them: an allow row shares a fixture
+with the refusal it pairs with, so `10a`, `11a`, `12a` and `20c` live inside
+`authz_10`, `authz_11`, `authz_12` and `authz_20` rather than in functions of
+their own. Splitting them would duplicate the setup and let the pair drift. The
+index in "Coverage, stated exactly" is what covers those four; the grep does
+not.
 
 ## Fixture notes that are easy to get wrong
 
@@ -209,47 +214,63 @@ name is a gap a grep finds.
 
 ## Coverage, stated exactly
 
-A review round found this section claiming probe results for rows that have no
-test. Corrected below, because a coverage claim that overstates itself is worse
-than a gap: the gap is visible and can be closed, the overstatement is not.
+Rewritten from the test list rather than patched. Two review rounds found this
+section contradicting itself — claiming a count its own table disproved, and
+listing rows as untested two sections after recording their probe results. That
+is what incremental edits to an inventory produce, so this is generated from
+`rg "fn authz_"` and kept that way.
 
-**Implemented and probed** — 25 tests:
+**33 tests exist.** By area:
 
-| rows | where |
+| area | tests |
 |---|---|
-| 1, 1a, 2, 2a, 3, 3a | `router::tests` — the real `RouterAuthorizer` over a real `AuthenticatedClient` |
-| 13b, 13c, 13d, 13e and their allow counterparts | `meta_mcp::authz_tests` — every meta dispatch shape |
-| 6a, 17, 17b, 18, 18a, 19, 24 | `meta_mcp::authz_tests` — denial semantics and the playbook engine |
-| 15, 15a, 22 | `server::tests` — the stdio transport |
-| the 403 mapping and its non-reclassification control | `router::tests` |
-| 12, 12a, 20 — pre-dispatch ordering | `meta_mcp::authz_tests`, against a live cache and a live nonce store |
-| 10, 10a, 11, 11a — certificate and agent scope | `router::tests`, each carrying its identity through the real authorizer |
+| client scope, real policy (`router::tests`) | `authz_1`, `authz_1a`, `authz_2`, `authz_2a` |
+| global tool policy (`router::tests`) | `authz_3`, `authz_3a` |
+| certificate policy (`router::tests`) | `authz_10` — refuse and permit in one case |
+| agent scope (`router::tests`) | `authz_11` — refuse, permit, and no-identity |
+| dispatch shapes (`meta_mcp::authz_tests`) | `authz_13a` ×2, `authz_13b` ×2, `authz_13c`, `authz_13d`, `authz_13cd`, `authz_13e` ×2 |
+| denial semantics (`meta_mcp::authz_tests`) | `authz_17`, `authz_17b`, `authz_18`, `authz_18a`, `authz_19`, `authz_24` |
+| condition skip (`meta_mcp::authz_tests`) | `authz_6a` |
+| pre-dispatch ordering (`meta_mcp::authz_tests`) | `authz_12` (cache), `authz_20` (nonce) |
+| HTTP status and attribution (`router::tests`) | `authz_playbook_denial_answers_forbidden_over_http`, `authz_every_refusal_branch_carries_the_status`, `authz_ordinary_error_is_not_reclassified_as_forbidden`, `authz_refusal_principal_names_the_authenticated_identity` |
+| stdio (`server::tests`) | `authz_15`, `authz_15a`, `authz_22` |
 
-**Not implemented.** Named honestly rather than folded into the list above:
+**On the naming convention.** The plan proposed `authz_<row>_<slug>`, one test
+per row, so a grep for `authz_10a` would find a gap. Several rows are paired
+inside one function instead — `10a` lives in `authz_10`, `11a` in `authz_11`,
+`12a` in `authz_12`, `20c` in `authz_20`. That is deliberate: an allow row and
+its refusal row share a fixture, and splitting them duplicates the setup while
+letting the pair drift. The cost is real and is stated here rather than hidden:
+**a grep no longer finds those four rows**, so this table is the index instead.
+
+**Still not implemented:**
 
 | rows | why not, and what it would take |
 |---|---|
-| 14a, 14b, 23 — the audit line | no log-capture harness exists; see the section below |
-| 7, 7a, 7b, 20a, 20b, 20c — the remaining side effects | idempotency in-flight state, per-user credential minting and budget consultation each need a live subsystem wired into a meta-level fixture. Placement is read, not tested: the check sits at `invoke.rs:551`, above `:750`, `:861` |
-| 8, 8a, 16, 21 — message and route regressions | pin literal strings and the direct route; guard against a future refactor rather than demonstrate this change |
-| 13a — surfaced tool | the one dispatch shape without its own case; 13b-13e cover the other four |
+| 14a, 14b, 23 — the audit line | no log-capture harness exists; see below |
+| 7, 7a, 7b — budget ordering | needs a live budget enforcer with a priced tool. Placement is read, not tested: the check sits at `invoke.rs:551`, above `:861` |
+| 20a, 20b — idempotency and credential minting | needs a live idempotency store and an identity-propagating backend, with the backend gated so the in-flight entry can be observed while it exists |
+| 8, 8a, 16, 21 — message and route regressions | pin literal strings and the direct route; guard a future refactor rather than demonstrate this change |
 
-**What that leaves unproven, precisely**: that the audit lines fire, and that
+**A limitation of the identity tests, stated.** `authz_10` and `authz_11` build
+`RouterAuthorizer` and the caller context themselves rather than driving
+`handlers.rs`. They prove the authorizer consults the identity it is given; they
+do NOT prove the production handler hands it over. That wiring is one
+construction site (`handlers.rs`, the `RouterAuthorizer { .. }` literal) and its
+completeness is enforced by the type — the struct has no `Default`, so every
+field must be named — but a site that named `None` explicitly would compile and
+these tests would stay green. Control: code review over one literal.
+
+**What that leaves unproven, precisely**: that the audit lines fire; that
 idempotency, credential minting and budget consultation do not precede the
-check.
+check; and that the HTTP handler passes the certificate and agent identities it
+holds.
 
-The cache and the nonce — the two that mattered most, because a wrong order
-there either serves another caller's data or lets a refusal deny service to the
-next honest request — are now tested rather than read. Each was probed by the
-specific mis-ordering it guards, and neither falls to the other's probe: moving
-the check below the nonce store leaves AUTHZ.12 green, and only moving it below
-the cache read turns it red. A single "wrong order" probe would have certified
-one of them falsely.
-
-**What IS proven, by probe rather than assertion**: a playbook step targeting a
-backend or tool outside the caller's scope, or denied by global policy, is
-refused under the real production policy — and is NOT refused when the
-chokepoint is disabled. That is the defect this change exists to close.
+**What IS proven, by probe rather than assertion**: a playbook step outside the
+caller's backend scope, tool allow-list, global policy, certificate policy or
+agent scope is refused under the real production policy, and is NOT refused when
+the chokepoint is disabled; a refused caller is served no cached result and
+burns no nonce; and a denial is neither retried nor silently null-filled.
 
 ## What the probes actually found
 
@@ -258,36 +279,39 @@ unexpectedly is evidence about the plan, not just about the code.
 
 | probe | result |
 |---|---|
-| chokepoint no-op, meta rows | 13b/13c/13d/13e denied → **red**; both allow rows stayed green. The three-way probe split is confirmed empirically: a no-op cannot falsify an allow row. Rows 7, 12, 20 and 20a appear in the probe table above but have no test yet, so no probe ran for them |
-| chokepoint no-op, router rows | AUTHZ.1 and AUTHZ.2 → **red**, 1a and 2a green. These use the real `RouterAuthorizer` over a real `AuthenticatedClient`, so this is the row that demonstrates the defect is closed under production policy rather than under a double |
-| engine revert | 17 and 18 → **red**, 24 green |
-| deny-all inversion | every allow row → **red** |
-| stdio authorizer permits everything | 15 → **red**, 15a and 22 green |
-| check moved below the nonce registration | 20 → **red** (a refused call burned the nonce, so the honest retry was rejected as a replay); 12 stayed green, correctly — the cache read is further down still. 17b also went red, because the check then sits below tool-name validation and is never consulted |
-| check moved below the cache read | 12 → **red**: the refused caller was served the cached payload |
-| certificate and agent identities dropped at the authorizer | the ALLOW halves of 10 and 11 → **red**; both DENY halves stayed green. That is the fail-closed trap demonstrated live: `evaluate(None)` denies, and agent auth with no identity denies, so each refusal row alone would have passed with the identity never arriving. The allow half is the entire proof of propagation |
+| chokepoint disabled, meta rows | every denial row → **red**; every allow row stayed green. The three-way probe split is confirmed empirically: disabling a check cannot falsify an allow row |
+| chokepoint disabled, router rows | `authz_1` and `authz_2` → **red**, their allow halves green. These use the real `RouterAuthorizer` over a real `AuthenticatedClient`, so this is what demonstrates the defect is closed under production policy rather than under a double |
+| engine reverted | `authz_17` and `authz_18` → **red**, `authz_24` green |
+| authorizer inverted to deny everything | every allow row → **red** |
+| stdio authorizer permits everything | `authz_15` → **red**, `authz_15a` and `authz_22` green |
+| check moved below the nonce registration | `authz_20` → **red** — a refused call burned the nonce, so the honest retry was rejected as a replay. `authz_12` stayed green, correctly: the cache read is further down still. `authz_17b` also went red, because the check then sits below tool-name validation and is never consulted |
+| check moved below the cache read | `authz_12` → **red**: the refused caller was served the cached payload |
+| certificate and agent identities dropped at the authorizer | the ALLOW halves of `authz_10` and `authz_11` → **red**; both denial halves stayed green |
 
-Two results corrected the plan rather than the code:
+Four results corrected the plan rather than the code:
 
-- **AUTHZ.17b is not a pure control.** The plan filed it on the honesty list as
-  passing against unfixed code. It asserts two things — the retry count, which
-  is pre-existing, and that an ordinary failure lands in `step_errors`, which is
-  not — so it went red under the engine revert as well as under its own probe.
-  It is falsifiable two ways, which is stronger than planned, and it also
-  discharges AUTHZ.18b.
-- **The first stdio probe was invalid and the compiler said so.** Substituting
-  `AllowAll` into the production construction site did not build, because that
-  double is `#[cfg(test)]`. That failure is the withdrawn AUTHZ.9 demonstrated:
-  the permissive authorizer genuinely cannot be reached from a release build,
-  proven by the type system rather than by a test. The valid probe makes the
-  real stdio authorizer permit everything.
+- **One probe is not enough for ordering.** Moving the check below the nonce
+  store left `authz_12` green, and only moving it below the cache read turned it
+  red. A single generic "wrong order" probe would have certified one of the two
+  falsely.
+- **The fail-closed trap is real, and was demonstrated.** Dropping both
+  identities turned only the ALLOW halves red — `evaluate(None)` denies, and
+  agent auth with no identity denies, so each refusal row alone would have
+  passed with the identity never arriving. The allow half is the entire proof.
+- **`authz_17b` is not a pure control.** The plan filed it as passing against
+  unfixed code. It asserts both a retry count (pre-existing) and that an
+  ordinary failure lands in `step_errors` (not), so it is falsifiable two ways.
+- **A permissive double cannot compile into a release build.** Substituting
+  `AllowAll` into the stdio construction site failed to build, because it is
+  `#[cfg(test)]`. That is the withdrawn AUTHZ.9 proven by the type system.
 
 One finding about the system, not about this change: **a missing backend does
 not produce an error.** It returns a success envelope carrying `isError: true`,
 so the engine records the step as COMPLETED and the retry path never engages.
-The first draft of AUTHZ.17b used a missing backend and could not have failed
-for the right reason. Any future test that means "the step failed" must pick a
-failure that is genuinely an `Err`.
+Two draft tests were built on the opposite assumption and could not have failed.
+A related one: an invalid tool name IS a refusal here — `authorize_tool_target`
+validates the name first — so it answers 403, which looks like a mapping bug and
+is not.
 
 ## Criteria verified by reading, not by test
 
