@@ -2268,12 +2268,16 @@ mod tests {
         let response =
             run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &test_mtls_policy());
 
-        // The backend does not exist, so the step fails at dispatch. What must
-        // not appear is a policy refusal: the check ran and let it through.
+        // A POSITIVE oracle, not the absence of a phrase: the step must have
+        // reached dispatch, which it can only do if the policy check passed.
+        // The backend does not exist, so dispatch is what fails — and saying so
+        // is proof the call got that far. Asserting "no refusal text" would
+        // stay green if the refusal were ever worded differently.
         let text = response.to_string();
         assert!(
-            !text.contains("blocked by policy") && !text.contains("denied by policy"),
-            "a permitted tool must not be refused by the stdio authorizer: {text}"
+            text.contains("not found") || text.contains("missing"),
+            "a permitted tool must reach dispatch and fail there, not be \
+             refused before it: {text}"
         );
     }
 
@@ -2294,11 +2298,14 @@ mod tests {
 
         let response = run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &mtls);
 
+        // Same positive oracle: the call must reach dispatch. With the
+        // certificate policy wrongly applied, `evaluate(None)` returns `Deny`
+        // and the step is refused before dispatch, so this assertion fails.
         let text = response.to_string();
         assert!(
-            !text.contains("certificate policy"),
-            "stdio has no certificate to present, so a configured mTLS policy \
-             must not refuse it: {text}"
+            text.contains("not found") || text.contains("missing"),
+            "stdio presents no certificate, so a configured mTLS policy must \
+             not stop the call reaching dispatch: {text}"
         );
     }
 

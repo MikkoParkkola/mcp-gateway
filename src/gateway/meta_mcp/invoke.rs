@@ -563,7 +563,10 @@ impl MetaMcp {
         // consulted. And the router builds its own target from the same raw
         // arguments, so a policy that one day reads them cannot give the two
         // layers two answers.
-        let empty_args = Value::Null;
+        // `{}` and not `Null`: the router's own target builder defaults a
+        // missing inner `arguments` to an empty object, and two gates that see
+        // different targets are two gates that can disagree.
+        let empty_args = serde_json::json!({});
         let target = crate::gateway::authz::ToolTarget {
             server,
             tool,
@@ -579,6 +582,7 @@ impl MetaMcp {
             );
             return Err(Error::Forbidden {
                 code: e.code,
+                status: e.status.as_u16(),
                 message: e.message,
             });
         }

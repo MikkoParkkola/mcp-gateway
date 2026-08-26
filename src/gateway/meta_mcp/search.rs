@@ -524,6 +524,21 @@ impl MetaMcp {
                     "tool": tool_ref,
                     "result": result,
                 })),
+                // A refusal stays a refusal. Flattening it into -32603 told
+                // the caller their chain hit an internal error when in fact
+                // they were not allowed to run that step — and it hid the
+                // denial from anything downstream that classifies errors.
+                Err(Error::Forbidden {
+                    code,
+                    status,
+                    message,
+                }) => {
+                    return Err(Error::Forbidden {
+                        code,
+                        status,
+                        message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+                    });
+                }
                 Err(e) => {
                     return Err(Error::json_rpc(
                         -32603,

@@ -169,12 +169,53 @@ async fn authz_13d_code_mode_chain_step_denied() {
         )
         .await;
 
-    let refused = result.as_ref().map_or(true, |v| {
-        v.get("isError").and_then(Value::as_bool).unwrap_or(false)
-            || v.to_string().to_lowercase().contains("denied")
-    });
-    assert!(refused, "a denied chain step must be refused: {result:?}");
+    let err = result.expect_err("a denied chain step must be refused");
+    assert!(
+        matches!(err, crate::Error::Forbidden { .. }),
+        "a chain must report a denial AS a denial, not flatten it into an \
+         internal error: {err:?}"
+    );
+    assert!(
+        err.to_string().contains("refused"),
+        "and must say which step: {err}"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no backend call");
+}
+
+/// The allow counterpart. Without it, 13c and 13d pass vacuously if code-mode
+/// dispatch never reaches a backend for some unrelated reason.
+#[tokio::test]
+async fn authz_13cd_code_mode_allowed_reaches_the_backend() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+
+    let single = meta
+        .code_mode_execute(
+            &json!({ "tool": "alpha:read", "arguments": {} }),
+            None,
+            &ctx(&AllowAll),
+        )
+        .await;
+    assert!(
+        single.is_ok(),
+        "an allowed code-mode call must run: {single:?}"
+    );
+
+    let chain = meta
+        .code_mode_execute(
+            &json!({ "chain": [ { "tool": "alpha:read", "arguments": {} } ] }),
+            None,
+            &ctx(&AllowAll),
+        )
+        .await;
+    assert!(chain.is_ok(), "an allowed chain must run: {chain:?}");
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "both allowed shapes must actually reach the backend, or the two \
+         refusals above prove nothing about authorization"
+    );
 }
 
 // ===========================================================================

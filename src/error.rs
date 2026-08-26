@@ -30,6 +30,13 @@ pub enum Error {
     Forbidden {
         /// JSON-RPC error code the refusal envelope carries.
         code: i32,
+        /// HTTP status the refusal deserves.
+        ///
+        /// Carried rather than derived: the router gate already answers a
+        /// refusal with 403, and a denial that only the chokepoint can see —
+        /// a playbook step — must not come back 200 with an error buried in
+        /// the body. One refusal, one status, whichever gate produced it.
+        status: u16,
         /// Human-readable refusal reason, safe to return to the caller.
         message: String,
     },

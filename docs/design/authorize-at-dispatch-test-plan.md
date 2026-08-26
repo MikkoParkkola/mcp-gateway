@@ -241,3 +241,28 @@ so the engine records the step as COMPLETED and the retry path never engages.
 The first draft of AUTHZ.17b used a missing backend and could not have failed
 for the right reason. Any future test that means "the step failed" must pick a
 failure that is genuinely an `Err`.
+
+## Criteria verified by reading, not by test
+
+Stated rather than hidden behind a green row.
+
+**AUTHZ.14a, 14b and 23 — the refusal audit line.** Both gates call the shared
+`audit_refusal` helper: the router pre-check at `handlers.rs` before it returns
+its error response, and the chokepoint at `invoke.rs` before it returns
+`Error::Forbidden`. Neither is covered by a test.
+
+The reason is the cost of the instrument, not the value of the rows. This
+repository has no log-capture harness — no `MakeWriter` into a shared buffer, no
+scoped subscriber helper, nothing under `src/` that asserts on emitted spans.
+Building one means installing a subscriber that the test process shares across
+parallel tests, which is a well-known source of flakes, and a flaky test that
+guards observability is a worse trade than a stated gap: it costs every future
+run and it teaches people to re-run until green.
+
+What that leaves unproven, precisely: that the lines fire, that they carry the
+right transport, and that a router-covered refusal emits exactly one. The
+control is code review over two call sites of a single helper, which is a
+smaller surface than the harness would be.
+
+**Revisit when** a log-capture helper exists for any other reason. At that point
+these three rows are cheap and should be written.

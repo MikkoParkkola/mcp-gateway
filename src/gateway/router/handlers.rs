@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 use super::AppState;
 use super::authorization::{
     RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
-    require_admin_tool_access,
+    refusal_principal, require_admin_tool_access,
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
@@ -551,6 +551,22 @@ pub(super) async fn meta_mcp_handler(
                     cert_identity.as_ref(),
                     target.as_target(),
                 ) {
+                    // This gate returns without entering the meta layer, so the
+                    // chokepoint's emitter never fires for a shape the router
+                    // covers. Both gates call the one helper, or HTTP scope
+                    // denials — the ones most worth seeing — go unrecorded.
+                    crate::gateway::authz::audit_refusal(
+                        crate::gateway::authz::Transport::Http,
+                        refusal_principal(
+                            client.as_ref(),
+                            oauth_agent_identity.as_ref(),
+                            cert_identity.as_ref(),
+                        )
+                        .as_deref(),
+                        &target.server,
+                        &target.tool,
+                        &e.message,
+                    );
                     return build_error_response(
                         Some(id),
                         e.code,

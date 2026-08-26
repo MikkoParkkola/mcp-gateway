@@ -212,6 +212,34 @@ fn parse_qualified_tool_ref(tool_ref: &str) -> Option<(&str, &str)> {
     Some((server, tool))
 }
 
+/// Name the principal a refusal should be recorded against.
+///
+/// An HTTP caller can be authenticated three ways, and only one of them is an
+/// API key. Reporting just the key name labels an agent-authenticated or
+/// certificate-authenticated caller as unauthenticated, which is the opposite
+/// of what an audit line is for — those are exactly the refusals worth
+/// attributing. Preference order matches specificity: the API key names a
+/// configured client, an agent identity names a delegated actor, a certificate
+/// names a machine.
+pub(super) fn refusal_principal(
+    client: Option<&AuthenticatedClient>,
+    oauth_agent_identity: Option<&OAuthAgentIdentity>,
+    cert_identity: Option<&CertIdentity>,
+) -> Option<String> {
+    if let Some(client) = client
+        && client.authenticated
+    {
+        return Some(client.name.clone());
+    }
+    if let Some(agent) = oauth_agent_identity {
+        return Some(format!("agent:{}", agent.agent_name));
+    }
+    if let Some(cert) = cert_identity {
+        return Some(format!("cert:{}", cert.display_name));
+    }
+    None
+}
+
 /// The HTTP authorizer: the full policy set, against the caller's real identity.
 ///
 /// Borrows everything. It is built per request and handed to the meta layer
@@ -241,6 +269,11 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
     }
 
     fn caller_name(&self) -> Option<&str> {
-        self.client.map(|c| c.name.as_str())
+        // Borrowed, so this reports only the API-key client. The router gate
+        // uses `refusal_principal` for the fuller answer; the chokepoint sees
+        // whatever this returns, which is why the two are kept adjacent.
+        self.client
+            .filter(|c| c.authenticated)
+            .map(|c| c.name.as_str())
     }
 }
