@@ -74,8 +74,8 @@ write or a budget spend.
 
 | AC | case | L | why it can fail |
 |---|---|---|---|
-| 7 | a refused meta-level `gateway_invoke` → **backend counter 0**, **no new response-cache entry for that key**, **no recorded budget spend** | U | a check after the spend at `invoke.rs:861` passes a backend-only assertion; a check after the cache write at `:1231` passes both. Each clause needs its own oracle or the clause is untested |
-| 7a | the same call allowed → backend counter 1, a cache entry present, a spend recorded | U | makes 7's three zeros meaningful; without it an unreachable code path scores three passes |
+| 7 | a refused meta-level `gateway_invoke` → **backend counter 0**, **no new response-cache entry for that key**, and **`BudgetEnforcer::check` never consulted** | U | a check placed after the cache write at `:1231` passes a backend-only assertion. The budget clause is stated as *consultation*, not spend: `record_spend` (`:960`) is post-invoke and runs only when `dispatch_result.is_ok()`, so "a refused call records no spend" is true of any implementation and could never fail. `check` at `:861` is the call a refusal must precede |
+| 7a | the same call allowed → backend counter 1, a cache entry present, `check` consulted once, and a spend recorded | U | makes 7's three zeros meaningful; without it an unreachable code path scores three passes |
 | 12 | prime the response cache for `alpha:tool` as an allowed caller, then drive the same target with `DenyAll` → refused, and the cached value is **not** returned | U | a check after the cache read returns the cached payload. The cache must be genuinely primed |
 | 12a | the same primed target with `AllowAll` → the cached value **is** returned | U | proves the fixture's cache is real, so 12's refusal is not just an empty cache |
 | 20 | a refused call carrying a fresh top-level `nonce` against a live `NonceStore` → refused, and the same nonce is **still registrable** afterwards | U | a check below `:634` consumes the nonce |
@@ -94,13 +94,13 @@ between the gates, and the chokepoint must refuse before the cache is read.
 
 | AC | case | L | why it can fail |
 |---|---|---|---|
-| 13 | `DenyAll` through the production caller-context constructor, against all five meta shapes — surfaced tool, `gateway_invoke`, code-mode single, code-mode chain step, playbook step | U | a playbook-only fix fails four rows. The highest-value row in this plan |
+| 13a-13e | `DenyAll` through the production caller-context constructor, as **five independent cases** — 13a surfaced tool, 13b `gateway_invoke`, 13c code-mode single, 13d code-mode chain step, 13e playbook step | U | the highest-value rows in this plan, and independent on purpose: one case asserting five shapes stops at the first failure and hides the other four, reporting one defect where there may be four |
 | 6 | a run with two steps, one `condition: false` targeting an unauthorized backend and one executed → **`ToolInvoker::invoke` called exactly once, for the executed step** | E | a zero-count alone is satisfied by an invoker never called at all; the paired count of one makes zero meaningful. Stated as invoker calls because the engine sees no authorizer |
 | 6a | the same playbook at meta level with a counting authorizer → **consulted once**, for the executed step only | U | this is where "never authorized" is actually observable |
 | 14 | satisfied by 14a and 14b together; it has no separate case, because the criterion is one assertion made on two transports | — | — |
 | 14a | **Http**, on a router-uncovered shape (a playbook step): the refusal line carries caller, server, tool and `transport = Http`, and the authorizer emits nothing | I | on a router-covered shape the router emits and the chokepoint is never reached, so ownership would be proven against the wrong gate |
 | 14b | **Stdio**, same assertion with `transport = Stdio` | S | cannot run at I; a fix hard-coding one transport fails one half |
-| 23 | a denied `gateway_invoke` over the **full router path** → exactly one refusal line | I | the router returns before the chokepoint, so a meta-level fixture proves nothing here |
+| 23 | a denied `gateway_invoke` over the **full router path** → exactly one refusal line **of the shared `audit_refusal` helper** | I | the router returns before the chokepoint, so a meta-level fixture proves nothing here |
 | 21 | the direct `/mcp/{name}` route keeps its existing refusal behaviour | I | fails if the outer check is deleted as redundant |
 
 ## Behaviour that must not change
@@ -160,12 +160,12 @@ therefore says what it makes fail.
 | rows | probe | why this one, and not another |
 |---|---|---|
 | 1, 2, 3, 10, 11, 15 | restore pre-fix production source | the strongest probe: the mechanism is genuinely absent, and these assertions name no new API, so the tree still compiles |
-| 7, 12, 13, 14a, 20, 20a | make the chokepoint's authorization call a **no-op**, one line, every type left in place | the refusal disappears and each row's assertion goes red. Restoring the source instead leaves these test files uncompilable, and a compile error is not a falsification |
+| 7, 12, 13a-13e, 14a, 20, 20a | make the chokepoint's authorization call a **no-op**, one line, every type left in place | the refusal disappears and each row's assertion goes red. Restoring the source instead leaves these test files uncompilable, and a compile error is not a falsification |
 | 23 | remove the `audit_refusal` call from the **router** gate | 23 runs the full router path, which refuses and returns *before* the chokepoint — the chokepoint no-op leaves its line intact and the row green. Sabotaging the gate that actually emits it takes the count from one to zero |
 | 6a, 17a | the same no-op | consultation counts drop to zero, so the row fails. A deny-all probe cannot falsify them: the authorizer is consulted once whatever verdict it returns |
 | 17, 18, 18a | revert the **engine** change — restore the retry loop without the denial break, and stop populating `step_errors` | 17's single invoker call becomes three, and `step_errors` disappears. These run at engine level against a synthetic invoker, so a chokepoint no-op would leave every assertion untouched |
 | 17b | widen the denial break to match **every** error, not only a denial | 17b asserts pre-existing behaviour — ordinary errors retried three times — so the engine revert restores exactly what it expects and cannot fail it. The risk 17b guards is an over-broad non-retry, so that is the sabotage: ordinary errors then stop after one call and the row goes red |
-| 14b | remove the stdio authorizer from `dispatch_single` | the refusal and its audit line disappear. The chokepoint no-op does not reach the stdio construction site |
+| 14b | swap the stdio authorizer for `AllowAll` at its construction site | the refusal and its audit line disappear and the row goes red. *Removing* it does not compile — `MetaMcpCallerContext` has no `Default` and the field is mandatory, by this design — and a compile error is not a falsification |
 | 1a, 2a, 3a, 7a, 10a, 11a, 12a, 15a, 20b, 20c | invert the relevant authorizer to **deny everything** — the stdio one for 15a | the permitted call is refused and the row goes red. A no-op probe makes an allow row pass and cannot falsify one; nor can removing an authorizer, since a permitted call succeeds either way |
 
 Rows on the honesty list get no probe: they are expected to pass before and
@@ -175,11 +175,22 @@ the mechanism.
 A row whose probe does not produce the expected failure is not evidence of a
 correct implementation. It is evidence the row is not testing what it claims.
 
+## Test names
+
+One convention, so a row and its test are findable from each other without a
+41-entry table that would drift: `authz_<row>_<slug>`, where `<row>` is the row
+label in lower case. Row 10a becomes `authz_10a_allowed_certificate_succeeds`;
+row 13e becomes `authz_13e_playbook_step_denied`. A row with no test of that
+name is a gap a grep finds.
+
 ## Fixture notes that are easy to get wrong
 
 - **20b** needs the backend gated — paused mid-call — so the idempotency
   in-flight entry can be observed while it exists. Inspecting after completion
   sees an entry that has already been cleared, and reads as absent.
+- **7 and 7a** need a live enforcer AND a tool whose `cost_for` is non-zero.
+  A free tool records nothing, so 7a's "a spend recorded" would fail for a
+  reason that has nothing to do with authorization.
 - **12** needs a genuinely primed cache, not a mock returning a hit.
 - **8 and 8a** pin literal message strings as constants in the test, so a
   reworded refusal fails loudly rather than silently passing a `contains` check.
