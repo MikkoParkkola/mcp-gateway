@@ -1933,8 +1933,21 @@ impl MetaMcp {
             ));
         }
 
-        // Resolve target session (explicit arg or current session)
-        let target_session_id = extract_optional_str(args, "session_id").or(session_id);
+        // Resolve target session. A non-admin caller may name only its own:
+        // taking the argument in preference to the caller's session let any
+        // client read any other client's spend by guessing or observing an id.
+        let requested = extract_optional_str(args, "session_id");
+        if let Some(requested) = requested
+            && !caller.is_admin
+            && Some(requested) != session_id
+        {
+            return Err(crate::Error::Config(
+                "reporting on another session is an admin view and requires an admin \
+                 credential"
+                    .to_string(),
+            ));
+        }
+        let target_session_id = requested.or(session_id);
 
         let session_report = if include_all_sessions {
             serde_json::to_value(self.cost_tracker.all_sessions()).unwrap_or(json!([]))

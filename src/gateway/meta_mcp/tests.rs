@@ -2217,3 +2217,37 @@ async fn cost_report_refuses_the_admin_view_for_a_non_admin() {
     let plain = meta.get_cost_report(&json!({}), None, &caller).await;
     assert!(plain.is_ok(), "the caller's own report needs no admin");
 }
+
+/// A non-admin caller could name any session id and read its spend, because the
+/// argument was taken in preference to the caller's own session.
+#[tokio::test]
+async fn cost_report_refuses_another_callers_session_for_a_non_admin() {
+    let meta = make_meta_mcp();
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    let args = json!({ "session_id": "someone-elses-session" });
+
+    let result = meta
+        .get_cost_report(&args, Some("my-own-session"), &caller)
+        .await;
+    assert!(
+        result.is_err(),
+        "naming another session is an admin view and must be refused"
+    );
+
+    // The caller's own session still reports without a credential.
+    assert!(
+        meta.get_cost_report(&json!({}), Some("my-own-session"), &caller)
+            .await
+            .is_ok()
+    );
+    // Naming your own session explicitly is the same request.
+    assert!(
+        meta.get_cost_report(
+            &json!({ "session_id": "my-own-session" }),
+            Some("my-own-session"),
+            &caller
+        )
+        .await
+        .is_ok()
+    );
+}

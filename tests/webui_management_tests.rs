@@ -1504,22 +1504,34 @@ async fn anonymous_is_refused_every_inventory_surface() {
         "/api/costs exposes cross-tenant spend and must require admin"
     );
 
-    // The control plane DOES project by role, so the property is what it shows,
-    // not the status. An anonymous caller must see no backend names.
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/ui/api/control-plane")
-        .body(Body::empty())
-        .unwrap();
-    let response = router.oneshot(req).await.unwrap();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body = String::from_utf8_lossy(&bytes);
-    assert!(
-        !body.contains("backend:"),
-        "an anonymous caller must not see the backend inventory: {body}"
-    );
+    // The control plane is a governance surface. Filtering the backend list was
+    // not enough: the snapshot also carries policies and shadow-radar data, and
+    // an assertion about one substring cannot see the rest. A caller that
+    // presented no credential is refused outright.
+    for uri in [
+        "/ui/api/control-plane",
+        "/ui/api/control-plane/grants",
+        "/ui/api/control-plane/policies",
+        "/ui/api/control-plane/decisions",
+    ] {
+        let method = if uri.ends_with("control-plane") {
+            Method::GET
+        } else {
+            Method::POST
+        };
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{uri} is a governance surface and must refuse an unauthenticated caller"
+        );
+    }
 }
 
 /// `/health` computed a variable named `is_admin` from a client-NAME test, so

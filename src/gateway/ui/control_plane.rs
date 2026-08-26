@@ -47,6 +47,30 @@ pub fn control_plane_router() -> Router<Arc<AppState>> {
             "/ui/api/control-plane/export-status",
             get(export_status_handler),
         )
+        // Governance data is refused to a caller that presented no credential,
+        // as a LAYER rather than a check inside each handler. Every route here
+        // derives an actor from the client, and filtering one field of the
+        // result missed the rest; a layer also cannot be forgotten when a sixth
+        // route is added.
+        .layer(axum::middleware::from_fn(require_authenticated))
+}
+
+/// Refuse a caller that presented no credential.
+///
+/// The anonymous identity used when authentication is disabled, and the
+/// identity given to a public path, both carry `authenticated: false`.
+async fn require_authenticated(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let authenticated = request
+        .extensions()
+        .get::<AuthenticatedClient>()
+        .is_some_and(|c| c.authenticated);
+    if !authenticated {
+        return auth_required(StatusCode::FORBIDDEN).into_response();
+    }
+    next.run(request).await
 }
 
 /// GET the SIEM export status (MIK-6703 SIEM.RUN.2): per-source forwarded/lag/

@@ -57,6 +57,9 @@ pub struct OriginPolicy {
     /// a `public_url` and had it removed by a reload would otherwise keep gating
     /// with nothing left to gate against, and refuse every request.
     bind_is_loopback: bool,
+    /// Scheme this listener speaks, so an Origin is compared as a full origin
+    /// rather than only an authority.
+    listener_scheme: &'static str,
 }
 
 impl OriginPolicy {
@@ -68,7 +71,9 @@ impl OriginPolicy {
     /// would have to drop the live view, and silently lose `public_url` with it.
     #[must_use]
     pub fn from_live(live_config: &Arc<crate::config_reload::LiveConfig>) -> Self {
-        let config = &live_config.get().server;
+        let full = live_config.get();
+        let tls = full.mtls.enabled;
+        let config = &full.server;
         let port = config.port;
         // Every spelling of the loopback bind a browser could legitimately use.
         let allowed_origins: Vec<String> = if is_loopback_host(&config.host) {
@@ -76,27 +81,22 @@ impl OriginPolicy {
             // loopback bind, including the configured address itself: a bind on
             // 127.0.0.2 is served at 127.0.0.2, and its own page is same-origin
             // only there.
-            // Both schemes: the listener may be TLS, and a page served over
-            // https carries an https Origin. A hardcoded http list refuses the
-            // gateway's own page.
+            // One scheme: the one this listener actually speaks. Listing both
+            // would admit an origin nothing can serve.
+            let scheme = if tls { "https" } else { "http" };
             let mut origins = vec![
-                format!("http://127.0.0.1:{port}"),
-                format!("https://127.0.0.1:{port}"),
-                format!("http://localhost:{port}"),
-                format!("https://localhost:{port}"),
-                format!("http://[::1]:{port}"),
-                format!("https://[::1]:{port}"),
+                format!("{scheme}://127.0.0.1:{port}"),
+                format!("{scheme}://localhost:{port}"),
+                format!("{scheme}://[::1]:{port}"),
             ];
             let bracketed = if config.host.contains(':') && !config.host.starts_with('[') {
                 format!("[{}]", config.host)
             } else {
                 config.host.clone()
             };
-            for scheme in ["http", "https"] {
-                let configured = format!("{scheme}://{bracketed}:{port}").to_ascii_lowercase();
-                if !origins.contains(&configured) {
-                    origins.push(configured);
-                }
+            let configured = format!("{scheme}://{bracketed}:{port}").to_ascii_lowercase();
+            if !origins.contains(&configured) {
+                origins.push(configured);
             }
             origins
         } else {
@@ -107,6 +107,7 @@ impl OriginPolicy {
             allowed_origins,
             live_config: Arc::clone(live_config),
             bind_is_loopback: is_loopback_host(&config.host),
+            listener_scheme: if tls { "https" } else { "http" },
         }
     }
 
@@ -161,24 +162,24 @@ impl OriginPolicy {
         let Ok(parsed) = url::Url::parse(&candidate) else {
             return false;
         };
+        // Scheme must be the one this listener speaks. Same-socket cross-scheme
+        // cannot really occur, but comparing it costs nothing and keeps the
+        // check a full origin comparison rather than an authority one.
+        if parsed.scheme() != self.listener_scheme {
+            return false;
+        }
         let Some(origin_host) = parsed.host_str() else {
             return false;
         };
-        if !is_numeric_host(origin_host) {
+        if !is_numeric_host(strip_brackets(origin_host)) {
             return false;
         }
-        // Compare host AND port: a different port on the same address is a
-        // different origin and a different server.
-        let origin_port = parsed.port().map_or_else(
-            || if parsed.scheme() == "https" { 443 } else { 80 },
-            u16::from,
+        let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
+        let origin = canonical_authority(
+            &format!("{}:{}", origin_host, parsed.port().unwrap_or(default_port)),
+            default_port,
         );
-        let auth_host = strip_port(authority);
-        let auth_port = authority
-            .rsplit_once(':')
-            .and_then(|(_, p)| p.parse::<u16>().ok());
-        origin_host.eq_ignore_ascii_case(strip_brackets(auth_host))
-            && auth_port.is_some_and(|p| p == origin_port)
+        canonical_authority(authority, default_port) == origin
     }
 
     /// `true` when a `Host` value names this gateway.
@@ -232,6 +233,24 @@ impl OriginPolicy {
     fn fetch_site_allowed(site: &str) -> bool {
         matches!(site, "same-origin" | "none")
     }
+}
+
+/// Canonical (host, port) of an authority, for comparison.
+///
+/// The host is normalised through `IpAddr` when it parses as one, so bracketed
+/// and unbracketed IPv6, and long-hand and compressed forms of the same
+/// address, compare equal. A hand-rolled string comparison got all three wrong.
+fn canonical_authority(authority: &str, default_port: u16) -> (String, u16) {
+    let bare = strip_brackets(strip_port(authority));
+    let host = bare
+        .parse::<std::net::IpAddr>()
+        .map_or_else(|_| bare.to_ascii_lowercase(), |ip| ip.to_string());
+    let port = authority
+        .rsplit_once(':')
+        .filter(|(head, _)| !head.ends_with(':') && !authority.ends_with(']'))
+        .and_then(|(_, p)| p.parse::<u16>().ok())
+        .unwrap_or(default_port);
+    (host, port)
 }
 
 /// Strip the brackets from an IPv6 literal, leaving anything else alone.
@@ -508,6 +527,52 @@ mod tests {
     }
 
     #[test]
+    fn an_https_listener_admits_its_own_https_page() {
+        // The mirror of the plain-HTTP case: with TLS on, the gateway's own
+        // page carries an https Origin and the http spelling names nothing.
+        let config = crate::config::Config {
+            mtls: crate::mtls::MtlsConfig {
+                enabled: true,
+                ..crate::mtls::MtlsConfig::default()
+            },
+            ..crate::config::Config::default()
+        };
+        let p = OriginPolicy::from_live(&Arc::new(crate::config_reload::LiveConfig::new(config)));
+        assert!(p.origin_ok("https://127.0.0.1:39400"));
+        assert!(!p.origin_ok("http://127.0.0.1:39400"));
+    }
+
+    #[test]
+    fn own_origin_matching_is_canonical() {
+        // Three defects in one hand-rolled comparison: the scheme was ignored,
+        // so an http page matched an https listener; an IPv6 authority carries
+        // brackets while the parsed origin host does not, so the gateway's own
+        // IPv6 page could never match; and a default port omitted from the
+        // Origin compared unequal to an explicit one.
+        let p = policy_for(ServerConfig {
+            host: "0.0.0.0".to_string(),
+            ..ServerConfig::default()
+        });
+
+        // IPv6: bracketed authority against an unbracketed parsed host.
+        assert!(
+            p.origin_ok_at("http://[fd00::1]:39400", "[fd00::1]:39400"),
+            "the gateway's own IPv6 page"
+        );
+        // Alternate spellings of the same address must compare equal.
+        assert!(
+            p.origin_ok_at("http://[fd00:0:0:0:0:0:0:1]:39400", "[fd00::1]:39400"),
+            "the same IPv6 address written long-hand"
+        );
+        // A different address must not.
+        assert!(!p.origin_ok_at("http://[fd00::2]:39400", "[fd00::1]:39400"));
+        // Default port omitted on one side only.
+        assert!(p.origin_ok_at("http://192.168.1.5", "192.168.1.5:80"));
+        // Cross-scheme on the same authority is a different origin.
+        assert!(!p.origin_ok_at("https://192.168.1.5:39400", "192.168.1.5:39400"));
+    }
+
+    #[test]
     fn the_gateways_own_page_is_same_origin_on_any_bind() {
         // Two ways an operator gets refused by their own gateway: a LAN bind,
         // where the page is served from an address no allow-list names; and a
@@ -531,11 +596,12 @@ mod tests {
             "a different port is a different origin"
         );
 
-        let tls = policy_for(ServerConfig::default());
-        assert!(
-            tls.origin_ok("https://127.0.0.1:39400"),
-            "the gateway's own page over TLS"
-        );
+        // The listener speaks one scheme. On a plain-HTTP listener an https
+        // origin names something nothing serves, so it is refused; the TLS case
+        // is covered by `an_https_listener_admits_its_own_https_page`.
+        let plain = policy_for(ServerConfig::default());
+        assert!(plain.origin_ok("http://127.0.0.1:39400"));
+        assert!(!plain.origin_ok("https://127.0.0.1:39400"));
     }
 
     #[test]
