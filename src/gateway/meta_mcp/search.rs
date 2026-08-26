@@ -475,15 +475,7 @@ impl MetaMcp {
         // Code Mode carries the caller's identity + attribution through to
         // dispatch, so an identity-required backend gets the per-user credential
         // just like the direct gateway_invoke path (MIK-6734).
-        self.invoke_tool(
-            &invoke_args,
-            session_id,
-            caller.api_key_name,
-            caller.agent_id,
-            caller.grant_subject.clone(),
-            caller.verified_identity,
-            caller.is_admin,
-        )
+        self.invoke_tool(&invoke_args, session_id, caller)
         .await
     }
 
@@ -527,17 +519,7 @@ impl MetaMcp {
                 "arguments": arguments,
             });
 
-            match self
-                .invoke_tool(
-                    &invoke_args,
-                    session_id,
-                    caller.api_key_name,
-                    caller.agent_id,
-                    caller.grant_subject.clone(),
-                    caller.verified_identity,
-                    caller.is_admin,
-                )
-                .await
+            match self.invoke_tool(&invoke_args, session_id, caller).await
             {
                 Ok(result) => results.push(json!({
                     "step": idx,

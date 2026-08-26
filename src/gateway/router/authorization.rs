@@ -2,57 +2,19 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared authorization for backend tool invocations.
 
-use axum::http::StatusCode;
 use serde_json::Value;
 use tracing::warn;
 
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
+pub(super) use crate::gateway::authz::{AuthorizationError, OwnedToolTarget, ToolTarget};
+use crate::gateway::authz::{ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_agent_scope_and_audit_reason,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::{validate_tool_name, validate_url_not_ssrf};
-
-pub(super) struct OwnedToolTarget {
-    pub server: String,
-    pub tool: String,
-    pub arguments: Value,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct ToolTarget<'a> {
-    pub server: &'a str,
-    pub tool: &'a str,
-    pub arguments: &'a Value,
-}
-
-impl OwnedToolTarget {
-    pub(super) fn as_target(&self) -> ToolTarget<'_> {
-        ToolTarget {
-            server: &self.server,
-            tool: &self.tool,
-            arguments: &self.arguments,
-        }
-    }
-}
-
-pub(super) struct AuthorizationError {
-    pub code: i32,
-    pub status: StatusCode,
-    pub message: String,
-}
-
-impl AuthorizationError {
-    fn forbidden(code: i32, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            status: StatusCode::FORBIDDEN,
-            message: message.into(),
-        }
-    }
-}
 
 pub(super) fn backend_tool_targets_for_call(
     meta_mcp: &MetaMcp,
@@ -248,4 +210,37 @@ fn parse_qualified_tool_ref(tool_ref: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((server, tool))
+}
+
+/// The HTTP authorizer: the full policy set, against the caller's real identity.
+///
+/// Borrows everything. It is built per request and handed to the meta layer
+/// through the caller context, so nothing here is ever stored — which is what
+/// keeps `AppState` (owner of `meta_mcp`) out of `MetaMcp` and avoids a
+/// reference cycle.
+pub(super) struct RouterAuthorizer<'a> {
+    pub(super) state: &'a AppState,
+    pub(super) client: Option<&'a AuthenticatedClient>,
+    pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
+    pub(super) cert_identity: Option<&'a CertIdentity>,
+}
+
+impl ToolAuthorizer for RouterAuthorizer<'_> {
+    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
+        authorize_tool_target(
+            self.state,
+            self.client,
+            self.oauth_agent_identity,
+            self.cert_identity,
+            target,
+        )
+    }
+
+    fn transport(&self) -> Transport {
+        Transport::Http
+    }
+
+    fn caller_name(&self) -> Option<&str> {
+        self.client.map(|c| c.name.as_str())
+    }
 }

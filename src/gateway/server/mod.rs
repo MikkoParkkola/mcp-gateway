@@ -1626,28 +1626,13 @@ impl Gateway {
                 let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
                 let tool_name = tool_name.to_string();
 
-                // Apply tool policy check for gateway_invoke calls
-                if tool_name == "gateway_invoke"
-                    && let Some(ref p) = params
-                {
-                    let server = p
-                        .get("arguments")
-                        .and_then(|a| a.get("server"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let tool = p
-                        .get("arguments")
-                        .and_then(|a| a.get("tool"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if !server.is_empty()
-                        && !tool.is_empty()
-                        && let Err(e) = tool_policy.check(server, tool)
-                    {
-                        let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
-                        return Some(resp.to_value_lossy());
-                    }
-                }
+                // The tool policy is applied at the dispatch chokepoint via the
+                // authorizer below, not here. The inline check this replaces ran
+                // for `gateway_invoke` alone, so a stdio playbook or code-mode
+                // step reached a backend with no policy check at all.
+                let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+                    tool_policy: tool_policy.as_ref(),
+                };
 
                 meta_mcp
                     .handle_tools_call(
@@ -1656,6 +1641,7 @@ impl Gateway {
                         arguments,
                         Some(session_id),
                         MetaMcpCallerContext {
+                            authorizer: &stdio_authorizer,
                             // Stdio has no port and no network surface: the
                             // client SPAWNED this process, so it already has
                             // whatever the operator has. Withholding admin here
@@ -1664,7 +1650,10 @@ impl Gateway {
                             // protect, and protects nothing — the same caller
                             // could edit the config.
                             is_admin: true,
-                            ..MetaMcpCallerContext::default()
+                            api_key_name: None,
+                            agent_id: None,
+                            grant_subject: None,
+                            verified_identity: None,
                         },
                     )
                     .await

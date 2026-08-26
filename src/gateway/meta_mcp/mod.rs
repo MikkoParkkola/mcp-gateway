@@ -102,8 +102,17 @@ impl CallerIdentityHeaderTrust {
 }
 
 /// Authenticated caller context for a `tools/call` dispatch.
-#[derive(Debug, Clone, Default)]
+///
+/// Deliberately has **no `Default`**: the authorizer is mandatory, and a
+/// derived default would let a construction site acquire one by omission. Every
+/// site names the authorizer it means, which in tests makes a permissive one
+/// visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
+    /// Decides whether this caller may invoke a given backend tool.
+    ///
+    /// Borrowed, never stored: `AppState` owns `meta_mcp`, so holding an
+    /// `Arc<AppState>` inside `MetaMcp` would be a cycle that never frees.
+    pub authorizer: &'a (dyn crate::gateway::authz::ToolAuthorizer + Sync),
     /// Static or temporary API-key name, used for accounting and fallback grants.
     pub api_key_name: Option<&'a str>,
     /// Optional caller agent identifier.
@@ -1136,17 +1145,7 @@ impl MetaMcp {
                 "tool": tool_name,
                 "arguments": arguments,
             });
-            let result = self
-                .invoke_tool(
-                    &invoke_args,
-                    session_id,
-                    caller.api_key_name,
-                    caller.agent_id,
-                    caller.grant_subject.clone(),
-                    caller.verified_identity,
-                    caller.is_admin,
-                )
-                .await;
+            let result = self.invoke_tool(&invoke_args, session_id, &caller).await;
             return match result {
                 // `invoke_tool` already returns a complete MCP tools/call result
                 // envelope ({content, structuredContent?, isError}) with output-
@@ -1170,18 +1169,7 @@ impl MetaMcp {
             "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
-            "gateway_invoke" => {
-                self.invoke_tool(
-                    &arguments,
-                    session_id,
-                    caller.api_key_name,
-                    caller.agent_id,
-                    caller.grant_subject,
-                    caller.verified_identity,
-                    caller.is_admin,
-                )
-                .await
-            }
+            "gateway_invoke" => self.invoke_tool(&arguments, session_id, &caller).await,
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
             "gateway_webhook_status" => self.webhook_status(),
