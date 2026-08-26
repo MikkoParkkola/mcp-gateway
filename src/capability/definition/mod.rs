@@ -831,6 +831,16 @@ pub struct CapabilityMetadata {
     #[serde(default)]
     pub read_only: bool,
 
+    /// Whether this capability registers a caller-chosen destination that a
+    /// third party will later deliver to.
+    ///
+    /// Declared rather than inferred where the shape is not obvious from the
+    /// name or the parameters: `gws_gmail_watch` registers a Pub/Sub topic,
+    /// which is a delivery destination with neither "webhook" in its name nor a
+    /// URL in its schema. `None` falls back to inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registers_external_callback: Option<bool>,
+
     /// Whether the operation may destructively modify user-visible state.
     ///
     /// When omitted, capability tools infer a conservative value from
@@ -1091,17 +1101,23 @@ mod cwe532_debug_redaction {
 /// the count was wrong, which is the argument for deriving it.
 #[must_use]
 pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bool {
-    let mutating = def
-        .providers
-        .named
-        .values()
-        .chain(def.providers.fallback.iter())
-        .any(|p| {
-            matches!(
-                p.config.method.to_ascii_uppercase().as_str(),
-                "POST" | "PUT" | "PATCH"
-            )
-        });
+    // Not an HTTP method test: a capability backed by a CLI has no method, and
+    // `gws_gmail_watch` — which registers a Pub/Sub topic — is exactly that. A
+    // read-only capability cannot register anything, so that flag is the
+    // transport-independent question, with the method as a fallback where the
+    // flag was left at its default.
+    let mutating = !def.metadata.read_only
+        || def
+            .providers
+            .named
+            .values()
+            .chain(def.providers.fallback.iter())
+            .any(|p| {
+                matches!(
+                    p.config.method.to_ascii_uppercase().as_str(),
+                    "POST" | "PUT" | "PATCH"
+                )
+            });
     if !mutating {
         return false;
     }
@@ -1118,20 +1134,35 @@ pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bo
     // admin would take ordinary tools away from the single-user client for no
     // security gain. What matters is REGISTERING an address the third party
     // will later deliver to.
-    let registers_a_callback = def.name.to_ascii_lowercase().contains("webhook")
-        || def.name.to_ascii_lowercase().contains("subscribe")
-        || def.name.to_ascii_lowercase().contains("callback");
+    // An explicit declaration wins. Name inference is a fallback, not the
+    // contract: `gws_gmail_watch` registers a Pub/Sub topic, whose destination
+    // is not a URL and whose name is not "webhook", and inference alone missed
+    // it. A capability author can say so instead of hoping the heuristic holds.
+    if let Some(declared) = def.metadata.registers_external_callback {
+        return declared;
+    }
+
+    let name = def.name.to_ascii_lowercase();
+    let registers_a_callback = ["webhook", "subscribe", "callback", "watch", "notify"]
+        .iter()
+        .any(|k| name.contains(k));
     if !registers_a_callback {
         return false;
     }
 
     props.iter().any(|(name, spec)| {
         let lower = name.to_ascii_lowercase();
+        // Not only URLs. A Pub/Sub topic, a queue name or an address is just as
+        // much a caller-chosen destination that a third party will deliver to.
         let looks_like_a_destination = lower == "url"
             || lower.ends_with("_url")
             || lower == "callback"
             || lower == "webhook"
-            || lower == "endpoint";
+            || lower == "endpoint"
+            || lower == "address"
+            || lower.contains("topic")
+            || lower.contains("queue")
+            || lower.contains("channel");
         let declared_uri = spec.get("format").and_then(|f| f.as_str()) == Some("uri");
         looks_like_a_destination || declared_uri
     })
@@ -1146,8 +1177,13 @@ mod caller_addressed_state_tests {
     }
 
     fn named_def(name: &str, method: &str, input: &serde_json::Value) -> CapabilityDefinition {
+        // A read capability declares itself read-only, as the shipped ones do.
+        // Leaving the flag at its default means "unknown", which is treated as
+        // mutating: the safe direction for a rule about registering a
+        // destination somebody else will deliver to.
+        let read_only = method.eq_ignore_ascii_case("GET");
         let yaml = format!(
-            "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\n",
+            "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\nmetadata:\n  read_only: {read_only}\n",
             serde_json::to_string(input).unwrap()
         );
         serde_yaml::from_str(&yaml).expect("definition parses")
@@ -1191,14 +1227,28 @@ mod caller_addressed_state_tests {
             "expected the full capability set, walked {walked}"
         );
         flagged.sort();
-        assert!(
-            flagged.contains(&"linear_create_webhook".to_string()),
-            "the known case must be caught: {flagged:?}"
-        );
-        assert!(
-            !flagged.contains(&"wayback_availability".to_string()),
-            "a read must not be flagged: {flagged:?}"
-        );
+        // Every shipped registration, not only the one that prompted this.
+        // `gws_gmail_watch` registers a Pub/Sub topic: no "webhook" in the name
+        // and no URL in the schema, and the first version missed it.
+        for expected in ["linear_create_webhook", "gws_gmail_watch", "bus_subscribe"] {
+            assert!(
+                flagged.contains(&expected.to_string()),
+                "{expected} registers a delivery destination and must be caught: {flagged:?}"
+            );
+        }
+        // Sending a URL as DATA is not registering a destination: nothing calls
+        // back, and requiring a credential would take ordinary tools away.
+        for ordinary in [
+            "wayback_availability",
+            "wayback_save",
+            "linear_attach_url",
+            "notion_create_page",
+        ] {
+            assert!(
+                !flagged.contains(&ordinary.to_string()),
+                "{ordinary} posts a URL as data and must stay open: {flagged:?}"
+            );
+        }
     }
 
     #[test]

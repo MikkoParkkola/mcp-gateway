@@ -498,8 +498,11 @@ credential. It needs no readable response to be useful, so the browser and
 network gates do not constrain it. Those capabilities require an admin
 credential.
 
-The rule is derived from each capability's own definition: it registers a
-callback, and takes a caller-supplied destination. Posting a URL as data —
+The rule is derived from each capability's own definition: it is not read-only,
+and it takes a caller-supplied destination — a URL, but also a topic, queue or
+channel, since a delivery address need not be a URL. A capability can declare
+`metadata.registers_external_callback` explicitly where its shape is not
+obvious from the name. Posting a URL as data —
 archiving a page, attaching a link — is not covered, because nothing calls back
 and requiring a credential there would take an ordinary tool away for no gain.
 A capability added later inherits the rule rather than needing to be remembered
