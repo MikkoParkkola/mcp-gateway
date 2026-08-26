@@ -122,12 +122,16 @@ task (verified above).
    `router::authorization` uses them rather than defining its own. A move, not
    a second copy — two definitions of a target type is how two layers drift.
 2. `MetaMcpCallerContext<'a>` gains `authorizer: &'a (dyn ToolAuthorizer + Sync)`
-   and a `transport: Transport` (`Http` | `Stdio`), and **loses its `Default`
-   impl**, so no site can acquire either by omission. The transport is not
-   decoration: the audit line the chokepoint owes (below) names the transport,
-   and nothing in the context carries it today, so the criterion would be
-   unimplementable without it. Cost, counted: 19 construction sites — 17 in
-   `meta_mcp/tests.rs`, one in `invoke.rs`, one in `server/mod.rs`.
+   and **loses its `Default` impl**, so no site can acquire an authorizer by
+   omission. Cost, counted: 19 construction sites — 17 in `meta_mcp/tests.rs`,
+   one in `invoke.rs`, one in `server/mod.rs`.
+   The audit line the chokepoint owes names a **transport**, which nothing
+   carries today. It is `fn transport(&self) -> Transport` **on the
+   `ToolAuthorizer` trait**, not a second field beside the authorizer: a field
+   can be set inconsistently with the authorizer it sits next to, and an audit
+   line that says `Stdio` while the router authorizer decided is worse than no
+   line. `RouterAuthorizer` answers `Http`, `ToolPolicyAuthorizer` answers
+   `Stdio`, and the two cannot disagree because there is only one of them.
 3. `ToolAuthorizer` takes the **whole `ToolTarget`**, matching
    `authorize_tool_target`'s signature so the two cannot drift as policy grows
    to read arguments.
@@ -164,6 +168,26 @@ registration**, any nonce registration, any per-user credential mint for an
 identity-propagating backend, the budget spend, and the "tool invoked" info
 log. A denied call that has already minted a token or pinned an idempotency key
 has had an effect it was not entitled to.
+
+**Exact placement, and a reviewer disagreement settled at source.** The order in
+`invoke_tool_traced` is: `server`/`tool` extracted at `:551-552`,
+`parse_tool_arguments` `:573`, `_full` stripped `:584`, `_claim` stripped
+`:594`, `validate_tool_name` `:621`, nonce check-and-register `:634`. One
+reviewer asked for the check to sit immediately above the nonce block, after the
+directive strips; it goes **immediately after `:552`**, reading `arguments` raw.
+
+The deciding fact is what the router's own pre-check sees: it builds its target
+from `extract_tools_call_params` output via `target_from_invoke_arguments`,
+which reads the raw inner `arguments` — directives included. Authorizing
+post-strip would hand the two layers different argument views, so a policy that
+one day reads arguments would give one rule two answers. Raw-and-earliest is
+also the point where nothing whatever has happened yet, which is the property
+this section is about.
+
+A consequence, stated so nobody deletes it as dead: `validate_tool_name` then
+runs twice — once inside `authorize_tool_target`, once at `:621`. It is pure and
+gives the same verdict both times, and the second call still guards the paths
+that never reach the first.
 
 ### A denial is not retried, is never silent, and respects `on_error`
 
@@ -203,7 +227,21 @@ override:
    String>`, populated for **both** `Continue` and `Retry` — the `!succeeded`
    arm (`engine/mod.rs:206`) null-fills for both, so covering only `Continue`
    leaves a `Retry` caller with an unexplained partial result. `steps_failed`
-   keeps its shape and meaning, so no existing consumer breaks.
+   keeps its shape and meaning.
+   Three properties of that field, each verified rather than assumed:
+   - **It is a public-API change.** `pub mod playbook` (`lib.rs:63`) makes
+     `PlaybookResult` public, so a downstream struct literal stops compiling.
+     `#[non_exhaustive]` goes on in the same change: the break happens once
+     here, and never again for the next field.
+   - **The wire is unchanged for successful runs.** Serialized with
+     `skip_serializing_if` on empty, so a playbook that denies nothing produces
+     byte-identical JSON to today.
+   - **Keyed by step name, like everything else.** `step_results` is already
+     `HashMap<String, Value>` keyed by name (`playbook.rs:154`), and `$step.path`
+     interpolation resolves by name too. Two steps sharing a name are therefore
+     already ambiguous engine-wide; `step_errors` inherits that rather than
+     inventing a second identity scheme. Disambiguating step names is a separate
+     change and is out of scope here.
 
 ### Refusals are observable, and one layer owns saying so
 
@@ -270,13 +308,15 @@ Denial semantics — the fixtures must set `on_error` explicitly, because the
 default is `Abort` and an `Abort` fixture passes whether or not the rule holds:
 
 - MIK.AUTHZ.17 `on_error: retry`, `max_retries: 3`, a denied step: the
-  authorizer is consulted **once**, the backend zero times, and `step_errors`
-  carries the refusal reason. A retried denial fails the first assertion; a
-  reasonless null-filled partial result fails the third.
+  authorizer is consulted **once**, the backend zero times, `step_errors`
+  carries the refusal reason, and the run's terminal state is the one `Retry`
+  specifies — the step recorded failed, later steps still run. A retried denial
+  fails the first assertion; a reasonless partial result fails the third.
 - MIK.AUTHZ.18 `on_error: continue`, a denied step followed by an allowed step:
-  the run completes, the allowed step executes, and the denied step appears in
-  `steps_failed` carrying its refusal reason. A terminal-refusal implementation
-  fails this; so does one that records the step as a silent null.
+  the run completes, the allowed step executes, the denied step's name appears
+  in `steps_failed`, and **its reason appears in `step_errors`**. A
+  terminal-refusal implementation fails the first half; a silent null fails the
+  second.
 - MIK.AUTHZ.19 `on_error: abort`, a denied step: the run returns the refusal,
   and no later step executes.
 
@@ -300,16 +340,23 @@ Ordering and coverage:
 - MIK.AUTHZ.20 A refused call registers no idempotency in-flight entry, mints
   no per-user credential, and **consumes no nonce**: a denied call carrying a
   fresh nonce leaves that nonce still registrable afterwards. Nonce
-  check-and-register sits at `invoke.rs:627`, so the authorization call must be
-  placed above it, not merely "before dispatch".
+  check-and-register sits at `invoke.rs:634`, so the authorization call must be
+  placed above it, not merely "before dispatch". The fixture uses a live
+  `NonceStore` and a top-level `nonce` on the invoke envelope — a nonce placed
+  in a playbook step's arguments is never read by that code and would make the
+  criterion pass vacuously.
 - MIK.AUTHZ.13 Every meta-layer dispatch shape — surfaced tool,
   `gateway_invoke`, code-mode single, code-mode chain step, playbook step — is
   refused when the authorizer denies, driven at the meta layer with a denying
   authorizer built through the same caller context production builds.
 - MIK.AUTHZ.14 A refusal emits an audit line carrying caller, server, tool and
   transport, emitted by the chokepoint rather than the authorizer. Asserted on
-  the presence of the four fields, not on a sentence, and exercised through
-  **both** production transport constructors.
+  the **values** — `transport` is `Http` through the router constructor and
+  `Stdio` through the stdio one — not merely on the four keys being present, and
+  not on the sentence. Ownership is proved with an authorizer that logs nothing.
+- MIK.AUTHZ.23 On a router-covered shape such as `gateway_invoke`, a denied call
+  emits **exactly one** refusal line. The design records that ALLOW audits double
+  on those paths; refusals must not.
 - MIK.AUTHZ.21 The direct `/mcp/{name}` route keeps its existing refusal
   behaviour, proving the outer check was not removed as redundant.
 
