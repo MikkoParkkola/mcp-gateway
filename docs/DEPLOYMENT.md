@@ -489,6 +489,29 @@ is not.
 Applied without a restart: backends, `server.public_url`, and
 `control_plane.role_mapping`.
 
+### Opening the dashboard
+
+`mcp-gateway init` generates an admin credential for the install and writes it
+into `gateway.yaml`, which is created readable only by you. Tools work without
+it; managing the gateway and reading the dashboard need it.
+
+A browser cannot attach an `Authorization` header to a navigation, so `serve`
+prints a link:
+
+```
+DASHBOARD (opens once, then remembered in this browser):
+  http://127.0.0.1:39400/dashboard?bootstrap=...
+```
+
+Opening it exchanges a single-use value for a session cookie and redirects, so
+nothing stays in the address bar. The value in the link is **not** the admin
+credential — a query string reaches this gateway's own request log, which
+outlives the browser tab. It works once and dies with the process, so a link
+left in a shell history is spent.
+
+The cookie is `HttpOnly` and `SameSite=Strict`: script cannot read it and it is
+never sent cross-site.
+
 ### Admin requires a credential
 
 With `auth.enabled = false` every caller is anonymous and holds **no admin**.

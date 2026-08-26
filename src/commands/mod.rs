@@ -160,6 +160,18 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "  host: \"127.0.0.1\"\n",
             "  port: 39400\n",
             "\n",
+            "# Admin credential, generated for this install.\n",
+            "#\n",
+            "# Tools work without it. Managing the gateway and reading the\n",
+            "# dashboard need it, because an unauthenticated gateway cannot tell\n",
+            "# its operator from anything else that reaches the port.\n",
+            "#\n",
+            "# This file is written readable only by you. Do not commit it.\n",
+            "auth:\n",
+            "  enabled: true\n",
+            "  bearer_token: \"{admin_token}\"\n",
+            "  single_user: true\n",
+            "\n",
             "# Meta-MCP mode - exposes a compact gateway tool surface\n",
             "# Common deployment: 14 tools (12 minimum, 15 with webhooks)\n",
             "# Keeps prompt overhead low by discovering backend tools on demand\n",
@@ -171,6 +183,21 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
         ),
         profile = profile,
         examples_section = examples_section,
+        admin_token = generate_admin_token(),
+    )
+}
+
+/// A fresh admin credential for a new install.
+///
+/// Generated rather than asked for: a setup step the operator must perform is a
+/// step most will skip, and the gateway would then have no admin path at all.
+/// The prefix makes it recognisable in a log or a paste.
+fn generate_admin_token() -> String {
+    use rand::RngExt;
+    let bytes: [u8; 32] = rand::rng().random();
+    format!(
+        "mcpgw_{}",
+        base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
     )
 }
 
@@ -576,4 +603,48 @@ async fn tool_completions(
     let script = generate_completion(target, &tool_names);
     print!("{script}");
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod admin_credential_tests {
+    use super::{InitProfile, build_init_config, generate_admin_token};
+
+    #[test]
+    fn a_new_install_has_an_admin_credential() {
+        // Removing admin from the anonymous identity left a fresh install with
+        // no admin path at all: no dashboard, no management tools, and a YAML
+        // edit as the only remedy. A generated credential restores it without
+        // asking the operator to do anything.
+        let config = build_init_config(true, InitProfile::Local);
+        assert!(config.contains("enabled: true"), "auth must be on");
+        assert!(
+            config.contains("mcpgw_"),
+            "a credential must be generated, not left blank: {config}"
+        );
+        assert!(
+            config.contains("single_user: true"),
+            "a laptop install is one principal; say so rather than making the \
+             operator discover the flag"
+        );
+    }
+
+    #[test]
+    fn each_install_gets_its_own_credential() {
+        assert_ne!(
+            generate_admin_token(),
+            generate_admin_token(),
+            "a shared credential across installs is no credential"
+        );
+    }
+
+    #[test]
+    fn the_credential_is_not_guessable() {
+        let token = generate_admin_token();
+        assert!(token.starts_with("mcpgw_"));
+        // 32 random bytes, base64url without padding.
+        assert!(
+            token.len() >= 6 + 42,
+            "too short to be 32 random bytes: {token}"
+        );
+    }
 }

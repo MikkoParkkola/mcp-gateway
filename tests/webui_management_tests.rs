@@ -120,6 +120,9 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(
+            mcp_gateway::gateway::auth::DashboardBootstrap::new(),
+        ),
     })
 }
 
@@ -192,6 +195,9 @@ fn make_app_state_with_reload(
             )),
             export_status: None,
             transparency_log: None,
+            dashboard_bootstrap: std::sync::Arc::new(
+                mcp_gateway::gateway::auth::DashboardBootstrap::new(),
+            ),
         }),
         live_config,
     )
@@ -1577,4 +1583,78 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
         body["backends"].as_array().is_none(),
         "a non-admin key must not receive backend names: {body}"
     );
+}
+
+/// A browser navigating to the dashboard cannot attach an Authorization header,
+/// so a token alone does not make the dashboard usable. The gateway prints a
+/// one-time link; opening it exchanges the credential for a session cookie and
+/// redirects, so the token never stays in the address bar or the history.
+#[tokio::test]
+async fn the_dashboard_bootstrap_link_opens_the_dashboard() {
+    let auth = admin_auth_config();
+    let state = make_app_state_with_auth_config(&auth);
+    // The link carries a single-use value, NOT the admin token: a query string
+    // reaches this gateway's own request log, which outlives the browser tab.
+    let bootstrap = state
+        .dashboard_bootstrap
+        .peek()
+        .expect("a fresh gateway has an unused bootstrap value");
+    let router = create_router(state);
+
+    // Step 1: the printed link carries that value once.
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/dashboard?bootstrap={bootstrap}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SEE_OTHER,
+        "the link must redirect, so the credential leaves the address bar"
+    );
+    let cookie = response
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        cookie.contains("HttpOnly"),
+        "not readable by script: {cookie}"
+    );
+    assert!(
+        cookie.contains("SameSite=Strict"),
+        "not sent cross-site: {cookie}"
+    );
+
+    // Step 2: the browser follows the redirect carrying that cookie.
+    let session = cookie.split(';').next().unwrap_or_default().to_string();
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/dashboard")
+        .header(axum::http::header::COOKIE, session)
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the dashboard must render"
+    );
+
+    // A wrong value opens nothing, and so does the right value a second time:
+    // a link left in a shell history is spent.
+    for value in ["not-the-value", bootstrap.as_str()] {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/dashboard?bootstrap={value}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            router.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED,
+            "bootstrap value {value} must not open the dashboard"
+        );
+    }
 }

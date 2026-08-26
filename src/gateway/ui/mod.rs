@@ -90,6 +90,16 @@ async fn index() -> impl IntoResponse {
     )
 }
 
+/// The credential carried by a bootstrap link.
+fn bootstrap_value(query: &str) -> String {
+    query
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .find(|(k, _)| *k == "bootstrap")
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default()
+}
+
 /// Served in place of the dashboard when the caller holds no admin credential.
 const DASHBOARD_ADMIN_REQUIRED_HTML: &str = "<!doctype html><meta charset=utf-8>\
 <title>Admin required</title>\
@@ -108,7 +118,39 @@ config, then open <a href=\"/ui\">/ui</a>, which can present the token.</p>";
 pub async fn dashboard_handler(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    uri: axum::http::Uri,
 ) -> impl IntoResponse {
+    // A one-time bootstrap link: the gateway prints it at startup, opening it
+    // exchanges the credential for a session cookie and redirects, so the token
+    // does not stay in the address bar, the history, or a `Referer`. The auth
+    // middleware has already validated the credential to reach here with a
+    // client, so this only has to move it into the cookie.
+    if let Some(query) = uri.query()
+        && query
+            .split('&')
+            .filter_map(|p| p.split_once('='))
+            .any(|(k, _)| k == "bootstrap")
+    {
+        return match client.as_ref() {
+            Some(Extension(c)) if c.authenticated => (
+                StatusCode::SEE_OTHER,
+                [
+                    (axum::http::header::LOCATION, "/dashboard".to_string()),
+                    (
+                        axum::http::header::SET_COOKIE,
+                        format!(
+                            "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
+                            crate::gateway::auth::SESSION_COOKIE,
+                            bootstrap_value(query)
+                        ),
+                    ),
+                ],
+            )
+                .into_response(),
+            _ => auth_required(StatusCode::FORBIDDEN).into_response(),
+        };
+    }
+
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
         // HTML, not JSON. A browser navigating here cannot attach an

@@ -72,6 +72,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -120,6 +121,7 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -164,6 +166,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -227,6 +230,7 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -302,6 +306,7 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -349,6 +354,7 @@ fn test_router_app_state_with_ssrf(
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -410,6 +416,7 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 

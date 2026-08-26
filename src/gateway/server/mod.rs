@@ -1156,6 +1156,9 @@ impl Gateway {
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
+            dashboard_bootstrap: std::sync::Arc::new(
+                crate::gateway::auth::DashboardBootstrap::new(),
+            ),
         });
 
         // Webhook routes are built BEFORE the router and handed to it, so the
@@ -1174,6 +1177,10 @@ impl Gateway {
         } else {
             None
         };
+
+        // Captured before the router takes ownership: the startup banner prints
+        // the dashboard link and runs after the bind.
+        let dashboard_bootstrap = Arc::clone(&state.dashboard_bootstrap);
 
         // Create router
         let app = create_router_with(state, webhook_routes);
@@ -1246,7 +1253,11 @@ impl Gateway {
         // Bind listener
         let listener = TcpListener::bind(addr).await?;
 
-        log_startup_banner(&self.config, &self.backends);
+        log_startup_banner(
+            &self.config,
+            &self.backends,
+            Some(dashboard_bootstrap.as_ref()),
+        );
 
         // Warm-start backends: connect + prefetch tools into cache
         // If warm_start list is empty, warm ALL backends (makes list/search fast)

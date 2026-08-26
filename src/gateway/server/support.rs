@@ -9,6 +9,7 @@
 //! - [`build_persisted_costs`]: converts an enforcer snapshot to the
 //!   persistence format (cost-governance feature only).
 
+use crate::gateway::auth::DashboardBootstrap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,7 +35,11 @@ use crate::mtls::CertIdentity;
 ///
 /// Logs version, listen address, backend count, auth status,
 /// Meta-MCP URLs, streaming URLs, and per-backend direct access paths.
-pub(super) fn log_startup_banner(config: &Config, backends: &BackendRegistry) {
+pub(super) fn log_startup_banner(
+    config: &Config,
+    backends: &BackendRegistry,
+    bootstrap: Option<&DashboardBootstrap>,
+) {
     info!("============================================================");
     info!("MCP GATEWAY v{}", env!("CARGO_PKG_VERSION"));
     info!("============================================================");
@@ -42,6 +47,18 @@ pub(super) fn log_startup_banner(config: &Config, backends: &BackendRegistry) {
     info!(backends = backends.all().len(), "Backends registered");
 
     if config.auth.enabled {
+        // Print the dashboard link. A browser navigation carries no
+        // Authorization header, so without this an operator with a perfectly
+        // good credential still cannot open the dashboard. The value is
+        // single-use and is not the credential itself.
+        if let Some(value) = bootstrap.and_then(DashboardBootstrap::peek) {
+            info!(
+                "DASHBOARD (opens once, then remembered in this browser): \
+                 http://{}:{}/dashboard?bootstrap={}",
+                config.server.host, config.server.port, value
+            );
+        }
+
         let key_count = config.auth.api_keys.len();
         let has_bearer = config.auth.bearer_token.is_some();
         info!(

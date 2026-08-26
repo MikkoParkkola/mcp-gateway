@@ -61,6 +61,8 @@ pub struct AppState {
     pub streaming_config: StreamingConfig,
     /// Authentication configuration (static keys)
     pub auth_config: Arc<ResolvedAuthConfig>,
+    /// Single-use value that opens the dashboard from the link `serve` prints.
+    pub dashboard_bootstrap: Arc<crate::gateway::auth::DashboardBootstrap>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
     /// Tool access policy
@@ -133,6 +135,7 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
     let auth_state = AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
+        dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
     };
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).

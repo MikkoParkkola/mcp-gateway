@@ -403,6 +403,89 @@ impl AuthenticatedClient {
     }
 }
 
+/// A one-time value that exchanges for a dashboard session.
+///
+/// Printed by `serve` as part of a link. It is NOT the admin credential: the
+/// link's query string reaches this gateway's own request log, so putting the
+/// real token there would leak it into a file that outlives the browser tab.
+/// This value is single-use and dies with the process.
+#[derive(Debug)]
+pub struct DashboardBootstrap {
+    value: std::sync::Mutex<Option<String>>,
+}
+
+impl DashboardBootstrap {
+    /// Mint a fresh single-use value.
+    #[must_use]
+    pub fn new() -> Self {
+        use rand::RngExt;
+        let bytes: [u8; 32] = rand::rng().random();
+        let value =
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
+        Self {
+            value: std::sync::Mutex::new(Some(value)),
+        }
+    }
+
+    /// The value to print, while it remains unused.
+    #[must_use]
+    pub fn peek(&self) -> Option<String> {
+        self.value.lock().ok().and_then(|v| v.clone())
+    }
+
+    /// Consume the value if it matches. Single use: a second attempt fails even
+    /// with the right value, so a link left in a shell history is spent.
+    #[must_use]
+    pub fn consume(&self, candidate: &str) -> bool {
+        let Ok(mut guard) = self.value.lock() else {
+            return false;
+        };
+        match guard.as_deref() {
+            Some(expected) if expected == candidate => {
+                *guard = None;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Default for DashboardBootstrap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Name of the browser session cookie the dashboard bootstrap sets.
+///
+/// A browser cannot attach an `Authorization` header to a navigation, so a
+/// bearer token alone leaves the dashboard unusable however correct the
+/// credential is. The gateway prints a one-time link; opening it exchanges the
+/// credential for this cookie and redirects, so the token never lingers in the
+/// address bar, the history, or a `Referer`.
+pub const SESSION_COOKIE: &str = "mcp_gateway_session";
+
+/// The `bootstrap` query parameter, if present.
+fn bootstrap_param(query: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .find(|(k, _)| *k == "bootstrap")
+        .map(|(_, v)| v.to_string())
+}
+
+/// Read the session cookie from a request's headers, if present.
+#[must_use]
+pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())?
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .find(|(name, _)| *name == SESSION_COOKIE)
+        .map(|(_, value)| value.to_string())
+}
+
 /// The identity every caller holds when authentication is disabled.
 ///
 /// Reaches ordinary tools, so a local MCP client works out of the box, and
@@ -434,6 +517,8 @@ pub struct AuthState {
     pub auth_config: Arc<ResolvedAuthConfig>,
     /// Key server for OIDC-issued temporary tokens (optional).
     pub key_server: Option<Arc<KeyServer>>,
+    /// Single-use value that opens the dashboard from a printed link.
+    pub dashboard_bootstrap: Arc<DashboardBootstrap>,
 }
 
 /// Authentication middleware
@@ -472,22 +557,58 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
 
-    // Extract token from Authorization header
-    let token = request
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.strip_prefix("Bearer ")
-                .or_else(|| v.strip_prefix("bearer "))
-        });
+    // A browser navigation carries no Authorization header, so the dashboard
+    // session cookie is accepted as an equivalent credential. It is HttpOnly and
+    // SameSite=Strict, so script cannot read it and it is not sent cross-site.
+    // The dashboard bootstrap link. A browser navigation carries no header and
+    // no cookie yet, so this is the one path where a credential arrives in the
+    // URL — which is why the value is single-use and is not the admin token.
+    if request.uri().path() == "/dashboard"
+        && let Some(candidate) = request.uri().query().and_then(bootstrap_param)
+    {
+        if !state.dashboard_bootstrap.consume(&candidate) {
+            warn!("Dashboard bootstrap rejected: wrong or already-used value");
+            return bearer_unauthorized_response("Bootstrap link is invalid or already used");
+        }
+        // Hand the browser the credential in an HttpOnly cookie and redirect.
+        // Done here rather than in the handler so the token never leaves this
+        // module, and so the address bar keeps nothing after the redirect.
+        let Some(token) = auth_config.bearer_token.clone() else {
+            return bearer_unauthorized_response("No admin credential is configured");
+        };
+        return axum::response::IntoResponse::into_response((
+            axum::http::StatusCode::SEE_OTHER,
+            [
+                (axum::http::header::LOCATION, "/dashboard".to_string()),
+                (
+                    axum::http::header::SET_COOKIE,
+                    format!(
+                        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400"
+                    ),
+                ),
+            ],
+        ));
+    }
+
+    let token = session_cookie_value(request.headers()).or_else(|| {
+        request
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| {
+                v.strip_prefix("Bearer ")
+                    .or_else(|| v.strip_prefix("bearer "))
+            })
+            .map(ToString::to_string)
+    });
 
     let Some(token) = token else {
-        warn!(path = %path, "Missing Authorization header");
+        warn!(path = %path, "Missing credential");
         return bearer_unauthorized_response(
             "Missing Authorization header. Use: Authorization: Bearer <token>",
         );
     };
+    let token = token.as_str();
 
     // 1. Try static auth (existing behavior)
     if let Some(client) = auth_config.validate_token(token) {
