@@ -137,7 +137,14 @@ impl OriginPolicy {
         request_authority: Option<&str>,
     ) -> bool {
         let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
-        if self.allowed_origins.contains(&candidate) {
+        // Canonical, not string equality: a browser omits the port when it is
+        // the scheme default, so a gateway on port 80 or 443 would refuse its
+        // own page against an allow-list entry that spells the port out.
+        if self
+            .allowed_origins
+            .iter()
+            .any(|allowed| same_origin(allowed, &candidate))
+        {
             return true;
         }
         if public.is_some_and(|(_, public_origin)| *public_origin == candidate) {
@@ -232,6 +239,26 @@ impl OriginPolicy {
     #[must_use]
     fn fetch_site_allowed(site: &str) -> bool {
         matches!(site, "same-origin" | "none")
+    }
+}
+
+/// `true` when two origin strings name the same origin.
+///
+/// Compares scheme, host and effective port after parsing, so an omitted
+/// default port and an explicit one are equal and IPv6 spellings agree.
+fn same_origin(a: &str, b: &str) -> bool {
+    let parts = |o: &str| {
+        let u = url::Url::parse(o).ok()?;
+        let host = u.host_str()?.to_string();
+        let default = if u.scheme() == "https" { 443 } else { 80 };
+        let host = strip_brackets(&host)
+            .parse::<std::net::IpAddr>()
+            .map_or_else(|_| host.to_ascii_lowercase(), |ip| ip.to_string());
+        Some((u.scheme().to_string(), host, u.port().unwrap_or(default)))
+    };
+    match (parts(a), parts(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
     }
 }
 
@@ -693,6 +720,20 @@ mod tests {
             p.host_ok("mcp.example.com"),
             "a reloaded public_url must be honored without a restart"
         );
+    }
+
+    #[test]
+    fn a_default_port_omitted_by_the_browser_still_matches() {
+        // A gateway on port 80 is reached at `http://localhost`, with no port,
+        // while the allow-list spells it out. String equality refuses the
+        // gateway's own page.
+        let p = policy_for(ServerConfig {
+            port: 80,
+            ..ServerConfig::default()
+        });
+        assert!(p.origin_ok("http://localhost"));
+        assert!(p.origin_ok("http://127.0.0.1:80"));
+        assert!(!p.origin_ok("http://localhost:8080"));
     }
 
     #[test]
