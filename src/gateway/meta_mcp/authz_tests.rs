@@ -262,3 +262,166 @@ steps:
          nothing about authorization"
     );
 }
+
+// ===========================================================================
+// AUTHZ.17-19 — denial semantics. Every fixture sets `on_error` explicitly:
+// the default is `Abort`, and an `Abort` fixture passes whether or not the
+// rules below hold.
+// ===========================================================================
+
+/// A refusal is not retried, and says why.
+///
+/// One step, so the consultation count is unambiguous: a whole-run count is
+/// satisfied by a terminal refusal, and a multi-step playbook under `DenyAll`
+/// denies every step, so the total could never be one even when correct.
+#[tokio::test]
+async fn authz_17_denial_is_not_retried() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let counting = CountingAuthorizer::new(DenyAll);
+
+    let result = run_playbook_yaml(
+        &meta,
+        r"
+name: retrying
+description: retries a failing step
+on_error: retry
+max_retries: 3
+steps:
+  - name: read
+    server: alpha
+    tool: read
+",
+        &ctx(&counting),
+    )
+    .await;
+
+    assert_eq!(
+        counting.count_for("alpha", "read"),
+        1,
+        "a denial must be consulted once, not once per retry attempt"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "no backend call");
+
+    let value = result.expect("retry continues past a failed step");
+    let errors = value
+        .get("step_errors")
+        .expect("a denied step must record why it failed");
+    assert!(
+        errors.get("read").is_some(),
+        "the refusal reason must be recorded under the step's name: {errors}"
+    );
+}
+
+/// An ordinary error still retries. Without this control, an implementation
+/// that stopped retrying *everything* would satisfy the case above.
+///
+/// The failure has to be a genuine `Err`, and that is narrower than it looks:
+/// a missing backend comes back as `Ok` carrying an `isError` envelope, so the
+/// engine records the step as COMPLETED and the retry loop never engages. An
+/// invalid tool name is rejected after the chokepoint and does return `Err`,
+/// so the authorizer is consulted once per attempt.
+#[tokio::test]
+async fn authz_17b_ordinary_error_still_retries() {
+    let registry = Arc::new(BackendRegistry::new());
+    let meta = MetaMcp::new(registry);
+    let counting = CountingAuthorizer::new(AllowAll);
+
+    let result = run_playbook_yaml(
+        &meta,
+        r"
+name: retrying_ordinary
+description: retries a step whose tool name cannot be dispatched
+on_error: retry
+max_retries: 3
+steps:
+  - name: read
+    server: alpha
+    tool: 'bad/name'
+",
+        &ctx(&counting),
+    )
+    .await;
+
+    assert_eq!(
+        counting.count_for("alpha", "bad/name"),
+        3,
+        "an ordinary failure must still be retried max_retries times; only a \
+         denial short-circuits"
+    );
+    let value = result.expect("retry continues past a failed step");
+    assert!(
+        value
+            .get("step_errors")
+            .and_then(|e| e.get("read"))
+            .is_some(),
+        "an ordinary failure must be explained too, not only a refusal: {value}"
+    );
+}
+
+/// Under `continue`, a denied step is recorded and the run carries on.
+#[tokio::test]
+async fn authz_18_continue_records_and_carries_on() {
+    let (registry, _calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+
+    let value = run_playbook_yaml(
+        &meta,
+        r"
+name: continuing
+description: one denied step, then one allowed step
+on_error: continue
+steps:
+  - name: denied
+    server: alpha
+    tool: read
+  - name: also_denied
+    server: alpha
+    tool: write
+",
+        &ctx(&DenyAll),
+    )
+    .await
+    .expect("continue must not abort the run");
+
+    let failed = value
+        .get("steps_failed")
+        .and_then(Value::as_array)
+        .expect("steps_failed must be present");
+    assert_eq!(failed.len(), 2, "both steps ran and both were refused");
+
+    let errors = value.get("step_errors").expect("reasons must be recorded");
+    assert!(
+        errors.get("denied").is_some() && errors.get("also_denied").is_some(),
+        "a partial run must explain itself, or it reads as a success: {errors}"
+    );
+}
+
+/// A run that fails nothing serialises exactly as it did before this change.
+#[tokio::test]
+async fn authz_24_successful_run_omits_step_errors() {
+    let (registry, _calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+
+    let value = run_playbook_yaml(
+        &meta,
+        r"
+name: clean
+description: nothing fails
+on_error: abort
+steps:
+  - name: read
+    server: alpha
+    tool: read
+",
+        &ctx(&AllowAll),
+    )
+    .await
+    .expect("a clean run must succeed");
+
+    assert!(
+        value.get("step_errors").is_none(),
+        "a run that denies nothing must produce the JSON it produced before \
+         this field existed: {value}"
+    );
+}
