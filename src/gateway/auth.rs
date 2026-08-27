@@ -523,6 +523,49 @@ mod dashboard_session_tests {
         assert_ne!(a, c);
         assert!(a.len() >= 42, "32 random bytes, base64url: {a}");
     }
+
+    /// The session handle is never the admin credential.
+    ///
+    /// This is the central claim of the opaque-session design — the cookie used
+    /// to carry the bearer token, which is long-lived and, without TLS,
+    /// recoverable from the wire — and nothing asserted it. A change that put
+    /// the credential back in the cookie would have passed every test here.
+    #[test]
+    fn a_session_handle_is_never_the_admin_credential() {
+        let bearer = "mcpgw_a-realistic-looking-admin-credential";
+        let b = DashboardBootstrap::new();
+
+        for _ in 0..8 {
+            let handle = b.issue_session();
+            assert_ne!(
+                handle, bearer,
+                "the cookie must carry an opaque handle, never the credential"
+            );
+            assert!(
+                !handle.contains(bearer) && !bearer.contains(&handle),
+                "and must not embed or be embedded in it: {handle}"
+            );
+            assert!(
+                !handle.starts_with("mcpgw_"),
+                "nor look like one, which would invite pasting it as a token: {handle}"
+            );
+        }
+    }
+
+    /// A bootstrap value is spent exactly once, and a wrong one spends nothing.
+    #[test]
+    fn a_bootstrap_value_is_single_use_and_a_wrong_one_costs_nothing() {
+        let b = DashboardBootstrap::new();
+        let printed = b.peek().expect("a value is issued at startup");
+
+        assert!(!b.consume("not-the-value"), "a wrong value is rejected");
+        assert!(
+            b.consume(&printed),
+            "and rejecting it must not have spent the real one — otherwise a \
+             stray click on a stale link disarms the operator's own"
+        );
+        assert!(!b.consume(&printed), "the real value is spent only once");
+    }
 }
 
 /// Name of the browser session cookie the dashboard bootstrap sets.
@@ -545,20 +588,26 @@ fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option
     }
     let candidate = request.uri().query().and_then(bootstrap_param)?;
     {
+        // Checked BEFORE the value is spent. The bootstrap is one-time, so
+        // consuming it and then discovering there is no credential to exchange
+        // it for leaves the operator holding a dead link with no way to retry
+        // short of restarting the gateway — and nothing tells them that. An
+        // install configured with API keys but no bearer hits exactly this.
+        if state.auth_config.bearer_token.is_none() {
+            warn!("Dashboard bootstrap unusable: no bearer token is configured");
+            return Some(bearer_unauthorized_response(
+                "No admin credential is configured. Set auth.bearer_token, or run                  `mcp-gateway init` to generate one, then restart for a fresh link.",
+            ));
+        }
         if !state.dashboard_bootstrap.consume(&candidate) {
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
-                "Bootstrap link is invalid or already used",
+                "Bootstrap link is invalid or already used. Restart the gateway                  for a fresh link.",
             ));
         }
-        // Hand the browser the credential in an HttpOnly cookie and redirect.
+        // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
-        if state.auth_config.bearer_token.is_none() {
-            return Some(bearer_unauthorized_response(
-                "No admin credential is configured",
-            ));
-        }
         let handle = state.dashboard_bootstrap.issue_session();
         // `Secure` whenever this listener speaks TLS. Without it a downgrade
         // puts the cookie on the wire; with a plain-HTTP loopback listener the
