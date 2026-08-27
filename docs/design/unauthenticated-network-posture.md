@@ -277,6 +277,40 @@ on the next request, and the tools are open with an accurate warning next to
 them. The refusal has to happen before the publish, which is also before
 `apply_patch` and its side effects.
 
+### A blank public path was the most public path of all
+
+Found by the final code review, and pre-dating this decision: `network_bind_refusal`
+skipped empty `auth.public_paths` entries when deciding whether tools were
+reachable without a credential. Public paths are matched by **prefix**
+(`ResolvedAuthConfig::is_public_path`, `path.starts_with(p)`), so a blank entry
+— a stray dash in a YAML list — is a prefix of every path and opens the whole
+gateway. The single entry that opens everything was the single entry that did
+not count, so such a config read as secured and served every backend.
+
+Fixed at the shared root rather than on the reload path, because the refusal is
+what both callers ask, and the startup half was the more exposed of the two: it
+serves, where the reload half only publishes. Covered on both.
+
+The reload case has to be staged in the RUNNING config to mean anything, and
+mis-staging it is instructive: a blank entry in the FILE is harmless at reload
+time, because `auth` is not applied and the request path keeps the closed paths
+it started with. What makes it the live half of the forbidden state is being
+already in force.
+
+### Telling an operator to revert a file a restart would accept
+
+The refusal first said, always, that the configuration on disk would refuse at
+the next start. That is true for a file declaring only a `public_url`, and false
+for one that also enables authentication — which a reload cannot apply, and a
+restart applies correctly. The deployment guide tells that operator to write
+exactly that file and restart, so the refusal was contradicting our own advice
+and telling them to undo the fix.
+
+The refusal therefore reports two facts: why this reload cannot be applied, and
+whether a restart on the same file would refuse as well. The second is
+`network_bind_refusal(wanted)` — the startup question, asked of the file — and
+the message ends differently on each answer.
+
 ### Accepted residual
 
 The admin UI writes the file before it reloads, so a config that would refuse at

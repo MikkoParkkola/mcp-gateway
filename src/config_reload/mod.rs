@@ -1369,15 +1369,23 @@ impl ReloadContext {
         // Before `apply_patch`, which stops and starts backends: a refusal that
         // ran after it could not say nothing was applied. And before the
         // publish, which is what the origin gate would re-read.
-        if let Some(reason) =
+        if let Some(refusal) =
             crate::gateway::reload_posture_refusal(self.live_config.running(), &new_config)
         {
+            // What a restart does with this same file is the operator's next
+            // decision, and it differs. A file that also enables authentication
+            // is right on a restart and only wrong to apply live; a file that
+            // just declares the name refuses at the next start, planned or not.
+            let restart = if refusal.restart_would_also_refuse {
+                "This configuration is on disk, so the next start — including an                  unplanned one — will refuse to serve. Revert it, or close the                  tool paths."
+            } else {
+                "A restart applies this file whole, including the parts a reload                  cannot, and starting on it is safe."
+            };
             return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} Nothing was applied, backends in \
-                 the same file included, and the gateway is still serving the \
-                 configuration it started with. This configuration is on disk, so \
-                 the next start will refuse to serve: revert it, or close the tool \
-                 paths."
+                "{POSTURE_REFUSED_PREFIX} {} Nothing was applied, backends in the \
+                 same file included, and the gateway is still serving the \
+                 configuration in force before this reload. {restart}",
+                refusal.reason
             ));
         }
 

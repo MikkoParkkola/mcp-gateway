@@ -1516,3 +1516,75 @@ async fn a_reload_is_not_refused_for_a_state_it_did_not_cause() {
         .expect("a reload was refused for a state that predates it");
     assert!(ctx.registry.get("svc").is_some());
 }
+
+#[tokio::test]
+async fn a_blank_public_path_in_force_is_tools_open_and_refuses() {
+    // GIVEN: a gateway running on loopback whose public_paths carry a BLANK
+    // entry — a stray dash in YAML. Startup allowed it: on loopback with no
+    // declared name, reachability is the half that was missing. But blank is a
+    // prefix of every path (`ResolvedAuthConfig::is_public_path`), so at request
+    // time this gateway's tools need no credential, whatever `auth.enabled`
+    // says.
+    //
+    // Staged in the RUNNING config, not the file, and that is the whole case.
+    // In the file it would be harmless here: `auth` is not applied by a reload,
+    // so the request path would keep the old, closed paths and the in-force
+    // state would be safe. It is being ALREADY IN FORCE that makes it the live
+    // half of the forbidden state.
+    let mut running = Config::default();
+    running.auth.enabled = true;
+    running.auth.bearer_token = Some("secret".to_string());
+    running.auth.public_paths = vec!["/health".to_string(), String::new()];
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: the file supplies the other half — a name it is reached by
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n    - \"\"\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, running);
+
+    // THEN: refused. `auth.enabled` is true on both sides, so the overlay saves
+    // nothing here — this rests entirely on the refusal counting a blank entry
+    // as public, which it did not always do.
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("a blank public path opened every route and the reload was applied");
+    assert!(err.starts_with(POSTURE_REFUSED_PREFIX), "{err}");
+}
+
+#[tokio::test]
+async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
+    // GIVEN: a gateway running with authentication OFF
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: one edit declares the public URL and turns authentication on — the
+    // fix, written correctly. A reload still cannot apply it, because the auth
+    // half needs a restart while the public_url half would take effect at once.
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the reload was applied");
+
+    // THEN: it says a restart applies it — not "revert this". Telling an
+    // operator to undo the fix they just wrote correctly is the worse failure,
+    // and the deployment guide tells them to do exactly this and restart.
+    assert!(
+        err.contains("A restart applies this file"),
+        "an operator who wrote the fix correctly was told to revert it: {err}"
+    );
+    assert!(
+        !err.contains("Revert it"),
+        "a startup-safe file was reported as one to revert: {err}"
+    );
+}

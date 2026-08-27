@@ -501,11 +501,15 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     // MCP endpoint leaves every backend reachable with the gateway's keys,
     // whatever the auth flag says. `/health` carries no authority and does not
     // count.
-    let tools_are_public = config
-        .auth
-        .public_paths
-        .iter()
-        .any(|p| p != "/health" && !p.is_empty());
+    //
+    // An EMPTY entry counts, and counts hardest. Public paths are matched by
+    // prefix (`gateway::auth`, `ResolvedAuthConfig::is_public_path`), so `""` is
+    // a prefix of every path and makes the whole gateway public. This line used
+    // to skip empty entries as noise, which had it exactly backwards: the one
+    // entry that opens everything was the one entry that did not count, so a
+    // config with `auth.enabled = true` and a blank public path read as secured
+    // and served every backend to anyone who reached it.
+    let tools_are_public = config.auth.public_paths.iter().any(|p| p != "/health");
     if config.auth.enabled && !tools_are_public {
         return None;
     }
@@ -579,7 +583,7 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
 ///
 /// Design: `docs/design/unauthenticated-network-posture.md`, Decision C.
 #[must_use]
-pub fn reload_posture_refusal(running: &Config, wanted: &Config) -> Option<String> {
+pub fn reload_posture_refusal(running: &Config, wanted: &Config) -> Option<ReloadPostureRefusal> {
     if network_bind_refusal(running).is_some() {
         return None;
     }
@@ -588,7 +592,26 @@ pub fn reload_posture_refusal(running: &Config, wanted: &Config) -> Option<Strin
         .server
         .public_url
         .clone_from(&wanted.server.public_url);
-    network_bind_refusal(&effective)
+    network_bind_refusal(&effective).map(|reason| ReloadPostureRefusal {
+        reason,
+        restart_would_also_refuse: network_bind_refusal(wanted).is_some(),
+    })
+}
+
+/// Why a reload was refused, and what a restart on the same file would do.
+///
+/// The second answer is not cosmetic. A file that declares a `public_url` AND
+/// enables authentication cannot be applied by a reload — the authentication
+/// half needs a restart, so applying it would open the origin gate over a
+/// request path still running without a credential — and yet it is exactly
+/// right on a restart. Telling that operator to revert would be telling them to
+/// undo the fix. Telling the one who declared only a `public_url` that a
+/// restart applies it would be worse: their next start would refuse to serve.
+pub struct ReloadPostureRefusal {
+    /// What is wrong with the configuration that would be in force.
+    pub reason: String,
+    /// `true` when starting fresh on this same file would refuse to serve.
+    pub restart_would_also_refuse: bool,
 }
 
 #[cfg(test)]
@@ -602,6 +625,24 @@ mod network_bind_tests {
         c.auth.enabled = auth;
         c.server.allow_unauthenticated_network_bind = override_set;
         c
+    }
+
+    #[test]
+    fn a_blank_public_path_is_the_most_public_path_there_is() {
+        // Public paths are matched by PREFIX (`ResolvedAuthConfig::is_public_path`,
+        // `path.starts_with(p)`), so a blank entry is a prefix of every path and
+        // opens the whole gateway — the MCP endpoint included. A YAML list with
+        // a stray dash produces one.
+        //
+        // This case exists because the check used to skip empty entries, so the
+        // single entry that opens everything was the single entry that did not
+        // count: the config below read as secured and served every backend.
+        let mut c = config("0.0.0.0", true, false);
+        c.auth.public_paths = vec!["/health".to_string(), String::new()];
+        assert!(
+            network_bind_refusal(&c).is_some(),
+            "a blank public path opens every route and must be refused"
+        );
     }
 
     #[test]
