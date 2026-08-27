@@ -567,9 +567,17 @@ running on the configuration that was in force before it. Anything an earlier
 reload applied, backends included, stays applied:
 
 ```
-config reload refused, the running gateway is unchanged: refusing to serve
-HTTP, reachable at the declared public_url host your-tunnel.example.com: ...
+config reload refused: refusing to serve HTTP, reachable at the declared
+public_url host your-tunnel.example.com: ...
 ```
+
+The refusal names two things it did not do — no backend was started or stopped,
+and no configuration was published — and claims nothing beyond them. Reading a
+config file applies any `env_files` it names to the process environment before
+the file is validated, so a refused reload is not a complete no-op. If a
+capability resolves its credential from an environment variable, check that one
+after a refused reload. This is true of every failed reload rather than only
+this one.
 
 Enabling `auth.enabled` in the same edit does not get it through, and that is
 deliberate rather than an oversight: authentication is applied at startup, so

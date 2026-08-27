@@ -392,6 +392,17 @@ each narrowed it ("nothing was applied" → "still serving what it started with"
 three patches is one to delete rather than patch again, and a test now asserts
 its ABSENCE so a later edit cannot reintroduce the reassurance.
 
+The prefix went the same way, one round later. It read "config reload refused,
+the running gateway is unchanged:" — the identical claim, three words shorter,
+sitting in the one part of the message the test was not reading, because that
+test listed the phrasings the body had just been corrected of. It is now a bare
+label, and the test asserts the PROPERTY over every phrasing this claim has ever
+taken rather than the two most recent.
+
+That is the lesson worth keeping: a test written against the last wording
+catches the last mistake. The claim had four spellings across four rounds, and
+the one that survived was the one nobody thought to read.
+
 The operator loses nothing they can act on. Overclaiming in a security message
 is how the next report starts.
 

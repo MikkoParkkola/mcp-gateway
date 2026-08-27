@@ -1257,14 +1257,30 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
         err.contains("next start"),
         "refusal did not say what a restart does with this file: {err}"
     );
-    // AND: it does NOT summarise what remains in force. `Config::load` has
-    // already applied the candidate's env_files to the process, and
-    // `capability::executor` reads `std::env::var` per call, so any such claim
-    // is one the code cannot keep (MIK-7256).
-    assert!(
-        !err.contains("still serving") && !err.contains("in force"),
-        "the refusal claims what remains in force, which it cannot know: {err}"
-    );
+    // AND: it makes NO claim about what remains in force, anywhere in the
+    // message — prefix included. `Config::load` has already applied the
+    // candidate's env_files to the process and `capability::executor` reads
+    // `std::env::var` per call, so any such claim is one the code cannot keep
+    // (MIK-7256).
+    //
+    // Every phrasing that has appeared here, not only the last one. An earlier
+    // version of this case listed the two the body had just been corrected of,
+    // and so did not notice that the shared PREFIX still said "the running
+    // gateway is unchanged" — the same claim, three words shorter, in the one
+    // part of the message the test was not reading.
+    for claim in [
+        "unchanged",
+        "in force",
+        "still serving",
+        "nothing was applied",
+        "no changes were made",
+    ] {
+        assert!(
+            !err.to_ascii_lowercase().contains(claim),
+            "the refusal claims {claim:?} — what remains in force is what it \
+             cannot know: {err}"
+        );
+    }
     // AND: it says precisely what did not happen — no backend moved, nothing
     // published. Not "nothing was applied", which would be a wider claim than
     // the code can keep: `Config::load` has already applied any `env_files`.

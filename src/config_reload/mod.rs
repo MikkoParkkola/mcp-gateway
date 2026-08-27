@@ -96,12 +96,18 @@ const SHUTDOWN_ABORTED_ERROR: &str = "config reload aborted: the gateway is shut
 /// tool surface reachable without a credential — the state the gateway refuses
 /// to START in (`gateway::server::support::network_bind_refusal`).
 ///
+/// A bare LABEL, deliberately. It used to read "config reload refused, the
+/// running gateway is unchanged:" — which is the very claim about what remains
+/// in force that this message states two bounded facts instead of making. The
+/// body was corrected and the prefix kept it, in compressed form, where a test
+/// written against the old phrasings did not look.
+///
 /// A PREFIX, matched with [`is_posture_refusal`], not compared whole like
 /// [`SHUTDOWN_ABORTED_ERROR`]: the refusal's own text names the exposure and
 /// carries the remedy, and rides behind this. An arm written `==` would never
 /// match, and the refusal would be logged as a broken config file — sending the
 /// operator to hunt YAML instead of reverting the `public_url`.
-const POSTURE_REFUSED_PREFIX: &str = "config reload refused, the running gateway is unchanged:";
+const POSTURE_REFUSED_PREFIX: &str = "config reload refused:";
 
 /// `true` when `error` is the refusal [`POSTURE_REFUSED_PREFIX`] describes.
 ///
