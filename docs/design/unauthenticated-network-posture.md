@@ -380,10 +380,20 @@ before it returns, so by the time this check runs, that much has happened. It is
 true of every failed reload — a parse error, a validation error, the shutdown
 abort — and pre-dates this decision; found in review of it, filed as **MIK-7256**.
 
-The refusal's message is worded to the narrower truth as a result: no backend
-was started or stopped, and no configuration was published. Not "nothing was
-applied", which is the wider claim and not one the code can keep. Overclaiming
-in a security message is how the next report starts.
+It is not inert, either: `capability::executor` resolves an `env:` credential
+with `std::env::var` inside `dispatch_protocol`, per call, so a later capability
+call can use a value the refused file supplied.
+
+So the message states two bounded facts — no backend was started or stopped, no
+configuration was published — and offers **no summary of what remains in
+force**. That summary is the thing that kept being wrong: three review rounds
+each narrowed it ("nothing was applied" → "still serving what it started with" →
+"still serving what was in force") and each left it false. A claim that survives
+three patches is one to delete rather than patch again, and a test now asserts
+its ABSENCE so a later edit cannot reintroduce the reassurance.
+
+The operator loses nothing they can act on. Overclaiming in a security message
+is how the next report starts.
 
 ### Accepted residual
 

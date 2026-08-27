@@ -1252,11 +1252,18 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
         err.contains("auth.enabled"),
         "refusal did not carry the remedy: {err}"
     );
-    // AND: it says the gateway kept the old config, and that the refusing one is
-    // on disk and will refuse at the next start
+    // AND: it says what a restart does with this same file
     assert!(
-        err.contains("still serving") && err.contains("next start"),
-        "refusal did not say what was kept and what is still on disk: {err}"
+        err.contains("next start"),
+        "refusal did not say what a restart does with this file: {err}"
+    );
+    // AND: it does NOT summarise what remains in force. `Config::load` has
+    // already applied the candidate's env_files to the process, and
+    // `capability::executor` reads `std::env::var` per call, so any such claim
+    // is one the code cannot keep (MIK-7256).
+    assert!(
+        !err.contains("still serving") && !err.contains("in force"),
+        "the refusal claims what remains in force, which it cannot know: {err}"
     );
     // AND: it says precisely what did not happen — no backend moved, nothing
     // published. Not "nothing was applied", which would be a wider claim than

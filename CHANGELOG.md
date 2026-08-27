@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mcp-gateway init` generates an admin credential for the install** and
+  writes it into `gateway.yaml`, along with `auth.public_paths` covering
+  `/health` and `/mcp` so tool calls keep working. This is what makes the
+  credential requirement below survivable on a new install: management needs a
+  credential, and now there is one.
+
+  An upgrade does not rewrite an existing config. If you manage the gateway
+  today with authentication off, see the BREAKING note below for the edit to
+  make by hand.
+
+- **A way into the dashboard that a browser can actually use.** A browser
+  cannot attach an `Authorization` header to a navigation, so `serve` prints a
+  link once:
+
+  ```
+  DASHBOARD (opens once, then remembered in this browser):
+    http://127.0.0.1:39400/dashboard?bootstrap=...
+  ```
+
+  Opening it exchanges a single-use value for a session cookie and redirects,
+  so nothing stays in the address bar. The value in the link is **not** the
+  admin credential; it works once, dies with the process, and is redeemable
+  only from this machine, so a link in a shell history is spent and a declared
+  `server.public_url` cannot make it usable from elsewhere. The cookie carries
+  an opaque handle rather than the credential, `HttpOnly` and
+  `SameSite=Strict`, and `Secure` when the listener speaks TLS. Details in
+  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#opening-the-dashboard).
+
+- **Config files are written readable only by you** (`0600`), on every path
+  that writes one — `init`, the dashboard's edits, and the config-export
+  command. The file holds this gateway's credentials, and until now it
+  inherited the process umask.
+
+  An existing file is **reported, not changed**: the startup log names it, its
+  mode, and the `chmod` to fix it. Silently re-permissioning a file you own is
+  its own surprise. It does not stay wide forever either — writes replace the
+  file from a scratch file created `0600`, so the next config write tightens
+  it.
+
 ### Security
 
 - **Origin validation on the HTTP surface (CWE-346).** Reported by Avishai
@@ -139,11 +180,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   off. It is the shape a browser or any other caller on the network can drive
   today, which is why it now stops rather than warns.
 
+  It is also a break, less obviously, for a reachable gateway whose
+  `auth.public_paths` contains a blank entry — a stray `-` in that YAML list.
+  Because public paths match by prefix, a blank entry is a prefix of every path
+  and makes the whole gateway public, `/mcp` included, whatever `auth.enabled`
+  says. Such a config previously started and read as protected. It now refuses,
+  and the message names the list. Remove the empty entry.
+
 - `server.public_url` is re-read on each request, so a configuration reload
   takes effect without a restart — **unless applying it would leave the tools
   reachable without a credential**, in which case the reload is refused and
-  nothing in the file is applied, backends included. The gateway keeps serving
-  the configuration that was in force before the reload.
+  no backend is started or stopped and no configuration is published.
+
+  It does not claim more than that. Reading a config file applies any
+  `env_files` it names to the process environment before the file is validated,
+  so a refused reload is not a complete no-op, and that is true of every failed
+  reload rather than only this one.
 
   The refusal is judged against the configuration that would be **in force**,
   not against the file. `auth` and the override are not applied by a reload —

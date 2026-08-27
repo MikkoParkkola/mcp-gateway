@@ -1389,16 +1389,26 @@ impl ReloadContext {
                 "A restart accepts this file whole, including the parts a reload \
                  cannot apply."
             };
-            // "No backend moved and nothing was published", not "nothing was
-            // applied". `Config::load` applies `env_files` to the process
-            // environment before returning, so by the time this check runs that
-            // much has already happened — on this path and on every other reload
-            // failure, which is pre-existing and filed separately. Claiming more
-            // than is true in a security message is how the next report starts.
+            // Two bounded facts, and no summary of "what is still in force".
+            //
+            // That summary is what kept being wrong. `Config::load` applies the
+            // candidate's `env_files` to the PROCESS environment before it
+            // returns, so by the time this check runs, that has happened — and
+            // it is not inert: `capability::executor` resolves an `env:` or
+            // `{env.VAR}` credential with `std::env::var` inside
+            // `dispatch_protocol`, per call. A later capability call can
+            // therefore use a value the refused file supplied.
+            //
+            // Three review rounds each narrowed that clause and each left it
+            // false, which is the shape of a claim that should be deleted
+            // rather than patched. The two facts below are checkable and the
+            // operator can act on them; the reassurance they wanted is the one
+            // the code cannot give. Pre-existing on every reload failure and
+            // filed as MIK-7256; overclaiming in a security message is how the
+            // next report starts.
             return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped \
-                 and no configuration was published, so the gateway is still \
-                 serving what was in force before this reload. {restart}",
+                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
+                 and no configuration was published. {restart}",
                 refusal.reason
             ));
         }
