@@ -57,7 +57,16 @@ pub(super) fn log_startup_banner(config: &Config, backends: &BackendRegistry) {
             "  Anonymous holds no admin: {} and the admin dashboard are unavailable.",
             crate::gateway::router::ADMIN_META_TOOLS.join(", ")
         );
-        warn!("  To use them, set auth.enabled = true with a bearer token.");
+        // Naming public_paths is not optional detail. Turning auth on gates
+        // EVERY path, so an operator who follows the short version loses the
+        // MCP client they already configured — a worse regression than the
+        // missing dashboard they were trying to fix. `init` writes this for a
+        // new install; an existing one only ever sees this line.
+        warn!(
+            "  To use them, set auth.enabled = true with a bearer token, and \
+             list /health and /mcp under auth.public_paths so tool calls keep \
+             working: the credential gates management, not tools."
+        );
         // A loopback bind keeps this to callers already on the machine. A
         // wildcard or LAN bind hands the same unauthenticated surface, and the
         // credentials behind it, to the network.

@@ -55,16 +55,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already holds whatever the operator holds and could edit the config file
   directly; withholding it there would remove management from exactly the
   single-user setup this protects. `/dashboard` and the
-  management endpoints under `/ui/api/` return `403`, including
-  `/ui/api/costs`, which reports spend across every key and session and was
-  previously open. `/ui/api/status` returns counts without backend names, and
+  management endpoints under `/ui/api/` return `403`. So does `/api/costs`,
+  which reports spend across every key and session and was previously open —
+  note that is the top-level route, not `/ui/api/costs`, which already required
+  admin. `/ui/api/status` returns counts without backend names, and
   `/health` returns a backend count and overall health rather than names.
   Ordinary tool invocation is unchanged, so local MCP clients are unaffected.
 
-  Set `auth.enabled = true` with a bearer token to restore them; that token
-  carries admin. The startup log states this. Without a credential the gateway
-  cannot distinguish its operator from any other caller that reaches the port,
-  so admin now follows an explicit credential.
+  To restore them on an existing install, set `auth.enabled = true` with a
+  bearer token — and list `/health` and `/mcp` under `auth.public_paths` at the
+  same time:
+
+  ```yaml
+  auth:
+    enabled: true
+    bearer_token: "<your token>"
+    public_paths: ["/health", "/mcp"]
+  ```
+
+  The second half is not optional. Turning authentication on gates **every**
+  path, so enabling it alone makes the MCP client you already configured start
+  failing — a worse outcome than the missing dashboard it was meant to fix.
+  `mcp-gateway init` writes this shape for a new install; an upgrade does not
+  rewrite your config, so this is the step to take by hand. The startup log
+  says the same.
+
+  Without a credential the gateway cannot distinguish its operator from any
+  other caller that reaches the port, so admin now follows an explicit
+  credential.
 
 - `server.public_url` is re-read on each request, so a configuration reload
   takes effect without a restart.

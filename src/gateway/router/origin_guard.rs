@@ -35,11 +35,14 @@ use super::well_known::is_loopback_host;
 /// `server.host`/`port` are restart-required, so a snapshot cannot drift from
 /// the live listener.
 ///
-/// There is deliberately no operator allow-list of extra browser origins. A
-/// cross-origin browser client needs CORS preflight responses to work at all,
-/// which this gate does not serve, so an allow-list would name origins that
-/// still could not call the gateway. Serve the page from the gateway's own
-/// origin, or use a non-browser client.
+/// There is deliberately no operator allow-list of extra browser origins, and
+/// not for the reason it first appears. Saying such a list would be inert
+/// because this gate serves no CORS preflight is WRONG: a form POST is a
+/// simple request and skips the preflight entirely, which is the very shape
+/// this gate exists to refuse. An allow-list would therefore be a real grant —
+/// every page on that origin could drive the gateway with whatever credentials
+/// it holds. Serve the page from the gateway's own origin, or use a
+/// non-browser client.
 #[derive(Clone)]
 pub struct OriginPolicy {
     allowed_origins: Vec<String>,
