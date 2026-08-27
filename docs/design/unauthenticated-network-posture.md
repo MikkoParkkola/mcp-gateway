@@ -306,6 +306,21 @@ Scope, stated rather than missed: a public path over the ADMIN surface is a
 different exposure with a different control — the anonymous identity holds no
 admin — and this refusal is about a caller invoking every configured backend.
 
+The rule went through three spellings, and the third is the one that asks the
+question in the operator's terms rather than in the string's:
+
+| spelling | wrong how |
+|---|---|
+| any entry that is not `/health` | refused a legitimate `/metrics` |
+| ...and is not empty | skipped the entry that opens everything |
+| any entry beginning `/mcp` | refused `/mcp-status`, `/mcpx`, `/mcp.json` — an operator's own endpoints, none of which axum routes to a tool |
+
+The slash is the correction: a configured prefix opens the tools when it is a
+prefix of `/mcp`, or when it begins `/mcp/` and so names a path SEGMENT. The
+test derives its expected column from `real_path.starts_with(entry)` over the
+real routes rather than asserting it by hand, because a hand-written column is
+how two of those three spellings stayed green while being wrong.
+
 ### A blank public path was the most public path of all
 
 Found by the final code review, and pre-dating this decision: `network_bind_refusal`
@@ -357,6 +372,18 @@ fails when one of those changes status. It cannot fail for a field in a section
 nothing has made live yet. `every_tracked_section_is_covered` already holds the
 exhaustive half — every section reaches the classifier — so what is uncovered is
 narrow: a field moved to live-applied in a section this case does not touch.
+
+### What a refusal does NOT undo
+
+`Config::load` applies the config's `env_files` to the process environment
+before it returns, so by the time this check runs, that much has happened. It is
+true of every failed reload — a parse error, a validation error, the shutdown
+abort — and pre-dates this decision; found in review of it, filed as **MIK-7256**.
+
+The refusal's message is worded to the narrower truth as a result: no backend
+was started or stopped, and no configuration was published. Not "nothing was
+applied", which is the wider claim and not one the code can keep. Overclaiming
+in a security message is how the next report starts.
 
 ### Accepted residual
 

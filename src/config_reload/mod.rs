@@ -1389,10 +1389,16 @@ impl ReloadContext {
                 "A restart accepts this file whole, including the parts a reload \
                  cannot apply."
             };
+            // "No backend moved and nothing was published", not "nothing was
+            // applied". `Config::load` applies `env_files` to the process
+            // environment before returning, so by the time this check runs that
+            // much has already happened — on this path and on every other reload
+            // failure, which is pre-existing and filed separately. Claiming more
+            // than is true in a security message is how the next report starts.
             return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {} Nothing was applied, backends in the \
-                 same file included, and the gateway is still serving the \
-                 configuration in force before this reload. {restart}",
+                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped \
+                 and no configuration was published, so the gateway is still \
+                 serving what was in force before this reload. {restart}",
                 refusal.reason
             ));
         }

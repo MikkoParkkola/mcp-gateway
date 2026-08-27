@@ -446,9 +446,14 @@ mod tests {
     }
 }
 
-/// The route that carries tool-invocation authority. `/mcp/{name}` starts with
-/// it, so one prefix answers for the whole surface (`router::create_router_with`).
+/// The route that carries tool-invocation authority (`router::create_router_with`).
 const TOOL_ROUTE: &str = "/mcp";
+
+/// The per-backend routes, `/mcp/{name}`, as a prefix. Separate from
+/// [`TOOL_ROUTE`] because the trailing slash is load-bearing: it is what
+/// distinguishes a path SEGMENT from a name that merely begins with the same
+/// letters, and `/mcp-status` is not a tool route.
+const TOOL_ROUTE_PREFIX: &str = "/mcp/";
 
 /// Why an unauthenticated gateway must not serve HTTP on this bind, if it must not.
 ///
@@ -526,8 +531,20 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     // the anonymous identity holds no admin — and this refusal is about a caller
     // invoking every configured backend.
     let tools_are_public = config.auth.public_paths.iter().any(|p| {
-        // `/mcp/{name}` starts with `/mcp`, so one route answers for both.
-        TOOL_ROUTE.starts_with(p.as_str()) || p.starts_with(TOOL_ROUTE)
+        // Two ways a configured prefix opens a tool route, and no third:
+        //
+        // - it is a prefix of `/mcp` itself: `""`, `"/"`, `"/m"`, `"/mcp"`;
+        // - it is a prefix of some `/mcp/{name}`, which means it starts with
+        //   `/mcp/` — the SLASH is what makes it a path segment.
+        //
+        // The slash is the whole correction. Asking only whether `p` starts
+        // with `/mcp` refuses `/mcp-status`, `/mcpx`, `/mcp.json` and
+        // `/mcp%2Ffoo`, none of which axum routes to a tool and none of which
+        // makes a tool call public — `is_public_path` asks whether the REQUEST
+        // path starts with `p`, and `/mcp` does not start with `/mcp-status`.
+        // That is a denial of service on a legitimate config: the gateway
+        // refuses to start, and the operator's own health endpoint is why.
+        TOOL_ROUTE.starts_with(p.as_str()) || p.starts_with(TOOL_ROUTE_PREFIX)
     });
     if config.auth.enabled && !tools_are_public {
         return None;
@@ -648,20 +665,37 @@ mod network_bind_tests {
 
     #[test]
     fn a_public_path_counts_when_it_covers_the_tool_surface() {
-        // The question is whether a public prefix reaches `/mcp`, asked with the
-        // same prefix semantics authentication uses. Both halves matter: refuse
-        // what opens the tools, and do NOT refuse what does not.
-        let cases: [(&str, bool); 8] = [
-            ("", true),            // prefix of every path — a stray dash in YAML
-            ("/", true),           // likewise
-            ("/m", true),          // prefix-matches /mcp, which is what counts
-            ("/mcp", true),        // the tool surface itself
-            ("/mcp/github", true), // a single backend is still every call to it
-            ("/health", false),    // carries no authority
-            ("/metrics", false),   // documented, legitimate, grants nothing
-            ("/.well-known/oauth-protected-resource", false),
+        // Whether a configured prefix opens the tools is DERIVED here, not
+        // asserted: it opens them exactly when some real tool request path
+        // starts with it, which is what `ResolvedAuthConfig::is_public_path`
+        // computes at request time. Writing the column by hand is how the
+        // earlier spellings of this rule stayed green while being wrong.
+        let real_tool_paths = ["/mcp", "/mcp/github"];
+        let cases = [
+            // Reach a tool route.
+            "",
+            "/",
+            "/m",
+            "/mc",
+            "/mcp",
+            "/mcp/",
+            "/mcp/github",
+            // Do NOT, and each of these once refused the gateway at startup:
+            // the check asked whether an entry BEGAN with `/mcp` rather than
+            // whether it reached a tool route, so an operator's own health
+            // endpoint stopped the process from starting.
+            "/mcp-status",
+            "/mcpx",
+            "/mcp.json",
+            "/mcp%2Ffoo",
+            "/mcp\u{FF0F}foo",
+            "/health",
+            "/metrics",
+            "/MCP",
+            "/.well-known/oauth-protected-resource",
         ];
-        for (path, opens_tools) in cases {
+        for path in cases {
+            let opens_tools = real_tool_paths.iter().any(|real| real.starts_with(path));
             let mut c = config("0.0.0.0", true, false);
             c.auth.public_paths = vec!["/health".to_string(), path.to_string()];
             assert_eq!(

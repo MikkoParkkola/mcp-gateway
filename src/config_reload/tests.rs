@@ -1258,10 +1258,13 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
         err.contains("still serving") && err.contains("next start"),
         "refusal did not say what was kept and what is still on disk: {err}"
     );
-    // AND: it says nothing was applied, backends in the same file included
+    // AND: it says precisely what did not happen — no backend moved, nothing
+    // published. Not "nothing was applied", which would be a wider claim than
+    // the code can keep: `Config::load` has already applied any `env_files`.
     assert!(
-        err.contains("Nothing was applied"),
-        "refusal did not say the whole patch was skipped: {err}"
+        err.contains("No backend was started or stopped")
+            && err.contains("no configuration was published"),
+        "refusal did not say what was skipped: {err}"
     );
 }
 
