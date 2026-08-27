@@ -458,7 +458,9 @@ always needs a hostname while a network client dials an address. Set
 
 ### Admin requires a credential
 
-With `auth.enabled = false` every caller is anonymous and holds **no admin**.
+With `auth.enabled = false` every caller **over HTTP** is anonymous and holds
+**no admin**. A stdio caller is treated as admin: the client spawned the
+process, so it already holds whatever the operator holds.
 Ordinary tools work, so a local MCP client needs no configuration. These do not:
 
 - `gateway_kill_server`, `gateway_revive_server`, `gateway_reload_config`,

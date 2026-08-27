@@ -50,7 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gateway_set_state` are NOT gated: each writes only the caller's own session
   and cannot widen what that caller reaches, and gating the first stopped
   nothing anyway, since a profile can be chosen at `initialize` through the
-  same call with no credential. `/dashboard` and the
+  same call with no credential. This applies to callers over HTTP. A stdio
+  caller is treated as admin, because the client that spawned the process
+  already holds whatever the operator holds and could edit the config file
+  directly; withholding it there would remove management from exactly the
+  single-user setup this protects. `/dashboard` and the
   management endpoints under `/ui/api/` return `403`, including
   `/ui/api/costs`, which reports spend across every key and session and was
   previously open. `/ui/api/status` returns counts without backend names, and

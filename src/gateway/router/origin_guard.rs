@@ -682,12 +682,13 @@ mod tests {
     }
 
     #[test]
-    fn ipv6_public_url_matches_a_bracketed_host() {
-        // Locks in behaviour a review claimed was broken and is not: the `url`
-        // crate's `host_str` returns an IPv6 literal WITH brackets, the same
-        // form a Host header carries, so the comparison matches. Kept as a
-        // regression guard, since switching to `Url::host()` would return the
-        // unbracketed form and silently lock out every IPv6 operator.
+    fn a_numeric_host_reaches_a_non_loopback_bind() {
+        // What this case actually covers, renamed to say so. It was called
+        // `ipv6_public_url_matches_a_bracketed_host` and claimed to lock in the
+        // bracketed `public_url` comparison — which it never reached: with a
+        // non-loopback bind, `host_allowed` returns true on the numeric-host
+        // rule before `public_url` is consulted at all. Its assertions were
+        // true and its stated purpose was not tested.
         let config = ServerConfig {
             host: "0.0.0.0".to_string(),
             public_url: Some("http://[fd00::1]:39400".to_string()),
@@ -696,10 +697,39 @@ mod tests {
         let p = policy_for(config);
         assert!(p.host_ok("[fd00::1]:39400"));
         assert!(p.host_ok("[fd00::1]"));
-        // A different literal is also admitted, because every numeric host
-        // reaches a non-loopback bind by design: rebinding needs a NAME. What
-        // public_url gates is names.
+        // A DIFFERENT literal is admitted too, which is the point: every
+        // numeric host reaches a non-loopback bind by design, because rebinding
+        // needs a NAME. What `public_url` gates is names.
         assert!(p.host_ok("[fd00::2]"));
+        assert!(!p.host_ok("attacker.example"));
+    }
+
+    #[test]
+    fn ipv6_public_url_matches_a_bracketed_host() {
+        // The comparison the case above claimed to cover, on a LOOPBACK bind so
+        // the numeric short-circuit cannot fire and `public_url` is genuinely
+        // consulted.
+        //
+        // This matters because a Host header carries an IPv6 literal in
+        // brackets while `Url::host_str` does not necessarily return it that
+        // way. If the two forms did not compare equal, every IPv6 operator who
+        // set `public_url` would be locked out of their own gateway.
+        let config = ServerConfig {
+            host: "127.0.0.1".to_string(),
+            public_url: Some("http://[fd00::1]:39400".to_string()),
+            ..ServerConfig::default()
+        };
+        let p = policy_for(config);
+
+        assert!(
+            p.host_ok("[fd00::1]:39400"),
+            "the bracketed Host form must match a bracketed public_url"
+        );
+        assert!(
+            !p.host_ok("[fd00::2]:39400"),
+            "and a different literal must not — on a loopback bind the numeric \
+             rule does not apply, so this is the public_url comparison itself"
+        );
         assert!(!p.host_ok("attacker.example"));
     }
 
