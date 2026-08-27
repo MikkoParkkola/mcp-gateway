@@ -166,6 +166,17 @@ that overlay is `server.public_url` and nothing else.
     effective = running.clone()
     effective.server.public_url = new.server.public_url
 
+The overlay is built **beside `network_bind_refusal`**, in the same module, and
+is what `config_reload` calls — the raw refusal is not exported. Two functions
+that must agree about which fields are live do not stay in agreement across a
+module boundary, and the failure is silent: the overlay would simply judge the
+wrong config. Co-locating them makes the next person to add a refusal input read
+the overlay in the same screen.
+
+It runs **after the file is loaded and before `apply_patch`**. Before, and there
+is no file to judge; after, and backends in the same file have already been
+stopped and started, so "nothing was applied" would be false.
+
 Every other input to `network_bind_refusal` therefore comes from `running`, and
 that is the point rather than an accident:
 
@@ -223,6 +234,13 @@ second one:
 - its own arm in the file-watcher match, so it is logged as a refusal and not
   as the broken-config-file alert that a parse failure raises.
 
+A typed error variant would be better than a string literal four consumers must
+agree on, and would let the admin API narrow its status. It is the same
+next-major job `reload_outcome`'s own comment already records for
+`Result<_, String>`, and doing it here would change that signature for every
+caller outside the crate. Following the existing constant is the smaller change;
+the typed version is a reason to do that job, not a reason to do it now.
+
 The message says three things, because each is something the operator would
 otherwise get wrong:
 
@@ -251,6 +269,13 @@ operator's stated intent and the error tells them immediately, including point 3
 above. Rejecting the write pre-emptively is a separate change and is out of
 scope here.
 
+A restart-only edit can still invite a bounce into the startup refusal by a
+different route: disabling `auth` in the file is reported as restart-required
+and applied to disk, and the restart then refuses to serve. The running gateway
+never enters the forbidden state, so it is outside this decision's FOR, and the
+fix belongs with the reload's restart-required reporting rather than here.
+Raised in review, labelled, and left for that work.
+
 `reload_outcome`'s error reaches the admin API as a 500. It is a policy refusal
 rather than an internal fault, so the status is generous; the text is what the
 operator reads, and narrowing the status means giving `Err(String)` a shape it
@@ -264,9 +289,24 @@ does not have. Stated rather than fixed.
 | Enabling `auth` in the same edit does not mask it | same file, plus `auth.enabled = true` and tightened `public_paths` — still refused, because the running auth is what is in force | unit | security |
 | Setting the override in the same edit does not mask it either | same file, plus `allow_unauthenticated_network_bind = true` — still refused | unit | security |
 | Refused means nothing was applied | a backend added in the same file is absent from the registry, and the live snapshot still has no `public_url` | unit | security |
-| A reload that does not enter the state is unaffected | the same file with tool paths not public applies normally | unit | regression |
+| A reload that does not enter the state is unaffected | a RUNNING config whose tool paths are already not public, plus the same new `public_url` — applies normally | unit | regression |
+| The refusal is logged as a refusal | the file watcher takes its own arm, not the broken-config-file arm a parse failure raises | unit | regression |
+| Every refusal input comes from the side it should | `auth`, the override and `host` read from `running`; `public_url` from the file | unit | security |
+| `auth` is not applied by a reload | a reload toggling `auth.enabled` in a file that does not refuse leaves request-time authentication governed by the startup snapshot | integration | security |
 
 The second and third cases are the ones that fail against the first draft; they
 are the design review's finding turned into a test. The first case asserts the
 message content and not merely the error's identity, so reducing the message to
 a bare label fails it.
+
+The regression case takes its non-public tool paths from the RUNNING config
+rather than the file, because taking them from the file is the very mistake the
+overlay exists to prevent — a test written the other way would pass by treating
+a restart-only auth edit as live.
+
+The last row is the load-bearing one, and it is not obvious. The overlay is only
+safe while a reload does not apply `auth`; that is verified at source today and
+nothing enforces it. If it ever changes, the inverse hole opens — disabling auth
+and setting a `public_url` in one edit would slip through — and every other row
+here stays green, because they all read `auth` from `running` and would keep
+agreeing with themselves. This row is what fails on that day.
