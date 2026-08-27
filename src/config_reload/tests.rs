@@ -1580,7 +1580,7 @@ async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
     // operator to undo the fix they just wrote correctly is the worse failure,
     // and the deployment guide tells them to do exactly this and restart.
     assert!(
-        err.contains("A restart applies this file"),
+        err.contains("A restart accepts this file"),
         "an operator who wrote the fix correctly was told to revert it: {err}"
     );
     assert!(
@@ -1622,7 +1622,71 @@ async fn tightening_public_paths_in_the_same_edit_does_not_mask_it() {
     assert!(err.starts_with(POSTURE_REFUSED_PREFIX), "{err}");
     // AND: a restart on this file is right, so it must not say revert.
     assert!(
-        err.contains("A restart applies this file"),
+        err.contains("A restart accepts this file"),
         "the correct fix was reported as one to revert: {err}"
+    );
+}
+
+/// Every refusal reads as a sentence.
+///
+/// A Rust string literal wrapped across lines WITHOUT a trailing `\` keeps the
+/// indentation of the continuation line, so the message reaches an operator
+/// with runs of spaces in it. The other cases here assert substrings that
+/// happen to fall inside one line, so all of them passed while both branches of
+/// the restart advice were mangled. This one reads the whole message.
+#[tokio::test]
+async fn a_refusal_reads_as_a_sentence_on_both_branches() {
+    // Two files, one per branch of the restart advice: the first refuses at the
+    // next start too, the second is accepted by one.
+    for file in [
+        "server:\n  public_url: \"https://gw.example.com\"\n",
+        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        std::fs::write(&path, file).unwrap();
+        let ctx = posture_context(&path, clean_running());
+
+        let err = ctx
+            .reload_outcome()
+            .await
+            .expect_err("the reload was applied");
+
+        assert!(
+            !err.contains("  "),
+            "the refusal carries a run of spaces, so a literal lost its line \
+             continuation: {err}"
+        );
+        assert!(
+            err.trim_end().ends_with('.'),
+            "the refusal does not end as a sentence: {err}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_override_is_reported_as_a_file_a_restart_accepts() {
+    // The escape hatch is honoured at STARTUP, so a file that sets it is
+    // accepted by a restart even though the reload cannot apply it. Telling
+    // that operator to revert would be wrong, and this is the case where the
+    // two branches of the advice are easiest to get backwards: the file leaves
+    // the tools open on purpose, which reads like the revert case.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\n  allow_unauthenticated_network_bind: true\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the reload was applied");
+    assert!(
+        err.contains("A restart accepts this file"),
+        "a file the escape hatch makes startup-legal was reported as one to \
+         revert: {err}"
     );
 }

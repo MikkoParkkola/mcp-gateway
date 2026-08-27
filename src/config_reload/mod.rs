@@ -1377,9 +1377,17 @@ impl ReloadContext {
             // is right on a restart and only wrong to apply live; a file that
             // just declares the name refuses at the next start, planned or not.
             let restart = if refusal.restart_would_also_refuse {
-                "This configuration is on disk, so the next start — including an                  unplanned one — will refuse to serve. Revert it, or close the                  tool paths."
+                "This configuration is on disk, so the next start, including an \
+                 unplanned one, will refuse to serve. Revert it, or close the \
+                 tool paths."
             } else {
-                "A restart applies this file whole, including the parts a reload                  cannot, and starting on it is safe."
+                // "accepts", not "is safe". The one file that reaches this
+                // branch while still leaving the tools open is the one that
+                // sets the escape hatch, and calling that safe would have the
+                // gateway endorse a choice the operator made deliberately and
+                // owns.
+                "A restart accepts this file whole, including the parts a reload \
+                 cannot apply."
             };
             return Err(format!(
                 "{POSTURE_REFUSED_PREFIX} {} Nothing was applied, backends in the \
