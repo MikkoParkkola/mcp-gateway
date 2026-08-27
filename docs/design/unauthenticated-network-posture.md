@@ -131,7 +131,9 @@ Neither addresses adversary 3. Nothing at this layer can.
 ## Decision C — a reload that would open the tools is refused, not applied
 
 Added 2026-08-27, after Decision A shipped. It closes the gap Decision A left
-open and that `support.rs` recorded rather than guessed at.
+open and that `support.rs` recorded rather than guessed at. Revised once, after
+a design review found the first draft's condition unsound; that round is kept
+below because the unsound version is the obvious one to reach for.
 
 ### SCOPE
 
@@ -155,33 +157,83 @@ restart-required, because the origin gate re-reads it per request
 `public_url` to a RUNNING gateway whose tool paths are public reaches exactly
 the state startup refuses, without passing through the check.
 
-### The decision
+### The condition — the config that will be IN FORCE, not the file
 
-A reload is **refused** — not merely reported — when the running config would
-not have been refused at startup and the new one would. The gateway keeps
-serving the old config: no dropped connections, nothing changing underneath the
-operator, and the file on disk is left alone.
+The refusal is evaluated against an **effective** config: what the process is
+running, with only the live-applied fields overlaid from the new file. Today
+that overlay is `server.public_url` and nothing else.
 
-The result says so at the moment they asked, with `restart_required: true`, a
-stable reason, and the full refusal text, which already carries the remedy. Not
-a prompt: a reload is a file change or a signal and there is nobody to prompt.
+    effective = running.clone()
+    effective.server.public_url = new.server.public_url
 
-Reported as restart-required rather than as an error because that is what it is
-— the change is not lost, it is unapplied — and because restarting is what
-surfaces the startup refusal with its remedy. The message says the restart will
-refuse to serve, so it is not an invitation into a dead gateway.
+Every other input to `network_bind_refusal` therefore comes from `running`, and
+that is the point rather than an accident:
 
-### Why a transition, and not "is the new config refusable"
+| Input | Taken from | Why |
+|---|---|---|
+| `server.public_url` | the new file | the origin gate re-reads it per request |
+| `auth.enabled`, `auth.public_paths` | `running` | the router snapshots `auth_config` at construction; `src/config_reload/` never touches it |
+| `server.allow_unauthenticated_network_bind` | `running` | restart-only, like the rest of `server` |
+| `server.host` | `running` | the listener is bound; a host edit is restart-required |
 
-Keyed on `refusal(running).is_none() && refusal(new).is_some()`, using
-`LiveConfig::running()` — the same snapshot the startup check ran against.
+Testing the new file as a whole is the version this design first proposed, and
+two reviewers independently killed it as CRITICAL. The hole: an operator who
+adds a `public_url` **and** enables authentication in the same edit — which is
+the remediation this project recommends everywhere — produces a file that reads
+as safe. The refusal sees `auth.enabled = true`, declines to fire, the reload
+publishes, the origin gate admits the new host on the next request, and the
+running auth state is still the old permissive one. The masking works with
+`allow_unauthenticated_network_bind` too, and with any restart-only input the
+function grows later.
 
-An unconditional test of the new config would refuse every reload for any
-gateway already running in a refusable state. Today that is unreachable on the
-HTTP path, since startup refused it. It is reachable off that path: `run_stdio`
-has no listener and never runs the check, and the file watcher is started from
-`Gateway::run` only today. Keying on the transition stays correct if a stdio
-reload path is ever added, and costs one comparison.
+Overlaying the live fields onto the running config removes the class rather than
+the instance: a field that is not applied cannot influence a decision about what
+is in force, because it never enters the config being judged.
+
+### Refuse only what this reload would cause
+
+Keyed on `refusal(running).is_none() && refusal(effective).is_some()`.
+
+An unconditional test of `effective` would refuse every reload for a gateway
+already running in a refusable state. That is unreachable on the HTTP path,
+since startup refused it. It is reachable off that path: `run_stdio` has no
+listener, never runs the check, and wires no reload context today — verified,
+not assumed. Keying on the transition stays correct if a stdio reload path is
+ever added, and costs one comparison.
+
+### The reload fails, and says why
+
+The reload returns an **error**, not a successful outcome carrying a flag.
+
+The first draft reported `restart_required: true` on the theory that the change
+was unapplied rather than lost. Three reviewers rejected it for the same reason,
+and they are right: `restart_required` is the signal that says *bounce me*, and
+an operator or a supervisor that acts on it restarts a working gateway into
+Decision A's startup refusal. A control against opening the tools must not have
+a path to taking the gateway down instead.
+
+An error is also what actually happened. `reload_outcome` already returns `Err`
+for the one other case where a reload did not happen —
+`SHUTDOWN_ABORTED_ERROR` — and this follows that shape rather than inventing a
+second one:
+
+- one shared constant for the message, so the file watcher, the meta-tool, the
+  admin API and the test all key on the same literal and a later edit cannot
+  split them;
+- its own arm in the file-watcher match, so it is logged as a refusal and not
+  as the broken-config-file alert that a parse failure raises.
+
+The message says three things, because each is something the operator would
+otherwise get wrong:
+
+1. the whole patch was skipped, backends in the same file included, so nobody
+   assumes a bundled backend registered;
+2. the running gateway is unchanged and still serving the old config;
+3. the file on disk is unchanged too, so the **next** start — including an
+   unplanned one — will refuse to serve. Revert it or close the tool paths.
+
+It carries the `network_bind_refusal` text as well, which already names the
+condition and the remedy.
 
 ### Why not just report it
 
@@ -193,20 +245,28 @@ them. The refusal has to happen before the publish, which is also before
 
 ### Accepted residual
 
-An admin-UI edit writes the file first and reloads second, so a config that
-would refuse at startup can be persisted and then reported unapplied. The write
-is the operator's stated intent and the reload result tells them immediately;
-rejecting the write is a separate change and is out of scope here.
+The admin UI writes the file before it reloads, so a config that would refuse at
+startup can be persisted and then reported as refused. The write is the
+operator's stated intent and the error tells them immediately, including point 3
+above. Rejecting the write pre-emptively is a separate change and is out of
+scope here.
+
+`reload_outcome`'s error reaches the admin API as a 500. It is a policy refusal
+rather than an internal fault, so the status is generous; the text is what the
+operator reads, and narrowing the status means giving `Err(String)` a shape it
+does not have. Stated rather than fixed.
 
 ### Test plan
 
 | AC | Case | Level | Type |
 |----|------|-------|------|
-| A reload adding a published `public_url` over public tool paths is refused | `restart_reason` is the new constant, not the generic pending-fields one | unit | security |
-| Refused means not applied | a backend added in the same file is absent from the registry, and the live snapshot still has no `public_url` | unit | security |
+| A reload adding a published `public_url` over public tool paths is refused | `Err` whose text is the shared constant, and which carries the refusal remedy and the next-start warning | unit | security |
+| Enabling `auth` in the same edit does not mask it | same file, plus `auth.enabled = true` and tightened `public_paths` — still refused, because the running auth is what is in force | unit | security |
+| Setting the override in the same edit does not mask it either | same file, plus `allow_unauthenticated_network_bind = true` — still refused | unit | security |
+| Refused means nothing was applied | a backend added in the same file is absent from the registry, and the live snapshot still has no `public_url` | unit | security |
 | A reload that does not enter the state is unaffected | the same file with tool paths not public applies normally | unit | regression |
 
-The first case needs its own reason constant to be able to fail: the fixture
-edits `auth`, a tracked section, so `with_pending_restart` already sets
-`restart_required: true` on the un-guarded code. Asserting the boolean alone
-would pass without the guard.
+The second and third cases are the ones that fail against the first draft; they
+are the design review's finding turned into a test. The first case asserts the
+message content and not merely the error's identity, so reducing the message to
+a bare label fails it.
