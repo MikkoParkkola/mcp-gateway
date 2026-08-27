@@ -2219,3 +2219,82 @@ async fn a_numeric_origin_must_match_the_request_authority() {
         "the gateway's own page must still work"
     );
 }
+
+/// The admin gate covers the tools with global effect, and only those.
+///
+/// Both halves matter. Gating too little leaves a shared control open to any
+/// caller; gating too much breaks a legitimate workflow while stopping nothing,
+/// which is what happened to `gateway_set_profile`: it was announced as
+/// admin-only in the changelog, was never tested, and was bypassable anyway
+/// because `handle_initialize` binds a caller-supplied profile through the
+/// identical call with no credential.
+#[test]
+fn admin_gate_covers_global_tools_and_not_session_local_ones() {
+    for global in [
+        "gateway_kill_server",
+        "gateway_revive_server",
+        "gateway_reload_config",
+        "gateway_reload_capabilities",
+    ] {
+        assert!(
+            super::authorization::is_admin_meta_tool(global),
+            "{global} changes the gateway for every session and must need a credential"
+        );
+    }
+
+    for session_local in ["gateway_set_profile", "gateway_set_state"] {
+        assert!(
+            !super::authorization::is_admin_meta_tool(session_local),
+            "{session_local} writes only the caller's own session and cannot widen \
+             what that caller reaches, so gating it blocks the documented path \
+             while leaving the equivalent one at initialize open"
+        );
+    }
+}
+
+/// A non-admin caller can switch its own routing profile.
+///
+/// The regression guard for the half above that is easy to re-break: someone
+/// reading `set_profile` as "administrative" and adding it back to the gate.
+#[tokio::test]
+async fn non_admin_may_set_its_own_routing_profile() {
+    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .header("mcp-session-id", "sess-profile")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_set_profile",
+                    "arguments": { "profile": "does-not-exist" }
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    // The profile name is deliberately unknown: the assertion is about the
+    // GATE, not about profile resolution. A refusal for lacking admin is what
+    // must not happen; being told the profile is unknown means the call got
+    // past the gate and reached the tool.
+    assert_ne!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a non-admin must not be refused its own session's routing profile"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let message = json["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        !message.contains("admin access"),
+        "and must not be told it needs admin: {message}"
+    );
+}

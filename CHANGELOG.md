@@ -35,8 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING: server management requires a credential.** With `auth.enabled =
   false`, `gateway_kill_server`, `gateway_revive_server`,
-  `gateway_set_profile`, `gateway_set_state`, `gateway_reload_config` and
-  `gateway_reload_capabilities` are unavailable. `/dashboard` and the
+  `gateway_reload_config` and `gateway_reload_capabilities` are unavailable.
+  Those four change the gateway for every session. `gateway_set_profile` and
+  `gateway_set_state` are NOT gated: each writes only the caller's own session
+  and cannot widen what that caller reaches, and gating the first stopped
+  nothing anyway, since a profile can be chosen at `initialize` through the
+  same call with no credential. `/dashboard` and the
   management endpoints under `/ui/api/` return `403`; `/ui/api/status` returns
   counts without backend names. Ordinary tool invocation is unchanged, so local
   MCP clients are unaffected.

@@ -76,13 +76,36 @@ pub(super) fn backend_tool_targets_for_call(
     }
 }
 
+/// Meta-tools that change the gateway for everyone, and so require a credential.
+///
+/// The test is global effect, not "sounds administrative". Killing or reviving a
+/// backend flips a shared kill switch; reloading config or capabilities replaces
+/// state every session reads. Those four are gated.
+///
+/// `gateway_set_profile` and `gateway_set_state` were gated here and should not
+/// have been. Both write only the caller's own session — `set_profile` calls
+/// `session_profiles.set_profile(sid, ..)` and `set_state` calls
+/// `session_state.set_state(sid, ..)` — and neither can widen what that caller
+/// reaches, because the per-client backend and tool scope checks and the global
+/// tool policy are evaluated independently at dispatch.
+///
+/// Gating them was worse than useless. `handle_initialize` binds a
+/// caller-supplied profile to the session through the very same call, with no
+/// credential, so the gate on `gateway_set_profile` stopped nothing: a caller
+/// who wanted a different profile asked for it at connect time instead. What
+/// the gate did achieve was breaking a non-admin client that switched its own
+/// profile through the documented tool. A control that blocks the legitimate
+/// path and leaves the equivalent one open is not a control.
+///
+/// The alternative — gating profile selection at initialize as well — was
+/// rejected: it would refuse a client that legitimately picks its own routing
+/// at connect time, to prevent something that grants no access it did not
+/// already have.
 pub(super) fn is_admin_meta_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
         "gateway_kill_server"
             | "gateway_revive_server"
-            | "gateway_set_profile"
-            | "gateway_set_state"
             | "gateway_reload_config"
             | "gateway_reload_capabilities"
     )
