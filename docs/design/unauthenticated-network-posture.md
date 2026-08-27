@@ -311,6 +311,24 @@ whether a restart on the same file would refuse as well. The second is
 `network_bind_refusal(wanted)` — the startup question, asked of the file — and
 the message ends differently on each answer.
 
+### Stated limits of the test set
+
+Two coverage gaps are known and left, rather than closed badly.
+
+The watcher case asserts the CLASSIFICATION of a real refusal string, not the
+`ConfigWatcher` match arms themselves. It catches the realistic mistake — an arm
+written `==` against a prefix, which never matches — and does not catch an arm
+deleted or ordered after the generic one. Running the arms means capturing log
+output, and no such harness exists here; a shared subscriber across parallel
+tests is a flake source. Revisit if a log-capture harness lands for other
+reasons.
+
+The live-field tripwire mutates `public_url`, `role_mapping` and `auth`, so it
+fails when one of those changes status. It cannot fail for a field in a section
+nothing has made live yet. `every_tracked_section_is_covered` already holds the
+exhaustive half — every section reaches the classifier — so what is uncovered is
+narrow: a field moved to live-applied in a section this case does not touch.
+
 ### Accepted residual
 
 The admin UI writes the file before it reloads, so a config that would refuse at

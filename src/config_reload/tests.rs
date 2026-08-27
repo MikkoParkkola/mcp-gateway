@@ -1588,3 +1588,41 @@ async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
         "a startup-safe file was reported as one to revert: {err}"
     );
 }
+
+#[tokio::test]
+async fn tightening_public_paths_in_the_same_edit_does_not_mask_it() {
+    // GIVEN: the shape `mcp-gateway init` writes, which is what a default
+    // install runs: authentication ON, and `/mcp` public so the MCP client that
+    // was already configured keeps working. Tools are therefore invocable
+    // without a credential, on purpose, on loopback.
+    let mut running = Config::default();
+    running.auth.enabled = true;
+    running.auth.bearer_token = Some("secret".to_string());
+    running.auth.public_paths = vec!["/health".to_string(), "/mcp".to_string()];
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: one edit publishes the gateway by name AND closes `/mcp` — both
+    // halves of the correct fix, written together
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, running);
+
+    // THEN: refused, because the tightening is not in force. This is the case
+    // an overlay that took `auth.enabled` from the running config but
+    // `public_paths` from the file would let through: both halves must come
+    // from the same side, and that side is what is running.
+    let err = ctx.reload_outcome().await.expect_err(
+        "the file's tightened public_paths masked the exposure, while the request \
+         path still has /mcp open",
+    );
+    assert!(err.starts_with(POSTURE_REFUSED_PREFIX), "{err}");
+    // AND: a restart on this file is right, so it must not say revert.
+    assert!(
+        err.contains("A restart applies this file"),
+        "the correct fix was reported as one to revert: {err}"
+    );
+}
