@@ -31,6 +31,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     no-CORS GET, which the Fetch standard omits `Origin` from.
   - The identity used when authentication is disabled no longer carries admin.
 
+- **A playbook step now faces the caller's own permissions.** Found while
+  reviewing the fix above, and pre-existing rather than introduced by it. The
+  per-caller checks — backend scope, tool allow-list, global tool policy,
+  certificate policy and agent scope — ran at the HTTP router, which inspects
+  the incoming request. A playbook's steps come from the stored playbook, so
+  their targets never appeared in that request and the router had nothing to
+  check: a restricted client could reach a backend through a playbook that it
+  could not reach directly.
+
+  The check moved to the single point every backend invocation passes through,
+  ahead of every side effect, so a refused call reads no cached result, consumes
+  no replay nonce, mints no credential and charges no budget. Code-mode steps
+  and surfaced tools pass the same check.
+
+  Operator-visible consequences:
+
+  - A client with `backends` or `allowed_tools` set may now see a playbook step
+    refused that previously ran. That is the fix working; widen the client's
+    scope if the access was intended.
+  - A refused call answers HTTP `403` rather than `200` with the refusal in the
+    body.
+  - Under `on_error: continue`, a refused step is recorded in a new
+    `step_errors` field on the playbook result, keyed by step name, alongside
+    the existing `steps_failed`. A run that fails nothing omits the field
+    entirely, so successful output is unchanged. A refusal is never retried,
+    since retrying a permission denial cannot change the answer.
+  - `PlaybookResult` gained that field and is now `#[non_exhaustive]`. Code
+    constructing it with a struct literal must change; code reading it need not.
+
+  Standing limitation, unchanged: a process running under the same user account
+  is not constrained by any of this.
+
+- **stdio gained the tool-policy check it never had.** The stdio transport
+  applied the global tool policy to `gateway_invoke` alone, so a playbook or
+  code-mode step reached a backend with no policy check. Every dispatch shape
+  now passes the same check. Certificate policy is deliberately not applied
+  there: stdio presents no certificate, so evaluating it would refuse every
+  call once any certificate rule existed.
+
 ### Changed
 
 - **BREAKING: server management requires a credential.** With `auth.enabled =
