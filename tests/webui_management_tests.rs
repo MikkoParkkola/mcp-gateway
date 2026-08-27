@@ -1632,6 +1632,11 @@ async fn the_dashboard_bootstrap_link_opens_the_dashboard() {
     let req = Request::builder()
         .method(Method::GET)
         .uri(format!("/dashboard?bootstrap={bootstrap}"))
+        // A real browser always sends Host, and the link is printed for the
+        // machine running the gateway. Redemption is restricted to a loopback
+        // Host so a declared public_url cannot make the printed value usable
+        // from elsewhere; omitting the header made this case unfaithful.
+        .header("host", "127.0.0.1:39400")
         .body(Body::empty())
         .unwrap();
     let response = router.clone().oneshot(req).await.unwrap();
@@ -1786,5 +1791,49 @@ async fn a_credential_presented_on_a_public_path_still_counts() {
     assert!(
         body["backends"].get("count").is_none(),
         "an admin credential must still grant the admin view, got the redacted one: {body}"
+    );
+}
+
+/// The printed dashboard link works only from the machine running the gateway.
+///
+/// The value is printed to the operator's terminal on the assumption that
+/// seeing it means being at the machine. Declaring a `public_url` breaks that:
+/// the origin gate then admits the published hostname by design, so anyone who
+/// obtains the printed value — shipped logs, shared scrollback, a screenshot —
+/// could exchange it for an admin session from anywhere. Printing was already
+/// gated on a loopback bind; redemption was not.
+#[tokio::test]
+async fn a_bootstrap_link_is_not_redeemable_through_a_published_host() {
+    let auth = AuthConfig {
+        enabled: true,
+        bearer_token: Some("admin-token".to_string()),
+        ..AuthConfig::default()
+    };
+    let state = make_app_state_with_auth_config(&auth);
+    let bootstrap = state
+        .dashboard_bootstrap
+        .peek()
+        .expect("a bootstrap value is issued at startup");
+    let router = create_router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/dashboard?bootstrap={bootstrap}"))
+        .header("host", "gw.example.com")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+
+    // Refused, and which layer refuses depends on the configuration. With no
+    // `public_url` declared, as here, the origin gate rejects the unknown Host
+    // first and answers 403. With one declared the gate admits that hostname by
+    // design, and the loopback restriction on redemption is what refuses,
+    // answering 401. Asserting "refused" rather than one code keeps the case
+    // honest about which control is doing the work.
+    assert!(
+        response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN,
+        "a published Host must not mint an admin session from the printed \
+         link, got {}",
+        response.status()
     );
 }

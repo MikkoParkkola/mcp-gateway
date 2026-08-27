@@ -452,10 +452,22 @@ mod tests {
 /// binding a listener and a test can assert the decision without starting a
 /// server. `None` means the configuration may serve.
 ///
-/// A once-at-startup check is sufficient because neither half of the forbidden
-/// state can be reached later: `server.host` is restart-required
-/// (`config_reload::ConfigPatch::server_changed`), and the running auth state is
+/// A once-at-startup check WAS sufficient when the only inputs were
+/// `server.host`, which is restart-required
+/// (`config_reload::ConfigPatch::server_changed`), and the auth state, which is
 /// snapshotted into the router at construction and never replaced by a reload.
+///
+/// It is no longer sufficient, and this comment used to claim otherwise.
+/// `server.public_url` is deliberately hot-reloadable — the origin gate re-reads
+/// it per request so a reload takes effect at once — so adding a non-loopback
+/// `public_url` to a running gateway reaches the state this refusal exists to
+/// prevent, without passing through it. Startup is the only place it currently
+/// fires.
+///
+/// KNOWN GAP, not a subtlety: closing it means re-evaluating this on reload and
+/// deciding what a running server does when the answer turns to refuse — reject
+/// the patch, or stop serving. That is a design decision about reload semantics
+/// rather than a line to add here, so it is recorded rather than guessed at.
 #[must_use]
 pub fn network_bind_refusal(config: &Config) -> Option<String> {
     if config.server.allow_unauthenticated_network_bind {
@@ -514,9 +526,16 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
         || format!("the bind address {}", config.server.host),
         |h| format!("the declared public_url host {h}"),
     );
-    let remedy = if declared_public_host.is_some() {
+    let remedy = if declared_public_host.is_some() && config.auth.enabled {
         "Remove the tool paths from auth.public_paths: a gateway published by \
          name is reached by more than the client on this machine."
+    } else if declared_public_host.is_some() {
+        // With auth off, clearing public_paths changes nothing — every path is
+        // open. Saying otherwise sends the operator to make an edit that leaves
+        // them refused, with no idea why.
+        "Set auth.enabled = true with a bearer token and keep auth.public_paths \
+         to /health: with authentication off, every path is open regardless of \
+         that list."
     } else if config.auth.enabled {
         "Remove the tool paths from auth.public_paths, or bind 127.0.0.1."
     } else {

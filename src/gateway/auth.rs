@@ -588,6 +588,31 @@ fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option
     }
     let candidate = request.uri().query().and_then(bootstrap_param)?;
     {
+        // Redeemable only from this machine, whatever the origin gate admits.
+        //
+        // The value is printed to the operator's own terminal on the assumption
+        // that seeing it means being at the machine. That assumption breaks the
+        // moment a `public_url` is declared: the origin gate then admits that
+        // hostname by design, so anyone who obtains the printed value — shipped
+        // logs, shared scrollback, a screenshot — can exchange it for an admin
+        // session from anywhere. Printing is already gated on a loopback bind;
+        // the exchange was not, which left the weaker half deciding.
+        //
+        // A `Host` naming the published address is exactly the case to refuse
+        // here, so this deliberately does NOT consult the origin allow-list.
+        let host_is_local = request
+            .headers()
+            .get(axum::http::header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .map(|h| h.rsplit_once(':').map_or(h, |(host, _)| host))
+            .is_some_and(|h| crate::gateway::router::is_loopback_bind(h.trim_matches(['[', ']'])));
+        if !host_is_local {
+            warn!("Dashboard bootstrap refused: redeemable only from this machine");
+            return Some(bearer_unauthorized_response(
+                "The dashboard link works only from the machine running the gateway.",
+            ));
+        }
+
         // Checked BEFORE the value is spent. The bootstrap is one-time, so
         // consuming it and then discovering there is no credential to exchange
         // it for leaves the operator holding a dead link with no way to retry
