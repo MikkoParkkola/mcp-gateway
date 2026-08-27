@@ -33,9 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - `Origin`, `Host`, the HTTP/2 `:authority` and `Sec-Fetch-Site` are checked
     ahead of authentication, so a cross-site request is refused before an
-    identity is assigned. A request without `Origin` is still accepted, since
-    non-browser MCP clients do not send one. `Sec-Fetch-Site` covers the
-    no-CORS GET, which the Fetch standard omits `Origin` from.
+    identity is assigned. A request without `Origin` is not refused on that
+    ground, since non-browser MCP clients do not send one — but the `Host`
+    check applies to every request regardless, so a client that reaches the
+    gateway by a name it does not answer to is refused whether or not it is a
+    browser. `Sec-Fetch-Site` covers the no-CORS GET, which the Fetch standard
+    omits `Origin` from.
   - The identity used when authentication is disabled no longer carries admin.
 
 ### Changed
@@ -48,9 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and cannot widen what that caller reaches, and gating the first stopped
   nothing anyway, since a profile can be chosen at `initialize` through the
   same call with no credential. `/dashboard` and the
-  management endpoints under `/ui/api/` return `403`; `/ui/api/status` returns
-  counts without backend names. Ordinary tool invocation is unchanged, so local
-  MCP clients are unaffected.
+  management endpoints under `/ui/api/` return `403`, including
+  `/ui/api/costs`, which reports spend across every key and session and was
+  previously open. `/ui/api/status` returns counts without backend names, and
+  `/health` returns a backend count and overall health rather than names.
+  Ordinary tool invocation is unchanged, so local MCP clients are unaffected.
 
   Set `auth.enabled = true` with a bearer token to restore them; that token
   carries admin. The startup log states this. Without a credential the gateway

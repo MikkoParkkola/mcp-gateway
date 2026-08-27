@@ -439,11 +439,16 @@ which is re-read on every request so a config reload takes effect at once. A
 page served from `http://localhost:3000` is refused: being local does not make
 it trusted.
 
-There is deliberately no setting for allowing extra browser origins. A
-cross-origin browser client also needs CORS preflight responses, which this
-gateway does not serve, so such a setting would name origins that still could
-not call it. Serve the page from the gateway's own origin, or use a non-browser
-client.
+There is deliberately no setting for allowing extra browser origins, and the
+reason is not the one it looks like. It is tempting to say such a setting would
+be inert because the gateway serves no CORS preflight responses — that is
+wrong. A form POST is a simple request and skips the preflight entirely, which
+is the very shape the origin check exists to refuse. An extra-origin setting
+would therefore be a real grant: every page on that origin could drive the
+gateway with whatever credentials it holds, and one cross-site scripting flaw
+on that origin would inherit them.
+
+Serve the page from the gateway's own origin, or use a non-browser client.
 
 When the bind is not loopback and no `public_url` is set, a `Host` naming a
 domain is refused and a numeric address is accepted. Such a gateway answers at
