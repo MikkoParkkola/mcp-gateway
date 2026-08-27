@@ -234,9 +234,10 @@ for the one other case where a reload did not happen —
 `SHUTDOWN_ABORTED_ERROR` — and this follows that shape rather than inventing a
 second one:
 
-- one shared constant as a stable **prefix**, matched with `starts_with`, so the
-  file watcher, the meta-tool, the admin API and the test all key on the same
-  literal while the refusal's own text rides behind it. `SHUTDOWN_ABORTED_ERROR`
+- one shared constant as a stable **prefix**, matched through a single
+  predicate, with the refusal's own text riding behind it. The file watcher is
+  the only consumer that classifies today; the meta-tool and the admin API
+  forward the message whole, so it reaches an operator either way. `SHUTDOWN_ABORTED_ERROR`
   is compared whole because it carries nothing dynamic; this one cannot be, and
   saying "the same shape" without saying which produces an arm that never
   matches;

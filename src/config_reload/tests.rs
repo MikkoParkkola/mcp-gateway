@@ -1240,7 +1240,7 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
 
     // THEN: it is refused, under the shared literal every consumer keys on
     assert!(
-        err.starts_with(POSTURE_REFUSED_ERROR),
+        err.starts_with(POSTURE_REFUSED_PREFIX),
         "refusal did not carry the shared prefix: {err}"
     );
     // AND: the message carries the remedy, not merely a label
@@ -1286,7 +1286,7 @@ async fn enabling_auth_in_the_same_edit_does_not_mask_the_exposure() {
         "a reload was applied because the FILE enabled auth, while the running \
          gateway's auth is unchanged — the exposure this refusal exists to stop",
     );
-    assert!(err.starts_with(POSTURE_REFUSED_ERROR), "{err}");
+    assert!(err.starts_with(POSTURE_REFUSED_PREFIX), "{err}");
 }
 
 #[tokio::test]
@@ -1308,7 +1308,7 @@ async fn setting_the_override_in_the_same_edit_does_not_mask_it_either() {
         .reload_outcome()
         .await
         .expect_err("the file's override silenced a refusal it cannot silence until a restart");
-    assert!(err.starts_with(POSTURE_REFUSED_ERROR), "{err}");
+    assert!(err.starts_with(POSTURE_REFUSED_PREFIX), "{err}");
 }
 
 #[tokio::test]
@@ -1418,7 +1418,7 @@ async fn a_published_but_not_running_auth_value_does_not_mask_it_either() {
         "the second reload was applied because the published snapshot said auth \
          was on, while the request path is still running without it",
     );
-    assert!(err.starts_with(POSTURE_REFUSED_ERROR), "{err}");
+    assert!(err.starts_with(POSTURE_REFUSED_PREFIX), "{err}");
 }
 
 /// The overlay names the live fields by hand, because `pending_restart_fields`
@@ -1460,7 +1460,7 @@ fn the_live_field_allow_list_has_not_grown() {
 ///
 /// Asserted against the string a refused reload really produces, rather than
 /// against the constant. That is the whole point: the constant is a PREFIX with
-/// the refusal text behind it, so an arm written `e == POSTURE_REFUSED_ERROR` —
+/// the refusal text behind it, so an arm written `e == POSTURE_REFUSED_PREFIX` —
 /// the shape the neighbouring `SHUTDOWN_ABORTED_ERROR` arm uses — never matches
 /// and falls through to the parse-failure arm. This test fails on that mistake.
 #[tokio::test]

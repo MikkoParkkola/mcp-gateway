@@ -101,16 +101,16 @@ const SHUTDOWN_ABORTED_ERROR: &str = "config reload aborted: the gateway is shut
 /// carries the remedy, and rides behind this. An arm written `==` would never
 /// match, and the refusal would be logged as a broken config file — sending the
 /// operator to hunt YAML instead of reverting the `public_url`.
-pub const POSTURE_REFUSED_ERROR: &str = "config reload refused, the running gateway is unchanged:";
+const POSTURE_REFUSED_PREFIX: &str = "config reload refused, the running gateway is unchanged:";
 
-/// `true` when `error` is the refusal [`POSTURE_REFUSED_ERROR`] describes.
+/// `true` when `error` is the refusal [`POSTURE_REFUSED_PREFIX`] describes.
 ///
-/// One predicate rather than a `starts_with` at each consumer, so the file
-/// watcher, the meta-tool and the admin API cannot drift apart on how they
-/// recognise it.
-#[must_use]
-pub fn is_posture_refusal(error: &str) -> bool {
-    error.starts_with(POSTURE_REFUSED_ERROR)
+/// One predicate rather than a bare `starts_with`, so the day a second consumer
+/// needs to tell this apart there is one place that decides. The file watcher is
+/// the only one today; the meta-tool and the admin API forward the message
+/// whole, and it carries the prefix.
+fn is_posture_refusal(error: &str) -> bool {
+    error.starts_with(POSTURE_REFUSED_PREFIX)
 }
 
 /// Structured reload outcome for callers that need more than a log line.
@@ -1373,7 +1373,7 @@ impl ReloadContext {
             crate::gateway::reload_posture_refusal(self.live_config.running(), &new_config)
         {
             return Err(format!(
-                "{POSTURE_REFUSED_ERROR} {reason} Nothing was applied, backends in \
+                "{POSTURE_REFUSED_PREFIX} {reason} Nothing was applied, backends in \
                  the same file included, and the gateway is still serving the \
                  configuration it started with. This configuration is on disk, so \
                  the next start will refuse to serve: revert it, or close the tool \
