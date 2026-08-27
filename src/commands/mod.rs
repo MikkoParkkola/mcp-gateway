@@ -290,6 +290,15 @@ fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samp
         println!("Created zero-key sample capabilities under ./capabilities/");
     }
     println!();
+    // The credential is generated and written silently otherwise, and it is the
+    // one thing in this file the operator has to know exists: management and the
+    // dashboard need it, tool calls do not. Saying so here reaches the person
+    // who never opens the docs.
+    println!("An admin credential was generated and written into that file,");
+    println!("which is readable only by you. Tool calls do not need it; managing");
+    println!("the gateway and opening the dashboard do. `serve` prints a");
+    println!("single-use dashboard link on startup.");
+    println!();
     println!("Next steps:");
     println!("  1. Run diagnostics:");
     println!("     mcp-gateway doctor -c {}", output.display());
