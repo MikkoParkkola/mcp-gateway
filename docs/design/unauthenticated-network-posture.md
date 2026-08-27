@@ -173,6 +173,12 @@ module boundary, and the failure is silent: the overlay would simply judge the
 wrong config. Co-locating them makes the next person to add a refusal input read
 the overlay in the same screen.
 
+The overlay list is not derived from `pending_restart_fields`, which returns
+field names and offers no way to apply them. A test pins that allow-list to its
+exact contents instead, so making a new field live fails a test whose message
+sends the reader here. That is a tripwire rather than a derivation, and it is
+named as one: it catches the addition, not a wrong overlay.
+
 It runs **after the file is loaded and before `apply_patch`**. Before, and there
 is no file to judge; after, and backends in the same file have already been
 stopped and started, so "nothing was applied" would be false.
@@ -228,9 +234,12 @@ for the one other case where a reload did not happen —
 `SHUTDOWN_ABORTED_ERROR` — and this follows that shape rather than inventing a
 second one:
 
-- one shared constant for the message, so the file watcher, the meta-tool, the
-  admin API and the test all key on the same literal and a later edit cannot
-  split them;
+- one shared constant as a stable **prefix**, matched with `starts_with`, so the
+  file watcher, the meta-tool, the admin API and the test all key on the same
+  literal while the refusal's own text rides behind it. `SHUTDOWN_ABORTED_ERROR`
+  is compared whole because it carries nothing dynamic; this one cannot be, and
+  saying "the same shape" without saying which produces an arm that never
+  matches;
 - its own arm in the file-watcher match, so it is logged as a refusal and not
   as the broken-config-file alert that a parse failure raises.
 
@@ -247,8 +256,14 @@ otherwise get wrong:
 1. the whole patch was skipped, backends in the same file included, so nobody
    assumes a bundled backend registered;
 2. the running gateway is unchanged and still serving the old config;
-3. the file on disk is unchanged too, so the **next** start — including an
+3. this configuration is **on disk**, so the next start — including an
    unplanned one — will refuse to serve. Revert it or close the tool paths.
+
+Point 3 is worded around the disk rather than around what changed, because the
+two entry points differ: the file watcher fires because the operator edited the
+file, while the admin UI writes the file itself before reloading. "The file is
+unchanged" is false on the second path and unhelpful on the first. What holds on
+both is that the refusing configuration is the one on disk.
 
 It carries the `network_bind_refusal` text as well, which already names the
 condition and the remedy.
@@ -293,6 +308,8 @@ does not have. Stated rather than fixed.
 | The refusal is logged as a refusal | the file watcher takes its own arm, not the broken-config-file arm a parse failure raises | unit | regression |
 | Every refusal input comes from the side it should | `auth`, the override and `host` read from `running`; `public_url` from the file | unit | security |
 | `auth` is not applied by a reload | a reload toggling `auth.enabled` in a file that does not refuse leaves request-time authentication governed by the startup snapshot | integration | security |
+| A published-but-not-running value cannot mask it either | two reloads: the first publishes `auth.enabled` with no `public_url`, the second adds one — still refused | unit | security |
+| The live-field allow-list has not grown | `pending_restart_fields`' allow-list is exactly `server.public_url` and `control_plane.role_mapping` | unit | regression |
 
 The second and third cases are the ones that fail against the first draft; they
 are the design review's finding turned into a test. The first case asserts the
@@ -304,7 +321,16 @@ rather than the file, because taking them from the file is the very mistake the
 overlay exists to prevent — a test written the other way would pass by treating
 a restart-only auth edit as live.
 
-The last row is the load-bearing one, and it is not obvious. The overlay is only
+The two-reload row is what separates `running()` from `get()`. Every other case
+starts on a fresh `LiveConfig`, where the two are equal, so an implementation
+that overlays onto the **published** snapshot passes all of them — and reopens
+the masking hole one reload later, in the exact sequence this project's own
+advice produces: enable authentication, be told it is restart-required, add the
+public URL. That second reload would read the published `auth.enabled = true`,
+decline to refuse, and open the origin gate over a request path still running
+the old auth.
+
+The `auth`-is-not-live row is the other load-bearing one, and it is not obvious. The overlay is only
 safe while a reload does not apply `auth`; that is verified at source today and
 nothing enforces it. If it ever changes, the inverse hole opens — disabling auth
 and setting a `public_url` in one edit would slip through — and every other row

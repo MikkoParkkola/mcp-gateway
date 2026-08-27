@@ -1187,3 +1187,187 @@ fn test_reload_context(config_path: &std::path::Path) -> ReloadContext {
         Duration::from_secs(60),
     )
 }
+
+// -------------------------------------------------------------------------
+// Posture refusal — a reload must not enter the state startup refuses
+//
+// The gateway refuses to start when it is reachable by name and its tools are
+// invocable without a credential (`network_bind_refusal`). `server.public_url`
+// is re-read per request, so adding one to a running gateway reaches that state
+// without passing the startup check. These cases pin the refusal that closes it.
+//
+// The three masking cases are the ones that matter. A refusal judged against the
+// FILE passes them by reading fields the reload never applies: the file may say
+// authentication is on while the router is still running the startup snapshot.
+// They fail against that version and pass against one judged on the config that
+// will be in force. See docs/design/unauthenticated-network-posture.md,
+// Decision C.
+// -------------------------------------------------------------------------
+
+/// A running config that startup would not have refused: loopback, no declared
+/// public URL. Every posture case starts here, because the refusal only fires on
+/// a reload that would ENTER the refusable state.
+fn clean_running() -> Config {
+    Config::default()
+}
+
+/// The reload context of [`test_reload_context`], with the running config named
+/// rather than defaulted, so a case can start from a gateway whose tools are
+/// already closed.
+fn posture_context(config_path: &std::path::Path, running: Config) -> ReloadContext {
+    ReloadContext::new(
+        config_path.to_path_buf(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+}
+
+#[tokio::test]
+async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
+    // GIVEN: a gateway running on loopback with no declared public URL
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: the file declares a public URL, leaving the tools reachable
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("a reload that opens the tool surface to the network was applied");
+
+    // THEN: it is refused, under the shared literal every consumer keys on
+    assert!(
+        err.starts_with(POSTURE_REFUSED_ERROR),
+        "refusal did not carry the shared prefix: {err}"
+    );
+    // AND: the message carries the remedy, not merely a label
+    assert!(
+        err.contains("gw.example.com"),
+        "refusal did not name the exposure: {err}"
+    );
+    assert!(
+        err.contains("auth.enabled"),
+        "refusal did not carry the remedy: {err}"
+    );
+    // AND: it says the running gateway is untouched and the file is not
+    assert!(
+        err.contains("still serving") && err.contains("next start"),
+        "refusal did not say what was and was not changed: {err}"
+    );
+}
+
+#[tokio::test]
+async fn enabling_auth_in_the_same_edit_does_not_mask_the_exposure() {
+    // GIVEN: the same running gateway
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: the file declares a public URL AND enables authentication — the
+    // remediation this project recommends everywhere. A reload does not apply
+    // `auth`: the router snapshots it at construction, so the request path is
+    // still running the old, permissive state while the origin gate has already
+    // started admitting the new host.
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let err = ctx.reload_outcome().await.expect_err(
+        "a reload was applied because the FILE enabled auth, while the running \
+         gateway's auth is unchanged — the exposure this refusal exists to stop",
+    );
+    assert!(err.starts_with(POSTURE_REFUSED_ERROR), "{err}");
+}
+
+#[tokio::test]
+async fn setting_the_override_in_the_same_edit_does_not_mask_it_either() {
+    // GIVEN: the same running gateway
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: the file declares a public URL and sets the escape hatch. Like
+    // `auth`, the override is restart-only, so it silences nothing on a running
+    // process. A refusal that read the file would let it silence this one.
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\n  allow_unauthenticated_network_bind: true\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the file's override silenced a refusal it cannot silence until a restart");
+    assert!(err.starts_with(POSTURE_REFUSED_ERROR), "{err}");
+}
+
+#[tokio::test]
+async fn a_refused_reload_applies_nothing_at_all() {
+    // GIVEN: a gateway running on loopback, with no backends
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: one edit adds both a backend and the public URL that refuses
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let _ = ctx.reload_outcome().await.expect_err("the reload was applied");
+
+    // THEN: the backend in the same file was never registered — the refusal runs
+    // before `apply_patch`, which stops and starts backends
+    assert!(
+        ctx.registry.get("svc").is_none(),
+        "a refused reload registered a backend from the same file"
+    );
+    // AND: nothing was published, so the origin gate never sees the new host
+    assert!(
+        ctx.live_config.get().server.public_url.is_none(),
+        "a refused reload published its config"
+    );
+}
+
+#[tokio::test]
+async fn a_reload_that_does_not_open_the_tools_still_applies() {
+    // GIVEN: a gateway whose RUNNING config already closes the tool surface.
+    //
+    // Taken from the running config and not from the file on purpose: reading it
+    // from the file is the mistake the refusal exists to prevent, so a
+    // regression case written that way would pass by making it.
+    let mut running = Config::default();
+    running.auth.enabled = true;
+    running.auth.bearer_token = Some("secret".to_string());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: the same public URL is declared, over tools that need a credential
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, running);
+
+    // THEN: it applies, and the backend beside it registers
+    ctx.reload_outcome()
+        .await
+        .expect("a reload that leaves the tools behind a credential was refused");
+    assert!(
+        ctx.registry.get("svc").is_some(),
+        "an applied reload did not register its backend"
+    );
+    assert_eq!(
+        ctx.live_config.get().server.public_url.as_deref(),
+        Some("https://gw.example.com")
+    );
+}
