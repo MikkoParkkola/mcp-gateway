@@ -1227,7 +1227,14 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             "gateway_reload_config",
             json!({}),
             None,
-            allow_all_ctx(),
+            // Admin, because reloading config is admin-gated at the dispatcher.
+            // The default context is non-admin, and this test is about what the
+            // reload REPORTS, not about the gate — an operator running it holds
+            // a credential.
+            MetaMcpCallerContext {
+                is_admin: true,
+                ..allow_all_ctx()
+            },
         )
         .await;
 
@@ -2377,4 +2384,71 @@ fn a_playbook_carries_the_caller_identity() {
         "the caller identity must survive into the playbook invoker"
     );
     assert!(!caller.is_admin, "the default caller holds no admin");
+}
+
+/// A global meta-tool is refused at the DISPATCHER, not only at the HTTP router.
+///
+/// Driven straight at `handle_tools_call` with a non-admin caller, bypassing
+/// the router entirely. Before the gate moved here, this reached the tool: the
+/// router was the only thing checking, and anything that dispatched without
+/// going through it inherited no protection. That is the shape that hid the
+/// playbook defect, and this is the case that stops it recurring for meta-tools.
+#[tokio::test]
+async fn global_meta_tool_is_refused_at_the_dispatcher() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_reload_config",
+            json!({}),
+            Some("sess-dispatcher"),
+            allow_all_ctx(),
+        )
+        .await;
+
+    let message = response
+        .error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        response.error.is_some(),
+        "a non-admin caller must not reload config through the dispatcher: {response:?}"
+    );
+    assert!(
+        message.contains("admin access"),
+        "and must be told why: {message}"
+    );
+}
+
+/// The same tool succeeds for an admin caller, so the case above is about the
+/// gate rather than about the tool failing for some unrelated reason.
+#[tokio::test]
+async fn global_meta_tool_reaches_an_admin_caller() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_reload_config",
+            json!({}),
+            Some("sess-dispatcher-admin"),
+            crate::gateway::meta_mcp::MetaMcpCallerContext {
+                is_admin: true,
+                ..allow_all_ctx()
+            },
+        )
+        .await;
+
+    let message = response
+        .error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        !message.contains("admin access"),
+        "an admin caller must get past the gate; what happens next is the \
+         tool's business: {message}"
+    );
 }

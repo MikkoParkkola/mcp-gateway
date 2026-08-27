@@ -1643,12 +1643,17 @@ impl Gateway {
                         MetaMcpCallerContext {
                             authorizer: &stdio_authorizer,
                             // Stdio has no port and no network surface: the
-                            // client SPAWNED this process, so it already has
-                            // whatever the operator has. Withholding admin here
-                            // takes the management tools away from exactly the
-                            // single-user setup the origin gate was built to
-                            // protect, and protects nothing — the same caller
-                            // could edit the config.
+                            // client SPAWNED this process, so it already holds
+                            // whatever the operator holds — it could edit the
+                            // config file just as easily. Withholding admin
+                            // here would take the management tools away from
+                            // exactly the single-user setup the origin gate
+                            // exists to protect, and protect nothing.
+                            //
+                            // Explicit since the admin gate moved to the
+                            // dispatcher: it previously lived on the HTTP path
+                            // alone, so stdio was never checked and the default
+                            // non-admin context went unnoticed.
                             is_admin: true,
                             api_key_name: None,
                             agent_id: None,

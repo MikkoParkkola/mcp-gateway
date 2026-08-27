@@ -96,19 +96,25 @@ pub(super) fn log_startup_banner(
         );
     } else {
         warn!("AUTHENTICATION disabled - every local caller is anonymous");
+        // Formatted from the one list, not repeated from it. This banner named
+        // two tools that had been removed from the admin set, which is what a
+        // fourth hand-maintained copy of a roster does.
         warn!(
-            "  Anonymous holds no admin: gateway_kill_server, gateway_revive_server, \
-             gateway_reload_config, gateway_reload_capabilities and the admin \
-             dashboard are unavailable."
+            "  Anonymous holds no admin: {} and the admin dashboard are unavailable.",
+            crate::gateway::router::ADMIN_META_TOOLS.join(", ")
         );
-        // Two audiences, and the short version serves neither. A NEW install
-        // should run `init`, which generates the credential and writes the
-        // whole shape; telling them to hand-edit YAML sends them to do badly
-        // what a command does correctly. An EXISTING install cannot re-run
-        // `init` over a config it already has, and enabling auth alone gates
-        // EVERY path — so the operator who follows the short version loses the
-        // MCP client they already configured, which is worse than the missing
-        // dashboard they were fixing.
+        // The roster above is formatted from the one list rather than repeated
+        // from it: a hand-written copy here named two tools that had already
+        // been removed from the admin set.
+        //
+        // Two audiences below, and the short version serves neither. A NEW
+        // install should run `init`, which generates the credential and writes
+        // the whole shape; telling them to hand-edit YAML sends them to do
+        // badly what a command does correctly. An EXISTING install cannot
+        // re-run `init` over a config it already has, and enabling auth alone
+        // gates EVERY path — so an operator who follows the short version loses
+        // the MCP client they already configured, which is worse than the
+        // missing dashboard they set out to fix.
         warn!("  To use them, either:");
         warn!("    - run `mcp-gateway init` for a new install: it generates the");
         warn!("      credential and writes the config, including public_paths; or");

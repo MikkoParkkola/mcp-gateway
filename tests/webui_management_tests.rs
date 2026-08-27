@@ -1488,9 +1488,17 @@ async fn anonymous_still_reads_redacted_status() {
         .await
         .unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
+    // `backends` is not a field either view sets — the inventory is `servers`,
+    // and only the admin view has it. Asserting the absence of a name nothing
+    // uses is an assertion that cannot fail.
     assert!(
-        body.get("backends").is_none(),
-        "an anonymous caller must not receive backend names: {body}"
+        body.get("servers").is_none(),
+        "an anonymous caller must not receive the server inventory: {body}"
+    );
+    assert!(
+        body.get("server_count").is_some() && body.get("healthy_count").is_some(),
+        "and must still get the redacted counts, or this proves only that the \
+         endpoint returned something: {body}"
     );
 }
 
@@ -1584,9 +1592,23 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
         .await
         .unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
+    // Asserted on the redacted SHAPE, not on `backends` failing to be an array.
+    // Both views put an object there — the admin view a map keyed by backend
+    // name, the redacted view `{count, all_healthy}` — so `as_array().is_none()`
+    // was true either way and the case passed with the `.admin` check removed.
+    let backends = body["backends"]
+        .as_object()
+        .expect("the redacted view still carries a backends object");
+    let mut keys: Vec<&str> = backends.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["all_healthy", "count"],
+        "a non-admin key gets counts and nothing that names a backend: {body}"
+    );
     assert!(
-        body["backends"].as_array().is_none(),
-        "a non-admin key must not receive backend names: {body}"
+        body.get("capabilities").is_none(),
+        "and no capability detail, which is admin-only: {body}"
     );
 }
 

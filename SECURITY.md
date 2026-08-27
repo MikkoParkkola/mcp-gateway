@@ -41,10 +41,12 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
 - **Zero unsafe code**: `#![deny(unsafe_code)]` enforced at crate level
 - **TLS/mTLS**: Full mutual TLS support with certificate-based access control
 - **Authentication**: Bearer tokens, API keys, OIDC JWT verification, per-client scopes
-- **Admin needs a credential**: with `auth.enabled = false` every caller is an
-  anonymous non-admin. Server management tools and the admin dashboard require
-  an explicit credential, because an unauthenticated gateway cannot tell its
-  operator from a web page that rebound a hostname to loopback
+- **Admin needs a credential**: with `auth.enabled = false` every caller over
+  HTTP is an anonymous non-admin. Server management tools and the admin
+  dashboard require an explicit credential, because an unauthenticated gateway
+  cannot tell its operator from a web page that rebound a hostname to loopback.
+  A stdio caller is admin: it spawned the process, so it already holds whatever
+  the operator holds
 - **Secrets**: OS keychain integration (macOS Keychain, Linux secret-service) — never stored in config
 - **Circuit breakers**: Per-backend fault isolation prevents cascading failures
 - **Rate limiting**: Token-bucket per-backend rate limiting

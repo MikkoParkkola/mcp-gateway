@@ -25,6 +25,7 @@ use crate::security::ToolPolicy;
 use crate::security::firewall::Firewall;
 
 mod authorization;
+pub(crate) use authorization::{ADMIN_META_TOOLS, is_admin_meta_tool};
 mod backend_handlers;
 mod handlers;
 pub(crate) mod helpers;

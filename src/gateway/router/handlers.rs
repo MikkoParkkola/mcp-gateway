@@ -635,10 +635,16 @@ pub(super) async fn meta_mcp_handler(
                 oauth_agent_identity.as_ref(),
             );
 
-            // OWASP ASI09 — destructive meta-tool confirmation gate.
+            // Destructive meta-tool confirmation. NOT the control — the admin
+            // requirement is, and `gateway_kill_server`, the only tool carrying
+            // `destructiveHint: true`, is in the admin set. This is the prompt
+            // an honest client shows its user before proceeding.
             //
-            // For any meta-tool carrying `destructiveHint: true`, require explicit
-            // human confirmation via MCP elicitation before execution proceeds.
+            // Deliberately not labelled OWASP ASI09 here. An earlier version
+            // was, and `destructive_confirmation`'s own header was corrected to
+            // say why: the citation reads as a control and invites over-trust in
+            // a prompt that a client may simply not support, in which case the
+            // action proceeds after a warning.
             // Non-destructive tools and all backend tool calls skip this check.
             if is_destructive_meta_tool(tool_name) {
                 let action_desc = describe_destructive_action(tool_name, params.as_ref());

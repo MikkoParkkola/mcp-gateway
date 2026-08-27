@@ -462,11 +462,16 @@ which is re-read on every request so a config reload takes effect at once. A
 page served from `http://localhost:3000` is refused: being local does not make
 it trusted.
 
-There is deliberately no setting for allowing extra browser origins. A
-cross-origin browser client also needs CORS preflight responses, which this
-gateway does not serve, so such a setting would name origins that still could
-not call it. Serve the page from the gateway's own origin, or use a non-browser
-client.
+There is deliberately no setting for allowing extra browser origins, and the
+reason is not the one it looks like. It is tempting to say such a setting would
+be inert because the gateway serves no CORS preflight responses — that is
+wrong. A form POST is a simple request and skips the preflight entirely, which
+is the very shape the origin check exists to refuse. An extra-origin setting
+would therefore be a real grant: every page on that origin could drive the
+gateway with whatever credentials it holds, and one cross-site scripting flaw
+on that origin would inherit them.
+
+Serve the page from the gateway's own origin, or use a non-browser client.
 
 When the bind is not loopback and no `public_url` is set, a `Host` naming a
 domain is refused and a numeric address is accepted. Such a gateway answers at
@@ -589,11 +594,15 @@ cross-site, and it is marked `Secure` when the listener speaks TLS.
 
 ### Admin requires a credential
 
-With `auth.enabled = false` every caller is anonymous and holds **no admin**.
+With `auth.enabled = false` every caller **over HTTP** is anonymous and holds
+**no admin**. A stdio caller is treated as admin: the client spawned the
+process, so it already holds whatever the operator holds.
 Ordinary tools work, so a local MCP client needs no configuration. These do not:
 
-- `gateway_kill_server`, `gateway_revive_server`, `gateway_set_profile`,
-  `gateway_set_state`, `gateway_reload_config`, `gateway_reload_capabilities`
+- `gateway_kill_server`, `gateway_revive_server`, `gateway_reload_config`,
+  `gateway_reload_capabilities` — the four that change the gateway for every
+  session. Choosing a routing profile or a discovery state writes only the
+  caller's own session, so those stay available without a credential
 - `/dashboard` and the management endpoints under `/ui/api/`, which return
   `403`. `/ui/api/status` still answers, with counts rather than backend names
 
