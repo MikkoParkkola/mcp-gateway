@@ -494,6 +494,10 @@ is not.
 Applied without a restart: backends, `server.public_url`, and
 `control_plane.role_mapping`.
 
+One reload is refused outright rather than applied: one that would leave the
+tools reachable without a credential — see the tunnel section below, which is
+where this is met in practice.
+
 ### Capabilities that register an address with a third party
 
 A capability that hands a caller-chosen destination to a third party which then
@@ -541,6 +545,23 @@ The Host check already admits `public_url`, and it is re-read on each request,
 so a reload applies it without a restart. Without it the provider sees a `403`
 and the gateway logs `Request blocked: Host does not name this gateway`, naming
 the hostname it refused.
+
+**Declare authentication in the same breath, and restart.** A `public_url`
+naming a tunnel says the gateway is reached from off this machine. Over tools
+that need no credential, that is the gateway serving every configured backend
+to whoever reaches the tunnel — so the reload is refused, and the gateway keeps
+running on the configuration it started with:
+
+```
+config reload refused, the running gateway is unchanged: refusing to serve
+HTTP, reachable at the declared public_url host your-tunnel.example.com: ...
+```
+
+Enabling `auth.enabled` in the same edit does not get it through, and that is
+deliberate rather than an oversight: authentication is applied at startup, so
+until a restart the request path is still running without it while the tunnel
+hostname would already be admitted. Set both, then restart — the same start
+that applies the authentication is the one that admits the hostname.
 
 ### Managing the gateway from your MCP client
 

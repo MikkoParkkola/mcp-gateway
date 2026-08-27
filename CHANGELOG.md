@@ -123,8 +123,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other caller that reaches the port, so admin now follows an explicit
   credential.
 
+- **The gateway refuses to serve when its tools are reachable without a
+  credential.** Reachable means a non-loopback bind, or a `server.public_url`
+  declaring a name a proxy or tunnel answers to; open means authentication is
+  off, or `auth.public_paths` covers more than `/health`. The refusal happens
+  before the listener binds, so such a configuration never opens a port. It
+  names which of the two conditions fired and how to fix that one. Where
+  authentication terminates in front of the gateway — a sidecar, a mesh, a
+  reverse proxy — set `server.allow_unauthenticated_network_bind = true`, which
+  is logged on every start while it remains set.
+
+  This is a real break for a deployment that binds wide with authentication
+  off. It is the shape a browser or any other caller on the network can drive
+  today, which is why it now stops rather than warns.
+
 - `server.public_url` is re-read on each request, so a configuration reload
-  takes effect without a restart.
+  takes effect without a restart — **unless applying it would leave the tools
+  reachable without a credential**, in which case the reload is refused and
+  nothing in the file is applied, backends included. The running gateway keeps
+  the configuration it started with; the file on disk is what would refuse at
+  the next start.
+
+  The refusal is judged against the configuration that would be **in force**,
+  not against the file. `auth` and the override are not applied by a reload —
+  the router snapshots them at startup — so declaring a `public_url` and
+  enabling authentication in one edit does not pass the check. Restart to apply
+  both together.
 
 - The startup log states what the anonymous identity cannot do and how to
   restore it, and reports when the gateway binds to a non-loopback address
