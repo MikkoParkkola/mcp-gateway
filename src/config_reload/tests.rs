@@ -1488,3 +1488,31 @@ async fn the_watcher_recognises_a_posture_refusal_and_not_as_a_broken_file() {
         "a parse failure is not a posture refusal"
     );
 }
+
+#[tokio::test]
+async fn a_reload_is_not_refused_for_a_state_it_did_not_cause() {
+    // GIVEN: a gateway already running in the refusable state — wide bind, no
+    // credential. Unreachable through `Gateway::run`, which refuses to start
+    // there; reachable through `run_stdio`, which has no listener and never runs
+    // the check. Keying the refusal on the TRANSITION rather than on the
+    // candidate alone is what keeps that gateway able to reload at all.
+    let mut running = Config::default();
+    running.server.host = "0.0.0.0".to_string();
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    // WHEN: it reloads something unrelated
+    std::fs::write(
+        &path,
+        "server:\n  host: \"0.0.0.0\"\nbackends:\n  svc:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, running);
+
+    // THEN: it applies. The refusal answers "would this reload OPEN the tools",
+    // not "are they open" — the second would wedge such a gateway permanently.
+    ctx.reload_outcome()
+        .await
+        .expect("a reload was refused for a state that predates it");
+    assert!(ctx.registry.get("svc").is_some());
+}
