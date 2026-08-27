@@ -101,7 +101,7 @@ pub(super) fn backend_tool_targets_for_call(
 /// rejected: it would refuse a client that legitimately picks its own routing
 /// at connect time, to prevent something that grants no access it did not
 /// already have.
-pub(super) fn is_admin_meta_tool(tool_name: &str) -> bool {
+pub(crate) fn is_admin_meta_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
         "gateway_kill_server"

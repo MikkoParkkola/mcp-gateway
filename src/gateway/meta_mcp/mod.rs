@@ -1129,6 +1129,25 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
+        // Admin gate for the meta-tools that change the gateway for every
+        // session. Enforced HERE, at the dispatcher, and not only at the HTTP
+        // router that also checks it.
+        //
+        // Both current callers happen to handle it — the router checks first,
+        // and stdio marks its caller admin because the client that spawned the
+        // process already holds whatever the operator holds. That is exactly the
+        // shape that hid the playbook defect: a check living at one entry point,
+        // correct for every caller that exists today and silently absent for the
+        // next one added. Placing it at the point of dispatch costs a redundant
+        // comparison on the router path and removes the possibility.
+        if crate::gateway::router::is_admin_meta_tool(tool_name) && !caller.is_admin {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32600,
+                format!("Tool '{tool_name}' requires admin access"),
+            );
+        }
+
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
         if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
             let invoke_args = json!({
