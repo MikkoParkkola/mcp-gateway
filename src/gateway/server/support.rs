@@ -98,10 +98,23 @@ pub(super) fn log_startup_banner(
         warn!("AUTHENTICATION disabled - every local caller is anonymous");
         warn!(
             "  Anonymous holds no admin: gateway_kill_server, gateway_revive_server, \
-             gateway_set_profile, gateway_set_state, gateway_reload_config, \
-             gateway_reload_capabilities and the admin dashboard are unavailable."
+             gateway_reload_config, gateway_reload_capabilities and the admin \
+             dashboard are unavailable."
         );
-        warn!("  To use them, set auth.enabled = true with a bearer token.");
+        // Two audiences, and the short version serves neither. A NEW install
+        // should run `init`, which generates the credential and writes the
+        // whole shape; telling them to hand-edit YAML sends them to do badly
+        // what a command does correctly. An EXISTING install cannot re-run
+        // `init` over a config it already has, and enabling auth alone gates
+        // EVERY path — so the operator who follows the short version loses the
+        // MCP client they already configured, which is worse than the missing
+        // dashboard they were fixing.
+        warn!("  To use them, either:");
+        warn!("    - run `mcp-gateway init` for a new install: it generates the");
+        warn!("      credential and writes the config, including public_paths; or");
+        warn!("    - on an existing config, set auth.enabled = true with a bearer");
+        warn!("      token AND list /health and /mcp under auth.public_paths, so");
+        warn!("      tool calls keep working. The credential gates management, not tools.");
         // A loopback bind keeps this to callers already on the machine. A
         // wildcard or LAN bind hands the same unauthenticated surface, and the
         // credentials behind it, to the network.
