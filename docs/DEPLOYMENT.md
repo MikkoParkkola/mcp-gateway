@@ -616,7 +616,12 @@ into `gateway.yaml`, which is created readable only by you. Tools work without
 it; managing the gateway and reading the dashboard need it.
 
 A browser cannot attach an `Authorization` header to a navigation, so `serve`
-prints a link:
+prints a link — **on a loopback bind only**, and redeemable only from this
+machine. A gateway bound to a network address prints none, because a link that
+grants an admin session should not travel in a log that leaves the host. Reach
+such a gateway's dashboard over a local port-forward (`ssh -L`) so the browser
+arrives on loopback, or manage it through the credential rather than the
+dashboard.
 
 ```
 DASHBOARD (opens once, then remembered in this browser):

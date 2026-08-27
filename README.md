@@ -161,7 +161,8 @@ mcp-gateway doctor --fix           # auto-fix issues where possible
 The web dashboard is at <http://localhost:39400/ui> once `serve` is running. The
 operator dashboard at `/dashboard` needs the admin credential, and a browser
 cannot send one on a navigation — so `serve` prints a single-use link to open it
-with. See [Opening the dashboard](docs/DEPLOYMENT.md#opening-the-dashboard).
+with, on a loopback bind. See
+[Opening the dashboard](docs/DEPLOYMENT.md#opening-the-dashboard).
 
 ### Connect AI clients (if you skipped Option A)
 
@@ -298,7 +299,7 @@ Single-binary gateway. An AI client talks to the compact meta-surface, and the g
 
 ### Web dashboard
 
-Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`, which needs the admin credential — `serve` prints a single-use link to open it with, since a browser cannot attach an `Authorization` header to a navigation. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
+Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`, which needs the admin credential — on a loopback bind `serve` prints a single-use link to open it with, since a browser cannot attach an `Authorization` header to a navigation. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
 
 ### Security and governance
 
@@ -398,7 +399,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 | `/mcp/{backend}` | POST | Direct backend access |
 | `/ui` | GET | Web dashboard |
 | `/ui/api/control-plane` | GET | Read-only local control-plane projection for inventory, runtime health, decisions, RBAC, and license boundaries |
-| `/dashboard` | GET | Operator dashboard. Admin only; opened with the single-use link `serve` prints |
+| `/dashboard` | GET | Operator dashboard. Admin only; opened with the single-use link `serve` prints on a loopback bind |
 | `/metrics` | GET | Prometheus metrics (with `--features metrics`) |
 
 ## Performance

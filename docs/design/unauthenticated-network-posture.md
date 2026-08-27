@@ -30,8 +30,12 @@ layer and is not claimed.
 Exit non-zero before binding the listener. A warning is not a control: the
 current one has been emitted on every such start and has not prevented one.
 
-Placement is **before** `TcpListener::bind`, so a refused configuration never
-opens a port at all. `log_startup_banner` is reached only from `Gateway::run`
+Placement is **before every listener**, so a refused configuration never opens a
+port at all. That means ahead of the optional WebSocket spawn as well as the
+HTTP bind: the check first sat between the two, which spawned a WebSocket
+listener on the same host for a configuration the next line refused. The
+guarantee was written before that listener existed and was not re-checked when
+it did — found in review, 2026-08-27. `log_startup_banner` is reached only from `Gateway::run`
 (`src/gateway/server/mod.rs:1230`), so stdio mode is untouched — verified, not
 assumed.
 

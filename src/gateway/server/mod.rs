@@ -1216,6 +1216,19 @@ impl Gateway {
             None
         };
 
+        // Refuse BEFORE opening ANY listener, so a configuration that must not
+        // serve never opens a port at all. Only this path reaches it; stdio mode
+        // has no listener and is untouched.
+        //
+        // Ahead of the WebSocket spawn as well as the HTTP bind. It used to sit
+        // between them, which spawned a listener on the same host for a config
+        // the next line refused — a port opened by a start that then failed,
+        // contradicting the guarantee this comment makes.
+        if let Some(reason) = support::network_bind_refusal(&self.config) {
+            error!("{reason}");
+            return Err(Error::Config(reason));
+        }
+
         // Optionally spawn a WebSocket listener alongside the HTTP server.
         if let Some(ws_port) = self.config.server.ws_port {
             let ws_addr = SocketAddr::new(
@@ -1238,13 +1251,6 @@ impl Gateway {
             );
         }
 
-        // Refuse BEFORE binding, so a configuration that must not serve never
-        // opens a port at all. Only this path reaches it; stdio mode has no
-        // listener and is untouched.
-        if let Some(reason) = support::network_bind_refusal(&self.config) {
-            error!("{reason}");
-            return Err(Error::Config(reason));
-        }
         // Warned on EVERY start while the escape hatch is set, and not only when
         // authentication is off. The narrower condition missed the shape the
         // hatch is most often reached from: authentication enabled with `/mcp`
