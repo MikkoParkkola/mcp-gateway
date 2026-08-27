@@ -92,6 +92,27 @@ const NO_CHANGES_SUMMARY: &str = "no changes detected";
 const SHUTDOWN_ABORTED_ERROR: &str = "config reload aborted: the gateway is shutting down and refused to register \
      one or more backends";
 
+/// Prefix of the error a reload returns when applying the file would leave the
+/// tool surface reachable without a credential — the state the gateway refuses
+/// to START in (`gateway::server::support::network_bind_refusal`).
+///
+/// A PREFIX, matched with [`is_posture_refusal`], not compared whole like
+/// [`SHUTDOWN_ABORTED_ERROR`]: the refusal's own text names the exposure and
+/// carries the remedy, and rides behind this. An arm written `==` would never
+/// match, and the refusal would be logged as a broken config file — sending the
+/// operator to hunt YAML instead of reverting the `public_url`.
+pub const POSTURE_REFUSED_ERROR: &str = "config reload refused, the running gateway is unchanged:";
+
+/// `true` when `error` is the refusal [`POSTURE_REFUSED_ERROR`] describes.
+///
+/// One predicate rather than a `starts_with` at each consumer, so the file
+/// watcher, the meta-tool and the admin API cannot drift apart on how they
+/// recognise it.
+#[must_use]
+pub fn is_posture_refusal(error: &str) -> bool {
+    error.starts_with(POSTURE_REFUSED_ERROR)
+}
+
 /// Structured reload outcome for callers that need more than a log line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReloadOutcome {
@@ -1068,6 +1089,13 @@ impl ConfigWatcher {
                                         "Config reload: complete"
                                     );
                                 }
+                                Err(e) if is_posture_refusal(&e) => {
+                                    // Its own arm, ahead of the generic one: a
+                                    // posture refusal is a decision about this
+                                    // config, not a file the operator must fix
+                                    // the syntax of.
+                                    warn!("Config reload: {e}");
+                                }
                                 Err(e) if e == SHUTDOWN_ABORTED_ERROR => {
                                     warn!(
                                         "Config reload: aborted, the gateway is \
@@ -1337,6 +1365,21 @@ impl ReloadContext {
                 &self.live_config,
             ));
         };
+
+        // Before `apply_patch`, which stops and starts backends: a refusal that
+        // ran after it could not say nothing was applied. And before the
+        // publish, which is what the origin gate would re-read.
+        if let Some(reason) =
+            crate::gateway::reload_posture_refusal(self.live_config.running(), &new_config)
+        {
+            return Err(format!(
+                "{POSTURE_REFUSED_ERROR} {reason} Nothing was applied, backends in \
+                 the same file included, and the gateway is still serving the \
+                 configuration it started with. This configuration is on disk, so \
+                 the next start will refuse to serve: revert it, or close the tool \
+                 paths."
+            ));
+        }
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(

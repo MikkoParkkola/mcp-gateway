@@ -1837,3 +1837,74 @@ async fn a_bootstrap_link_is_not_redeemable_through_a_published_host() {
         response.status()
     );
 }
+
+/// A reload does not change request-time authentication — the invariant the
+/// reload posture refusal rests on.
+///
+/// `network_bind_refusal` is evaluated on a reload against the config that will
+/// be IN FORCE: the running snapshot, with only live-applied fields overlaid
+/// from the file. That is only safe while `auth` is NOT one of the live fields.
+/// It is not, today — `AppState::auth_config` is built once and `config_reload`
+/// never touches it — but nothing enforced it, and every other case in that
+/// suite reads `auth` from the running config and would keep agreeing with
+/// itself if this changed. This is the test that fails on that day.
+///
+/// See docs/design/unauthenticated-network-posture.md, Decision C.
+#[tokio::test]
+async fn a_reload_does_not_change_request_time_authentication() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    std::fs::write(&config_path, "server:\n  host: \"127.0.0.1\"\n").unwrap();
+
+    // GIVEN: a gateway started with authentication ON
+    let (state, live_config) =
+        make_app_state_with_reload(Config::default(), None, config_path.clone());
+    let router = create_router(Arc::clone(&state));
+
+    let unauthenticated = || {
+        Request::builder()
+            .method(Method::GET)
+            .uri("/ui/api/config")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    // Positive control: without it, a router that never refuses anything would
+    // pass the assertion below for the wrong reason.
+    let before = router
+        .clone()
+        .oneshot(unauthenticated())
+        .await
+        .unwrap()
+        .status();
+    assert!(
+        before == StatusCode::UNAUTHORIZED || before == StatusCode::FORBIDDEN,
+        "the fixture does not require a credential, so this test proves nothing: {before}"
+    );
+
+    // WHEN: the file turns authentication OFF and is reloaded. Nothing here
+    // refuses — no public URL is declared — so the reload applies and publishes.
+    std::fs::write(&config_path, "auth:\n  enabled: false\n").unwrap();
+    let ctx = ReloadContext::new(
+        config_path,
+        Arc::clone(&live_config),
+        Arc::clone(&state.backends),
+        Config::default().failsafe,
+        Config::default().meta_mcp.cache_ttl,
+    );
+    ctx.reload_outcome().await.expect("the reload failed");
+
+    // THEN: the request path is unmoved. The published snapshot may say auth is
+    // off; what is in force is what the process started with.
+    let after = router
+        .clone()
+        .oneshot(unauthenticated())
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(
+        after, before,
+        "a reload changed request-time authentication — the reload posture \
+         overlay reads `auth` from the running config and is now unsound"
+    );
+}

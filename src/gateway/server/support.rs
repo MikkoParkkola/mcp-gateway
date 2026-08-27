@@ -457,17 +457,15 @@ mod tests {
 /// (`config_reload::ConfigPatch::server_changed`), and the auth state, which is
 /// snapshotted into the router at construction and never replaced by a reload.
 ///
-/// It is no longer sufficient, and this comment used to claim otherwise.
+/// It is no longer sufficient on its own, and this comment used to claim it was.
 /// `server.public_url` is deliberately hot-reloadable — the origin gate re-reads
 /// it per request so a reload takes effect at once — so adding a non-loopback
 /// `public_url` to a running gateway reaches the state this refusal exists to
-/// prevent, without passing through it. Startup is the only place it currently
-/// fires.
+/// prevent, without passing through it.
 ///
-/// KNOWN GAP, not a subtlety: closing it means re-evaluating this on reload and
-/// deciding what a running server does when the answer turns to refuse — reject
-/// the patch, or stop serving. That is a design decision about reload semantics
-/// rather than a line to add here, so it is recorded rather than guessed at.
+/// [`reload_posture_refusal`] closes that: a reload which would enter the state
+/// is refused rather than applied. This function stays the single place that
+/// decides what the state IS, and is called from both.
 #[must_use]
 pub fn network_bind_refusal(config: &Config) -> Option<String> {
     if config.server.allow_unauthenticated_network_bind {
@@ -548,6 +546,49 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
          of this gateway (a sidecar, a service mesh, or a reverse proxy), set \
          server.allow_unauthenticated_network_bind = true."
     ))
+}
+
+/// The refusal a config reload must answer: [`network_bind_refusal`] applied to
+/// the configuration that will be IN FORCE if this reload publishes.
+///
+/// `running` is what the process actually applied, fixed at startup; `wanted` is
+/// the file. Only fields a reload applies live are taken from `wanted`, and
+/// today that is `server.public_url` alone. Everything else — `auth`, the
+/// override, `host` — comes from `running`, because a reload does not apply
+/// them: the router snapshots `auth_config` at construction and `config_reload`
+/// never touches it.
+///
+/// That distinction is the whole function. Judging the FILE instead lets an
+/// operator who declares a `public_url` and enables authentication in one edit
+/// — the remediation this project recommends everywhere — produce a config that
+/// reads as safe while the request path is still running the old, permissive
+/// auth. The same masking works with `allow_unauthenticated_network_bind`, and
+/// with any restart-only input [`network_bind_refusal`] grows later. Overlaying
+/// the live fields onto the running config removes the class: a field that is
+/// not applied cannot influence a decision about what is in force.
+///
+/// Lives here, beside the refusal, because the two must agree about which
+/// fields are live and the failure to agree is silent — the overlay would
+/// simply judge the wrong config. `config_reload` calls this and not the
+/// refusal directly.
+///
+/// Returns `None` when `running` would ALREADY have been refused, so a reload is
+/// only refused for a state it would itself cause. Unreachable on the HTTP path,
+/// where startup refused it; reachable off it, since `run_stdio` never runs the
+/// check.
+///
+/// Design: `docs/design/unauthenticated-network-posture.md`, Decision C.
+#[must_use]
+pub fn reload_posture_refusal(running: &Config, wanted: &Config) -> Option<String> {
+    if network_bind_refusal(running).is_some() {
+        return None;
+    }
+    let mut effective = running.clone();
+    effective
+        .server
+        .public_url
+        .clone_from(&wanted.server.public_url);
+    network_bind_refusal(&effective)
 }
 
 #[cfg(test)]

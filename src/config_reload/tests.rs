@@ -1230,11 +1230,7 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
     // WHEN: the file declares a public URL, leaving the tools reachable
-    std::fs::write(
-        &path,
-        "server:\n  public_url: \"https://gw.example.com\"\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "server:\n  public_url: \"https://gw.example.com\"\n").unwrap();
     let ctx = posture_context(&path, clean_running());
 
     let err = ctx
@@ -1256,10 +1252,16 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
         err.contains("auth.enabled"),
         "refusal did not carry the remedy: {err}"
     );
-    // AND: it says the running gateway is untouched and the file is not
+    // AND: it says the gateway kept the old config, and that the refusing one is
+    // on disk and will refuse at the next start
     assert!(
         err.contains("still serving") && err.contains("next start"),
-        "refusal did not say what was and was not changed: {err}"
+        "refusal did not say what was kept and what is still on disk: {err}"
+    );
+    // AND: it says nothing was applied, backends in the same file included
+    assert!(
+        err.contains("Nothing was applied"),
+        "refusal did not say the whole patch was skipped: {err}"
     );
 }
 
@@ -1322,7 +1324,10 @@ async fn a_refused_reload_applies_nothing_at_all() {
     .unwrap();
     let ctx = posture_context(&path, clean_running());
 
-    let _ = ctx.reload_outcome().await.expect_err("the reload was applied");
+    let _ = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the reload was applied");
 
     // THEN: the backend in the same file was never registered — the refusal runs
     // before `apply_patch`, which stops and starts backends
@@ -1369,5 +1374,117 @@ async fn a_reload_that_does_not_open_the_tools_still_applies() {
     assert_eq!(
         ctx.live_config.get().server.public_url.as_deref(),
         Some("https://gw.example.com")
+    );
+}
+
+#[tokio::test]
+async fn a_published_but_not_running_auth_value_does_not_mask_it_either() {
+    // GIVEN: a gateway running with authentication OFF, whose operator has just
+    // done what this project advises — turned it on in the file and been told it
+    // is restart-required. The value is now PUBLISHED in the live snapshot and
+    // is not in force: the router is still running the startup auth state.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "auth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+    )
+    .unwrap();
+    let ctx = posture_context(&path, clean_running());
+    ctx.reload_outcome()
+        .await
+        .expect("enabling auth with no public_url is not a refusable change");
+    assert!(
+        ctx.live_config.get().auth.enabled,
+        "the first reload did not publish, so the second cannot demonstrate anything"
+    );
+    assert!(
+        !ctx.live_config.running().auth.enabled,
+        "the running snapshot moved, which it must never do without a restart"
+    );
+
+    // WHEN: they then add the public URL — a second reload, against a published
+    // snapshot that disagrees with what is running
+    std::fs::write(
+        &path,
+        "server:\n  public_url: \"https://gw.example.com\"\nauth:\n  enabled: true\n  bearer_token: \"secret\"\n  public_paths:\n    - /health\n",
+    )
+    .unwrap();
+
+    // THEN: still refused. A refusal that overlaid onto the PUBLISHED snapshot
+    // would read `auth.enabled = true` here and let it through, which is the
+    // round-1 masking hole arriving one reload later.
+    let err = ctx.reload_outcome().await.expect_err(
+        "the second reload was applied because the published snapshot said auth \
+         was on, while the request path is still running without it",
+    );
+    assert!(err.starts_with(POSTURE_REFUSED_ERROR), "{err}");
+}
+
+/// The overlay names the live fields by hand, because `pending_restart_fields`
+/// returns names and offers no way to apply them. This is the tripwire that
+/// catches a field BECOMING live: it does not check the overlay, it fails when
+/// the set it was derived from changes, and sends the reader to the design.
+#[test]
+fn the_live_field_allow_list_has_not_grown() {
+    let mut wanted = Config::default();
+    wanted.server.public_url = Some("https://gw.example.com".to_string());
+    wanted.control_plane.role_mapping.rules = vec![crate::control_plane::ControlPlaneRoleRule {
+        issuer: "https://idp.example.com".to_string(),
+        group: Some("admins".to_string()),
+        email: None,
+        domain: None,
+        role: crate::control_plane::ControlPlaneRole::Admin,
+    }];
+
+    assert!(
+        pending_restart_fields(&Config::default(), &wanted).is_empty(),
+        "a field that used to be applied live is now restart-required"
+    );
+
+    // And nothing else is live: one more edit, in any other section, is pending.
+    let mut also = wanted.clone();
+    also.auth.enabled = true;
+    assert_eq!(
+        pending_restart_fields(&Config::default(), &also),
+        vec!["auth"],
+        "the set of live-applied fields has changed; if a new one feeds \
+         network_bind_refusal, the reload posture overlay must carry it — see \
+         docs/design/unauthenticated-network-posture.md, Decision C"
+    );
+}
+
+/// The file watcher must log a posture refusal as a refusal, not as the
+/// broken-config-file alert a parse failure raises — an operator sent hunting
+/// YAML will not revert the `public_url` that is the actual problem.
+///
+/// Asserted against the string a refused reload really produces, rather than
+/// against the constant. That is the whole point: the constant is a PREFIX with
+/// the refusal text behind it, so an arm written `e == POSTURE_REFUSED_ERROR` —
+/// the shape the neighbouring `SHUTDOWN_ABORTED_ERROR` arm uses — never matches
+/// and falls through to the parse-failure arm. This test fails on that mistake.
+#[tokio::test]
+async fn the_watcher_recognises_a_posture_refusal_and_not_as_a_broken_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "server:\n  public_url: \"https://gw.example.com\"\n").unwrap();
+    let ctx = posture_context(&path, clean_running());
+
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the reload was applied");
+
+    assert!(
+        is_posture_refusal(&err),
+        "the watcher would log this refusal as a broken config file: {err}"
+    );
+    assert!(
+        !is_posture_refusal(SHUTDOWN_ABORTED_ERROR),
+        "the shutdown abort is not a posture refusal"
+    );
+    assert!(
+        !is_posture_refusal("failed to parse config file: invalid YAML at line 3"),
+        "a parse failure is not a posture refusal"
     );
 }
