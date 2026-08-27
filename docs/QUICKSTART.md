@@ -40,7 +40,24 @@ cargo install mcp-gateway
 mcp-gateway init --profile local
 ```
 
-This writes `gateway.yaml` with sensible defaults and two free capability files under `capabilities/knowledge/`. Or create it manually:
+This writes `gateway.yaml` with sensible defaults and two free capability files under `capabilities/knowledge/`.
+
+It also generates an **admin credential** for this install and writes it into
+that file, which is created readable only by you. Tool calls do not need it —
+`init` lists `/health` and `/mcp` under `auth.public_paths` so the client you
+configure keeps working. Managing the gateway does: the four tools that change
+it for every session, and the operator dashboard.
+
+To open the dashboard, use the link `serve` prints on startup. A browser cannot
+attach an `Authorization` header to a navigation, so the link carries a
+single-use value that is exchanged for a session cookie and then spent:
+
+```
+DASHBOARD (opens once, then remembered in this browser):
+  http://127.0.0.1:39400/dashboard?bootstrap=...
+```
+
+Or create the config manually:
 
 ```yaml
 server:

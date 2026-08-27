@@ -404,15 +404,28 @@ setting for that backend stops the leak at the cost of keeping it resident.
 mcp-gateway stats --url http://127.0.0.1:39400 --price 15.0
 ```
 
-Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools). Auto-refresh every 5s.
+Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools), which is admin-only — see [Opening the dashboard](#opening-the-dashboard). Auto-refresh every 5s.
 
 ## Authentication for Production
 
-**The gateway refuses to start without auth on a network-accessible port.** The
-default bind (`127.0.0.1`) limits it to the local machine. Binding anywhere else
-with `auth.enabled = false` is refused before a listener is opened, because any
-caller reaching that address could invoke every configured backend with the
-gateway's credentials. For networked deployments:
+**The gateway refuses to start when its tools can be called without a
+credential and it can be reached from off this machine.** The refusal happens
+before a listener is opened, because any caller who reaches such a gateway can
+invoke every configured backend with the gateway's own credentials.
+
+Both halves have to be true for it to fire:
+
+| Reachable | Tools open |
+|---|---|
+| a bind other than loopback — the default `127.0.0.1` is not one | `auth.enabled = false`; every path is open regardless of any list |
+| a `server.public_url` naming a non-loopback host: a tunnel or proxy reaches it by that name | an `auth.public_paths` entry covering `/mcp`. Entries match by prefix, so `""`, `/`, `/m` and `/mcp` all count — `/health` and `/metrics` do not |
+
+`auth.enabled = true` on its own is therefore not enough: authentication with
+`/mcp` left public is a gateway that reads as protected and serves every backend
+to whoever reaches it. The message names whichever half fired and the fix for
+that one.
+
+For networked deployments:
 
 ```yaml
 server:

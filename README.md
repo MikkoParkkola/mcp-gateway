@@ -298,7 +298,7 @@ Single-binary gateway. An AI client talks to the compact meta-surface, and the g
 
 ### Web dashboard
 
-Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
+Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`, which needs the admin credential — `serve` prints a single-use link to open it with, since a browser cannot attach an `Authorization` header to a navigation. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
 
 ### Security and governance
 
@@ -333,8 +333,8 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 - **MCP version**: 2025-11-25 (latest spec)
 - **Transports**: stdio, Streamable HTTP, SSE, WebSocket
-- **Hot reload**: capability YAMLs plus reloadable gateway config sections are watched and reloaded live
-- **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` return `restart_required` for listener changes (for example `server.host` or `server.port`); `env_files` list edits remain startup-only
+- **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
+- **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
 - **Config discovery**: auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, and `/etc/mcp-gateway/`
 - **"Did you mean?"**: Levenshtein-based typo correction on tool names
 - **Tool annotations**: MCP 2025-11-25 `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; gateway meta-tools are fully annotated, while backend tools use the hybrid pass-through/fill policy in [ADR-003](docs/adr/ADR-003-mcp-tool-annotation-policy.md)
@@ -398,7 +398,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 | `/mcp/{backend}` | POST | Direct backend access |
 | `/ui` | GET | Web dashboard |
 | `/ui/api/control-plane` | GET | Read-only local control-plane projection for inventory, runtime health, decisions, RBAC, and license boundaries |
-| `/dashboard` | GET | Operator dashboard |
+| `/dashboard` | GET | Operator dashboard. Admin only; opened with the single-use link `serve` prints |
 | `/metrics` | GET | Prometheus metrics (with `--features metrics`) |
 
 ## Performance
