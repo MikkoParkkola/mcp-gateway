@@ -180,6 +180,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   off. It is the shape a browser or any other caller on the network can drive
   today, which is why it now stops rather than warns.
 
+  **The shipped deployment templates were that deployment.** The Helm chart and
+  the Kubernetes base bind `0.0.0.0` — a pod that binds loopback receives
+  nothing — and carried no `auth` section at all, so an unmodified install would
+  now exit at startup instead of serving. Both now require a credential and read
+  it from a Secret:
+
+  ```yaml
+  # values.yaml
+  auth:
+    existingSecret: mcp-gateway-auth   # kubectl create secret generic ...
+    secretKey: token
+  ```
+
+  **Upgrading the chart therefore needs that Secret created first.** Without it
+  the pod fails configuration validation, which is the intended outcome for a
+  cluster-reachable gateway with no credential. If a service mesh authenticates
+  before anything reaches the pod, set
+  `config.server.allow_unauthenticated_network_bind` instead; it is logged at
+  WARN on every start.
+
+  The Docker Compose template needed no credential: it publishes to
+  `127.0.0.1:39400` on the host, so the container's `0.0.0.0` is the container's
+  own interface. It now says so with
+  `MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND`, which stops being
+  true the moment that publish is widened.
+
   It is also a break, less obviously, for a reachable gateway whose
   `auth.public_paths` contains a blank entry — a stray `-` in that YAML list.
   Because public paths match by prefix, a blank entry is a prefix of every path
