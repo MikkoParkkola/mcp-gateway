@@ -101,14 +101,15 @@ pub(super) fn backend_tool_targets_for_call(
 /// rejected: it would refuse a client that legitimately picks its own routing
 /// at connect time, to prevent something that grants no access it did not
 /// already have.
+pub(crate) const ADMIN_META_TOOLS: &[&str] = &[
+    "gateway_kill_server",
+    "gateway_revive_server",
+    "gateway_reload_config",
+    "gateway_reload_capabilities",
+];
+
 pub(crate) fn is_admin_meta_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "gateway_kill_server"
-            | "gateway_revive_server"
-            | "gateway_reload_config"
-            | "gateway_reload_capabilities"
-    )
+    ADMIN_META_TOOLS.contains(&tool_name)
 }
 
 pub(super) fn require_admin_tool_access(

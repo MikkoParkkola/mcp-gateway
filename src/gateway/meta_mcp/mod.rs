@@ -1133,13 +1133,17 @@ impl MetaMcp {
         // session. Enforced HERE, at the dispatcher, and not only at the HTTP
         // router that also checks it.
         //
-        // Both current callers happen to handle it — the router checks first,
-        // and stdio marks its caller admin because the client that spawned the
-        // process already holds whatever the operator holds. That is exactly the
-        // shape that hid the playbook defect: a check living at one entry point,
-        // correct for every caller that exists today and silently absent for the
-        // next one added. Placing it at the point of dispatch costs a redundant
-        // comparison on the router path and removes the possibility.
+        // The router checks this too, and stdio marks its caller admin because
+        // the client that spawned the process already holds whatever the
+        // operator holds. Neither fact is why the check lives here: a gate at
+        // one entry point is correct for every caller that exists today and
+        // silently absent for the next one added, which is the shape that hid
+        // the playbook defect. Placing it at the point of dispatch costs a
+        // redundant comparison on the router path and removes the possibility.
+        //
+        // It also caught a live one immediately. Moving it here refused stdio,
+        // because that path passed a default context whose `is_admin` is false
+        // and nothing had ever checked it.
         if crate::gateway::router::is_admin_meta_tool(tool_name) && !caller.is_admin {
             return JsonRpcResponse::error(
                 Some(id),

@@ -1627,7 +1627,22 @@ impl Gateway {
                         &tool_name,
                         arguments,
                         Some(session_id),
-                        MetaMcpCallerContext::default(),
+                        MetaMcpCallerContext {
+                            // Stdio has no port and no network surface: the
+                            // client SPAWNED this process, so it already holds
+                            // whatever the operator holds — it could edit the
+                            // config file just as easily. Withholding admin
+                            // here would take the management tools away from
+                            // exactly the single-user setup the origin gate
+                            // exists to protect, and protect nothing.
+                            //
+                            // Explicit since the admin gate moved to the
+                            // dispatcher: it previously lived on the HTTP path
+                            // alone, so stdio was never checked and the default
+                            // non-admin context went unnoticed.
+                            is_admin: true,
+                            ..MetaMcpCallerContext::default()
+                        },
                     )
                     .await
             }

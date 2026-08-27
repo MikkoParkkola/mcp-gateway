@@ -456,8 +456,10 @@ always needs a hostname while a network client dials an address. Set
 With `auth.enabled = false` every caller is anonymous and holds **no admin**.
 Ordinary tools work, so a local MCP client needs no configuration. These do not:
 
-- `gateway_kill_server`, `gateway_revive_server`, `gateway_set_profile`,
-  `gateway_set_state`, `gateway_reload_config`, `gateway_reload_capabilities`
+- `gateway_kill_server`, `gateway_revive_server`, `gateway_reload_config`,
+  `gateway_reload_capabilities` — the four that change the gateway for every
+  session. Choosing a routing profile or a discovery state writes only the
+  caller's own session, so those stay available without a credential
 - `/dashboard` and the management endpoints under `/ui/api/`, which return
   `403`. `/ui/api/status` still answers, with counts rather than backend names
 

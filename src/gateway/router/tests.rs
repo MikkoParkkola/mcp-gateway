@@ -2006,19 +2006,57 @@ async fn health_is_reachable_by_a_probe_and_refused_cross_site() {
 
 #[test]
 fn anonymous_denied_admin_meta_tools() {
-    use super::authorization::require_admin_tool_access;
+    use super::authorization::{ADMIN_META_TOOLS, require_admin_tool_access};
     let anon = crate::gateway::auth::anonymous_client();
-    for tool in [
-        "gateway_kill_server",
-        "gateway_revive_server",
-        "gateway_set_profile",
-        "gateway_set_state",
-        "gateway_reload_config",
-        "gateway_reload_capabilities",
-    ] {
+
+    // Iterates the one list rather than a copy of it. The copy had drifted:
+    // it still named two tools removed from the admin set, and the assertion
+    // did not notice because `require_admin_tool_access` never reads the tool
+    // name — it answers from the client's admin bit alone, so the loop asserted
+    // the same thing once per entry whatever the entries were.
+    for tool in ADMIN_META_TOOLS {
+        assert!(
+            super::authorization::is_admin_meta_tool(tool),
+            "{tool} is in the admin list, so the predicate must say so"
+        );
         assert!(
             require_admin_tool_access(Some(&anon), tool).is_err(),
             "anonymous must not reach {tool}"
+        );
+    }
+
+    for session_local in ["gateway_set_profile", "gateway_set_state"] {
+        assert!(
+            !super::authorization::is_admin_meta_tool(session_local),
+            "{session_local} writes only the caller's own session and must stay \
+             out of the admin list"
+        );
+    }
+}
+
+/// The deployment guide names exactly the tools the admin set contains.
+///
+/// A prose file cannot be derived from a constant, so it is compared to one.
+/// The guide, the startup banner, the changelog and the predicate were four
+/// hand-maintained copies of one roster, and they disagreed the moment the
+/// roster changed. Three now read the constant; this makes the fourth fail
+/// loudly instead of quietly misleading an operator about what they can run.
+#[test]
+fn deployment_guide_matches_the_admin_tool_set() {
+    let guide = include_str!("../../../docs/DEPLOYMENT.md");
+
+    for tool in super::authorization::ADMIN_META_TOOLS {
+        assert!(
+            guide.contains(tool),
+            "DEPLOYMENT.md must name {tool} among the tools needing a credential"
+        );
+    }
+
+    for session_local in ["gateway_set_profile", "gateway_set_state"] {
+        assert!(
+            !guide.contains(session_local),
+            "DEPLOYMENT.md still lists {session_local} as needing a credential, \
+             which it no longer does"
         );
     }
 }

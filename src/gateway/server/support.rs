@@ -50,10 +50,12 @@ pub(super) fn log_startup_banner(config: &Config, backends: &BackendRegistry) {
         );
     } else {
         warn!("AUTHENTICATION disabled - every local caller is anonymous");
+        // Formatted from the one list, not repeated from it. This banner named
+        // two tools that had been removed from the admin set, which is what a
+        // fourth hand-maintained copy of a roster does.
         warn!(
-            "  Anonymous holds no admin: gateway_kill_server, gateway_revive_server, \
-             gateway_set_profile, gateway_set_state, gateway_reload_config, \
-             gateway_reload_capabilities and the admin dashboard are unavailable."
+            "  Anonymous holds no admin: {} and the admin dashboard are unavailable.",
+            crate::gateway::router::ADMIN_META_TOOLS.join(", ")
         );
         warn!("  To use them, set auth.enabled = true with a bearer token.");
         // A loopback bind keeps this to callers already on the machine. A
