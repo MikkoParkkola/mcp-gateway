@@ -466,6 +466,10 @@ mod tests {
 /// [`reload_posture_refusal`] closes that: a reload which would enter the state
 /// is refused rather than applied. This function stays the single place that
 /// decides what the state IS, and is called from both.
+/// The route that carries tool-invocation authority. `/mcp/{name}` starts with
+/// it, so one prefix answers for the whole surface (`router::create_router_with`).
+const TOOL_ROUTE: &str = "/mcp";
+
 #[must_use]
 pub fn network_bind_refusal(config: &Config) -> Option<String> {
     if config.server.allow_unauthenticated_network_bind {
@@ -499,17 +503,32 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     // `auth.enabled` alone is not the question. What matters is whether a
     // caller can invoke tools without a credential: a public path covering the
     // MCP endpoint leaves every backend reachable with the gateway's keys,
-    // whatever the auth flag says. `/health` carries no authority and does not
-    // count.
+    // whatever the auth flag says.
     //
-    // An EMPTY entry counts, and counts hardest. Public paths are matched by
-    // prefix (`gateway::auth`, `ResolvedAuthConfig::is_public_path`), so `""` is
-    // a prefix of every path and makes the whole gateway public. This line used
-    // to skip empty entries as noise, which had it exactly backwards: the one
-    // entry that opens everything was the one entry that did not count, so a
-    // config with `auth.enabled = true` and a blank public path read as secured
-    // and served every backend to anyone who reached it.
-    let tools_are_public = config.auth.public_paths.iter().any(|p| p != "/health");
+    // The question is whether a public prefix covers the TOOL surface, asked
+    // with the same prefix semantics authentication itself uses
+    // (`gateway::auth`, `ResolvedAuthConfig::is_public_path`, which matches with
+    // `path.starts_with(p)`). Two earlier spellings were both wrong:
+    //
+    // - "any entry that is not `/health`" refuses a gateway that lists
+    //   `/metrics`, which is a documented and legitimate shape and grants
+    //   nothing — the scrape route is merged outside the auth layer anyway.
+    // - "any entry that is not `/health` and is not empty" skipped the one
+    //   entry that opens everything. A blank string is a prefix of every path,
+    //   so a stray dash in a YAML list makes the whole gateway public while the
+    //   config reads as secured.
+    //
+    // Asking about the tool routes directly covers both: `""` and `"/"` and
+    // `"/m"` all prefix-match `/mcp`, while `/health` and `/metrics` do not.
+    //
+    // Scope, so the omission is deliberate rather than missed: a public path
+    // over the ADMIN surface is a different exposure with a different control —
+    // the anonymous identity holds no admin — and this refusal is about a caller
+    // invoking every configured backend.
+    let tools_are_public = config.auth.public_paths.iter().any(|p| {
+        // `/mcp/{name}` starts with `/mcp`, so one route answers for both.
+        TOOL_ROUTE.starts_with(p.as_str()) || p.starts_with(TOOL_ROUTE)
+    });
     if config.auth.enabled && !tools_are_public {
         return None;
     }
@@ -625,6 +644,34 @@ mod network_bind_tests {
         c.auth.enabled = auth;
         c.server.allow_unauthenticated_network_bind = override_set;
         c
+    }
+
+    #[test]
+    fn a_public_path_counts_when_it_covers_the_tool_surface() {
+        // The question is whether a public prefix reaches `/mcp`, asked with the
+        // same prefix semantics authentication uses. Both halves matter: refuse
+        // what opens the tools, and do NOT refuse what does not.
+        let cases: [(&str, bool); 8] = [
+            ("", true),            // prefix of every path — a stray dash in YAML
+            ("/", true),           // likewise
+            ("/m", true),          // prefix-matches /mcp, which is what counts
+            ("/mcp", true),        // the tool surface itself
+            ("/mcp/github", true), // a single backend is still every call to it
+            ("/health", false),    // carries no authority
+            ("/metrics", false),   // documented, legitimate, grants nothing
+            ("/.well-known/oauth-protected-resource", false),
+        ];
+        for (path, opens_tools) in cases {
+            let mut c = config("0.0.0.0", true, false);
+            c.auth.public_paths = vec!["/health".to_string(), path.to_string()];
+            assert_eq!(
+                network_bind_refusal(&c).is_some(),
+                opens_tools,
+                "public path {path:?} was judged wrongly: refusing a legitimate \
+                 config stops a gateway starting, and missing one serves every \
+                 backend without a credential"
+            );
+        }
     }
 
     #[test]

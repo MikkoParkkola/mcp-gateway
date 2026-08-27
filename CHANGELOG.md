@@ -140,19 +140,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `server.public_url` is re-read on each request, so a configuration reload
   takes effect without a restart — **unless applying it would leave the tools
   reachable without a credential**, in which case the reload is refused and
-  nothing in the file is applied, backends included. The running gateway keeps
-  the configuration it started with; the file on disk is what would refuse at
-  the next start.
+  nothing in the file is applied, backends included. The gateway keeps serving
+  the configuration that was in force before the reload.
 
   The refusal is judged against the configuration that would be **in force**,
   not against the file. `auth` and the override are not applied by a reload —
   the router snapshots them at startup — so declaring a `public_url` and
-  enabling authentication in one edit does not pass the check. Restart to apply
-  both together.
+  enabling authentication in one edit does not pass the check.
+
+  It then says which of two things a restart does with that same file, because
+  they differ. A file that also enables authentication is *accepted* by a
+  restart: set both and restart, and that is the documented fix. A file that
+  only declares the name will *refuse* at the next start, planned or not, so
+  revert it or close the tool paths.
 
 - The startup log states what the anonymous identity cannot do and how to
-  restore it, and reports when the gateway binds to a non-loopback address
-  while authentication is disabled.
+  restore it, reports when the gateway binds to a non-loopback address while
+  authentication is disabled, and warns on every start while
+  `server.allow_unauthenticated_network_bind` is set — including when
+  authentication is enabled with tool paths left public, which is the shape that
+  escape hatch is most often reached from.
 
 ## [3.4.0] - 2026-07-27
 

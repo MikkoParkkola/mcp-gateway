@@ -130,7 +130,7 @@ Neither addresses adversary 3. Nothing at this layer can.
 
 ## Decision C — a reload that would open the tools is refused, not applied
 
-Added 2026-08-27, after Decision A shipped. It closes the gap Decision A left
+Tracked as MIK-7254. Added 2026-08-27, after Decision A shipped. It closes the gap Decision A left
 open and that `support.rs` recorded rather than guessed at. Revised once, after
 a design review found the first draft's condition unsound; that round is kept
 below because the unsound version is the obvious one to reach for.
@@ -277,6 +277,27 @@ on the next request, and the tools are open with an accurate warning next to
 them. The refusal has to happen before the publish, which is also before
 `apply_patch` and its side effects.
 
+### The refusal asks about the tool surface, not about a list of exceptions
+
+Two spellings of "are the tools public" were wrong in opposite directions, and
+the final review found the second within a day of the first being fixed.
+
+| spelling | what it got wrong |
+|---|---|
+| any entry that is not `/health` | refused a gateway listing `/metrics` — documented, legitimate, and granting nothing, since the scrape route is merged outside the auth layer |
+| ...and is not empty | skipped the one entry that opens everything |
+
+Both come from framing the question as a list of exceptions. Asked directly —
+does any public prefix cover `/mcp`, using the same `starts_with` semantics
+authentication itself uses — it answers both: `""`, `"/"` and `"/m"` all
+prefix-match the tool route, while `/health` and `/metrics` do not. A
+table-driven case pins both directions, because an over-refusal stops a
+legitimate gateway starting and is not the safer error it looks like.
+
+Scope, stated rather than missed: a public path over the ADMIN surface is a
+different exposure with a different control — the anonymous identity holds no
+admin — and this refusal is about a caller invoking every configured backend.
+
 ### A blank public path was the most public path of all
 
 Found by the final code review, and pre-dating this decision: `network_bind_refusal`
@@ -342,7 +363,8 @@ different route: disabling `auth` in the file is reported as restart-required
 and applied to disk, and the restart then refuses to serve. The running gateway
 never enters the forbidden state, so it is outside this decision's FOR, and the
 fix belongs with the reload's restart-required reporting rather than here.
-Raised in review, labelled, and left for that work.
+Raised in review, and filed as **MIK-7255** rather than only labelled — a
+deferral without an identifier is theatre. Decision C itself is **MIK-7254**.
 
 `reload_outcome`'s error reaches the admin API as a 500. It is a policy refusal
 rather than an internal fault, so the status is generous; the text is what the

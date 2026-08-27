@@ -1845,20 +1845,42 @@ async fn a_bootstrap_link_is_not_redeemable_through_a_published_host() {
 /// be IN FORCE: the running snapshot, with only live-applied fields overlaid
 /// from the file. That is only safe while `auth` is NOT one of the live fields.
 /// It is not, today — `AppState::auth_config` is built once and `config_reload`
-/// never touches it — but nothing enforced it, and every other case in that
-/// suite reads `auth` from the running config and would keep agreeing with
-/// itself if this changed. This is the test that fails on that day.
+/// never touches it — but nothing enforced it, and every unit case in that suite
+/// reads `auth` from the running config and would keep agreeing with itself if
+/// this changed. This is the test that fails on that day.
+///
+/// Wired the way production is, because a first draft was not and could not have
+/// failed: it gave the router a hard-coded auth config and reloaded a DIFFERENT
+/// `LiveConfig` from the one the router held, so no reload could have reached
+/// the request path even if `auth` were live. Here one startup config builds the
+/// router's authentication, and one `Arc<LiveConfig>` is shared by the router
+/// and the reload — the arrangement `Gateway::run` builds.
 ///
 /// See docs/design/unauthenticated-network-posture.md, Decision C.
 #[tokio::test]
 async fn a_reload_does_not_change_request_time_authentication() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("gateway.yaml");
-    std::fs::write(&config_path, "server:\n  host: \"127.0.0.1\"\n").unwrap();
 
-    // GIVEN: a gateway started with authentication ON
-    let (state, live_config) =
-        make_app_state_with_reload(Config::default(), None, config_path.clone());
+    // GIVEN: one startup config, authentication ON, and it is what both the
+    // router's auth state and the shared live snapshot are built from.
+    let startup = Config {
+        auth: admin_auth_config(),
+        ..Config::default()
+    };
+    std::fs::write(
+        &config_path,
+        "auth:\n  enabled: true\n  bearer_token: \"test-admin-token\"\n",
+    )
+    .unwrap();
+
+    let live_config = Arc::new(LiveConfig::new(startup.clone()));
+    let mut state = make_app_state(None, Some(config_path.clone()));
+    {
+        let s = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
+        s.auth_config = Arc::new(ResolvedAuthConfig::from_config(&startup.auth));
+        s.live_config = Arc::clone(&live_config);
+    }
     let router = create_router(Arc::clone(&state));
 
     let unauthenticated = || {
@@ -1882,19 +1904,25 @@ async fn a_reload_does_not_change_request_time_authentication() {
         "the fixture does not require a credential, so this test proves nothing: {before}"
     );
 
-    // WHEN: the file turns authentication OFF and is reloaded. Nothing here
-    // refuses — no public URL is declared — so the reload applies and publishes.
+    // WHEN: the file turns authentication OFF and is reloaded through the live
+    // snapshot the router reads. Nothing here refuses — no public URL is
+    // declared — so the reload applies and publishes.
     std::fs::write(&config_path, "auth:\n  enabled: false\n").unwrap();
     let ctx = ReloadContext::new(
         config_path,
         Arc::clone(&live_config),
         Arc::clone(&state.backends),
-        Config::default().failsafe,
-        Config::default().meta_mcp.cache_ttl,
+        startup.failsafe.clone(),
+        startup.meta_mcp.cache_ttl,
     );
     ctx.reload_outcome().await.expect("the reload failed");
+    assert!(
+        !live_config.get().auth.enabled,
+        "the reload did not publish, so this proves nothing about what a \
+         published change reaches"
+    );
 
-    // THEN: the request path is unmoved. The published snapshot may say auth is
+    // THEN: the request path is unmoved. The published snapshot says auth is
     // off; what is in force is what the process started with.
     let after = router
         .clone()

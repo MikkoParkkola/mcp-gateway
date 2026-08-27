@@ -1245,12 +1245,17 @@ impl Gateway {
             error!("{reason}");
             return Err(Error::Config(reason));
         }
-        if self.config.server.allow_unauthenticated_network_bind && !self.config.auth.enabled {
+        // Warned on EVERY start while the escape hatch is set, and not only when
+        // authentication is off. The narrower condition missed the shape the
+        // hatch is most often reached from: authentication enabled with `/mcp`
+        // public, which is exactly the exposure it is suppressing. An operator
+        // reading their logs then saw no sign that the control was disarmed.
+        if self.config.server.allow_unauthenticated_network_bind {
             warn!(
                 host = %self.config.server.host,
                 "server.allow_unauthenticated_network_bind is set: this gateway serves \
-                 unauthenticated callers on the network. Authentication is expected to \
-                 terminate in front of it."
+                 callers on the network that it has not authenticated. Authentication \
+                 is expected to terminate in front of it."
             );
         }
 
