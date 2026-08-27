@@ -12,6 +12,20 @@ services:
     environment:
       MCP_GATEWAY_LOG_LEVEL: info
       MCP_GATEWAY_LOG_FORMAT: json
+      # The gateway refuses to serve when it is reachable by a network address
+      # and its tools need no credential. Inside a container it must bind
+      # 0.0.0.0 to receive anything at all, and the config `init` writes keeps
+      # /mcp public so the MCP client keeps working — which is that state.
+      #
+      # Here the boundary is the port publish above: 127.0.0.1:39400 means only
+      # this host reaches it, and the container's 0.0.0.0 is the container's
+      # own interface, not the host's. The gateway cannot see that from inside,
+      # so it is told.
+      #
+      # Change the publish to 0.0.0.0:39400 and this line becomes a lie. Then
+      # either close the tool paths and give clients the credential, or put
+      # something in front that authenticates.
+      MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:39400/health"]
       interval: 30s

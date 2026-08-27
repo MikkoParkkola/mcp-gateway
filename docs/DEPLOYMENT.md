@@ -415,10 +415,21 @@ invoke every configured backend with the gateway's own credentials.
 
 Both halves have to be true for it to fire:
 
-| Reachable | Tools open |
-|---|---|
-| a bind other than loopback — the default `127.0.0.1` is not one | `auth.enabled = false`; every path is open regardless of any list |
-| a `server.public_url` naming a non-loopback host: a tunnel or proxy reaches it by that name | an `auth.public_paths` entry covering `/mcp`. Entries match by prefix, so `""`, `/`, `/m` and `/mcp` all count — `/health` and `/metrics` do not |
+**Reachable** — either of:
+
+- a bind other than loopback; the default `127.0.0.1` is not one
+- a `server.public_url` naming a non-loopback host, because a tunnel or proxy
+  reaches the gateway by that name
+
+**AND tools open** — either of:
+
+- `auth.enabled = false`, where every path is open regardless of any list
+- an `auth.public_paths` entry covering `/mcp`. Entries match by prefix, so
+  `""`, `/`, `/m` and `/mcp` all count; `/health` and `/metrics` do not
+
+Both columns, not one. The pairing that surprises people is a wide bind with
+the `init` config's public `/mcp` — authentication is on, and the tools are
+still open.
 
 `auth.enabled = true` on its own is therefore not enough: authentication with
 `/mcp` left public is a gateway that reads as protected and serves every backend
@@ -582,7 +593,16 @@ this one.
 Enabling `auth.enabled` in the same edit does not get it through, and that is
 deliberate rather than an oversight: authentication is applied at startup, so
 until a restart the request path is still running without it while the tunnel
-hostname would already be admitted. Set both, then restart — the same start
+hostname would already be admitted.
+
+**Enabling it is not sufficient either.** A config `init` wrote already has
+authentication on and lists `/mcp` under `auth.public_paths`, so its tools need
+no credential — and that, plus a declared hostname, is exactly what is refused.
+Publishing such a gateway means closing the tool paths and giving clients the
+credential, or fronting it with something that authenticates and setting
+`server.allow_unauthenticated_network_bind`. The refusal says which of the two
+a restart would do with the file in front of it, so follow that rather than
+guessing. Set both, then restart — the same start
 that applies the authentication is the one that admits the hostname.
 
 ### Managing the gateway from your MCP client

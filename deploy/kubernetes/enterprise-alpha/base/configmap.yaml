@@ -11,6 +11,17 @@ data:
     server:
       host: 0.0.0.0
       port: 39400
+    # Reachable by every pod in the cluster, so the tools need a credential or
+    # the gateway refuses to open a port at all. MCP_GATEWAY_TOKEN comes from a
+    # Secret in the pod spec, never from this ConfigMap. /health stays open for
+    # probes.
+    #
+    # A mesh that authenticates first is the documented alternative:
+    # server.allow_unauthenticated_network_bind, logged at WARN on every start.
+    auth:
+      enabled: true
+      bearer_token: "env:MCP_GATEWAY_TOKEN"
+      public_paths: ["/health"]
     security:
       firewall:
         enabled: true

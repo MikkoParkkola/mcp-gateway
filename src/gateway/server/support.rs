@@ -663,6 +663,52 @@ mod network_bind_tests {
         c
     }
 
+    /// The deployment templates this repository ships must start.
+    ///
+    /// Every one of them binds `0.0.0.0`, because a container or a pod that
+    /// binds loopback receives nothing. That is half the refusal condition, so
+    /// each template has to answer the other half — and until this case existed,
+    /// three of them did not: the Helm chart and the Kubernetes base carried no
+    /// `auth` section at all, which is `enabled: false`, which is refused. An
+    /// unmodified `helm install` produced a pod that exited.
+    ///
+    /// The shapes below are the ones those files now hold. Reading the files
+    /// themselves from a unit test would tie this crate to the repository
+    /// layout, so they are mirrored here and named, which is the trade this
+    /// makes deliberately: it catches a REGRESSION in what the refusal accepts,
+    /// not an edit to the templates.
+    #[test]
+    fn the_shipped_deployment_shapes_are_allowed_to_serve() {
+        // Helm values.yaml and the Kubernetes base ConfigMap: a credential is
+        // required, and only /health is open so probes work without one.
+        let mut cluster = config("0.0.0.0", true, false);
+        cluster.auth.bearer_token = Some("env:MCP_GATEWAY_TOKEN".to_string());
+        cluster.auth.public_paths = vec!["/health".to_string()];
+        assert!(
+            network_bind_refusal(&cluster).is_none(),
+            "the shipped cluster templates would not start"
+        );
+
+        // docker-compose.yaml: binds 0.0.0.0 inside the container and keeps the
+        // init config's public /mcp, so it sets the escape hatch — the host
+        // publish is 127.0.0.1 only, and the gateway cannot see that.
+        let mut compose = config("0.0.0.0", true, true);
+        compose.auth.public_paths = vec!["/health".to_string(), "/mcp".to_string()];
+        assert!(
+            network_bind_refusal(&compose).is_none(),
+            "the shipped compose template would not start"
+        );
+
+        // And the same compose shape WITHOUT the hatch is refused, so the line
+        // is load-bearing rather than decorative.
+        let mut without = compose.clone();
+        without.server.allow_unauthenticated_network_bind = false;
+        assert!(
+            network_bind_refusal(&without).is_some(),
+            "the compose template's escape hatch is not what makes it start"
+        );
+    }
+
     #[test]
     fn a_public_path_counts_when_it_covers_the_tool_surface() {
         // Whether a configured prefix opens the tools is DERIVED here, not

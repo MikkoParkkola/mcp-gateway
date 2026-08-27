@@ -33,11 +33,38 @@ resources:
     cpu: "1"
     memory: 512Mi
 
+# Where the gateway's bearer token comes from. The config below references it as
+# env:MCP_GATEWAY_TOKEN; this names the Secret that supplies it.
+#
+# Required by default, because the config it feeds requires a credential. Leave
+# existingSecret empty ONLY together with the mesh alternative described under
+# `config.auth` — otherwise the pod fails validation at startup, which is the
+# intended outcome for an install that has neither.
+auth:
+  existingSecret: ""
+  secretKey: token
+
 # Gateway config rendered into a ConfigMap and mounted read-only.
 config:
   server:
     host: 0.0.0.0
     port: 39400
+  # A gateway reachable at a network address with tools that need no credential
+  # is refused before it opens a port, so this chart must say which it is. A
+  # pod's service is reachable by every other pod in the cluster.
+  #
+  # Default: require a credential. Supply it as MCP_GATEWAY_TOKEN in the pod —
+  # from a Secret, not from these values, which land in a ConfigMap in plain
+  # text. Only /health stays open, so probes work without one.
+  auth:
+    enabled: true
+    bearer_token: "env:MCP_GATEWAY_TOKEN"
+    public_paths: ["/health"]
+  # If a service mesh authenticates before anything reaches this pod, drop the
+  # auth block above and set this instead. It is logged at WARN on every start,
+  # deliberately: it is the one setting that turns the check off.
+  #   server:
+  #     allow_unauthenticated_network_bind: true
   security:
     firewall:
       enabled: true

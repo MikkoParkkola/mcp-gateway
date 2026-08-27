@@ -97,8 +97,14 @@ const DASHBOARD_ADMIN_REQUIRED_HTML: &str = "<!doctype html><meta charset=utf-8>
 <h1>Admin required</h1>\
 <p>This dashboard shows backend names, tool names and call counts, so it needs \
 an admin credential.</p>\
-<p>Set <code>auth.enabled = true</code> with a bearer token in your gateway \
-config, then open <a href=\"/ui\">/ui</a>, which can present the token.</p>";
+<p>On a config <code>mcp-gateway init</code> wrote, the credential already \
+exists and <code>serve</code> prints a single-use link to open this page with. \
+Look for DASHBOARD in its startup output. The link is printed on a loopback \
+bind only; reach a networked gateway through a local port-forward.</p>\
+<p>Otherwise set <code>auth.enabled = true</code> with a bearer token, keeping \
+<code>/health</code> and <code>/mcp</code> in <code>auth.public_paths</code> so \
+tool calls keep working, then open <a href=\"/ui\">/ui</a>, which can present \
+the token.</p>";
 
 /// `GET /dashboard` — operator dashboard: self-contained HTML, auto-refreshes every 5 s.
 ///
