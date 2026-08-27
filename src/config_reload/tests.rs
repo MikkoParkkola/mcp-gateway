@@ -1442,16 +1442,34 @@ fn the_live_field_allow_list_has_not_grown() {
         "a field that used to be applied live is now restart-required"
     );
 
-    // And nothing else is live: one more edit, in any other section, is pending.
-    let mut also = wanted.clone();
-    also.auth.enabled = true;
-    assert_eq!(
-        pending_restart_fields(&Config::default(), &also),
-        vec!["auth"],
-        "the set of live-applied fields has changed; if a new one feeds \
-         network_bind_refusal, the reload posture overlay must carry it — see \
-         docs/design/unauthenticated-network-posture.md, Decision C"
-    );
+    // And every input the refusal reads is still restart-only. Named one by one
+    // rather than as one blob: each is a field the overlay deliberately takes
+    // from the RUNNING config, and the overlay is unsound the moment any of them
+    // starts applying live.
+    for (name, edit) in [
+        (
+            "auth",
+            (|c: &mut Config| c.auth.enabled = true) as fn(&mut Config),
+        ),
+        ("auth", |c: &mut Config| {
+            c.auth.public_paths = vec!["/mcp".to_string()];
+        }),
+        ("server", |c: &mut Config| {
+            c.server.host = "0.0.0.0".to_string();
+        }),
+        ("server", |c: &mut Config| {
+            c.server.allow_unauthenticated_network_bind = true;
+        }),
+    ] {
+        let mut also = wanted.clone();
+        edit(&mut also);
+        assert!(
+            pending_restart_fields(&Config::default(), &also).contains(&name),
+            "a field the reload posture overlay reads from the running config is \
+             now applied live; the overlay must carry it — see \
+             docs/design/unauthenticated-network-posture.md, Decision C"
+        );
+    }
 }
 
 /// The file watcher must log a posture refusal as a refusal, not as the

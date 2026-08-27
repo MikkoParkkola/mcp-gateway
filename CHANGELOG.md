@@ -126,7 +126,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The gateway refuses to serve when its tools are reachable without a
   credential.** Reachable means a non-loopback bind, or a `server.public_url`
   declaring a name a proxy or tunnel answers to; open means authentication is
-  off, or `auth.public_paths` covers more than `/health`. The refusal happens
+  off, or an entry in `auth.public_paths` covers the `/mcp` tool surface. Public
+  paths are matched by prefix, so `""`, `/`, `/m` and `/mcp` all count, while
+  `/health` and `/metrics` do not. The refusal happens
   before the listener binds, so such a configuration never opens a port. It
   names which of the two conditions fired and how to fix that one. Where
   authentication terminates in front of the gateway — a sidecar, a mesh, a

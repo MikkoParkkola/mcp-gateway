@@ -446,6 +446,10 @@ mod tests {
     }
 }
 
+/// The route that carries tool-invocation authority. `/mcp/{name}` starts with
+/// it, so one prefix answers for the whole surface (`router::create_router_with`).
+const TOOL_ROUTE: &str = "/mcp";
+
 /// Why an unauthenticated gateway must not serve HTTP on this bind, if it must not.
 ///
 /// Returned as a message rather than logged, so the caller refuses before
@@ -466,10 +470,6 @@ mod tests {
 /// [`reload_posture_refusal`] closes that: a reload which would enter the state
 /// is refused rather than applied. This function stays the single place that
 /// decides what the state IS, and is called from both.
-/// The route that carries tool-invocation authority. `/mcp/{name}` starts with
-/// it, so one prefix answers for the whole surface (`router::create_router_with`).
-const TOOL_ROUTE: &str = "/mcp";
-
 #[must_use]
 pub fn network_bind_refusal(config: &Config) -> Option<String> {
     if config.server.allow_unauthenticated_network_bind {

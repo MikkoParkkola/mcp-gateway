@@ -256,15 +256,23 @@ otherwise get wrong:
 
 1. the whole patch was skipped, backends in the same file included, so nobody
    assumes a bundled backend registered;
-2. the running gateway is unchanged and still serving the old config;
-3. this configuration is **on disk**, so the next start — including an
-   unplanned one — will refuse to serve. Revert it or close the tool paths.
+2. the gateway keeps serving the configuration that was in force before this
+   reload — not necessarily the one it started with, since an earlier reload may
+   have applied backends;
+3. what a **restart** does with this same file, which is not one answer. A file
+   that also enables authentication is ACCEPTED by a restart, so that operator
+   is told to restart rather than to revert. A file that only declares the name
+   REFUSES at the next start, planned or not, so that operator is told to revert
+   it or close the tool paths. Taken from `network_bind_refusal(wanted)` — the
+   startup question, asked of the file — rather than assumed.
 
-Point 3 is worded around the disk rather than around what changed, because the
-two entry points differ: the file watcher fires because the operator edited the
-file, while the admin UI writes the file itself before reloading. "The file is
-unchanged" is false on the second path and unhelpful on the first. What holds on
-both is that the refusing configuration is the one on disk.
+Point 3 was a single unconditional sentence in the first draft, saying the next
+start would refuse. Two reviewers caught it: that is false for the file the
+deployment guide tells an operator to write, so the refusal was contradicting
+our own advice and telling them to undo the fix. Worded around what a restart
+DOES rather than around what changed, because the two entry points differ — the
+file watcher fires because the operator edited the file, the admin UI writes the
+file itself before reloading — and the restart outcome is true on both.
 
 It carries the `network_bind_refusal` text as well, which already names the
 condition and the remedy.
