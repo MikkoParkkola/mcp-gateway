@@ -139,7 +139,10 @@ impl OriginPolicy {
         let candidate = origin.trim_end_matches('/').to_ascii_lowercase();
         // Canonical, not string equality: a browser omits the port when it is
         // the scheme default, so a gateway on port 80 or 443 would refuse its
-        // own page against an allow-list entry that spells the port out.
+        // own page against an allow-list entry that spells the port out. Used
+        // for BOTH allow-list paths — the configured origins and `public_url` —
+        // because one decision reached by two comparison rules is a decision
+        // that can come out two ways.
         if self
             .allowed_origins
             .iter()
@@ -147,7 +150,7 @@ impl OriginPolicy {
         {
             return true;
         }
-        if public.is_some_and(|(_, public_origin)| *public_origin == candidate) {
+        if public.is_some_and(|(_, public_origin)| same_origin(public_origin, &candidate)) {
             return true;
         }
 

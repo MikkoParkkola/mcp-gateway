@@ -16,11 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A web page could therefore reach the gateway's local port and call its tools
   with whatever credentials the gateway holds.
 
-  Two related gaps were addressed in the same change. The handler accepted a
-  request body without requiring a JSON content type, a session, or a prior
-  `initialize`, so a cross-origin POST could reach `tools/call` without a
-  preflight. Separately, the checks below apply to browsers only; a process
-  running under the same user account is not constrained by them.
+  A related shape is worth stating precisely, because the mechanism that
+  closes it is not the obvious one. The handler accepts a request body without
+  requiring a JSON content type, a session, or a prior `initialize`, so a
+  cross-origin form POST can reach `tools/call` without triggering a preflight.
+  That vector is closed by the origin check below and by nothing else: a form
+  POST from a browser carries `Origin`, and the request is refused on it. No
+  content-type requirement was added, because non-browser MCP clients do not
+  reliably send one and refusing them would break the callers this gateway
+  exists to serve.
+
+  Separately, the checks below apply to browsers only; a process running under
+  the same user account is not constrained by them.
 
   Two changes, both required:
 
