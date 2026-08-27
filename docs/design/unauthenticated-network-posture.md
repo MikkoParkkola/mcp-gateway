@@ -127,3 +127,86 @@ Neither addresses adversary 3. Nothing at this layer can.
 | Does a refusal break stdio mode? | Read `server/mod.rs:1230` and its caller | No. Only `Gateway::run` reaches it | Allowed refusal instead of a warning-only compromise |
 | Do our own docs recommend non-loopback with auth off? | `rg '0\.0\.0\.0' docs/ README.md` | No. The one wide-bind example enables auth | Removed the main argument against refusing |
 | Does the final file inherit the scratch file's mode? | `rename(2)` preserves the inode | Yes | Let the fix sit at creation, closing the window |
+
+## Decision C — a reload that would open the tools is refused, not applied
+
+Added 2026-08-27, after Decision A shipped. It closes the gap Decision A left
+open and that `support.rs` recorded rather than guessed at.
+
+### SCOPE
+
+FOR: the forbidden state Decision A refuses at startup cannot be entered by a
+reload of a running gateway.
+
+OUT: making `auth` apply live; pre-write rejection in the admin UI; anything
+about a local process running as the operator.
+
+### What Decision A's sufficiency argument missed
+
+That argument checked two halves — `server.host` is restart-required, and `auth`
+is snapshotted at construction — and concluded a once-at-startup check suffices.
+It was true when written. `network_bind_refusal` then grew a third input:
+`server.public_url`, keyed on declared reachability because a tunnel or reverse
+proxy is not where the bind address says the request arrives from.
+
+`server.public_url` is the one `server` field deliberately excluded from
+restart-required, because the origin gate re-reads it per request
+(`config_reload/mod.rs`, `pending_restart_fields`). So adding a non-loopback
+`public_url` to a RUNNING gateway whose tool paths are public reaches exactly
+the state startup refuses, without passing through the check.
+
+### The decision
+
+A reload is **refused** — not merely reported — when the running config would
+not have been refused at startup and the new one would. The gateway keeps
+serving the old config: no dropped connections, nothing changing underneath the
+operator, and the file on disk is left alone.
+
+The result says so at the moment they asked, with `restart_required: true`, a
+stable reason, and the full refusal text, which already carries the remedy. Not
+a prompt: a reload is a file change or a signal and there is nobody to prompt.
+
+Reported as restart-required rather than as an error because that is what it is
+— the change is not lost, it is unapplied — and because restarting is what
+surfaces the startup refusal with its remedy. The message says the restart will
+refuse to serve, so it is not an invitation into a dead gateway.
+
+### Why a transition, and not "is the new config refusable"
+
+Keyed on `refusal(running).is_none() && refusal(new).is_some()`, using
+`LiveConfig::running()` — the same snapshot the startup check ran against.
+
+An unconditional test of the new config would refuse every reload for any
+gateway already running in a refusable state. Today that is unreachable on the
+HTTP path, since startup refused it. It is reachable off that path: `run_stdio`
+has no listener and never runs the check, and the file watcher is started from
+`Gateway::run` only today. Keying on the transition stays correct if a stdio
+reload path is ever added, and costs one comparison.
+
+### Why not just report it
+
+Adding `public_url` to `pending_restart_fields` reports and does not refuse:
+`live_config.set(new_config)` still runs, the origin gate re-reads the new host
+on the next request, and the tools are open with an accurate warning next to
+them. The refusal has to happen before the publish, which is also before
+`apply_patch` and its side effects.
+
+### Accepted residual
+
+An admin-UI edit writes the file first and reloads second, so a config that
+would refuse at startup can be persisted and then reported unapplied. The write
+is the operator's stated intent and the reload result tells them immediately;
+rejecting the write is a separate change and is out of scope here.
+
+### Test plan
+
+| AC | Case | Level | Type |
+|----|------|-------|------|
+| A reload adding a published `public_url` over public tool paths is refused | `restart_reason` is the new constant, not the generic pending-fields one | unit | security |
+| Refused means not applied | a backend added in the same file is absent from the registry, and the live snapshot still has no `public_url` | unit | security |
+| A reload that does not enter the state is unaffected | the same file with tool paths not public applies normally | unit | regression |
+
+The first case needs its own reason constant to be able to fail: the fixture
+edits `auth`, a tracked section, so `with_pending_restart` already sets
+`restart_required: true` on the un-guarded code. Asserting the boolean alone
+would pass without the guard.
