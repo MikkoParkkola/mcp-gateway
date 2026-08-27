@@ -458,8 +458,30 @@ mod tests {
 /// snapshotted into the router at construction and never replaced by a reload.
 #[must_use]
 pub fn network_bind_refusal(config: &Config) -> Option<String> {
-    if config.server.allow_unauthenticated_network_bind
-        || crate::gateway::router::is_loopback_bind(&config.server.host)
+    if config.server.allow_unauthenticated_network_bind {
+        return None;
+    }
+
+    // A loopback bind is not on its own a reason to stop asking. Declaring
+    // `server.public_url` with a non-loopback host says the gateway is reached
+    // from elsewhere — through a tunnel or a reverse proxy — and the origin
+    // gate admits that hostname precisely so those requests work. Combined with
+    // a public `/mcp`, the whole tool surface is then reachable from wherever
+    // that proxy is, with no credential, while the operator's config says
+    // `auth.enabled: true` and reads as protected.
+    //
+    // Keyed on the declared reachability rather than the bind address, because
+    // the bind address is not where such a request arrives from.
+    let declared_public_host = config
+        .server
+        .public_url
+        .as_deref()
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|u| u.host_str().map(str::to_string))
+        .filter(|h| !crate::gateway::router::is_loopback_bind(h));
+
+    if crate::gateway::router::is_loopback_bind(&config.server.host)
+        && declared_public_host.is_none()
     {
         return None;
     }
@@ -485,18 +507,27 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     } else {
         "authentication is disabled"
     };
-    let remedy = if config.auth.enabled {
+    // Two ways to be reachable, and the remedy differs. A wide bind is fixed by
+    // narrowing it; a declared public_url cannot be — the operator wants that
+    // reachability — so there the only fix is to stop leaving tools open.
+    let exposure = declared_public_host.as_deref().map_or_else(
+        || format!("the bind address {}", config.server.host),
+        |h| format!("the declared public_url host {h}"),
+    );
+    let remedy = if declared_public_host.is_some() {
+        "Remove the tool paths from auth.public_paths: a gateway published by \
+         name is reached by more than the client on this machine."
+    } else if config.auth.enabled {
         "Remove the tool paths from auth.public_paths, or bind 127.0.0.1."
     } else {
         "Set auth.enabled = true and keep auth.public_paths to /health, or bind 127.0.0.1."
     };
     Some(format!(
-        "refusing to serve HTTP on {}: {cause}, so any caller that reaches this \
-         address can invoke every configured backend with this gateway's \
-         credentials. {remedy} If authentication terminates in front of this \
-         gateway (a sidecar, a service mesh, or a reverse proxy), set \
-         server.allow_unauthenticated_network_bind = true.",
-        config.server.host
+        "refusing to serve HTTP, reachable at {exposure}: {cause}, so any caller \
+         that reaches it can invoke every configured backend with this \
+         gateway's credentials. {remedy} If authentication terminates in front \
+         of this gateway (a sidecar, a service mesh, or a reverse proxy), set \
+         server.allow_unauthenticated_network_bind = true."
     ))
 }
 
@@ -536,6 +567,47 @@ mod network_bind_tests {
         let mut probe_only = config("0.0.0.0", true, false);
         probe_only.auth.public_paths = vec!["/health".to_string()];
         assert!(network_bind_refusal(&probe_only).is_none());
+    }
+
+    #[test]
+    fn a_published_loopback_gateway_still_refuses_open_tools() {
+        // The interaction the three changes create together, which none of them
+        // has alone. The bind is loopback, so the bind-address check passes.
+        // `public_url` is declared, so the origin gate deliberately admits that
+        // hostname — that is what it is for. The starter config leaves /mcp
+        // public so the local client keeps working. Put together, a proxy or
+        // tunnel in front reaches every backend with no credential, while the
+        // operator's config says `auth.enabled: true` and reads as protected.
+        let mut c = config("127.0.0.1", true, false);
+        c.server.public_url = Some("https://gw.example.com".to_string());
+        c.auth.public_paths = vec!["/health".to_string(), "/mcp".to_string()];
+
+        let refusal = network_bind_refusal(&c);
+        assert!(
+            refusal.is_some(),
+            "a gateway published by name must not leave tools open"
+        );
+        let msg = refusal.unwrap();
+        assert!(
+            msg.contains("gw.example.com"),
+            "and must name the declared host as the exposure, since narrowing \
+             the bind would not fix it: {msg}"
+        );
+
+        // A loopback public_url is not a publication, so nothing changes.
+        let mut local = config("127.0.0.1", true, false);
+        local.server.public_url = Some("http://127.0.0.1:39400".to_string());
+        local.auth.public_paths = vec!["/health".to_string(), "/mcp".to_string()];
+        assert!(
+            network_bind_refusal(&local).is_none(),
+            "the ordinary local install must still start"
+        );
+
+        // And health-only stays fine even when published.
+        let mut published_probe = config("127.0.0.1", true, false);
+        published_probe.server.public_url = Some("https://gw.example.com".to_string());
+        published_probe.auth.public_paths = vec!["/health".to_string()];
+        assert!(network_bind_refusal(&published_probe).is_none());
     }
 
     #[test]
