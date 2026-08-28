@@ -12,8 +12,10 @@ OUT, tracked separately: authentication on by default and credential
 provisioning (MIK-7243), the destructive-confirmation gate (MIK-7246),
 capabilities taking a caller-supplied URL (MIK-7247).
 
-This scope moved once, on 2026-08-28, to take in two more members of the same
-class found by the final review — see Decision D.
+This scope moved twice, both on 2026-08-28: to take in two more members of the
+same class found by the final review (Decision D), and to close the two ways
+this change's own gates refuse the caller they were built to admit
+(Decision E).
 
 ## Which adversaries
 
@@ -596,3 +598,56 @@ grep, not "token" or "config".
 The inode assertion is the load-bearing one. A test asserting only the final
 mode passes against the old code, which did reach `0600` — one syscall late, and
 without ever detaching from the file it inherited.
+
+## Decision E — a gate that refuses the legitimate caller is a defect, not a posture
+
+Both gates this work added deny by default, which is right, and both had a
+configuration in which nothing could ever satisfy them. Neither is reachable by
+an adversary; both make the product unusable for an operator who did everything
+the documentation says. They are listed here because a closed gate looks
+correct from the inside — the refusal is logged, the tests pass, and only the
+person locked out knows.
+
+### An install administered by an API key could not open its own dashboard
+
+The bootstrap link is printed at startup and redeemed once. Redemption required
+`auth.bearer_token`, so an install whose only admin credential is an admin API
+key was refused every time, with a message that did not say why.
+
+The credential is never exchanged in this exchange — the link is an opaque
+single-use handle, and the session it issues carries admin rights. So the
+question the gate must ask is whether the install has an admin credential at
+all, not which kind. An admin API key answers yes. A restricted key does not,
+and is still refused: the session it would issue is more powerful than the key.
+
+Nothing configured admits nobody, and now says so, naming `auth.bearer_token`,
+an admin API key, and `mcp-gateway init`.
+
+### The shipped deployments declared no name, so the Host gate refused every client
+
+On a non-loopback bind the Host gate admits a numeric address unconditionally
+and a NAME only when `server.public_url` declares it. Every shipped deployment
+binds `0.0.0.0` because a container or pod must, and none of them declared a
+name.
+
+The failure is quiet in the worst way: kubelet probes an address, so readiness
+stays green, while every client dialling the Service by name gets 403. The
+single-node compose file has the same shape — the client on the host and the
+container's own healthcheck both dial `localhost`.
+
+Each shipped config now declares the one name its callers use, and the chart
+derives it from the release's own Service and namespace rather than asking the
+operator to repeat what the chart already knows.
+
+### Test plan (Decision E)
+
+| AC | Case | Level | Type |
+|----|------|-------|------|
+| An admin API key opens the dashboard | redeem a bootstrap link on an install with no bearer token and one admin key, assert `303` | unit | functional |
+| A restricted API key does not | same install, key without admin, assert `401` | unit | security |
+| An install with no admin credential is told so | redemption returns `401` naming the settings that would fix it | unit | functional |
+| A 0.0.0.0 Kubernetes config declares its name | parse the shipped ConfigMap, require a `.svc.cluster.local` `public_url`; require the chart template to render one | unit | functional |
+| The compose service declares its name | parse the shipped compose file, require `MCP_GATEWAY_SERVER__PUBLIC_URL` to name the published port | unit | functional |
+
+The restricted-key row is the one that keeps the repair honest. Widening the
+gate to "any API key is configured" passes every other row here.
