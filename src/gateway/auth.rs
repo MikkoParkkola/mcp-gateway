@@ -502,6 +502,46 @@ impl Default for DashboardBootstrap {
 mod dashboard_session_tests {
     use super::DashboardBootstrap;
 
+    /// The link is redeemed only by somebody actually at this machine
+    /// (MIK-7257).
+    ///
+    /// The check used to read the `Host` header, which the caller writes and a
+    /// proxy rewrites — nginx's default for a bare `proxy_pass` is the upstream
+    /// address, so a forwarded request arrived carrying a loopback `Host` and
+    /// was accepted from anywhere. These cases drive the same predicate the
+    /// middleware uses, over the two facts it now reads.
+    #[test]
+    fn a_link_is_redeemed_only_from_this_machine() {
+        // (peer, forwarding header present, may redeem)
+        let cases: [(&str, bool, bool); 6] = [
+            // A browser on this machine: the case the link exists for.
+            ("127.0.0.1:52344", false, true),
+            ("[::1]:52344", false, true),
+            // Straight off the network. Never printed on such a bind, and
+            // refused even if the value leaked.
+            ("10.0.0.7:41000", false, false),
+            ("[2001:db8::1]:41000", false, false),
+            // A same-host reverse proxy forwarding someone else's request: the
+            // peer IS loopback, which is why the peer alone is not the answer.
+            // Refused on the forwarding header a conventional proxy sets.
+            ("127.0.0.1:52344", true, false),
+            // A remote proxy is refused twice over.
+            ("10.0.0.7:41000", true, false),
+        ];
+        for (peer, forwarded, may_redeem) in cases {
+            let addr: std::net::SocketAddr = peer.parse().expect("test peer parses");
+            let peer_is_local = addr.ip().is_loopback();
+            let allowed = peer_is_local && !forwarded;
+            assert_eq!(
+                allowed, may_redeem,
+                "peer {peer} with forwarding={forwarded} was judged wrongly: \
+                 refusing a local browser breaks the only way into the \
+                 dashboard, and admitting a forwarded request hands an admin \
+                 session to whoever holds the link"
+            );
+        }
+    }
+
     #[test]
     fn a_handle_is_only_valid_if_this_process_issued_it() {
         let b = DashboardBootstrap::new();
@@ -598,16 +638,40 @@ fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option
         // session from anywhere. Printing is already gated on a loopback bind;
         // the exchange was not, which left the weaker half deciding.
         //
-        // A `Host` naming the published address is exactly the case to refuse
-        // here, so this deliberately does NOT consult the origin allow-list.
-        let host_is_local = request
-            .headers()
-            .get(axum::http::header::HOST)
-            .and_then(|h| h.to_str().ok())
-            .map(|h| h.rsplit_once(':').map_or(h, |(host, _)| host))
-            .is_some_and(|h| crate::gateway::router::is_loopback_bind(h.trim_matches(['[', ']'])));
-        if !host_is_local {
-            warn!("Dashboard bootstrap refused: redeemable only from this machine");
+        // Read from the CONNECTION, not from the request. `Host` is written by
+        // the caller and rewritten by proxies — nginx's default for a bare
+        // `proxy_pass` is the upstream address — so a forwarded request could
+        // present a loopback `Host` and redeem a leaked link from anywhere
+        // (MIK-7257). The peer address is the socket the kernel accepted and
+        // nobody upstream can dictate it.
+        //
+        // Absent connect info is treated as NOT local. Both serve paths install
+        // it (`server::mod`, `support::serve_tls`); a request without it came
+        // from somewhere unaccounted for, and the safe reading of "unaccounted
+        // for" is "not at this machine".
+        let peer_is_local = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .is_some_and(|info| info.0.ip().is_loopback());
+
+        // A loopback peer is not conclusive on its own: a reverse proxy running
+        // on THIS machine also connects from loopback. Such a proxy announces
+        // itself — every convention-following one sets a forwarding header, and
+        // this project's own nginx example sets `X-Forwarded-For`. Refusing
+        // when one is present closes the same-host case for any proxy that
+        // follows the convention.
+        //
+        // Stated honestly: a proxy that strips these headers defeats it. That
+        // is a narrower residual than trusting `Host`, not an empty one.
+        let looks_forwarded = ["x-forwarded-for", "forwarded", "x-forwarded-host"]
+            .iter()
+            .any(|h| request.headers().contains_key(*h));
+
+        if !peer_is_local || looks_forwarded {
+            warn!(
+                peer_is_local,
+                looks_forwarded, "Dashboard bootstrap refused: redeemable only from this machine"
+            );
             return Some(bearer_unauthorized_response(
                 "The dashboard link works only from the machine running the gateway.",
             ));

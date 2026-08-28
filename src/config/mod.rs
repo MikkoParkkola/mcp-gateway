@@ -369,7 +369,73 @@ impl Config {
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
+        self.validate_agent_key_material()?;
         self.key_server.validate()?;
+        Ok(())
+    }
+
+    /// Refuse to start when an enabled agent's key material cannot reject
+    /// anybody (MIK-7258).
+    ///
+    /// `DecodingKey::from_secret(b"")` is a perfectly valid key, so an agent
+    /// whose HS256 secret is empty verifies a token ANY caller can sign. The
+    /// config reads as having agent authentication on while that agent
+    /// authenticates the world. Nothing rejected it: the 32-byte figure existed
+    /// only as advice in `gateway::oauth::jwt`'s module docs.
+    ///
+    /// Checked on the RESOLVED value, not the literal. An `env:` reference to a
+    /// variable that exists and is empty passes every other check — existence
+    /// is what `validate_required_env_references` asks, and it is not the
+    /// question here.
+    ///
+    /// Every enabled agent, not merely one of them: a caller forges the WEAKEST
+    /// agent's token and gets that agent's scopes, so one sound definition
+    /// beside a forgeable one protects nothing.
+    fn validate_agent_key_material(&self) -> Result<()> {
+        /// Shortest HS256 secret accepted, in bytes. A shorter shared secret is
+        /// brute-forceable rather than merely inadvisable, and this is the
+        /// length this project's own guidance already asks for.
+        const MIN_HS256_SECRET_BYTES: usize = 32;
+
+        if !self.agent_auth.enabled {
+            return Ok(());
+        }
+        for agent in &self.agent_auth.agents {
+            let has_rsa = agent
+                .rs256_public_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty());
+            if has_rsa {
+                continue;
+            }
+            let Some(raw) = agent.hs256_secret.as_deref() else {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'] has neither hs256_secret nor \
+                     rs256_public_key, so it can verify nothing",
+                    agent.client_id
+                )));
+            };
+            let resolved = match raw.strip_prefix("env:") {
+                Some(var) => std::env::var(var).map_err(|_| {
+                    Error::ConfigValidation(format!(
+                        "agent_auth.agents['{}'].hs256_secret references missing \
+                         environment variable '{var}'",
+                        agent.client_id
+                    ))
+                })?,
+                None => raw.to_string(),
+            };
+            if resolved.len() < MIN_HS256_SECRET_BYTES {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'].hs256_secret resolves to {} bytes; \
+                     at least {MIN_HS256_SECRET_BYTES} are required. A short or \
+                     empty shared secret can be guessed or signed by anyone, so \
+                     that agent would authenticate every caller.",
+                    agent.client_id,
+                    resolved.len()
+                )));
+            }
+        }
         Ok(())
     }
 

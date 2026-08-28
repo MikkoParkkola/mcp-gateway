@@ -646,10 +646,16 @@ takes the directory's inherited permissions). Tools work without
 it; managing the gateway and reading the dashboard need it.
 
 A browser cannot attach an `Authorization` header to a navigation, so `serve`
-prints a link — **on a loopback bind only**, and refused unless the request's
-`Host` names a loopback address. That check reads a header the caller supplies,
-which a reverse proxy may rewrite, so treat the printed value as sensitive
-rather than as safe-by-construction. A gateway bound to a network address prints none, because a link that
+prints a link — **on a loopback bind only**, and redeemable only from this
+machine. That is checked against the connection's own peer address, not against
+a header the caller writes: a request forwarded from elsewhere carries whatever
+`Host` the proxy chose, and the peer is the socket the kernel accepted.
+
+A reverse proxy running on this same machine connects from loopback too, so a
+request carrying a forwarding header (`X-Forwarded-For`, `Forwarded`,
+`X-Forwarded-Host`) is refused as well. **Residual, stated rather than implied
+away**: a proxy that strips those headers would still be indistinguishable from
+a local browser. Treat the printed value as sensitive. A gateway bound to a network address prints none, because a link that
 grants an admin session should not travel in a log that leaves the host.
 
 There is therefore no link to use on such a gateway, and a port-forward does not

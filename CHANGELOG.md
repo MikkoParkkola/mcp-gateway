@@ -30,11 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Opening it exchanges a single-use value for a session cookie and redirects,
   so nothing stays in the address bar. The value in the link is **not** the
-  admin credential; it works once, dies with the process, and is refused unless
-  the request's `Host` names a loopback address, so a link left in a shell
-  history is spent. That check reads a header the caller supplies, so treat the
-  printed value as sensitive rather than as safe-by-construction — hardening it
-  is tracked and the link is printed only on a loopback bind in the meantime. The cookie carries
+  admin credential; it works once, dies with the process, and is redeemable only
+  from this machine, so a link left in a shell history is spent.
+
+  Locality is established from the connection's peer address rather than from
+  the `Host` header, which the caller writes and a reverse proxy rewrites —
+  nginx's default for a bare `proxy_pass` is the upstream address, so a
+  forwarded request used to arrive carrying a loopback `Host`. A request with a
+  forwarding header is refused as well, since a proxy on this same machine also
+  connects from loopback. A proxy that strips those headers remains
+  indistinguishable from a local browser; the printed value is sensitive. The cookie carries
   an opaque handle rather than the credential, `HttpOnly` and
   `SameSite=Strict`, and `Secure` when the listener speaks TLS. Details in
   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#opening-the-dashboard).

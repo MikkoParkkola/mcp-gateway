@@ -962,3 +962,111 @@ fn retired_key_detector_reads_the_loaded_file() {
         "the file-reading path Config::load uses must find the retired key"
     );
 }
+
+// -------------------------------------------------------------------------
+// Agent key material (MIK-7258)
+//
+// `DecodingKey::from_secret(b"")` is a valid key anyone can sign for, so an
+// agent whose HS256 secret is empty verifies a token from any caller while the
+// config reads as authenticated. Nothing rejected it, and the network-posture
+// refusal then treated `agent_auth.enabled` as proof the tools demand a
+// credential — an exemption meant to recognise security, recognising none.
+//
+// The check lives here rather than in that refusal because three attempts to
+// judge key strength there each missed the next case.
+// -------------------------------------------------------------------------
+
+/// A config with agent auth on and one agent holding `secret`.
+fn agent_config(secret: Option<&str>, rsa: Option<&str>) -> Config {
+    let mut c = Config::default();
+    c.agent_auth.enabled = true;
+    c.agent_auth.agents = vec![crate::config::AgentDefinitionConfig {
+        client_id: "svc".to_string(),
+        name: "svc".to_string(),
+        hs256_secret: secret.map(str::to_string),
+        rs256_public_key: rsa.map(str::to_string),
+        scopes: Vec::new(),
+        issuer: None,
+        audience: None,
+    }];
+    c
+}
+
+#[test]
+fn an_agent_secret_that_could_not_reject_anybody_fails_validation() {
+    for (label, secret) in [
+        ("empty", ""),
+        ("one character", "x"),
+        (
+            "thirty-one bytes, one short of the floor",
+            &"k".repeat(31)[..],
+        ),
+    ] {
+        let err = agent_config(Some(secret), None)
+            .validate()
+            .expect_err(&format!("an agent secret that is {label} was accepted"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("svc") && msg.contains("hs256_secret"),
+            "the message must name the agent and the field: {msg}"
+        );
+    }
+}
+
+#[test]
+fn a_usable_agent_secret_validates() {
+    agent_config(Some(&"k".repeat(32)), None)
+        .validate()
+        .expect("a 32-byte secret is the documented minimum and must be accepted");
+    agent_config(
+        None,
+        Some("-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----"),
+    )
+    .validate()
+    .expect("an RSA public key needs no shared secret");
+}
+
+#[test]
+fn an_agent_with_no_key_material_at_all_fails_validation() {
+    let err = agent_config(None, None)
+        .validate()
+        .expect_err("an agent that can verify nothing was accepted");
+    assert!(
+        err.to_string().contains("can verify nothing"),
+        "the message must say what is wrong: {err}"
+    );
+}
+
+#[test]
+fn one_sound_agent_does_not_excuse_a_forgeable_sibling() {
+    // A caller forges the WEAKEST agent's token and gets that agent's scopes,
+    // so every enabled agent has to hold up. An earlier version of this check
+    // asked whether ANY agent was sound, which is exactly backwards.
+    let mut c = agent_config(Some(&"k".repeat(32)), None);
+    c.agent_auth
+        .agents
+        .push(crate::config::AgentDefinitionConfig {
+            client_id: "weak".to_string(),
+            name: "weak".to_string(),
+            hs256_secret: Some(String::new()),
+            rs256_public_key: None,
+            scopes: Vec::new(),
+            issuer: None,
+            audience: None,
+        });
+    let err = c
+        .validate()
+        .expect_err("a forgeable agent beside a sound one was accepted");
+    assert!(
+        err.to_string().contains("weak"),
+        "the message must name the agent that is wrong, not the sound one: {err}"
+    );
+}
+
+#[test]
+fn agent_auth_disabled_ignores_key_material_entirely() {
+    let mut c = agent_config(Some(""), None);
+    c.agent_auth.enabled = false;
+    c.validate()
+        .expect("a disabled agent_auth block verifies nothing and gates nothing");
+}

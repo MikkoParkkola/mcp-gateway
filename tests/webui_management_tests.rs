@@ -1629,16 +1629,22 @@ async fn the_dashboard_bootstrap_link_opens_the_dashboard() {
     let router = create_router(state);
 
     // Step 1: the printed link carries that value once.
-    let req = Request::builder()
+    //
+    // Driven with connect info, because that is how the gateway serves this
+    // router: both branches of `Gateway::run` use
+    // `into_make_service_with_connect_info`, and redemption now reads the peer
+    // address rather than the `Host` header — a header the caller writes and a
+    // proxy rewrites (MIK-7257). A `oneshot` with no peer is refused on
+    // purpose, so a faithful case has to supply one.
+    let mut req = Request::builder()
         .method(Method::GET)
         .uri(format!("/dashboard?bootstrap={bootstrap}"))
-        // A real browser always sends Host, and the link is printed for the
-        // machine running the gateway. Redemption is restricted to a loopback
-        // Host so a declared public_url cannot make the printed value usable
-        // from elsewhere; omitting the header made this case unfaithful.
         .header("host", "127.0.0.1:39400")
         .body(Body::empty())
         .unwrap();
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "127.0.0.1:52344".parse::<std::net::SocketAddr>().unwrap(),
+    ));
     let response = router.clone().oneshot(req).await.unwrap();
     assert_eq!(
         response.status(),
@@ -1935,4 +1941,47 @@ async fn a_reload_does_not_change_request_time_authentication() {
         "a reload changed request-time authentication — the reload posture \
          overlay reads `auth` from the running config and is now unsound"
     );
+}
+
+/// A leaked link cannot be redeemed through a proxy (MIK-7257).
+///
+/// The check used to read `Host`, which the caller writes and a reverse proxy
+/// rewrites — nginx's default for a bare `proxy_pass` is the upstream address.
+/// A request forwarded from anywhere therefore arrived carrying a loopback
+/// `Host` and was granted an admin session. Both cases below present exactly
+/// that: a perfect loopback `Host` and a valid, unspent bootstrap value.
+#[tokio::test]
+async fn a_forwarded_request_cannot_redeem_the_dashboard_link() {
+    for (label, peer, forwarded) in [
+        ("straight off the network", "203.0.113.9:41000", false),
+        ("through a proxy on this machine", "127.0.0.1:52344", true),
+    ] {
+        let auth = admin_auth_config();
+        let state = make_app_state_with_auth_config(&auth);
+        let bootstrap = state
+            .dashboard_bootstrap
+            .peek()
+            .expect("a fresh gateway has an unused bootstrap value");
+        let router = create_router(state);
+
+        let mut builder = Request::builder()
+            .method(Method::GET)
+            .uri(format!("/dashboard?bootstrap={bootstrap}"))
+            // The loopback Host the old check trusted.
+            .header("host", "127.0.0.1:39400");
+        if forwarded {
+            builder = builder.header("x-forwarded-for", "203.0.113.9");
+        }
+        let mut req = builder.body(Body::empty()).unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(
+            peer.parse::<std::net::SocketAddr>().unwrap(),
+        ));
+
+        let response = router.clone().oneshot(req).await.unwrap();
+        assert_ne!(
+            response.status(),
+            StatusCode::SEE_OTHER,
+            "a request {label} redeemed the link and was handed an admin session"
+        );
+    }
 }

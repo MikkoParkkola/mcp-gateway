@@ -208,7 +208,10 @@ pub(super) async fn serve_tls(
         .map_err(|e| crate::Error::Tls(format!("TLS listener setup failed: {e}")))?
         .acceptor(acceptor)
         .handle(handle)
-        .serve(app.into_make_service())
+        // WITH connect info: `try_dashboard_bootstrap` needs the real peer
+        // address to tell a local browser from a forwarded request, and a
+        // header cannot tell it that.
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .map_err(|e| crate::Error::Tls(format!("TLS server error: {e}")))
 }
@@ -584,7 +587,18 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     // one. Refusing that config was the same over-refusal one layer down.
     let mtls_gates_tools = config.mtls.enabled
         && (config.mtls.require_client_cert || !config.mtls.policies.is_empty());
-    if mtls_gates_tools || agent_auth_gates_tools(config) {
+    // `enabled` is enough HERE because it cannot be enabled and toothless:
+    // `Config::validate` refuses to load a config whose agent key material
+    // could not reject anybody (MIK-7258), so a forgeable agent never reaches
+    // a running gateway.
+    //
+    // This function grew three patches trying to judge key strength itself —
+    // an empty secret, then a short one, then an `env:` reference resolving to
+    // either, then one sound agent masking a forgeable sibling. Each patch was
+    // correct and the next review found the next hole, which is the shape of a
+    // check living in the wrong place. Validation owns key soundness; this owns
+    // whether a credential is demanded at all.
+    if mtls_gates_tools || config.agent_auth.enabled {
         return None;
     }
     // The message names the condition that actually fired. Saying only
@@ -686,42 +700,6 @@ pub struct ReloadPostureRefusal {
     pub reason: String,
     /// `true` when starting fresh on this same file would refuse to serve.
     pub restart_would_also_refuse: bool,
-}
-
-/// `true` when `agent_auth` will actually turn a credential-less caller away.
-///
-/// `enabled` alone is not that. The middleware verifies a JWT against each
-/// agent's key material, and `DecodingKey::from_secret(b"")` is a perfectly
-/// valid key that anyone can sign for — so an agent whose `hs256_secret` is an
-/// empty string authenticates the world. Treating `enabled` as a gate would let
-/// such a gateway serve every backend on a network address, which is the exact
-/// state this refusal exists to prevent, reached through the exemption meant to
-/// recognise security.
-///
-/// The minimum is one agent that could reject somebody: an RSA public key, or
-/// an HS256 secret long enough to be a secret. 32 bytes is the length this
-/// project's own guidance asks for (`gateway::oauth::jwt`, module docs).
-///
-/// An `env:` reference is counted as usable without resolving it: this runs
-/// before the environment is a settled thing to read, and a missing variable
-/// already fails configuration validation. Deliberately generous there, and
-/// deliberately strict about a literal empty string, which nothing else catches.
-fn agent_auth_gates_tools(config: &Config) -> bool {
-    /// Shortest HS256 secret this will accept as one, in bytes.
-    const MIN_HS256_SECRET_BYTES: usize = 32;
-
-    config.agent_auth.enabled
-        && config.agent_auth.agents.iter().any(|agent| {
-            let hs256_is_usable = agent
-                .hs256_secret
-                .as_deref()
-                .is_some_and(|s| s.starts_with("env:") || s.len() >= MIN_HS256_SECRET_BYTES);
-            let rs256_is_usable = agent
-                .rs256_public_key
-                .as_deref()
-                .is_some_and(|k| !k.trim().is_empty());
-            hs256_is_usable || rs256_is_usable
-        })
 }
 
 #[cfg(test)]
@@ -827,45 +805,16 @@ mod network_bind_tests {
         );
 
         // Agent JWT auth: the middleware wraps every route and answers 401 to a
-        // request with no valid token — PROVIDED an agent holds key material
-        // somebody could fail to produce.
-        let usable_agent = |secret: &str| {
-            let mut c = config("0.0.0.0", false, false);
-            c.agent_auth.enabled = true;
-            c.agent_auth.agents = vec![crate::config::AgentDefinitionConfig {
-                client_id: "a".to_string(),
-                name: "a".to_string(),
-                hs256_secret: Some(secret.to_string()),
-                rs256_public_key: None,
-                scopes: Vec::new(),
-                issuer: None,
-                audience: None,
-            }];
-            c
-        };
+        // request with no valid token. `enabled` is sufficient here because
+        // `Config::validate` refuses a config whose agent keys could not reject
+        // anybody, so this state cannot reach a running gateway — see
+        // `config::Config::validate_agent_key_material` and its tests.
+        let mut agent = config("0.0.0.0", false, false);
+        agent.agent_auth.enabled = true;
         assert!(
-            network_bind_refusal(&usable_agent(&"k".repeat(32))).is_none(),
+            network_bind_refusal(&agent).is_none(),
             "a gateway requiring an agent JWT was refused"
         );
-
-        // ...and these do NOT gate, which is the direction that matters:
-        // `DecodingKey::from_secret(b"")` is a key anyone can sign for, so an
-        // empty secret authenticates the world. `enabled` on its own, with no
-        // agent at all, verifies nothing either.
-        for (label, cfg) in [
-            ("an empty HS256 secret", usable_agent("")),
-            ("a secret too short to be one", usable_agent("short")),
-            ("no agents at all", {
-                let mut c = config("0.0.0.0", false, false);
-                c.agent_auth.enabled = true;
-                c
-            }),
-        ] {
-            assert!(
-                network_bind_refusal(&cfg).is_some(),
-                "agent auth with {label} was treated as a credential gate"
-            );
-        }
 
         // And with none of them, the same bind is still refused, so the cases
         // above pass on the gate rather than on the fixture.

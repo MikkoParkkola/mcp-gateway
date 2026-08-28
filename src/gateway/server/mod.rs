@@ -1387,10 +1387,13 @@ impl Gateway {
             )
             .await?;
         } else {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-                .await
-                .map_err(|e| Error::Tls(e.to_string()))?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal(shutdown_tx))
+            .await
+            .map_err(|e| Error::Tls(e.to_string()))?;
         }
 
         // Save search ranker usage data
