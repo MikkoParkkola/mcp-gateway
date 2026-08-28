@@ -449,6 +449,16 @@ auth:
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
 
+A gateway whose tools already require a native credential is not refused, even
+with `auth.enabled = false`: mTLS with `require_client_cert`, mTLS with a
+non-empty policy — which denies any call arriving without a verified identity —
+and `agent_auth` each mean the tool surface admits nobody without one. The
+refusal asks whether the tools can be invoked without a credential, not whether
+one particular setting is on.
+
+`scripts/dev/mtls-serve-smoke.sh` starts a real gateway over mTLS and asserts it
+stays up; run it after changing anything on the serve path.
+
 If authentication terminates in front of the gateway — a sidecar, a service
 mesh, or a reverse proxy that authenticates before forwarding — the gateway
 itself may serve unauthenticated on a network address:
