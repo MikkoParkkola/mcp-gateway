@@ -943,9 +943,12 @@ fn resolve_env_file_paths(raw: &[String]) -> Vec<PathBuf> {
 }
 
 /// Returns `true` for create/modify events on the watched config file.
-fn is_config_event(event: &Event, config_path: &std::path::Path) -> bool {
+fn is_config_event(event: &Event, config_paths: &[PathBuf]) -> bool {
     matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
-        && event.paths.iter().any(|p| p == config_path)
+        && event
+            .paths
+            .iter()
+            .any(|p| config_paths.iter().any(|watched| watched == p))
 }
 
 /// Returns `Some(path)` when the event matches any of the watched env files,
@@ -1029,14 +1032,14 @@ impl ConfigWatcher {
         config_path: &std::path::Path,
         env_file_paths: &[PathBuf],
     ) -> Result<RecommendedWatcher> {
-        let config_path_owned = config_path.to_path_buf();
+        let config_paths_owned = config_watch_paths(config_path.to_path_buf());
         let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
         let mut watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
-                if is_config_event(&event, &config_path_owned) {
+                if is_config_event(&event, &config_paths_owned) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
                     let _ = event_tx.try_send(ReloadTrigger::EnvFile(path));
@@ -1048,17 +1051,21 @@ impl ConfigWatcher {
             crate::Error::ConfigWatcher(format!("Failed to create config watcher: {e}"))
         })?;
 
-        // Watch the config file's parent directory.
-        let config_dir = watch_dir_of(config_path);
-        watcher
-            .watch(&config_dir, RecursiveMode::NonRecursive)
-            .map_err(|e| {
-                crate::Error::ConfigWatcher(format!("Failed to watch config path: {e}"))
-            })?;
-
-        // Watch each env file's parent directory (skip duplicates and missing).
+        // Watch the parent directory of every path the config can arrive as.
+        // A symlinked config has two: the link the operator named and the
+        // target an in-place write actually touches.
         let mut watched_dirs = std::collections::HashSet::new();
-        watched_dirs.insert(config_dir);
+        for path in &config_watch_paths(config_path.to_path_buf()) {
+            let dir = watch_dir_of(path);
+            if !watched_dirs.insert(dir.clone()) {
+                continue;
+            }
+            watcher
+                .watch(&dir, RecursiveMode::NonRecursive)
+                .map_err(|e| {
+                    crate::Error::ConfigWatcher(format!("Failed to watch config path: {e}"))
+                })?;
+        }
 
         for env_path in env_file_paths {
             let dir = watch_dir_of(env_path);
@@ -1703,6 +1710,23 @@ fn absolute_watch_path(path: PathBuf) -> PathBuf {
 
 /// The directory to watch for changes to `path`.
 ///
+/// Every absolute path a config-file event can legitimately arrive as.
+///
+/// A symlinked config has two, and watching either alone loses a real case:
+/// matching only the operator-named link misses an in-place write to the
+/// target (which is what editing the config through the link does), and
+/// matching only the target misses a retarget of the link itself.
+fn config_watch_paths(path: PathBuf) -> Vec<PathBuf> {
+    let named = absolute_watch_path(path);
+    let mut paths = vec![named.clone()];
+    if let Ok(target) = std::fs::canonicalize(&named)
+        && target != named
+    {
+        paths.push(target);
+    }
+    paths
+}
+
 /// `Path::parent` returns an empty path for a bare relative filename such as
 /// `gateway.yaml`, and an empty path cannot be watched. Both callers below
 /// hand this a user-supplied path, so both need the same answer.

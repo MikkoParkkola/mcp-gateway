@@ -434,7 +434,10 @@ fn is_config_event_matches_modify_on_exact_path() {
         attrs: EventAttributes::default(),
     };
     // WHEN / THEN
-    assert!(super::is_config_event(&event, &config_path));
+    assert!(super::is_config_event(
+        &event,
+        std::slice::from_ref(&config_path)
+    ));
 }
 
 #[test]
@@ -450,7 +453,10 @@ fn is_config_event_does_not_match_different_path() {
         attrs: EventAttributes::default(),
     };
     // WHEN / THEN
-    assert!(!super::is_config_event(&event, &config_path));
+    assert!(!super::is_config_event(
+        &event,
+        std::slice::from_ref(&config_path)
+    ));
 }
 
 #[test]
@@ -465,7 +471,10 @@ fn is_config_event_does_not_match_remove_event() {
         attrs: EventAttributes::default(),
     };
     // WHEN / THEN: Remove is not a trigger (only Create/Modify are)
-    assert!(!super::is_config_event(&event, &config_path));
+    assert!(!super::is_config_event(
+        &event,
+        std::slice::from_ref(&config_path)
+    ));
 }
 
 // -------------------------------------------------------------------------
@@ -1806,5 +1815,46 @@ fn absolute_watch_path_keeps_a_symlinked_file_unresolved() {
         resolved.parent(),
         std::fs::canonicalize(dir.path()).ok().as_deref(),
         "expected the parent chain to be canonical, got {resolved:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn config_watch_paths_covers_the_symlink_and_its_target() {
+    // GIVEN: a config the operator names through a symlink
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("release.yaml");
+    std::fs::write(&target, "backends: {}\n").expect("write target");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+    // WHEN: we work out which paths the watcher has to recognise
+    let paths = super::config_watch_paths(link.clone());
+
+    // THEN: both the operator-named link and its target are covered, so
+    // neither an in-place write to the target nor a retarget goes unseen.
+    let canonical_dir = std::fs::canonicalize(dir.path()).expect("canonical dir");
+    assert!(
+        paths.contains(&canonical_dir.join("gateway.yaml")),
+        "the operator-named path must stay watched: {paths:?}"
+    );
+    assert!(
+        paths.contains(&canonical_dir.join("release.yaml")),
+        "the symlink target must be watched too: {paths:?}"
+    );
+}
+
+#[test]
+fn config_watch_paths_of_a_plain_file_is_a_single_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("gateway.yaml");
+    std::fs::write(&file, "backends: {}\n").expect("write");
+
+    let paths = super::config_watch_paths(file);
+
+    assert_eq!(
+        paths.len(),
+        1,
+        "no duplicate watch for a plain file: {paths:?}"
     );
 }
