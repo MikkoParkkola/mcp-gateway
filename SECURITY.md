@@ -2,23 +2,31 @@
 
 ## Supported Versions
 
-| Version | Supported          |
+Only the latest release is supported. Security fixes ship in a new release;
+they are not backported to earlier versions.
+
+| Version | Supported |
 | ------- | ------------------ |
-| 2.7.x   | :white_check_mark: |
-| 2.6.x   | :white_check_mark: |
-| < 2.6   | :x:                |
+| [Latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) | :white_check_mark: |
+| Anything older | :x: |
+
+If you are running an older version, upgrading to the latest release is the fix.
 
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT open a public GitHub issue.**
-2. Email **mikko.parkkola@iki.fi** with:
+2. Preferred: use GitHub's private vulnerability reporting on this repository
+   (**Security** -> **Report a vulnerability**). It keeps the report private,
+   threads the discussion with the maintainer, and records your credit on the
+   advisory when it is published.
+3. Alternatively, email **mikko.parkkola@iki.fi** with:
    - Description of the vulnerability
    - Steps to reproduce
    - Affected version(s)
-3. You will receive acknowledgment within 48 hours.
-4. A fix will be developed and released within 7 days for critical issues.
+4. You will receive acknowledgment within 48 hours.
+5. A fix will be developed and released within 7 days for critical issues.
 
 ## Security Architecture
 
