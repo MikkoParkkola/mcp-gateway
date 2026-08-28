@@ -369,7 +369,87 @@ impl Config {
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
+        self.validate_agent_key_material()?;
         self.key_server.validate()?;
+        Ok(())
+    }
+
+    /// Refuse to start when an enabled agent's key material cannot reject
+    /// anybody (MIK-7258).
+    ///
+    /// `DecodingKey::from_secret(b"")` is a perfectly valid key, so an agent
+    /// whose HS256 secret is empty verifies a token ANY caller can sign. The
+    /// config reads as having agent authentication on while that agent
+    /// authenticates the world. Nothing rejected it: the 32-byte figure existed
+    /// only as advice in `gateway::oauth::jwt`'s module docs.
+    ///
+    /// Checked on the RESOLVED value, not the literal. An `env:` reference to a
+    /// variable that exists and is empty passes every other check — existence
+    /// is what `validate_required_env_references` asks, and it is not the
+    /// question here.
+    ///
+    /// Every enabled agent, not merely one of them: a caller forges the WEAKEST
+    /// agent's token and gets that agent's scopes, so one sound definition
+    /// beside a forgeable one protects nothing.
+    fn validate_agent_key_material(&self) -> Result<()> {
+        /// Shortest HS256 secret accepted, in bytes. A shorter shared secret is
+        /// brute-forceable rather than merely inadvisable, and this is the
+        /// length this project's own guidance already asks for.
+        const MIN_HS256_SECRET_BYTES: usize = 32;
+
+        if !self.agent_auth.enabled {
+            return Ok(());
+        }
+        for agent in &self.agent_auth.agents {
+            let has_rsa = agent
+                .rs256_public_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty());
+            let has_hs256 = agent.hs256_secret.is_some();
+            // The algorithm comes from the TOKEN HEADER, so with both keys
+            // configured the caller picks which one verifies its token and the
+            // agent is only as strong as the weaker key. `AgentDefinition`
+            // already documents "exactly one"; refusing is what enforces it.
+            if has_rsa && has_hs256 {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'] sets both hs256_secret and \
+                     rs256_public_key. The algorithm is read from the token, so \
+                     a caller chooses which key verifies it and the agent is \
+                     only as strong as the weaker one. Configure exactly one.",
+                    agent.client_id
+                )));
+            }
+            if has_rsa {
+                continue;
+            }
+            let Some(raw) = agent.hs256_secret.as_deref() else {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'] has neither hs256_secret nor \
+                     rs256_public_key, so it can verify nothing",
+                    agent.client_id
+                )));
+            };
+            let resolved = match raw.strip_prefix("env:") {
+                Some(var) => std::env::var(var).map_err(|_| {
+                    Error::ConfigValidation(format!(
+                        "agent_auth.agents['{}'].hs256_secret references missing \
+                         environment variable '{var}'",
+                        agent.client_id
+                    ))
+                })?,
+                None => raw.to_string(),
+            };
+            if resolved.len() < MIN_HS256_SECRET_BYTES {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'].hs256_secret resolves to {} bytes; \
+                     at least {MIN_HS256_SECRET_BYTES} are required. A short or \
+                     empty shared secret can be guessed or signed by anyone, so \
+                     that agent would authenticate every caller.",
+                    agent.client_id,
+                    resolved.len()
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -698,6 +778,19 @@ pub struct ServerConfig {
     /// metadata endpoint returns `503` until it is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
+    /// Serve HTTP on a non-loopback address with authentication disabled.
+    ///
+    /// Default false, and the gateway refuses to start in that combination:
+    /// every caller that reaches the address can invoke each configured backend
+    /// with the credentials this gateway holds.
+    ///
+    /// Set this only where authentication terminates in front of the gateway —
+    /// a sidecar, a service mesh, or a reverse proxy that authenticates before
+    /// forwarding. Naming that use makes the setting reviewable: a reader can
+    /// ask whether the fronting layer actually exists. It is logged at WARN on
+    /// every start while it remains set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_unauthenticated_network_bind: bool,
 }
 
 impl Default for ServerConfig {
@@ -710,6 +803,7 @@ impl Default for ServerConfig {
             shutdown_timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
             public_url: None,
+            allow_unauthenticated_network_bind: false,
         }
     }
 }

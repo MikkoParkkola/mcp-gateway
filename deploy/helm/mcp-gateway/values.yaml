@@ -33,11 +33,48 @@ resources:
     cpu: "1"
     memory: 512Mi
 
+# How this gateway proves who is calling it. A pod's service is reachable by
+# every other pod in the cluster, and the gateway refuses to serve a
+# network-reachable tool surface that needs no credential — so this has to be
+# answered, and the chart renders exactly one of the two answers.
+#
+#   credential  (default) the tools require a bearer token, supplied from the
+#               Secret named below. Only /health stays open, so probes work.
+#   mesh        a service mesh authenticates before anything reaches this pod.
+#               No token is rendered and server.allow_unauthenticated_network_bind
+#               is set, which is logged at WARN on every start.
+#
+# The two are mutually exclusive by construction. Setting the mesh flag while a
+# token reference was still rendered produced a pod that crash-looped on an
+# unresolvable environment variable.
+auth:
+  mode: credential
+  # credential mode only: the Secret holding the bearer token. Named by default
+  # rather than left blank, so the chart renders and the missing-Secret failure
+  # lands where Kubernetes reports it clearly — the pod stops with
+  # CreateContainerConfigError naming this Secret, instead of the chart refusing
+  # to render at all.
+  #
+  #   kubectl create secret generic mcp-gateway-auth \
+  #     --from-literal=token="$(openssl rand -base64 32)"
+  existingSecret: mcp-gateway-auth
+  secretKey: token
+
 # Gateway config rendered into a ConfigMap and mounted read-only.
 config:
   server:
     host: 0.0.0.0
     port: 39400
+    # The name clients dial. Left unset, the template fills in this release's
+    # in-cluster Service DNS name, which is what a pod-to-pod caller uses. On a
+    # 0.0.0.0 bind the Host gate admits exactly one NAME, so set it to the
+    # ingress hostname when something fronts the pod; numeric probes are
+    # admitted either way, and an undeclared name reads as a healthy gateway
+    # that answers no one.
+    # public_url: "https://mcp-gateway.example.com"
+  # `auth` is NOT set here on purpose: the template renders it from auth.mode
+  # above, so the credential and the mesh flag cannot both appear. A value set
+  # here would be overwritten.
   security:
     firewall:
       enabled: true

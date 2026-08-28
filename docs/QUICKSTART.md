@@ -40,7 +40,25 @@ cargo install mcp-gateway
 mcp-gateway init --profile local
 ```
 
-This writes `gateway.yaml` with sensible defaults and two free capability files under `capabilities/knowledge/`. Or create it manually:
+This writes `gateway.yaml` with sensible defaults and two free capability files under `capabilities/knowledge/`.
+
+It also generates an **admin credential** for this install and writes it into
+that file, which is created readable only by you on Unix. Tool calls do not need it —
+`init` lists `/health` and `/mcp` under `auth.public_paths` so the client you
+configure keeps working. Managing the gateway does: the four tools that change
+it for every session, and the operator dashboard.
+
+To open the dashboard, use the link `serve` prints on startup — on a loopback
+bind, which is the default. A browser cannot attach an `Authorization` header to
+a navigation, so the link carries a single-use value that is exchanged for a
+session cookie and then spent:
+
+```
+DASHBOARD (opens once, then remembered in this browser):
+  http://127.0.0.1:39400/dashboard?bootstrap=...
+```
+
+Or create the config manually:
 
 ```yaml
 server:
@@ -268,7 +286,9 @@ For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distr
 - **Find unmanaged MCP servers**: `mcp-gateway cap discover --shadow --format json` emits a passive ShadowRadar report with stable finding IDs, ownership, transport exposure, trust status, data risk, recommended action, confidence, verification, and rollback. It does not invoke discovered tools. Add `--write-config` only after reviewing adoptable local findings.
 - **Inspect the local control plane**: Open `http://127.0.0.1:39400/ui#control-plane` for read-only inventory, runtime health, decision queue, RBAC, and license-boundary status.
 - **Enable caching**: Add `cache: { enabled: true, default_ttl: 60s }` to your config.
-- **Enable auth**: Add `auth: { enabled: true, bearer_token: "auto" }` for token-based access control.
+- **Enable auth**: on a config `init` wrote, it is already on with a generated credential. On a hand-written one, use `auth: { enabled: true, bearer_token: "env:MCP_GATEWAY_TOKEN", public_paths: ["/health", "/mcp"] }` and set that variable to a secret you keep.
+
+  Two halves, both load-bearing. `public_paths` is not optional: turning authentication on gates **every** path, so enabling it alone makes the MCP client you already configured start failing. And do not use `bearer_token: "auto"` if anything needs to authenticate — it mints a fresh random token on every start and logs only a fingerprint, never the value, so no client can present it. See [DEPLOYMENT.md](DEPLOYMENT.md#admin-requires-a-credential).
 - **Install from registry**: Run `mcp-gateway cap search finance` and `mcp-gateway cap install stock_quote`.
 - **Check health**: `mcp-gateway doctor` diagnoses config, port, runtime health, MCP handshake, tool listing, env vars, client config, and passive ShadowRadar unmanaged-MCP findings. Use `mcp-gateway doctor --format json` for automation-friendly results with fix hints, risk, confirmation, verification, and rollback metadata. In a repo checkout, `scripts/dev/usability-smoke.sh` verifies the local first-use path stays noninteractive by default and only uses backup/rollback for config mutation, and `scripts/dev/service-template-smoke.sh` verifies the Docker Compose, systemd, and launchd templates consume the same generated config layout.
 - **Full config reference**: See the [README](../README.md) or [examples/gateway-full.yaml](../examples/gateway-full.yaml).

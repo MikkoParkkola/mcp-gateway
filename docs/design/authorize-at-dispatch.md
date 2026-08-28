@@ -1,0 +1,453 @@
+# Authorize at the dispatch chokepoint (MIK-7252)
+
+## §P0 SCOPE
+
+**FOR**: closing the path by which an internal orchestration caller reaches a
+backend tool without the invoking caller's authorization checks running.
+
+**OUT** (labelled, filed separately if raised):
+- the router's own pre-check, its error envelopes, and the firewall hook
+- admin gating of meta-tools (`is_admin_meta_tool`), already correct
+- SSRF policy semantics, `trust_configured_backends` (MIK-3529 settled)
+- rate limiting, cost budgets, identity grants — orthogonal controls
+- the origin/Host gate and anonymous-admin work on this branch
+
+## The defect
+
+`authorize_tool_target` (`src/gateway/router/authorization.rs:105`) is the only
+place the caller's backend scope, per-client tool scope, global tool policy,
+mTLS policy and agent scope are checked. It is called from exactly two sites,
+both in the router: `handlers.rs:547` and `backend_handlers.rs:82`.
+
+The router decides WHICH targets to check with
+`backend_tool_targets_for_call` (`authorization.rs:57`), which returns targets
+for three shapes only — a surfaced tool, `gateway_invoke`, and
+`gateway_execute`. Every other tool name returns an empty vector, and an empty
+vector authorizes nothing.
+
+`gateway_run_playbook` (`meta_mcp/mod.rs:1188`) is not one of the three. Its
+steps reach `MetaMcp::invoke_tool` through `MetaMcpInvoker::invoke`
+(`meta_mcp/support.rs:175`), and `invoke_tool_traced` performs only one
+authorization check of its own — an admin gate on capabilities that register a
+caller-addressed external destination (`invoke.rs:560`). Backend scope, tool
+scope, tool policy, mTLS and agent scope are never consulted on that path.
+
+`api_key_name` IS threaded down and is used for budget enforcement
+(`invoke.rs:861`), provenance subject (`:1440`) and identity grants (`:1782`).
+None of those is the client's backend/tool scope. **Carrying an identity that
+the authorization checks never read is not a fix** — an earlier commit on this
+branch claimed to close this ticket by threading that identity and was wrong.
+
+## Unknowns, resolved before freezing this design
+
+| question | what was run | answer | what it changed |
+|---|---|---|---|
+| Can the meta layer rebuild an `AuthenticatedClient` from `api_key_name`? | `rg` for a by-name lookup over `src/` | No such lookup exists; the value is produced by validating a presented credential (`auth.rs:333`) | Killed the "look it up at dispatch" option. The identity must be threaded, not recovered. |
+| Are playbook step targets knowable before execution? | read `PlaybookStep` (`playbook.rs:86-104`) | `server` and `tool` are static strings; only `arguments` interpolate | A router-side pre-check IS possible — so the choice between patch and elimination is a real choice, not forced. |
+| Does the code-mode chain have the same hole? | read `targets_from_code_mode_arguments` (`authorization.rs:209`) | No — it walks every `chain` step | Narrows the defect to the playbook path today, and shows the shape of the recurrence. |
+| Would the check break working setups? | read `can_access_backend` (`auth.rs:366`), `check_tool_scope` (`auth.rs:378`) | Both default-permissive: empty backend list means all, absent allow/deny lists pass | UX risk is contained to clients that carry an explicit restriction, which is the population the check is for. |
+| Does the playbook engine spawn steps onto a `'static` task? | read `src/playbook/engine/mod.rs` for `spawn`/`JoinHandle`/`'static` | No matches; steps are awaited inline against a borrowed invoker (`:177`) | Confirms a borrowed authorizer compiles. Raised as a review finding and refuted here rather than left as an assumption. |
+| What does a failed step do today? | read `engine/mod.rs:163-211` and `ErrorStrategy` (`playbook.rs:136`) | `Retry` re-runs it `max_retries` times; `Continue` records `Value::Null` and proceeds; `Abort` returns the error | Forced an explicit decision on refusal semantics — see below. A refusal handled as an ordinary step failure would be retried, or null-filled into a partial result. |
+| Does the stdio path have `AppState`? | read `src/gateway/server/mod.rs:1620-1670` | No. `dispatch_single` receives `tool_policy` AND `mtls_policy` (`:1542`), but checks only tool policy, only for `gateway_invoke` (`:1645`) | Killed the single-adapter design. Two authorizers are required, and stdio gains a check it does not have today. |
+| Should the stdio authorizer evaluate mTLS, since it holds the handle? | read `MtlsPolicy::evaluate` (`src/mtls/access_control/mod.rs:89-111`) | With the policy enabled, a `None` identity returns `Deny`, and a non-matching identity also returns `Deny` (fail-closed) | No. stdio presents no certificate, so an operator who configures any mTLS rule would find every stdio call refused. mTLS is a property of the network transport stdio does not use. Recorded because the handle being in scope makes this a live trap. |
+
+## Options
+
+**A — add `gateway_run_playbook` to `backend_tool_targets_for_call`.**
+Smallest diff. Rejected: it is the patch, and the finding stays statable
+afterwards. The defect is not "playbooks were forgotten", it is "authorization
+lives at the router while dispatch lives in the meta layer, so every internal
+caller must remember to register itself". Code mode was the third such caller
+and was remembered; the playbook was the fourth and was not. Rejected also
+because a step's `condition` can skip it, so the router would authorize targets
+that never run — refusing a playbook for a step that would not have executed is
+a UX regression invented by the fix.
+
+**B — authorize inside `MetaMcpInvoker::invoke`.** Fixes the playbook only.
+Same recurrence one layer down. Rejected.
+
+**C — authorize at the dispatch chokepoint (CHOSEN).** `invoke_tool_traced` is
+the point every backend invocation passes through. Authorizing there makes the
+finding unstatable: no path reaches a backend without it, so no future caller
+can forget.
+
+**D — a proof token mintable only by the authorizer.** Compile-time rather than
+runtime. Deferred, not rejected: C closes the hole, and D can be layered later.
+
+### The claim C rests on, made checkable
+
+Every call site that reaches `invoke_tool`, enumerated so a future reader can
+re-run the search rather than trust this list
+(`rg -n "invoke_tool\(" --type rust`, non-test):
+
+| site | shape | authorized today? |
+|---|---|---|
+| `meta_mcp/mod.rs:1140` | surfaced tool | yes — router computes the target |
+| `meta_mcp/mod.rs:1174` | `gateway_invoke` | yes — router computes the target |
+| `meta_mcp/search.rs:478` | code-mode single call | yes — `targets_from_code_mode_arguments` |
+| `meta_mcp/search.rs:531` | code-mode chain step | yes — same, walks every step |
+| `meta_mcp/support.rs:175` | **playbook step** | **no — this is the defect** |
+
+The value of the chokepoint is that this table stops needing to be correct.
+
+## The design (C)
+
+### What the chokepoint does and does not cover
+
+`invoke_tool_traced` is the single point every **meta-layer** dispatch passes
+through — surfaced tool, `gateway_invoke`, code-mode single, code-mode chain
+step, playbook step. It is not the only way a backend is reached: the direct
+`/mcp/{name}` passthrough (`router/backend_handlers.rs:403`) dispatches without
+entering the meta layer at all, which is why it carries its own
+`authorize_tool_target` call at `backend_handlers.rs:82`.
+
+So this change produces **two** authorization points, each adjacent to the
+dispatch it guards, and neither claims to cover the other. Stating it the
+narrow way is the point: a maintainer who believes the inner authorizer covers
+the direct route will one day delete the outer one.
+
+### Structure
+
+The meta layer cannot reach `AppState` and must not hold it: `AppState` owns
+`meta_mcp`, so an `Arc<AppState>` stored inside `MetaMcp` is a reference cycle
+that never frees. The authorization context is **borrowed per request, never
+stored** — compilable because no step execution is spawned onto a `'static`
+task (verified above).
+
+1. **A neutral home for the port.** `ToolTarget`, `OwnedToolTarget` and
+   `AuthorizationError` are `pub(super)` to `gateway::router`
+   (`router/authorization.rs:18,25,41`), so `meta_mcp` cannot name them and the
+   trait does not compile where they live. A new `src/gateway/authz.rs` owns
+   the trait, the target type and the error at `pub(crate)`;
+   `router::authorization` uses them rather than defining its own. A move, not
+   a second copy — two definitions of a target type is how two layers drift.
+2. `MetaMcpCallerContext<'a>` gains `authorizer: &'a (dyn ToolAuthorizer + Sync)`
+   and **loses its `Default` impl**, so no site can acquire an authorizer by
+   omission. Cost, counted after the change landed: 20 construction sites — 17 in
+   `meta_mcp/tests.rs`, one in `invoke.rs`, and the two production sites,
+   `server/mod.rs` for stdio and `router/handlers.rs` for HTTP. The count
+   before the change was 19 and omitted the HTTP site, which did not exist
+   yet; recorded correctly here because the count is the audit.
+   The audit line the chokepoint owes names a **transport**, which nothing
+   carries today. It is `fn transport(&self) -> Transport` **on the
+   `ToolAuthorizer` trait**, not a second field beside the authorizer: a field
+   can be set inconsistently with the authorizer it sits next to, and an audit
+   line that says `Stdio` while the router authorizer decided is worse than no
+   line. `RouterAuthorizer` answers `Http`, `ToolPolicyAuthorizer` answers
+   `Stdio`, and the two cannot disagree because there is only one of them.
+3. `ToolAuthorizer` takes the **whole `ToolTarget`**, matching
+   `authorize_tool_target`'s signature so the two cannot drift as policy grows
+   to read arguments.
+4. **Two production implementations, because the transports carry different
+   identity:**
+   - `RouterAuthorizer` (HTTP) captures `&AppState` plus the resolved `client`,
+     `oauth_agent_identity` and `cert_identity`, and calls the existing
+     `authorize_tool_target` unchanged. No policy logic is rewritten.
+   - `ToolPolicyAuthorizer` (stdio) checks the global tool policy only. It
+     **replaces** the inline block at `server/mod.rs:1631-1649`, which runs for
+     `gateway_invoke` alone — so stdio gains tool-policy enforcement on
+     playbook and code-mode steps that have none today. Deleting that block is
+     part of this change, not an addition beside it. It deliberately does not
+     evaluate mTLS: see the unknowns table.
+   - `AllowAll` exists only under `#[cfg(test)]`, so it cannot be reached from
+     a release build.
+   - The HTTP site constructs `RouterAuthorizer` **concretely**, not through a
+     `dyn` parameter it could be handed, so the weaker stdio authorizer cannot
+     be installed on the network path by a miswire. This is weaker than a
+     closed enum over the two transports, which was considered and deferred:
+     the enum's HTTP variant needs router types, reintroducing the layering
+     problem the neutral module exists to solve.
+5. `invoke_tool` takes `&MetaMcpCallerContext<'_>` instead of five loose
+   parameters. The comment declining that refactor cites "no behavioural gain";
+   there is one now, and the parameter count drops.
+6. `run_playbook` passes the caller context into `MetaMcpInvoker`, so each step
+   is authorized at the moment it runs — after its `condition` is evaluated.
+
+### Authorization precedes every pre-dispatch side effect
+
+Not only the cache read. A refused call must burn nothing, so the check runs
+before: the response-cache lookup, the idempotency lookup **and its in-flight
+registration**, any nonce registration, any per-user credential mint for an
+identity-propagating backend, the budget spend, and the "tool invoked" info
+log. A denied call that has already minted a token or pinned an idempotency key
+has had an effect it was not entitled to.
+
+**Exact placement, and a reviewer disagreement settled at source.** The order in
+`invoke_tool_traced` is: `server`/`tool` extracted at `:551-552`,
+`parse_tool_arguments` `:573`, `_full` stripped `:584`, `_claim` stripped
+`:594`, `validate_tool_name` `:621`, nonce check-and-register `:634`. One
+reviewer asked for the check to sit immediately above the nonce block, after the
+directive strips; it goes **immediately after `:552`**, reading `arguments` raw.
+
+The deciding fact is what the router's own pre-check sees: it builds its target
+from `extract_tools_call_params` output via `target_from_invoke_arguments`,
+which reads the raw inner `arguments` — directives included. Authorizing
+post-strip would hand the two layers different argument views, so a policy that
+one day reads arguments would give one rule two answers. Raw-and-earliest is
+also the point where nothing whatever has happened yet, which is the property
+this section is about.
+
+A consequence, stated so nobody deletes it as dead: `validate_tool_name` then
+runs twice — once inside `authorize_tool_target`, once at `:621`. It is pure and
+gives the same verdict both times, and the second call still guards the paths
+that never reach the first.
+
+### A denial is not retried, is never silent, and respects `on_error`
+
+An earlier revision of this design made an authorization refusal terminal
+regardless of `on_error`. Both reviewers rejected it and both were right, for
+two different reasons that compose:
+
+- It **overrides a documented contract**. `on_error: continue` is a deliberate
+  choice by the playbook author, and `playbooks/research.yaml` in this
+  repository uses it. Making a denial terminal takes the cleanup and fallback
+  steps after an optional step away from exactly the restricted callers this
+  change is for. That is the user experience getting worse, not better.
+- It was **a semantic with no mechanism and no test that could catch its
+  absence**. The engine's `on_error` match (`playbook/engine/mod.rs:196-210`)
+  would have gone on null-filling, and every acceptance fixture defaults to
+  `Abort`, so the design would have shipped stating a rule the code did not
+  implement and no criterion would have failed.
+
+The replacement keeps what was actually right about the concern and drops the
+override:
+
+1. **A denial is a distinct error, not a backend failure.** Authorization
+   refusal gets its own `Error` variant carrying the `AuthorizationError`'s
+   code, status and message, so the playbook engine can ask "is this a denial?"
+   without string-matching. Its `to_rpc_code` returns the same code the router's
+   envelope already returns for that refusal, so a caller sees one
+   classification whichever gate rejected. Without a distinct variant the
+   non-retry rule below is unimplementable — the engine cannot tell a denial
+   from a timeout, and a timeout **should** be retried.
+2. **A denial is never retried.** The attempt loop
+   (`playbook/engine/mod.rs:172-192`) breaks immediately on that variant, so
+   `max_retries` cannot turn one refusal into `n` identical denials — waste
+   that reads like a brute-force loop in the audit log.
+3. **`on_error` is then honoured unchanged.** `Abort` aborts, `Continue`
+   records the step in `steps_failed` and proceeds to the next step. No new
+   control flow, no new strategy.
+4. **A denial is never silent — and today there is nowhere to say why.**
+   `PlaybookResult` (`playbook.rs:342-353`) carries `steps_failed:
+   Vec<String>`: names, no reasons. An earlier revision of this design said a
+   denial would be "recorded in `steps_failed` with its reason", which the type
+   cannot express. `PlaybookResult` therefore gains `step_errors: BTreeMap<String,
+   String>`, populated for **both** `Continue` and `Retry` — the `!succeeded`
+   arm (`engine/mod.rs:206`) null-fills for both, so covering only `Continue`
+   leaves a `Retry` caller with an unexplained partial result. `steps_failed`
+   keeps its shape and meaning.
+   Three properties of that field, each verified rather than assumed:
+   - **It is a public-API change.** `pub mod playbook` (`lib.rs:63`) makes
+     `PlaybookResult` public, so a downstream struct literal stops compiling.
+     `#[non_exhaustive]` goes on in the same change: the break happens once
+     here, and never again for the next field.
+   - **The wire is unchanged for successful runs.** Serialized with
+     `skip_serializing_if` on empty, so a playbook that denies nothing produces
+     byte-identical JSON to today.
+   - **It records every failed step, not only refusals.** A denial's entry is
+     its refusal reason; a backend failure's entry is the same string `Abort`
+     would already have returned to the same caller, so nothing newly reaches
+     anyone. Recording only refusals would make an unexplained null under
+     `Continue` still possible for ordinary failures — the defect this field
+     exists to close, left half-open.
+   - **Keyed by step name, like everything else.** `step_results` is already
+     `HashMap<String, Value>` keyed by name (`playbook.rs:154`), and `$step.path`
+     interpolation resolves by name too. Two steps sharing a name are therefore
+     already ambiguous engine-wide; `step_errors` inherits that rather than
+     inventing a second identity scheme. Disambiguating step names is a separate
+     change and is out of scope here.
+
+### Refusals are observable, and one helper owns saying so
+
+A refusal is the first signal of an attempted scope bypass. An earlier revision
+said the chokepoint emits the audit line — which cannot work, and the reason is
+worth keeping: the router's pre-check **returns** the error response
+(`handlers.rs:554`) without entering the meta layer at all, so for every
+router-covered shape the chokepoint is never reached and the line would never
+fire. The design would have promised an audit record for exactly the HTTP scope
+denials that most need one.
+
+So a single `audit_refusal` helper owns the line, and **both** authorization
+gates call it — the router pre-check and the chokepoint. The authorizer never
+emits it, so a silent or third-party `ToolAuthorizer` cannot omit it, and one
+emitter means one format. Caller, server, tool and transport come from data each
+gate already holds.
+
+### What the authorizer is NOT asked
+
+The authorizer is invoked only where a dispatch resolves to a real backend
+`(server, tool)`. Meta-tool names are never passed to it: a playbook step names
+a backend and a tool, and a nested meta call recurses to this same point. A
+restricted client's tool allow-list is never matched against `gateway_invoke`
+itself.
+
+### The router keeps its pre-check
+
+Retained deliberately: it produces the JSON-RPC error envelope clients already
+receive, and it is where the firewall request scan hangs. Two consequences,
+recorded rather than discovered later:
+
+- Across a config reload between the two checks the chokepoint is
+  authoritative, because it is the one adjacent to the dispatch it guards.
+- On the paths the router already covers — `gateway_invoke`, code mode,
+  surfaced tools — `authorize_tool_target` now runs **twice**, so an
+  agent-scope ALLOW audit fires twice for one invocation. Audit consumers must
+  not read doubled allows as doubled invocations. The playbook path, which the
+  router never covered, audits once.
+
+### A third path exists and is dormant
+
+`src/provider/mcp_provider.rs:88` issues `tools/call` straight at a backend,
+outside both authorization points. It is not reachable from any live route
+today, which is why this change does not gate it. It is recorded here because
+the moment a route adopts the provider layer it becomes a third unguarded path,
+and the person wiring that route is the one who needs to know.
+
+## Deferred, with reasons
+
+- **Doubled agent-scope ALLOW audits.** `authorize_tool_target` now runs twice
+  on router-covered paths, so an ALLOW audit fires twice per invocation there
+  and once on the playbook path. Deduplicating means either phase-labelling both
+  emissions or suppressing one, and the honest fix touches the audit contract
+  rather than this change. Filed, not folded in: an audit consumer counting
+  invocations from ALLOW lines is already reading a signal that was never an
+  invocation counter. Refusals are unaffected — MIK.AUTHZ.23 pins them at one.
+
+## Residual risk, stated
+
+`AllowAll` being test-only closes the "satisfy the type permissively" route in
+release builds, and constructing `RouterAuthorizer` concretely closes the
+miswire. Neither stops a future author writing a second permissive
+implementation. Only option D prevents that, and D is deferred.
+
+## Acceptance criteria
+
+Refusal cases — each names the check that must fire, so a fix wiring one of
+them fails the others:
+
+- MIK.AUTHZ.1 A playbook step targeting a backend outside the caller's
+  `backends` list is refused, and the refusal names the backend.
+- MIK.AUTHZ.2 A playbook step targeting a tool outside the caller's
+  `allowed_tools` is refused.
+- MIK.AUTHZ.3 A playbook step hitting a tool denied by global tool policy is
+  refused. (Policy lives on `AppState`, not the client, so this proves the
+  authorizer carries state and not merely an identity.)
+- MIK.AUTHZ.10 A playbook step denied by mTLS certificate policy is refused.
+- MIK.AUTHZ.11 A playbook step outside the caller's agent scope is refused when
+  agent authentication is enabled.
+
+Denial semantics — the fixtures must set `on_error` explicitly, because the
+default is `Abort` and an `Abort` fixture passes whether or not the rule holds:
+
+- MIK.AUTHZ.17 `on_error: retry`, `max_retries: 3`, a denied step: the
+  authorizer is consulted **once**, the backend zero times, `step_errors`
+  carries the refusal reason, and the run's terminal state is the one `Retry`
+  specifies — the step recorded failed, later steps still run. A retried denial
+  fails the first assertion; a reasonless partial result fails the third.
+- MIK.AUTHZ.18 `on_error: continue`, a denied step followed by an allowed step:
+  the run completes, the allowed step executes, the denied step's name appears
+  in `steps_failed`, and **its reason appears in `step_errors`**. A
+  terminal-refusal implementation fails the first half; a silent null fails the
+  second.
+- MIK.AUTHZ.19 `on_error: abort`, a denied step: the run returns the refusal,
+  and no later step executes.
+
+Behaviour that must not change:
+
+- MIK.AUTHZ.4 An admin, unrestricted caller runs the same playbook unchanged.
+- MIK.AUTHZ.5 A client with no explicit restrictions runs it unchanged — the
+  default-permissive path is not narrowed.
+- MIK.AUTHZ.6 A step skipped by its `condition` is never authorized. Asserted
+  with a **counting** authorizer showing zero consultations for that step, not
+  by the absence of an error.
+- MIK.AUTHZ.8 Direct `gateway_invoke` and code-mode chains keep their current
+  behaviour and refusal messages.
+
+Ordering and coverage:
+
+- MIK.AUTHZ.7 A refused call performs no backend call, writes no cache entry and
+  records no budget spend. The budget half needs the enforcer as its oracle: a
+  backend mock alone cannot fail an implementation that authorizes after the
+  spend at `invoke.rs:861`.
+- MIK.AUTHZ.12 A refused target already present in the response cache is still
+  refused, and the cached value is not returned. Observable on a client
+  `gateway_invoke`, which carries no `_full` — that directive is injected only
+  by `internal_invoke_args` (`support.rs:204`) — and so reaches the chokepoint
+  through the live cache path. This is the reload case above: the router
+  allowed the call, policy changed, and the chokepoint must refuse before the
+  cache is read.
+- MIK.AUTHZ.20 A refused call consumes no nonce — a fresh nonce on the envelope
+  is still registrable afterwards — registers no idempotency in-flight entry,
+  and mints no per-user credential. Same shape as AUTHZ.12: a client
+  `gateway_invoke` carries a top-level `nonce` and no `_full`, so
+  check-and-register at `invoke.rs:634` is on its path and the criterion can
+  fail.
+- MIK.AUTHZ.13 Every meta-layer dispatch shape — surfaced tool,
+  `gateway_invoke`, code-mode single, code-mode chain step, playbook step — is
+  refused when the authorizer denies, driven at the meta layer with a denying
+  authorizer built through the same caller context production builds.
+- MIK.AUTHZ.14 A refusal emits an audit line carrying caller, server, tool and
+  transport, emitted by the chokepoint rather than the authorizer. Asserted on
+  the **values** — `transport` is `Http` through the router constructor and
+  `Stdio` through the stdio one — not merely on the four keys being present, and
+  not on the sentence. Ownership is proved with an authorizer that logs nothing.
+- MIK.AUTHZ.23 On a router-covered shape such as `gateway_invoke`, a denied call
+  emits **exactly one** refusal line, exercised through the full router path
+  rather than at the meta layer — the router refuses and returns before the
+  chokepoint, so a meta-level fixture would prove nothing about the path that
+  actually runs. The design records that ALLOW audits double on those paths;
+  refusals must not.
+- MIK.AUTHZ.21 The direct `/mcp/{name}` route keeps its existing refusal
+  behaviour, proving the outer check was not removed as redundant.
+
+Transport:
+
+- MIK.AUTHZ.15 A stdio playbook step hitting a policy-denied tool is refused.
+  (No coverage today; the inline check runs for `gateway_invoke` only.)
+- MIK.AUTHZ.16 A stdio caller keeps its admin standing and its existing
+  `gateway_invoke` behaviour after the inline block is deleted.
+- MIK.AUTHZ.22 With mTLS rules configured, stdio calls are **not** refused —
+  the stdio authorizer does not evaluate a policy stdio cannot satisfy.
+
+Criteria added when the plan was reviewed, because a fail-closed policy refuses
+whether or not the identity reached it:
+
+- MIK.AUTHZ.1a/2a/3a A client restricted by backend, tool allow-list or global
+  policy still succeeds on a target it IS permitted.
+- MIK.AUTHZ.10a A certificate the mTLS policy ALLOWS succeeds. Without it,
+  AUTHZ.10 stays green with the certificate identity dropped entirely.
+- MIK.AUTHZ.11a An in-scope agent identity succeeds. Same trap as 10a.
+- MIK.AUTHZ.17a A **real** chokepoint denial, not an injected one, becomes the
+  engine's non-retry variant. 17-19 run at engine level and would otherwise
+  cover the branches without testing the conversion.
+- MIK.AUTHZ.18a An ordinary backend failure's message also lands in
+  `step_errors`, since the field records every failed step.
+- MIK.AUTHZ.8a The code-mode chain's refusal message, split from AUTHZ.8 so one
+  row cannot hide a regression in either shape.
+- MIK.AUTHZ.14a/14b The audit line proven on a router-uncovered shape for
+  `Http` and at stdio level for `Stdio`.
+- MIK.AUTHZ.24 A playbook that denies nothing serialises without a
+  `step_errors` key.
+- MIK.AUTHZ.17b An **ordinary** error under `on_error: retry` is still retried
+  `max_retries` times. Without this control, an implementation that stops
+  retrying everything satisfies 17 — the rule is that *denials* do not retry,
+  not that nothing does.
+- MIK.AUTHZ.20c An allowed call **consumes** its nonce, so replaying it is
+  rejected. Proves the nonce was on the path at all, without which AUTHZ.20's
+  "still registrable" is green for the wrong reason.
+- MIK.AUTHZ.7b With an exhausted budget AND an unauthorized target, the error
+  returned is the authorization refusal, not the budget error. This is how
+  ordering against the budget gate is observable at all: `BudgetEnforcer` is a
+  concrete type, so consultations cannot be counted, and `record_spend` is
+  post-invoke and success-only, so a spend assertion is vacuous.
+- MIK.AUTHZ.18b An ordinary failure under `on_error: retry`, attempts
+  exhausted, also lands in `step_errors`. The `!succeeded` arm null-fills for
+  both strategies, so covering `Continue` alone leaves retry callers
+  unexplained.
+- MIK.AUTHZ.15a A stdio playbook step hitting a **permitted** tool succeeds. A
+  stdio authorizer that denied every backend target would otherwise satisfy
+  AUTHZ.15 and AUTHZ.16 on its own.
+
+MIK.AUTHZ.9 is withdrawn: removing `Default` and gating `AllowAll` behind
+`#[cfg(test)]` makes it a property of the types, and a test that greps for a
+symbol is a lint wearing a test's clothes.

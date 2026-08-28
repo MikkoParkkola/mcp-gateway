@@ -158,7 +158,12 @@ mcp-gateway doctor                 # diagnose config, port, env vars, backend he
 mcp-gateway doctor --fix           # auto-fix issues where possible
 ```
 
-The web dashboard is at <http://localhost:39400/ui> once `serve` is running.
+The web dashboard is at <http://localhost:39400/ui> once `serve` is running. The
+operator dashboard at `/dashboard` needs the admin credential, and a browser
+cannot send one on a navigation — so `serve` prints a single-use link to open it
+with, on a loopback bind. A network-bound gateway prints none and is managed
+through `/ui` with the token instead. See
+[Opening the dashboard](docs/DEPLOYMENT.md#opening-the-dashboard).
 
 ### Connect AI clients (if you skipped Option A)
 
@@ -304,13 +309,14 @@ Single-binary gateway. An AI client talks to the compact meta-surface, and the g
 
 ### Web dashboard
 
-Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
+Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`, which needs the admin credential — on a loopback bind `serve` prints a single-use link to open it with, since a browser cannot attach an `Authorization` header to a navigation. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
 
 ### Security and governance
 
 | Feature | Description | Docs |
 |---------|-------------|------|
-| **Authentication** | Bearer tokens, API keys, explicit admin keys, per-client rate limits, and opt-in per-client circuit breakers | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
+| **Authentication** | Bearer tokens, API keys, explicit admin keys, per-client rate limits, and opt-in per-client circuit breakers. With auth disabled every caller over HTTP is anonymous and holds no admin; a stdio caller is admin, because the client spawned the process | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
+| **Cross-site protection** | `Origin`, `Host` and `Sec-Fetch-Site` validation refuses web pages reaching the local port. A client that sends no `Origin` is not refused for that, but the `Host` check applies to every request, so a client reaching the gateway by a name it does not answer to is refused whether or not it is a browser | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#browser-access-to-the-gateway-port) |
 | **End-user identity propagation** | Three configured strategies (`identity_propagation` config): gateway-signed assertion, client-token passthrough, and RFC 8693 token exchange. Fails closed when a backend requires identity. Per-user cache isolation. Enforced on dispatch, Code Mode, and direct routes. | [docs/adr/ADR-007-identity-propagation.md](docs/adr/ADR-007-identity-propagation.md) |
 | **Per-user OAuth isolation** | Fail-closed default (v3.0): a backend that requires a per-user OAuth identity refuses a call that lacks one instead of serving a shared stored token. Opt into the previous shared-credential behavior with `auth.single_user: true` (personal gateway) or `oauth.shared_account: true` (a specific backend). Upgrading from 2.x backs up `gateway.yaml` and prints a one-time posture notice; no config changes automatically. | [docs/adr/ADR-008-multi-user-oauth-isolation.md](docs/adr/ADR-008-multi-user-oauth-isolation.md), [docs/UPGRADING-3.0.md](docs/UPGRADING-3.0.md) |
 | **Per-client tool scopes** | Allowlist or denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
@@ -338,8 +344,8 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 - **MCP version**: 2025-11-25 (latest spec)
 - **Transports**: stdio, Streamable HTTP, SSE, WebSocket
-- **Hot reload**: capability YAMLs plus reloadable gateway config sections are watched and reloaded live
-- **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` return `restart_required` for listener changes (for example `server.host` or `server.port`); `env_files` list edits remain startup-only
+- **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
+- **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
 - **Config discovery**: auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, and `/etc/mcp-gateway/`
 - **"Did you mean?"**: Levenshtein-based typo correction on tool names
 - **Tool annotations**: MCP 2025-11-25 `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; gateway meta-tools are fully annotated, while backend tools use the hybrid pass-through/fill policy in [ADR-003](docs/adr/ADR-003-mcp-tool-annotation-policy.md)
@@ -403,7 +409,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 | `/mcp/{backend}` | POST | Direct backend access |
 | `/ui` | GET | Web dashboard |
 | `/ui/api/control-plane` | GET | Read-only local control-plane projection for inventory, runtime health, decisions, RBAC, and license boundaries |
-| `/dashboard` | GET | Operator dashboard |
+| `/dashboard` | GET | Operator dashboard. Admin only; opened with the single-use link `serve` prints on a loopback bind |
 | `/metrics` | GET | Prometheus metrics (with `--features metrics`) |
 
 ## Performance

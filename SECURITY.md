@@ -22,7 +22,7 @@ If you discover a security vulnerability, please report it responsibly:
 
 ## Security Architecture
 
-MCP Gateway implements defense-in-depth across six attack vectors identified by [Doyensec's MCP security research](https://blog.doyensec.com/2025/04/01/mcp.html):
+MCP Gateway implements defense-in-depth across the six attack vectors identified by [Doyensec's MCP security research](https://blog.doyensec.com/2025/04/01/mcp.html), plus one the gateway's own shape adds: it listens on a local HTTP port, which a web page can reach.
 
 ### Defenses
 
@@ -34,16 +34,36 @@ MCP Gateway implements defense-in-depth across six attack vectors identified by 
 | **Input Injection** | Shell/SQL/path traversal detection, input sanitization | `src/security/firewall/` |
 | **Credential Exposure** | Response redaction (AWS, GitHub, JWT, etc.) | `src/security/firewall/redactor.rs` |
 | **SSRF** | Private IP rejection on all outbound URLs | `src/security/` |
+| **Cross-site access to the local port** | `Origin`, `Host`, HTTP/2 `:authority` and `Sec-Fetch-Site` validation ahead of auth | `src/gateway/router/origin_guard.rs` |
 
 ### Security Practices
 
 - **Zero unsafe code**: `#![deny(unsafe_code)]` enforced at crate level
 - **TLS/mTLS**: Full mutual TLS support with certificate-based access control
 - **Authentication**: Bearer tokens, API keys, OIDC JWT verification, per-client scopes
+- **Admin needs a credential**: with `auth.enabled = false` every caller over
+  HTTP is an anonymous non-admin. Server management tools and the admin
+  dashboard require an explicit credential, because an unauthenticated gateway
+  cannot tell its operator from a web page that rebound a hostname to loopback.
+  A stdio caller is admin: it spawned the process, so it already holds whatever
+  the operator holds
 - **Secrets**: OS keychain integration (macOS Keychain, Linux secret-service) — never stored in config
 - **Circuit breakers**: Per-backend fault isolation prevents cascading failures
 - **Rate limiting**: Token-bucket per-backend rate limiting
 - **Audit logging**: NDJSON audit trail for all tool invocations
+
+### Known limitations
+
+- **Windows file permissions**: files holding secrets — the config with its
+  admin token, generated mTLS private keys, stored OAuth tokens — are created
+  owner-only (`0600`) on Unix. Windows has no equivalent in the Rust standard
+  library: the file inherits the ACL of the directory it is written to.
+  Restricting the DACL requires a Win32 call, and this crate denies `unsafe`
+  code, so the gateway does not claim a permission it cannot set. It warns once
+  per process when it writes such a file. **On Windows, put the config and any
+  key material in a directory only the gateway's account can read.** Tracked
+  rather than silently accepted; a safe wrapper for the Win32 call is the fix,
+  and it needs a Windows host to verify on.
 
 ### Security Testing
 

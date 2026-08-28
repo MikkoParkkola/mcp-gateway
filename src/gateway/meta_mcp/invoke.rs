@@ -417,14 +417,14 @@ impl MetaMcp {
     /// idempotency, error-budget tracking, and predictive prefetch.
     ///
     /// `agent_id` identifies the calling agent for audit logging (OWASP ASI03).
+    // Takes the caller context whole rather than five loose parameters: the
+    // authorizer travels with the identity it authorizes, so no call site can
+    // pass one without the other.
     pub(super) async fn invoke_tool(
         &self,
         args: &Value,
         session_id: Option<&str>,
-        api_key_name: Option<&str>,
-        agent_id: Option<&str>,
-        caller_identity: Option<GrantSubject>,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
@@ -432,10 +432,12 @@ impl MetaMcp {
             self.invoke_tool_traced(
                 args,
                 session_id,
-                api_key_name,
-                agent_id,
-                caller_identity.as_ref(),
-                verified_identity,
+                caller.is_admin,
+                caller.api_key_name,
+                caller.agent_id,
+                caller.grant_subject.as_ref(),
+                caller.verified_identity,
+                caller.authorizer,
                 &trace_id_clone,
             )
             .await
@@ -530,18 +532,80 @@ impl MetaMcp {
     /// render guard cannot be bypassed at the chokepoint (MIK-6690).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     #[allow(clippy::too_many_arguments)] // Caller context threaded explicitly (identity, keys, trace)
+    #[allow(clippy::too_many_arguments)]
     async fn invoke_tool_traced(
         &self,
         args: &Value,
         session_id: Option<&str>,
+        caller_is_admin: bool,
         api_key_name: Option<&str>,
         agent_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
         trace_id: &str,
     ) -> Result<GuardedValue> {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
+
+        // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
+        //
+        // Every meta-layer dispatch passes through here: a surfaced tool, a
+        // `gateway_invoke`, a code-mode step, a playbook step. The router
+        // authorizes only the shapes whose targets appear in the request, so a
+        // playbook step — whose targets come from the playbook definition —
+        // reached a backend with none of the caller's scope checks applied.
+        //
+        // Placed at the top, reading `arguments` raw, for two reasons. It is
+        // the earliest point at which the target is known, so nothing has yet
+        // happened that a refused call is not entitled to: no nonce consumed,
+        // no cache read, no idempotency entry, no credential minted, no budget
+        // consulted. And the router builds its own target from the same raw
+        // arguments, so a policy that one day reads them cannot give the two
+        // layers two answers.
+        // `{}` and not `Null`: the router's own target builder defaults a
+        // missing inner `arguments` to an empty object, and two gates that see
+        // different targets are two gates that can disagree.
+        let empty_args = serde_json::json!({});
+        let target = crate::gateway::authz::ToolTarget {
+            server,
+            tool,
+            arguments: args.get("arguments").unwrap_or(&empty_args),
+        };
+        if let Err(e) = authorizer.authorize(target) {
+            crate::gateway::authz::audit_refusal(
+                authorizer.transport(),
+                authorizer.caller_name(),
+                server,
+                tool,
+                &e.message,
+            );
+            return Err(Error::Forbidden {
+                code: e.code,
+                status: e.status.as_u16(),
+                message: e.message,
+            });
+        }
+
+        // A capability that hands a caller-chosen destination to a third party
+        // which then calls it creates persistent state outside this gateway,
+        // addressed by the caller and authorised by the operator's credential.
+        // That is an out-of-band channel needing no readable response, so it is
+        // an admin action. Derived from the definition, so one added later
+        // inherits the rule.
+        if !caller_is_admin
+            && let Some(capabilities) = self.get_capabilities()
+            && server == capabilities.name
+            && let Some(def) = capabilities.get(tool)
+            && crate::capability::definition::creates_caller_addressed_external_state(&def)
+        {
+            return Err(crate::Error::Config(format!(
+                "'{tool}' registers a caller-supplied address with a third party, which \
+                 then delivers to it using this gateway's credential. That requires an \
+                 admin credential."
+            )));
+        }
+
         let mut arguments = parse_tool_arguments(args)?;
         // `_full` is a gateway directive (opt out of response projection), not
         // an upstream parameter. Capture and strip it BEFORE the argument hash
@@ -1911,17 +1975,48 @@ impl MetaMcp {
     // ========================================================================
 
     /// `gateway_cost_report` — per-session and per-API-key spend report.
-    #[allow(clippy::unnecessary_wraps, clippy::unused_async)]
+    #[allow(
+        unknown_lints,
+        clippy::unnecessary_wraps,
+        clippy::unused_async,
+        clippy::unused_async_trait_impl
+    )]
     pub(super) async fn get_cost_report(
         &self,
         args: &Value,
         session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let include_all_sessions = extract_bool_or(args, "include_all_sessions", false);
         let include_all_keys = extract_bool_or(args, "include_all_keys", false);
 
-        // Resolve target session (explicit arg or current session)
-        let target_session_id = extract_optional_str(args, "session_id").or(session_id);
+        // Both are documented in this tool's own schema as an admin view, and
+        // were read straight from the arguments. Refusing beats quietly
+        // narrowing the report: a caller that asked for every session and got
+        // one has no way to tell that it was scoped rather than empty.
+        if (include_all_sessions || include_all_keys) && !caller.is_admin {
+            return Err(crate::Error::Config(
+                "include_all_sessions and include_all_keys are admin views and require an \
+                 admin credential"
+                    .to_string(),
+            ));
+        }
+
+        // Resolve target session. A non-admin caller may name only its own:
+        // taking the argument in preference to the caller's session let any
+        // client read any other client's spend by guessing or observing an id.
+        let requested = extract_optional_str(args, "session_id");
+        if let Some(requested) = requested
+            && !caller.is_admin
+            && Some(requested) != session_id
+        {
+            return Err(crate::Error::Config(
+                "reporting on another session is an admin view and requires an admin \
+                 credential"
+                    .to_string(),
+            ));
+        }
+        let target_session_id = requested.or(session_id);
 
         let session_report = if include_all_sessions {
             serde_json::to_value(self.cost_tracker.all_sessions()).unwrap_or(json!([]))
@@ -1940,7 +2035,14 @@ impl MetaMcp {
             json!(null)
         };
 
-        let aggregate = serde_json::to_value(self.cost_tracker.aggregate()).unwrap_or(json!(null));
+        // The gateway-wide total is every caller's spend combined, which is the
+        // same cross-tenant view the explicit flags are gated on. Gating those
+        // and leaving this open would have made the check cosmetic.
+        let aggregate = if caller.is_admin {
+            serde_json::to_value(self.cost_tracker.aggregate()).unwrap_or(json!(null))
+        } else {
+            json!(null)
+        };
 
         Ok(json!({
             "session": session_report,
@@ -1951,8 +2053,8 @@ impl MetaMcp {
 
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.
-    #[allow(clippy::unused_async)]
-    pub(super) async fn get_stats(&self, args: &Value) -> Result<Value> {
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
+    pub(super) async fn get_stats(&self, args: &Value, caller_is_admin: bool) -> Result<Value> {
         let price_per_million = extract_price_per_million(args);
 
         let stats = self
@@ -1995,7 +2097,9 @@ impl MetaMcp {
             map.insert("circuit_breakers".to_string(), Value::Array(cb_stats));
         }
 
-        // Inject cost governance section when enabled
+        // Cost governance is cross-tenant: budgets and spend for every caller.
+        #[cfg(feature = "cost-governance")]
+        let include_costs = caller_is_admin;
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
             let snap = enforcer.snapshot();
@@ -2006,7 +2110,7 @@ impl MetaMcp {
                 "tool_daily_limits": snap.tool_limits,
                 "key_daily_spend": snap.key_daily,
             });
-            if let Value::Object(ref mut map) = response {
+            if include_costs && let Value::Object(ref mut map) = response {
                 map.insert("cost_governance".to_string(), cost_section);
             }
             if let Some(ref registry) = self.cost_registry {
@@ -2162,7 +2266,11 @@ impl MetaMcp {
     }
 
     /// `gateway_run_playbook` — run a named playbook.
-    pub(super) async fn run_playbook(&self, args: &Value) -> Result<Value> {
+    pub(super) async fn run_playbook(
+        &self,
+        args: &Value,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Result<Value> {
         let name = extract_required_str(args, "name")?;
         let arguments = parse_tool_arguments(args)?;
 
@@ -2176,7 +2284,7 @@ impl MetaMcp {
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
 
-        let invoker = MetaMcpInvoker { meta: self };
+        let invoker = MetaMcpInvoker { meta: self, caller };
 
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);
@@ -2858,6 +2966,9 @@ mod response_transform_tests {
 
 #[cfg(test)]
 mod identity_propagation_enforcement_tests {
+    /// The permissive authorizer these tests hand out.
+    static ALLOW_ALL_INVOKE: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
+
     use std::sync::Arc;
 
     use serde_json::{Value, json};
@@ -3095,8 +3206,12 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
-            ..Default::default()
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            is_admin: false,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         m.code_mode_execute(&args, Some("s1"), &caller)
@@ -3116,7 +3231,14 @@ mod identity_propagation_enforcement_tests {
     #[tokio::test]
     async fn code_mode_execute_fails_closed_without_identity() {
         let (m, _captured) = meta_with_capturing_backend();
-        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext::default();
+        let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            authorizer: &ALLOW_ALL_INVOKE,
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            verified_identity: None,
+            is_admin: false,
+        };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m
             .code_mode_execute(&args, Some("s1"), &caller)
@@ -3141,8 +3263,12 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend_no_log();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
-            ..Default::default()
+            api_key_name: None,
+            agent_id: None,
+            grant_subject: None,
+            is_admin: false,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m

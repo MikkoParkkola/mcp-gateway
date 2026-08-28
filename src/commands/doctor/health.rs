@@ -158,7 +158,7 @@ async fn probe_mcp_runtime(
     let init = post_mcp_probe(client, base_url, initialize, None).await;
     let init = match init {
         Ok(init) => init,
-        Err(result) => return vec![result],
+        Err(result) => return vec![*result],
     };
 
     if let Some(auth_result) = auth_blocked_result("MCP handshake", &init, config) {
@@ -233,7 +233,7 @@ async fn probe_mcp_runtime(
                 );
             }
         }
-        Err(result) => results.push(result),
+        Err(result) => results.push(*result),
     }
 
     results
@@ -250,15 +250,17 @@ async fn post_mcp_probe(
     base_url: &str,
     body: Value,
     session_id: Option<&str>,
-) -> Result<McpProbeResponse, CheckResult> {
+) -> Result<McpProbeResponse, Box<CheckResult>> {
     let mut request = client.post(format!("{base_url}/mcp")).json(&body);
     if let Some(session_id) = session_id {
         request = request.header(MCP_SESSION_HEADER, session_id);
     }
 
     let response = request.send().await.map_err(|e| {
-        CheckResult::fail("MCP handshake", format!("cannot POST /mcp: {e}"))
-            .with_category("mcp_handshake")
+        Box::new(
+            CheckResult::fail("MCP handshake", format!("cannot POST /mcp: {e}"))
+                .with_category("mcp_handshake"),
+        )
     })?;
 
     let status = response.status();
@@ -268,8 +270,10 @@ async fn post_mcp_probe(
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned);
     let body = response.json::<Value>().await.map_err(|e| {
-        CheckResult::fail("MCP handshake", format!("invalid /mcp JSON response: {e}"))
-            .with_category("mcp_handshake")
+        Box::new(
+            CheckResult::fail("MCP handshake", format!("invalid /mcp JSON response: {e}"))
+                .with_category("mcp_handshake"),
+        )
     })?;
 
     Ok(McpProbeResponse {
