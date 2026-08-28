@@ -15,8 +15,12 @@ data:
       still rendered produced an unresolvable env:MCP_GATEWAY_TOKEN and a
       crash-looping pod.
     */}}
+    {{- $mode := .Values.auth.mode }}
+    {{- if not (has $mode (list "credential" "mesh")) }}
+    {{- fail (printf "auth.mode must be \"credential\" or \"mesh\", got %q. A value neither template recognises used to render a credential block with no Secret behind it, which is a crash-looping pod rather than an install error." $mode) }}
+    {{- end }}
     {{- $cfg := deepCopy .Values.config }}
-    {{- if eq .Values.auth.mode "mesh" }}
+    {{- if eq $mode "mesh" }}
     {{- $_ := unset $cfg "auth" }}
     {{- $_ := set $cfg.server "allow_unauthenticated_network_bind" true }}
     {{- else }}

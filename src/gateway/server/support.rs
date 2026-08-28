@@ -566,7 +566,14 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     // carefully secured deployments — the third time this refusal has been
     // wrong in the over-refusing direction, and the reason the test below
     // enumerates the gates rather than trusting this list to stay complete.
-    let mtls_gates_tools = config.mtls.enabled && config.mtls.require_client_cert;
+    // Two ways mTLS gates the tools, and the second is easy to miss. Required
+    // client certificates reject at the handshake. But a policy with rules also
+    // denies: `MtlsPolicy::evaluate` returns `Deny` when rules are configured
+    // and no verified certificate identity is present, so a gateway with
+    // OPTIONAL certificates and a non-empty policy still admits nobody without
+    // one. Refusing that config was the same over-refusal one layer down.
+    let mtls_gates_tools = config.mtls.enabled
+        && (config.mtls.require_client_cert || !config.mtls.policies.is_empty());
     if mtls_gates_tools || config.agent_auth.enabled {
         return None;
     }
@@ -753,13 +760,24 @@ mod network_bind_tests {
             "an mTLS gateway requiring client certificates was refused"
         );
 
-        // ...but mTLS WITHOUT that requirement is encryption, not
-        // authentication, and its own doc comment says so. It must still refuse.
+        // ...but mTLS WITHOUT that requirement and with no policy is
+        // encryption, not authentication, and its own doc comment says so. It
+        // must still refuse.
         let mut encryption_only = mtls.clone();
         encryption_only.mtls.require_client_cert = false;
+        encryption_only.mtls.policies = Vec::new();
         assert!(
             network_bind_refusal(&encryption_only).is_some(),
             "TLS without client certificates authenticates nobody"
+        );
+
+        // Optional certificates PLUS a policy does gate: the policy denies
+        // every call that arrives without a verified identity.
+        let mut policy_gated = encryption_only.clone();
+        policy_gated.mtls.policies = vec![crate::mtls::config::PolicyRuleConfig::default()];
+        assert!(
+            network_bind_refusal(&policy_gated).is_none(),
+            "an mTLS policy denies uncredentialed calls, so the tools are not open"
         );
 
         // Agent JWT auth: the middleware wraps every route and answers 401 to a

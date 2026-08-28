@@ -49,9 +49,15 @@ resources:
 # unresolvable environment variable.
 auth:
   mode: credential
-  # credential mode only. `kubectl create secret generic mcp-gateway-auth \
-  #   --from-literal=token="$(openssl rand -base64 32)"`
-  existingSecret: ""
+  # credential mode only: the Secret holding the bearer token. Named by default
+  # rather than left blank, so the chart renders and the missing-Secret failure
+  # lands where Kubernetes reports it clearly — the pod stops with
+  # CreateContainerConfigError naming this Secret, instead of the chart refusing
+  # to render at all.
+  #
+  #   kubectl create secret generic mcp-gateway-auth \
+  #     --from-literal=token="$(openssl rand -base64 32)"
+  existingSecret: mcp-gateway-auth
   secretKey: token
 
 # Gateway config rendered into a ConfigMap and mounted read-only.

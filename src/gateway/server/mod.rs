@@ -1265,8 +1265,14 @@ impl Gateway {
             );
         }
 
-        // Bind listener
-        let listener = TcpListener::bind(addr).await?;
+        // Bound in the branch that serves, not here. `serve_tls` calls
+        // `axum_server::bind(addr)` on the same address, so binding it up here
+        // as well made every mTLS gateway fail to start on "address already in
+        // use" — the plain listener held the port the TLS one then asked for.
+        //
+        // Binding early also fails EARLIER on a port already taken, which is
+        // the one thing lost: that error now surfaces from the serving branch
+        // instead, a few lines later, with the same message from the OS.
 
         log_startup_banner(
             &self.config,
@@ -1368,6 +1374,7 @@ impl Gateway {
         if self.config.mtls.enabled {
             serve_tls(app, addr, &self.config.mtls, shutdown_signal(shutdown_tx)).await?;
         } else {
+            let listener = TcpListener::bind(addr).await?;
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal(shutdown_tx))
                 .await
