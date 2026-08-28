@@ -501,8 +501,9 @@ fn dashboard_link_refusal(config: &Config) -> Option<String> {
     Some(format!(
         "server.public_url is {public}, so the dashboard session cookie is marked Secure and \
          a browser discards it over this plain-HTTP listener. Set mtls.enabled to serve this \
-         listener over HTTPS, or remove server.public_url while you redeem the link — \
-         redemption is loopback-only, so the HTTPS front end cannot perform it."
+         listener over HTTPS, or remove server.public_url and restart, which prints a \
+         usable link — redemption is loopback-only, so the HTTPS front end cannot \
+         perform it."
     ))
 }
 
