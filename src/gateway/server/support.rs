@@ -39,7 +39,8 @@ pub(super) fn log_startup_banner(
     config: &Config,
     backends: &BackendRegistry,
     bootstrap: Option<&DashboardBootstrap>,
-    config_path: Option<&std::path::Path>,
+    // Only the unix branch below reads it; Windows has no mode bits to check.
+    #[cfg_attr(not(unix), allow(unused_variables))] config_path: Option<&std::path::Path>,
 ) {
     info!("============================================================");
     info!("MCP GATEWAY v{}", env!("CARGO_PKG_VERSION"));
