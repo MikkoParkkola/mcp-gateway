@@ -296,7 +296,13 @@ jobs:
         # Trusted publisher is configured on npmjs.com for
         # @mikkoparkkola/mcp-gateway against this workflow. npm CLI auto-detects
         # OIDC via id-token:write — no NODE_AUTH_TOKEN required.
-        run: npm publish --access public --provenance
+        #
+        # The runner image points npm at a mirror in its user-level .npmrc, and
+        # setup-node's registry-url writes the project .npmrc at the repository
+        # root, which npm does not read from this subdirectory. Name the real
+        # registry on the command line so publish targets npmjs.org, which is
+        # also the only registry the trusted publisher can authenticate to.
+        run: npm publish --access public --provenance --registry https://registry.npmjs.org
 
   homebrew-update:
     needs: release
