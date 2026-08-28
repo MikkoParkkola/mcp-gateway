@@ -137,10 +137,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agent_auth.enabled = true`, a config that previously loaded is now refused
   when an agent:
 
-  - sets an `hs256_secret` shorter than 32 bytes, or one whose `env:` variable
-    is unset. `DecodingKey::from_secret(b"")` is a valid key, so an empty or
-    short shared secret verifies a token anyone can sign — that agent
-    authenticates the world;
+  - sets an `hs256_secret` shorter than the 32-byte minimum, or one whose
+    `env:` variable is unset. `DecodingKey::from_secret(b"")` is a valid key,
+    so an empty secret verifies a token anyone can sign — that agent
+    authenticates the world. A secret that is merely short is not forgeable by
+    inspection, but it falls under the project's minimum and is refused on the
+    same line;
   - sets both `hs256_secret` and `rs256_public_key`. The algorithm is read
     from the token header, so the caller picks which key verifies it and the
     agent is only as strong as the weaker one. Configure exactly one;
