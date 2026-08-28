@@ -8,7 +8,7 @@ description: >-
   upgrade/delete lifecycle; see https://helm.sh/docs/chart_best_practices/custom_resource_definitions/
 type: application
 version: 0.1.2
-appVersion: "3.4.0"
+appVersion: "3.5.0"
 home: https://github.com/MikkoParkkola/mcp-gateway
 maintainers:
   - name: Mikko Parkkola
