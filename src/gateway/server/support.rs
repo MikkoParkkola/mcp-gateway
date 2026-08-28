@@ -505,7 +505,6 @@ fn dashboard_link_refusal(config: &Config) -> Option<String> {
     ))
 }
 
-
 /// Why an unauthenticated gateway must not serve HTTP on this bind, if it must not.
 ///
 /// Returned as a message rather than logged, so the caller refuses before

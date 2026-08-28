@@ -993,7 +993,11 @@ impl ConfigWatcher {
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
-        let env_file_paths = resolve_env_file_paths(&initial_config.env_files);
+        let config_path = absolute_watch_path(config_path);
+        let env_file_paths: Vec<PathBuf> = resolve_env_file_paths(&initial_config.env_files)
+            .into_iter()
+            .map(absolute_watch_path)
+            .collect();
 
         let watcher = Self::create_notify_watcher(event_tx, &config_path, &env_file_paths)?;
 
@@ -1045,10 +1049,7 @@ impl ConfigWatcher {
         })?;
 
         // Watch the config file's parent directory.
-        let config_dir = config_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
+        let config_dir = watch_dir_of(config_path);
         watcher
             .watch(&config_dir, RecursiveMode::NonRecursive)
             .map_err(|e| {
@@ -1060,10 +1061,7 @@ impl ConfigWatcher {
         watched_dirs.insert(config_dir);
 
         for env_path in env_file_paths {
-            let dir = env_path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .to_path_buf();
+            let dir = watch_dir_of(env_path);
 
             if watched_dirs.contains(&dir) {
                 continue;
@@ -1677,6 +1675,28 @@ where
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// Resolve a watched path to the absolute form `notify` reports.
+///
+/// Events arrive with absolute, symlink-resolved paths, and they are matched
+/// against the watched paths by equality. A relative `-c gateway.yaml` would
+/// never match one, so hot-reload would go quiet without ever failing. An
+/// unresolvable path is kept as given: the watch below then reports why.
+fn absolute_watch_path(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
+/// The directory to watch for changes to `path`.
+///
+/// `Path::parent` returns an empty path for a bare relative filename such as
+/// `gateway.yaml`, and an empty path cannot be watched. Both callers below
+/// hand this a user-supplied path, so both need the same answer.
+fn watch_dir_of(path: &std::path::Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
 
 #[cfg(test)]
 mod tests;

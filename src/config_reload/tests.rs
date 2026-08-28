@@ -1734,3 +1734,44 @@ async fn the_override_is_reported_as_a_file_a_restart_accepts() {
          revert: {err}"
     );
 }
+
+/// A bare relative config path must still resolve to a watchable directory.
+///
+/// `Path::parent` answers `Some("")` for `gateway.yaml`, and watching an empty
+/// path fails — which silently disabled hot-reload for the invocation the
+/// installer itself prints.
+#[test]
+fn watch_dir_of_bare_filename_is_current_dir() {
+    use std::path::{Path, PathBuf};
+    assert_eq!(
+        super::watch_dir_of(Path::new("gateway.yaml")),
+        PathBuf::from(".")
+    );
+    assert_eq!(
+        super::watch_dir_of(Path::new("etc/gateway.yaml")),
+        PathBuf::from("etc")
+    );
+    assert_eq!(
+        super::watch_dir_of(Path::new("/etc/gateway.yaml")),
+        PathBuf::from("/etc")
+    );
+}
+
+/// A watched path must be absolute, because events are matched by equality.
+///
+/// A relative `-c gateway.yaml` matched no event, so config hot-reload was
+/// silently dead for the invocation the installer prints.
+#[test]
+fn absolute_watch_path_resolves_relative_paths() {
+    use std::path::PathBuf;
+    let resolved = super::absolute_watch_path(PathBuf::from("Cargo.toml"));
+    assert!(
+        resolved.is_absolute(),
+        "expected an absolute path, got {resolved:?}"
+    );
+    assert!(resolved.ends_with("Cargo.toml"));
+
+    // An unresolvable path is kept as given, so the watch call reports it.
+    let missing = PathBuf::from("no/such/gateway.yaml");
+    assert_eq!(super::absolute_watch_path(missing.clone()), missing);
+}
