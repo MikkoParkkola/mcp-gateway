@@ -1858,3 +1858,36 @@ fn config_watch_paths_of_a_plain_file_is_a_single_path() {
         "no duplicate watch for a plain file: {paths:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_retargeted_symlink_is_matched_at_its_new_target() {
+    // GIVEN: a config named through a link, pointed at one release
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.yaml");
+    let second = dir.path().join("second.yaml");
+    std::fs::write(&first, "a: 1").unwrap();
+    std::fs::write(&second, "a: 2").unwrap();
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    let paths_at_startup = super::config_watch_paths(link.clone());
+
+    // WHEN: the deployment repoints the link at the next release and writes it
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&second, &link).unwrap();
+    let event = notify::Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any,
+        )),
+        paths: vec![std::fs::canonicalize(&second).unwrap()],
+        attrs: EventAttributes::default(),
+    };
+
+    // THEN: the write is recognised, which a path list frozen at startup
+    // cannot do — it still names the release the link no longer points at.
+    assert!(
+        !super::is_config_event(&event, &paths_at_startup),
+        "the frozen list is exactly what this test exists to rule out"
+    );
+    assert!(super::is_config_event_for(&event, &link));
+}

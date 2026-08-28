@@ -951,6 +951,17 @@ fn is_config_event(event: &Event, config_paths: &[PathBuf]) -> bool {
             .any(|p| config_paths.iter().any(|watched| watched == p))
 }
 
+/// Returns `true` for create/modify events on the config the operator named,
+/// resolving the link target on every call.
+///
+/// The paths a config can arrive as are not fixed for the life of the process:
+/// a deployment can repoint the link at a new release and write that file. A
+/// list captured at startup keeps naming the release the link left behind, so
+/// the resolution happens per event instead.
+fn is_config_event_for(event: &Event, named_config_path: &std::path::Path) -> bool {
+    is_config_event(event, &config_watch_paths(named_config_path.to_path_buf()))
+}
+
 /// Returns `Some(path)` when the event matches any of the watched env files,
 /// `None` otherwise.
 fn matching_env_file(event: &Event, env_paths: &[PathBuf]) -> Option<PathBuf> {
@@ -1032,14 +1043,15 @@ impl ConfigWatcher {
         config_path: &std::path::Path,
         env_file_paths: &[PathBuf],
     ) -> Result<RecommendedWatcher> {
-        let config_paths_owned = config_watch_paths(config_path.to_path_buf());
+        let named_config_path = absolute_watch_path(config_path.to_path_buf());
+        let closure_config_path = named_config_path.clone();
         let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
         let mut watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
-                if is_config_event(&event, &config_paths_owned) {
+                if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
                     let _ = event_tx.try_send(ReloadTrigger::EnvFile(path));
@@ -1054,8 +1066,12 @@ impl ConfigWatcher {
         // Watch the parent directory of every path the config can arrive as.
         // A symlinked config has two: the link the operator named and the
         // target an in-place write actually touches.
+        // Retargeting the link to a file in one of these directories is picked
+        // up, because the match resolves the link per event. A retarget to a
+        // directory that was not watched at startup is not: closing that needs
+        // the watcher to add directories from inside its own callback.
         let mut watched_dirs = std::collections::HashSet::new();
-        for path in &config_watch_paths(config_path.to_path_buf()) {
+        for path in &config_watch_paths(named_config_path.clone()) {
             let dir = watch_dir_of(path);
             if !watched_dirs.insert(dir.clone()) {
                 continue;
