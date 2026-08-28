@@ -84,6 +84,7 @@ fi
 # readiness the admin health view reports — a backend that never loads still
 # fails this smoke. The product gap making it necessary is MIK-7268.
 admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
+[[ -n "$admin_token" ]] || { echo "could not read admin token from gateway.yaml" >&2; exit 1; }
 capabilities_ready=""
 for _ in $(seq 1 150); do
   if curl -fsS -H "Authorization: Bearer $admin_token" "$health_url" 2>/dev/null \

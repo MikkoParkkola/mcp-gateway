@@ -73,6 +73,7 @@ curl -fsS "$health_url" >/dev/null
 # view actually reports; a backend that never loads still fails the smoke.
 # The product gap that makes this wait necessary is MIK-7268.
 admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
+[[ -n "$admin_token" ]] || { echo "could not read admin token from gateway.yaml" >&2; exit 1; }
 capabilities_ready=""
 for _ in $(seq 1 100); do
   if curl -fsS -H "Authorization: Bearer $admin_token" "$health_url" 2>/dev/null \
