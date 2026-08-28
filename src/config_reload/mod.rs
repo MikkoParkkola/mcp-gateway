@@ -1069,7 +1069,7 @@ impl ConfigWatcher {
         // Retargeting the link to a file in one of these directories is picked
         // up, because the match resolves the link per event. A retarget to a
         // directory that was not watched at startup is not: closing that needs
-        // the watcher to add directories from inside its own callback.
+        // the watcher to add directories from inside its own callback (#453).
         let mut watched_dirs = std::collections::HashSet::new();
         for path in &config_watch_paths(named_config_path.clone()) {
             let dir = watch_dir_of(path);

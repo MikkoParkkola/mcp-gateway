@@ -296,7 +296,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event, so repointing it at a new release and editing that file is picked up
   too, as long as the new target sits in a directory watched at startup — the
   link's own directory and the directory of the target it pointed at then. A
-  plain config file is unaffected: it resolves to itself.
+  retarget outside those directories is tracked in #453. A plain config file is
+  unaffected: it resolves to itself.
 
 ## [3.4.0] - 2026-07-27
 
