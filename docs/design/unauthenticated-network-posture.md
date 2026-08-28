@@ -565,12 +565,32 @@ The non-Unix arm now emits the inherited-ACL warning the config path already
 emits, so a Windows operator hears about the token file for the same reason and
 in the same words as the config file.
 
+### The mTLS private key is replaced, never written into
+
+The generated mTLS key had the same shape as the token write and the same
+defect. `OpenOptions::mode` sets a mode on a file it *creates*; over a key file
+an earlier run already left behind, `create(true).truncate(true)` reuses that
+file, mode and all, and the `set_permissions` that followed only narrowed it
+after the key was already on disk. On a shared host the window is enough to read
+a CA key and mint client certificates the gateway trusts.
+
+Same repair, for the same reason: create a fresh `0600` scratch file next to the
+destination, write and `fsync` it, then `rename` it over the old key. The key
+exists only at owner-only mode, and the rename is atomic for anything reading
+the path. The non-Unix arm keeps the inherited-ACL warning it already had.
+
+This is the third member of the class, found by the final review after the first
+two were fixed. Searching for the construct rather than the report is what
+turned one finding into three: `OpenOptions` with `create` and a `mode` is the
+grep, not "token" or "config".
+
 ### Test plan (Decision D)
 
 | AC | Case | Level | Type |
 |----|------|-------|------|
 | An agent cannot hold both key types | validation returns `Err` naming the agent and both keys | unit | security |
 | A token never lands in a pre-existing readable file | pre-create the path `0644`, save, assert the inode changed and the mode is `0600` | unit | security |
+| A private key never lands in a pre-existing readable file | pre-create the key path `0644`, write, assert the inode changed and the mode is `0600` | unit | security |
 | The Windows warning covers tokens | the `cfg(not(unix))` arm compiles and calls the shared warning helper | compile | security |
 
 The inode assertion is the load-bearing one. A test asserting only the final

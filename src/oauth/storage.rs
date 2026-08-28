@@ -242,10 +242,7 @@ impl TokenStorage {
         // the destination that mode, so no moment exists at which the token is
         // world-readable. A refresh has to overwrite, so this replaces rather
         // than linking first-writer-wins the way `save_client_id` does.
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("token");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("token");
         let tmp = self.create_secret_tmp(file_name)?;
         let tmp = Self::write_secret_tmp(tmp, &content)?;
         if let Err(e) = fs::rename(&tmp, &path) {
@@ -475,9 +472,7 @@ impl TokenStorage {
             Ok(()) => Ok(tmp_path),
             Err(e) => {
                 let _ = fs::remove_file(&tmp_path);
-                Err(Error::OAuth(format!(
-                    "Failed to write temp file: {e}"
-                )))
+                Err(Error::OAuth(format!("Failed to write temp file: {e}")))
             }
         }
     }
@@ -492,9 +487,7 @@ impl TokenStorage {
             Ok(()) => Ok(tmp),
             Err(e) => {
                 let _ = fs::remove_file(&tmp);
-                Err(Error::OAuth(format!(
-                    "Failed to write temp file: {e}"
-                )))
+                Err(Error::OAuth(format!("Failed to write temp file: {e}")))
             }
         }
     }
@@ -525,9 +518,7 @@ impl TokenStorage {
                 // Stale temp collided; try the next nonce.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => {
-                    return Err(Error::OAuth(format!(
-                        "Failed to create temp file: {e}"
-                    )));
+                    return Err(Error::OAuth(format!("Failed to create temp file: {e}")));
                 }
             }
         }
@@ -559,9 +550,7 @@ impl TokenStorage {
                 // Stale temp collided; try the next nonce.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => {
-                    return Err(Error::OAuth(format!(
-                        "Failed to create temp file: {e}"
-                    )));
+                    return Err(Error::OAuth(format!("Failed to create temp file: {e}")));
                 }
             }
         }
@@ -1232,7 +1221,7 @@ mod tests {
     }
 
     /// The token file is REPLACED, never written into whatever already sits at
-    /// that path (MIK-7259).
+    /// that path (Decision D, `docs/design/unauthenticated-network-posture.md`).
     ///
     /// `fs::write` followed by `set_permissions` puts the access token inside a
     /// file created at the process umask, or inside an existing file whose mode
