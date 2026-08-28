@@ -56,6 +56,13 @@ fi
   pod-security.kubernetes.io/enforce=restricted \
   pod-security.kubernetes.io/enforce-version=latest
 
+# The workload's MCP_GATEWAY_TOKEN comes from a Secret, and a pod without it
+# stops at startup rather than serving unauthenticated -- so the smoke has to
+# supply one or every rollout here waits for a pod that can never start.
+"$KUBECTL" create secret generic mcp-gateway-auth -n "$NAMESPACE" \
+  --from-literal=token="kind-smoke-not-a-real-credential" \
+  --dry-run=client -o yaml | "$KUBECTL" apply -f -
+
 common_args=(
   --namespace "$NAMESPACE"
   --set image.registry="$IMG_REG"
