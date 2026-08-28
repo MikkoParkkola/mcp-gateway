@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Assert that a gateway_invoke response carries a real routed capability result.
 
 The gateway answers a failed route with JSON-RPC success whose *inner* payload
