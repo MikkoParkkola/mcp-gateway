@@ -359,6 +359,30 @@ whether a restart on the same file would refuse as well. The second is
 `network_bind_refusal(wanted)` — the startup question, asked of the file — and
 the message ends differently on each answer.
 
+### An exemption is only as good as the thing it recognises
+
+The gate list grew to include `agent_auth`, and the first version counted
+`enabled`. Review caught what that admits: `DecodingKey::from_secret(b"")` is a
+valid key anyone can sign for, so an agent whose `hs256_secret` is an empty
+string authenticates the world. A gateway in that state would have been exempted
+from the refusal and served every backend on a network address — reached
+through the exemption meant to recognise security.
+
+The gate now requires key material somebody could fail to produce: an RSA public
+key, an `env:` reference, or an HS256 secret of at least 32 bytes. Empty, short,
+and no-agents-at-all are each pinned as NOT gating, because that is the direction
+that costs something.
+
+The forgeable agent itself is a separate defect and is filed as **MIK-7258**:
+nothing rejects an empty secret at the auth layer either. This decision only
+stops the posture check from mistaking it for protection.
+
+**The general lesson, recorded because it will recur**: every exemption added
+here asks "is something else already demanding a credential?", and each one is
+an opportunity to accept a mechanism that is enabled but toothless. Adding a
+gate means checking that it can actually turn somebody away, not that its flag
+is on.
+
 ### Stated limits of the test set
 
 Two coverage gaps are known and left, rather than closed badly.

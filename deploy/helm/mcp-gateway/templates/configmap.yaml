@@ -28,5 +28,11 @@ data:
     {{- $_ := set $cfg.server "allow_unauthenticated_network_bind" true }}
     {{- else }}
     {{- $_ := set $cfg "auth" (dict "enabled" true "bearer_token" "env:MCP_GATEWAY_TOKEN" "public_paths" (list "/health")) }}
+    {{- /* And the mesh override is REMOVED, not merely left unset. The two modes
+           are described as mutually exclusive; a value carried over from
+           config.server would leave a credential deployment with the escape
+           hatch still on, warning on every start about a check it is not
+           relying on. */}}
+    {{- $_ := unset $cfg.server "allow_unauthenticated_network_bind" }}
     {{- end }}
     {{- toYaml $cfg | nindent 4 }}
