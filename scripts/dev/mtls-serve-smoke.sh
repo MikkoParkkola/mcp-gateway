@@ -87,4 +87,18 @@ if grep -qi "address already in use\|AddrInUse" "$tmp/gateway.log"; then
   exit 1
 fi
 
-echo "mTLS serve smoke passed (pid $server_pid stayed up on port $port)"
+# Staying up is necessary and not sufficient. The listening socket is handed
+# from tokio to axum-server through into_std(), which leaves it NONBLOCKING; a
+# socket in the wrong mode can leave a process alive that accepts nothing. Only
+# completing a request proves the handover produced a working listener.
+code="$(curl -sS --cacert "$tmp/tls/ca.crt" --resolve "localhost:$port:127.0.0.1" \
+  -o /dev/null -w '%{http_code}' --max-time 10 \
+  "https://localhost:$port/health" 2>"$tmp/curl.err" || true)"
+if [[ "$code" != "200" ]]; then
+  echo "FAIL: the gateway is up but did not answer over TLS (got '${code:-none}')" >&2
+  cat "$tmp/curl.err" >&2
+  cat "$tmp/gateway.log" >&2
+  exit 1
+fi
+
+echo "mTLS serve smoke passed (served HTTP $code over TLS on port $port)"
