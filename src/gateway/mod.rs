@@ -30,7 +30,7 @@ pub use oauth::{
 };
 pub use proxy::ProxyManager;
 pub use server::Gateway;
-pub(crate) use server::reload_posture_refusal;
+pub(crate) use server::{next_start_refusal, reload_posture_refusal};
 pub use streaming::{NotificationMultiplexer, TaggedNotification};
 pub use webhooks::WebhookRegistry;
 

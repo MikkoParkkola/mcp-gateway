@@ -353,6 +353,63 @@ mod restart_required_tests {
         );
     }
 
+    /// A restart-only edit can make the restart itself refuse to serve.
+    ///
+    /// The reload answers "restart required". The startup posture check
+    /// (MIK-7254) then refuses to bind a network-reachable gateway whose tools
+    /// need no credential — so an operator who disables authentication on a
+    /// `0.0.0.0` gateway is advised to do the one thing that takes the gateway
+    /// away. Exposure is not the risk here; availability is, and the operator
+    /// finds out only after the process they were serving with is gone.
+    #[test]
+    fn a_restart_that_would_refuse_is_named_in_the_outcome() {
+        fn reachable(auth: bool) -> Config {
+            let mut c = Config::default();
+            c.server.host = "0.0.0.0".to_string();
+            c.auth.enabled = auth;
+            c
+        }
+
+        let live = LiveConfig::new(reachable(true));
+        live.set(reachable(false));
+        let warned = super::with_pending_restart(
+            crate::config_reload::ReloadOutcome {
+                changes: "auth.enabled".to_string(),
+                restart_required: false,
+                restart_reason: None,
+            },
+            &live,
+        );
+        assert!(
+            warned.restart_required,
+            "the edit is restart-only, so the outcome must still say so"
+        );
+        assert!(
+            warned.changes.contains("a restart would not start"),
+            "the restart advice must carry its own consequence: {}",
+            warned.changes
+        );
+
+        // And it must stay quiet otherwise: the same restart-only edit on a
+        // loopback gateway starts fine, and a warning there would train the
+        // operator to ignore this one.
+        let local = LiveConfig::new(Config::default());
+        local.set(with_auth(false));
+        let quiet = super::with_pending_restart(
+            crate::config_reload::ReloadOutcome {
+                changes: "auth.enabled".to_string(),
+                restart_required: false,
+                restart_reason: None,
+            },
+            &local,
+        );
+        assert!(
+            !quiet.changes.contains("would not start"),
+            "a restart that starts must not be reported as refusing: {}",
+            quiet.changes
+        );
+    }
+
     #[test]
     fn every_tracked_section_is_covered() {
         // The classifier used to name eight sections while the diff tracked
@@ -1472,6 +1529,19 @@ fn with_pending_restart(mut outcome: ReloadOutcome, live: &LiveConfig) -> Reload
         outcome.changes,
         pending.join(", ")
     );
+    // The advice above is "restart", so it has to be advice that works. A
+    // restart-only edit is judged by the STARTUP check, not the reload overlay:
+    // the file is already published, so what a restart boots is `live.get()`.
+    // Telling an operator to restart into a refusal costs them the gateway,
+    // and the refusal message arrives after the process they were serving with
+    // is already gone (MIK-7255). Availability, not exposure — the edit that
+    // would have removed authentication is exactly the one that never applies.
+    if let Some(why) = crate::gateway::next_start_refusal(&live.get()) {
+        outcome.changes = format!(
+            "{outcome_changes} — WARNING: a restart would not start: {why}",
+            outcome_changes = outcome.changes
+        );
+    }
     outcome
 }
 

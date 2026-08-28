@@ -4,10 +4,12 @@
 
 mod persistence;
 mod support;
-// Only the reload overlay leaves this module, and only to `config_reload`. The
-// raw `network_bind_refusal` stays private so there is one way to ask the
-// question on a reload, and it is the one that judges the effective config.
-pub(crate) use support::reload_posture_refusal;
+// Two questions leave this module, both to `config_reload`, and each is
+// exported under the question it answers. A reload asks about the config that
+// would be IN FORCE, so it goes through the overlay. A restart-only edit asks
+// what the NEXT START does with the file, which is the startup check itself —
+// the same function the bind path calls, named here for the caller.
+pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_posture_refusal};
 mod warmstart;
 
 use std::net::SocketAddr;

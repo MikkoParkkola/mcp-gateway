@@ -412,6 +412,22 @@ It is not inert, either: `capability::executor` resolves an `env:` credential
 with `std::env::var` inside `dispatch_protocol`, per call, so a later capability
 call can use a value the refused file supplied.
 
+The fail-fast ran, and the answer is that undoing it is not expressible here.
+Three consumers read those variables — `expand_string` (`src/config/mod.rs:331`)
+and figment's `Env` provider (`:286`) at load time, and `capability::executor`
+per call — so an undo would have to unset or restore process variables, and
+`#![deny(unsafe_code)]` (`src/lib.rs:25`) forbids the `set_var`/`remove_var`
+that edition 2024 made unsafe. `dotenvy` can set them because it is a
+dependency; we cannot unset them. The alternative — resolving every consumer
+from a candidate map instead of the process environment — is a four-consumer
+refactor with its own design and review, not a fix to this decision.
+
+**MIK-7256 is therefore closed as a known residual, not repaired.** The narrower
+patch that suggested itself, refusing when the `env_files` LIST changes, was
+rejected: it misses a same-path file whose CONTENTS changed, which is the
+ordinary case. Nothing in the refusal message claims otherwise today, which is
+what keeps the residual honest rather than hidden.
+
 So the message states two bounded facts — no backend was started or stopped, no
 configuration was published — and offers **no summary of what remains in
 force**. That summary is the thing that kept being wrong: three review rounds
@@ -442,13 +458,21 @@ operator's stated intent and the error tells them immediately, including point 3
 above. Rejecting the write pre-emptively is a separate change and is out of
 scope here.
 
-A restart-only edit can still invite a bounce into the startup refusal by a
+A restart-only edit could still invite a bounce into the startup refusal by a
 different route: disabling `auth` in the file is reported as restart-required
 and applied to disk, and the restart then refuses to serve. The running gateway
-never enters the forbidden state, so it is outside this decision's FOR, and the
-fix belongs with the reload's restart-required reporting rather than here.
-Raised in review, and filed as **MIK-7255** rather than only labelled — a
-deferral without an identifier is theatre. Decision C itself is **MIK-7254**.
+never enters the forbidden state, so the risk is availability rather than
+exposure — but the advice was still "restart", and following it took the
+gateway away.
+
+**MIK-7255 is fixed, in the place the analysis named**: `with_pending_restart`
+asks the STARTUP check about the published config whenever it reports pending
+fields, and appends the consequence to the outcome. The startup check is the
+right question there precisely because the file is already published — what a
+restart boots is `live.get()`, not the reload overlay. `network_bind_refusal`
+stays private; it is re-exported as `next_start_refusal` so the call site names
+the question it asks, which is what the module's one-way-to-ask rule was
+protecting. Decision C itself is **MIK-7254**.
 
 `reload_outcome`'s error reaches the admin API as a 500. It is a policy refusal
 rather than an internal fault, so the status is generous; the text is what the
@@ -464,6 +488,7 @@ does not have. Stated rather than fixed.
 | Setting the override in the same edit does not mask it either | same file, plus `allow_unauthenticated_network_bind = true` — still refused | unit | security |
 | Refused means nothing was applied | a backend added in the same file is absent from the registry, and the live snapshot still has no `public_url` | unit | security |
 | A reload that does not enter the state is unaffected | a RUNNING config whose tool paths are already not public, plus the same new `public_url` — applies normally | unit | regression |
+| A restart-only edit whose restart would refuse says so | `with_pending_restart` on a `0.0.0.0` gateway losing `auth` carries the warning; the same edit on loopback does not | unit | security |
 | The refusal is logged as a refusal | the file watcher takes its own arm, not the broken-config-file arm a parse failure raises | unit | regression |
 | Every refusal input comes from the side it should | `auth`, the override and `host` read from `running`; `public_url` from the file | unit | security |
 | `auth` is not applied by a reload | a reload toggling `auth.enabled` in a file that does not refuse leaves request-time authentication governed by the startup snapshot | integration | security |
