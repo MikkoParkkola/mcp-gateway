@@ -167,8 +167,17 @@ pub(super) fn log_startup_banner(
 ///
 /// Builds a `rustls::ServerConfig` from `mtls_config`, wraps it in
 /// `axum-server`'s `RustlsConfig`, and runs until the `shutdown_fut` resolves.
+/// Takes an ALREADY BOUND listener rather than an address.
+///
+/// It used to bind its own, while the caller had bound the same address for the
+/// plain path — so every mTLS gateway died on "address already in use". Binding
+/// once in the caller and handing the socket here is what makes the two paths
+/// share an address they cannot fight over, and it keeps the bind BEFORE the
+/// startup banner and the warm-start, so a taken port is still reported before
+/// the process claims to be listening.
 pub(super) async fn serve_tls(
     app: axum::Router,
+    listener: std::net::TcpListener,
     addr: SocketAddr,
     mtls_config: &crate::mtls::MtlsConfig,
     shutdown_fut: impl std::future::Future<Output = ()> + Send + 'static,
@@ -195,7 +204,8 @@ pub(super) async fn serve_tls(
 
     let acceptor = PeerCertIdentityAcceptor::new(RustlsAcceptor::new(rustls_config));
 
-    axum_server::bind(addr)
+    axum_server::from_tcp(listener)
+        .map_err(|e| crate::Error::Tls(format!("TLS listener setup failed: {e}")))?
         .acceptor(acceptor)
         .handle(handle)
         .serve(app.into_make_service())

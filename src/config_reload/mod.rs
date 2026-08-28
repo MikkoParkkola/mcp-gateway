@@ -1392,8 +1392,15 @@ impl ReloadContext {
                 // sets the escape hatch, and calling that safe would have the
                 // gateway endorse a choice the operator made deliberately and
                 // owns.
-                "A restart accepts this file whole, including the parts a reload \
-                 cannot apply."
+                // "would not refuse it for this reason", not "accepts it".
+                // `network_bind_refusal` is the only question asked here; a
+                // restart still reads the whole file and can fail on a missing
+                // env: reference, an unreadable certificate, or anything else
+                // validation catches. Promising acceptance is how an operator
+                // restarts a working gateway into a different outage — the same
+                // overclaiming that cost this message three earlier rewrites.
+                "A restart would not refuse it for this reason, and applies the \
+                 parts a reload cannot."
             };
             // Two bounded facts, and no summary of "what is still in force".
             //

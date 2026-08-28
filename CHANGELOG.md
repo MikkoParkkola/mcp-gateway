@@ -194,11 +194,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   **Upgrading the chart therefore needs that Secret created first.** Without it
-  the pod fails configuration validation, which is the intended outcome for a
-  cluster-reachable gateway with no credential. If a service mesh authenticates
-  before anything reaches the pod, set
-  `config.server.allow_unauthenticated_network_bind` instead; it is logged at
-  WARN on every start.
+  Kubernetes stops the pod with `CreateContainerConfigError`, naming the Secret
+  and key it could not find — the container never starts, so there are no
+  gateway logs to read.
+
+  If a service mesh authenticates before anything reaches the pod, set
+  `auth.mode=mesh`. That renders `server.allow_unauthenticated_network_bind`
+  AND removes the credential and its Secret reference; setting the override on
+  its own leaves credential mode active and the pod still demanding a token.
 
   The Docker Compose template needed no credential: it publishes to
   `127.0.0.1:39400` on the host, so the container's `0.0.0.0` is the container's

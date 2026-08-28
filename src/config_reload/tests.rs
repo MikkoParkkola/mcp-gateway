@@ -1624,7 +1624,7 @@ async fn a_file_that_a_restart_would_accept_is_not_reported_as_one_to_revert() {
     // operator to undo the fix they just wrote correctly is the worse failure,
     // and the deployment guide tells them to do exactly this and restart.
     assert!(
-        err.contains("A restart accepts this file"),
+        err.contains("A restart would not refuse it for this reason"),
         "an operator who wrote the fix correctly was told to revert it: {err}"
     );
     assert!(
@@ -1666,7 +1666,7 @@ async fn tightening_public_paths_in_the_same_edit_does_not_mask_it() {
     assert!(err.starts_with(POSTURE_REFUSED_PREFIX), "{err}");
     // AND: a restart on this file is right, so it must not say revert.
     assert!(
-        err.contains("A restart accepts this file"),
+        err.contains("A restart would not refuse it for this reason"),
         "the correct fix was reported as one to revert: {err}"
     );
 }
@@ -1729,7 +1729,7 @@ async fn the_override_is_reported_as_a_file_a_restart_accepts() {
         .await
         .expect_err("the reload was applied");
     assert!(
-        err.contains("A restart accepts this file"),
+        err.contains("A restart would not refuse it for this reason"),
         "a file the escape hatch makes startup-legal was reported as one to \
          revert: {err}"
     );

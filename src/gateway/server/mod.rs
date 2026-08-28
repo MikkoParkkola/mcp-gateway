@@ -1265,14 +1265,16 @@ impl Gateway {
             );
         }
 
-        // Bound in the branch that serves, not here. `serve_tls` calls
-        // `axum_server::bind(addr)` on the same address, so binding it up here
-        // as well made every mTLS gateway fail to start on "address already in
-        // use" — the plain listener held the port the TLS one then asked for.
+        // Bound ONCE, here, and handed to whichever path serves it.
         //
-        // Binding early also fails EARLIER on a port already taken, which is
-        // the one thing lost: that error now surfaces from the serving branch
-        // instead, a few lines later, with the same message from the OS.
+        // Two failure modes meet at this line and both have been live. Binding
+        // here AND inside `serve_tls` made every mTLS gateway die on "address
+        // already in use". Binding only inside the serving branch fixed that
+        // and introduced the opposite fault: the startup banner said Listening
+        // and the warm-start ran before anything discovered the port was taken.
+        //
+        // One bind, before the banner, shared by both paths, has neither.
+        let listener = TcpListener::bind(addr).await?;
 
         log_startup_banner(
             &self.config,
@@ -1372,9 +1374,19 @@ impl Gateway {
 
         // Run server — plain HTTP or mTLS depending on config
         if self.config.mtls.enabled {
-            serve_tls(app, addr, &self.config.mtls, shutdown_signal(shutdown_tx)).await?;
+            // `axum_server` needs a std listener; the socket is the same one.
+            let std_listener = listener
+                .into_std()
+                .map_err(|e| Error::Tls(format!("could not hand the listener to TLS: {e}")))?;
+            serve_tls(
+                app,
+                std_listener,
+                addr,
+                &self.config.mtls,
+                shutdown_signal(shutdown_tx),
+            )
+            .await?;
         } else {
-            let listener = TcpListener::bind(addr).await?;
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal(shutdown_tx))
                 .await

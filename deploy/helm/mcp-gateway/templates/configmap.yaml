@@ -19,7 +19,10 @@ data:
     {{- if not (has $mode (list "credential" "mesh")) }}
     {{- fail (printf "auth.mode must be \"credential\" or \"mesh\", got %q. A value neither template recognises used to render a credential block with no Secret behind it, which is a crash-looping pod rather than an install error." $mode) }}
     {{- end }}
-    {{- $cfg := deepCopy .Values.config }}
+    {{- $cfg := deepCopy (.Values.config | default dict) }}
+    {{- if not $cfg.server }}
+    {{- fail "config.server must set host and port: the chart writes the posture answer into that section, and overriding config without it renders a gateway that cannot be reasoned about." }}
+    {{- end }}
     {{- if eq $mode "mesh" }}
     {{- $_ := unset $cfg "auth" }}
     {{- $_ := set $cfg.server "allow_unauthenticated_network_bind" true }}
