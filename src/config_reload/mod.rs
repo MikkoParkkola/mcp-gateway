@@ -1680,10 +1680,15 @@ where
 ///
 /// Events arrive with absolute, symlink-resolved paths, and they are matched
 /// against the watched paths by equality. A relative `-c gateway.yaml` would
-/// never match one, so hot-reload would go quiet without ever failing. An
-/// unresolvable path is kept as given: the watch below then reports why.
+/// never match one, so hot-reload would go quiet without ever failing.
+///
+/// Absolutizing first and canonicalizing second is what keeps a path that does
+/// not exist yet — an `env_file` the operator has still to write — out of the
+/// relative form: `canonicalize` fails on a missing file, so on its own it
+/// would hand that case straight back as the relative path that never matches.
 fn absolute_watch_path(path: PathBuf) -> PathBuf {
-    std::fs::canonicalize(&path).unwrap_or(path)
+    let absolute = std::path::absolute(&path).unwrap_or(path);
+    std::fs::canonicalize(&absolute).unwrap_or(absolute)
 }
 
 /// The directory to watch for changes to `path`.

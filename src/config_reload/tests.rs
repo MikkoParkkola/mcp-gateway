@@ -1771,7 +1771,12 @@ fn absolute_watch_path_resolves_relative_paths() {
     );
     assert!(resolved.ends_with("Cargo.toml"));
 
-    // An unresolvable path is kept as given, so the watch call reports it.
-    let missing = PathBuf::from("no/such/gateway.yaml");
-    assert_eq!(super::absolute_watch_path(missing.clone()), missing);
+    // A path that does not exist yet still comes back absolute: an `env_file`
+    // the operator writes later must match the event `notify` reports for it.
+    let missing = super::absolute_watch_path(PathBuf::from("no/such/gateway.yaml"));
+    assert!(
+        missing.is_absolute(),
+        "expected an absolute path, got {missing:?}"
+    );
+    assert!(missing.ends_with("no/such/gateway.yaml"));
 }
