@@ -26,6 +26,15 @@ services:
       # either close the tool paths and give clients the credential, or put
       # something in front that authenticates.
       MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND: "true"
+
+      # The name every caller dials. On the 0.0.0.0 bind above the Host gate
+      # admits a NAME only when it is declared here; an undeclared one is
+      # refused as a rebinding attempt while the port stays open, so the client
+      # on the host and the healthcheck below would both get 403.
+      #
+      # Change this together with the publish above: exactly one name is
+      # admitted, and it must be the one callers use.
+      MCP_GATEWAY_SERVER__PUBLIC_URL: "http://localhost:39400"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:39400/health"]
       interval: 30s

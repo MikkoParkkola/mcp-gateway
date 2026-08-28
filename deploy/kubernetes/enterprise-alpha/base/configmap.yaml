@@ -11,6 +11,15 @@ data:
     server:
       host: 0.0.0.0
       port: 39400
+      # The name clients dial. On a 0.0.0.0 bind the Host gate admits a NAME
+      # only when it is declared here; everything else is refused as a rebinding
+      # attempt. The numeric probes kubelet sends are admitted regardless, so an
+      # undeclared name reads as a healthy gateway that answers no one.
+      #
+      # EDIT THIS when applying into another namespace, or when an ingress
+      # fronts the pod: exactly one name is admitted, and it must be the one
+      # callers use.
+      public_url: "http://mcp-gateway.mcp-gateway.svc.cluster.local:39400"
     # Reachable by every pod in the cluster, so the tools need a credential or
     # the gateway refuses to open a port at all. MCP_GATEWAY_TOKEN comes from a
     # Secret in the pod spec, never from this ConfigMap. /health stays open for

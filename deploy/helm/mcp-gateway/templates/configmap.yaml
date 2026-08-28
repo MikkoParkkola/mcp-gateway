@@ -35,4 +35,15 @@ data:
            relying on. */}}
     {{- $_ := unset $cfg.server "allow_unauthenticated_network_bind" }}
     {{- end }}
+    {{- /* The name clients dial. On a 0.0.0.0 bind — the only bind a pod can
+           be reached on — the Host gate admits a NAME only when it is declared,
+           and refuses every other one as a rebinding attempt. Numeric probes are
+           admitted regardless, so leaving this unset reads as a healthy gateway
+           that answers no caller by name. The chart knows its own Service and
+           namespace, so it declares them; set config.server.public_url to the
+           ingress hostname when one fronts this pod. Exactly ONE name is
+           admitted and it must be the one callers use. */}}
+    {{- if not $cfg.server.public_url }}
+    {{- $_ := set $cfg.server "public_url" (printf "http://%s.%s.svc.cluster.local:%v" (include "mcp-gateway.fullname" .) .Release.Namespace .Values.service.port) }}
+    {{- end }}
     {{- toYaml $cfg | nindent 4 }}

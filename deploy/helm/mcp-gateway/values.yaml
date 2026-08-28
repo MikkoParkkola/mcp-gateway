@@ -65,6 +65,13 @@ config:
   server:
     host: 0.0.0.0
     port: 39400
+    # The name clients dial. Left unset, the template fills in this release's
+    # in-cluster Service DNS name, which is what a pod-to-pod caller uses. On a
+    # 0.0.0.0 bind the Host gate admits exactly one NAME, so set it to the
+    # ingress hostname when something fronts the pod; numeric probes are
+    # admitted either way, and an undeclared name reads as a healthy gateway
+    # that answers no one.
+    # public_url: "https://mcp-gateway.example.com"
   # `auth` is NOT set here on purpose: the template renders it from auth.mode
   # above, so the credential and the mesh flag cannot both appear. A value set
   # here would be overwritten.

@@ -13,6 +13,9 @@ const VALUES: &str =
 const PREFLIGHT: &str = include_str!("../deploy/kubernetes/enterprise-alpha/scripts/preflight.sh");
 const SERVER_DRY_RUN: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/scripts/server-dry-run.sh");
+const BASE_CONFIGMAP: &str =
+    include_str!("../deploy/kubernetes/enterprise-alpha/base/configmap.yaml");
+const HELM_CONFIGMAP: &str = include_str!("../deploy/helm/mcp-gateway/templates/configmap.yaml");
 const KIND_SMOKE: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh");
 
@@ -356,4 +359,32 @@ fn dry_run_and_kind_scripts_are_gated_and_reversible() {
     assert!(KIND_SMOKE.contains("trap cleanup EXIT"));
     assert!(KIND_SMOKE.contains("MCP_GATEWAY_KIND_KEEP"));
     assert!(KIND_SMOKE.contains("server-dry-run.sh"));
+}
+
+/// A pod binds `0.0.0.0`, and on a non-loopback bind the Host gate admits a
+/// NAME only when `server.public_url` declares it.
+///
+/// Without it the numeric probes kubelet sends stay green while every client
+/// dialling the Service by name is refused — a gateway that reports healthy and
+/// answers nobody.
+#[test]
+fn shipped_kubernetes_configs_declare_the_name_clients_dial() {
+    let config = docs(BASE_CONFIGMAP)
+        .into_iter()
+        .next()
+        .expect("configmap document");
+    let gateway: Value =
+        serde_yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+    let public_url = gateway["server"]["public_url"]
+        .as_str()
+        .expect("a 0.0.0.0 bind must declare the name clients dial");
+    assert!(
+        public_url.contains(".svc.cluster.local"),
+        "the declared name must be the in-cluster Service DNS name, got {public_url}"
+    );
+
+    assert!(
+        HELM_CONFIGMAP.contains("public_url"),
+        "the chart must render the same declaration; it knows its own namespace"
+    );
 }
