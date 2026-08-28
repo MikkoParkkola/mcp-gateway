@@ -1070,3 +1070,23 @@ fn agent_auth_disabled_ignores_key_material_entirely() {
     c.validate()
         .expect("a disabled agent_auth block verifies nothing and gates nothing");
 }
+
+#[test]
+fn an_agent_holding_both_key_types_fails_validation() {
+    // The algorithm is read from the TOKEN HEADER (src/gateway/oauth/jwt.rs:120),
+    // so a caller chooses which of the two keys verifies its token. An agent
+    // configured with both is therefore only as strong as its WEAKER key, while
+    // the operator who added an RSA key believes RSA is what is in force.
+    // `AgentDefinition` already documents "exactly one"; nothing enforced it.
+    let err = agent_config(
+        Some("short"),
+        Some("-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----"),
+    )
+    .validate()
+    .expect_err("an agent holding both key types was accepted");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("svc") && msg.contains("both"),
+        "the message must name the agent and the ambiguity: {msg}"
+    );
+}

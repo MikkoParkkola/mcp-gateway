@@ -405,6 +405,20 @@ impl Config {
                 .rs256_public_key
                 .as_deref()
                 .is_some_and(|k| !k.trim().is_empty());
+            let has_hs256 = agent.hs256_secret.is_some();
+            // The algorithm comes from the TOKEN HEADER, so with both keys
+            // configured the caller picks which one verifies its token and the
+            // agent is only as strong as the weaker key. `AgentDefinition`
+            // already documents "exactly one"; refusing is what enforces it.
+            if has_rsa && has_hs256 {
+                return Err(Error::ConfigValidation(format!(
+                    "agent_auth.agents['{}'] sets both hs256_secret and \
+                     rs256_public_key. The algorithm is read from the token, so \
+                     a caller chooses which key verifies it and the agent is \
+                     only as strong as the weaker one. Configure exactly one.",
+                    agent.client_id
+                )));
+            }
             if has_rsa {
                 continue;
             }
