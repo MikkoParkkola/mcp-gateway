@@ -92,6 +92,11 @@ jobs:
         run: cargo test --all-features
 
       - name: Verify publish package
+        # The runner image points crates-io at a mirror in its cargo config,
+        # and cargo publish refuses to run while the registry is replaced.
+        # A private CARGO_HOME carries no such config.
+        env:
+          CARGO_HOME: ${{ runner.temp }}/publish-cargo-home
         run: cargo publish --locked --dry-run
 
   build:
@@ -273,8 +278,10 @@ jobs:
 
       - name: Sync npm package version to git tag
         working-directory: npm
+        env:
+          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${TAG_REF}"
           VERSION="${TAG#v}"
           echo "Setting npm version to ${VERSION}"
           npm version "${VERSION}" --no-git-tag-version --allow-same-version
@@ -293,8 +300,10 @@ jobs:
     steps:
       - name: Compute version and download checksums
         id: meta
+        env:
+          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${TAG_REF}"
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
