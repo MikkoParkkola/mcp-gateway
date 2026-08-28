@@ -82,7 +82,7 @@ fi
 # a background task that deliberately waits for that bind. Invoking on health
 # alone races the load and fails with "Not found: 'gateway'". Wait for the
 # readiness the admin health view reports — a backend that never loads still
-# fails this smoke.
+# fails this smoke. The product gap making it necessary is MIK-7268.
 admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
 capabilities_ready=""
 for _ in $(seq 1 150); do

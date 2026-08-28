@@ -71,6 +71,7 @@ curl -fsS "$health_url" >/dev/null
 # (src/gateway/server/mod.rs). Invoking on health alone races that load and
 # fails with "Not found: 'gateway'". Wait for the readiness the admin health
 # view actually reports; a backend that never loads still fails the smoke.
+# The product gap that makes this wait necessary is MIK-7268.
 admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
 capabilities_ready=""
 for _ in $(seq 1 100); do
