@@ -138,16 +138,16 @@ impl ProxyManager {
     /// Full bidirectional flow:
     /// 1. Generates a unique request ID.
     /// 2. Registers a pending entry so the response can be correlated.
-    /// 3. Broadcasts the request to ALL connected SSE sessions.
-    /// 4. Awaits the first client's POST-back response, subject to `timeout`.
+    /// 3. Sends the request to `session_id` alone.
+    /// 4. Awaits that session's POST-back response, subject to `timeout`.
     /// 5. Returns the response on success, or a [`SamplingError`] on failure.
     ///
-    /// Broadcasting ensures the request reaches any client capable of handling
-    /// sampling, regardless of which session happens to be "first."
+    /// Only the originating session is prompted, so no other client can see or
+    /// answer a prompt addressed to it.
     ///
     /// # Errors
     ///
-    /// - [`SamplingError::NoSession`] if no sessions are connected.
+    /// - [`SamplingError::NoSession`] if `session_id` has no live stream.
     /// - [`SamplingError::Timeout`] if no client responds within `timeout`.
     /// - [`SamplingError::Cancelled`] if the oneshot channel is dropped unexpectedly.
     pub async fn forward_sampling_with_response(
@@ -234,7 +234,6 @@ impl ProxyManager {
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        // Broadcast to ALL sessions — first Claude Code instance to respond wins.
         // To the originating session only, for the same reason as sampling: a
         // confirmation another client can answer is not a confirmation.
         if !self.multiplexer.send_to_session(session_id, notification) {
