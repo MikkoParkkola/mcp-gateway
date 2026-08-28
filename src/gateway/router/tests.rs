@@ -2985,3 +2985,45 @@ async fn non_admin_may_set_its_own_routing_profile() {
         "and must not be told it needs admin: {message}"
     );
 }
+
+// ── Session-targeted prompts reach the session that asked ─────────────
+
+#[tokio::test]
+async fn sampling_prompt_is_delivered_to_the_requesting_session() {
+    // GIVEN: a live session listening on its own notification stream
+    let state = test_router_app_state();
+    let (session_id, mut rx) = state
+        .multiplexer
+        .get_or_create_session_for(Some("gw-caller"), "unauthenticated:anonymous");
+    let router = create_router(Arc::clone(&state));
+
+    // WHEN: that session asks the gateway for a sampling round trip
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-session-id", session_id.as_str())
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": "sample-1",
+                "method": "sampling/createMessage",
+                "params": {
+                    "messages": [{"role": "user", "content": {"type": "text", "text": "hi"}}],
+                    "maxTokens": 16
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let call = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+
+    // THEN: the prompt arrives on that session's stream
+    let delivered = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("the prompt must reach the requesting session, not a literal \"broadcast\" id")
+        .expect("the notification stream must stay open");
+    assert_eq!(delivered.data["method"], "sampling/createMessage");
+
+    call.abort();
+}

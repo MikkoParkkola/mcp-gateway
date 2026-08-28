@@ -788,11 +788,11 @@ pub(super) async fn meta_mcp_handler(
                 Err(resp) => return resp,
             };
 
-            // Broadcast to all sessions — first responder wins.
+            // To the session that asked, and only that one.
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_sampling_with_response("broadcast", &sampling_params, timeout)
+                .forward_sampling_with_response(&session_id, &sampling_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
@@ -807,11 +807,11 @@ pub(super) async fn meta_mcp_handler(
                 Err(resp) => return resp,
             };
 
-            // Broadcast to all sessions — first responder wins.
+            // To the session that asked, and only that one.
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_elicitation_with_response("broadcast", &elicitation_params, timeout)
+                .forward_elicitation_with_response(&session_id, &elicitation_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
