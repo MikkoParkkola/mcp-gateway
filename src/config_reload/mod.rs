@@ -1688,7 +1688,17 @@ where
 /// would hand that case straight back as the relative path that never matches.
 fn absolute_watch_path(path: PathBuf) -> PathBuf {
     let absolute = std::path::absolute(&path).unwrap_or(path);
-    std::fs::canonicalize(&absolute).unwrap_or(absolute)
+    // Resolve symlinks in the parent chain only. The chain must be resolved
+    // because macOS reports events under the real directory (`/private/var`,
+    // not `/var`) and the watcher compares paths for equality. The final
+    // component must not be, or a symlink-managed deployment aims the watcher
+    // at the current target's directory and retargeting the symlink fires no
+    // event the watcher can see.
+    absolute
+        .parent()
+        .zip(absolute.file_name())
+        .and_then(|(parent, name)| std::fs::canonicalize(parent).ok().map(|dir| dir.join(name)))
+        .unwrap_or(absolute)
 }
 
 /// The directory to watch for changes to `path`.

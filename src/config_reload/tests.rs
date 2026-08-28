@@ -1780,3 +1780,31 @@ fn absolute_watch_path_resolves_relative_paths() {
     );
     assert!(missing.ends_with("no/such/gateway.yaml"));
 }
+
+/// A symlinked config file must be watched where the operator points at it.
+/// Resolving the final component aims the watcher at the symlink target's
+/// directory, so a deploy that retargets the symlink writes nowhere the
+/// watcher is looking and the gateway keeps serving the superseded config.
+#[cfg(unix)]
+#[test]
+fn absolute_watch_path_keeps_a_symlinked_file_unresolved() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("release.yaml");
+    std::fs::write(&real, "servers: {}\n").expect("write");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+    let resolved = super::absolute_watch_path(link);
+    assert!(
+        resolved.ends_with("gateway.yaml"),
+        "expected the symlink path to survive, got {resolved:?}"
+    );
+    // The parent chain is still resolved: macOS reports events under the real
+    // directory (`/private/var`, not `/var`), and the watcher compares paths
+    // for equality.
+    assert_eq!(
+        resolved.parent(),
+        std::fs::canonicalize(dir.path()).ok().as_deref(),
+        "expected the parent chain to be canonical, got {resolved:?}"
+    );
+}
