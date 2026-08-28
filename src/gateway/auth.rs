@@ -682,16 +682,27 @@ fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option
         // it for leaves the operator holding a dead link with no way to retry
         // short of restarting the gateway — and nothing tells them that. An
         // install configured with API keys but no bearer hits exactly this.
-        if state.auth_config.bearer_token.is_none() {
-            warn!("Dashboard bootstrap unusable: no bearer token is configured");
+        //
+        // An admin API key counts. The exchange hands back an opaque session
+        // handle and never touches the credential itself, so a bearer is not
+        // mechanically required — demanding one refused every API-key-only
+        // operator over a token the exchange would not have used. A RESTRICTED
+        // key does not count: the session it opens carries admin.
+        let has_admin_credential = state.auth_config.bearer_token.is_some()
+            || state.auth_config.api_keys.iter().any(|k| k.admin);
+        if !has_admin_credential {
+            warn!("Dashboard bootstrap unusable: no admin credential is configured");
             return Some(bearer_unauthorized_response(
-                "No admin credential is configured. Set auth.bearer_token, or run                  `mcp-gateway init` to generate one, then restart for a fresh link.",
+                "No admin credential is configured. Set auth.bearer_token or an admin \
+                 API key, or run `mcp-gateway init` to generate one, then restart for \
+                 a fresh link.",
             ));
         }
         if !state.dashboard_bootstrap.consume(&candidate) {
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
-                "Bootstrap link is invalid or already used. Restart the gateway                  for a fresh link.",
+                "Bootstrap link is invalid or already used. Restart the gateway \
+                 for a fresh link.",
             ));
         }
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
@@ -1519,5 +1530,85 @@ mod tests {
         assert!(err.contains("server"));
         assert!(err.contains("blocked"));
         assert!(err.contains("restricted_bot"));
+    }
+
+    /// A dashboard bootstrap link for an install whose only admin credential is
+    /// an API key.
+    ///
+    /// The value is exchanged for an opaque session handle, never for the
+    /// credential itself, so demanding a bearer specifically refuses every
+    /// API-key-only operator for a token the exchange would not have used.
+    fn bootstrap_state(bearer: Option<&str>, keys: Vec<ResolvedApiKey>) -> (AuthState, String) {
+        let config = ResolvedAuthConfig {
+            enabled: true,
+            bearer_token: bearer.map(ToString::to_string),
+            api_keys: keys,
+            public_paths: vec![],
+            rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
+        };
+        let bootstrap = Arc::new(DashboardBootstrap::new());
+        let printed = bootstrap.peek().expect("a value is issued at startup");
+        (
+            AuthState {
+                auth_config: Arc::new(config),
+                key_server: None,
+                dashboard_bootstrap: bootstrap,
+                tls_enabled: false,
+            },
+            printed,
+        )
+    }
+
+    fn admin_key(admin: bool) -> ResolvedApiKey {
+        ResolvedApiKey {
+            key: "key-value".to_string(),
+            name: "ops".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin,
+        }
+    }
+
+    fn redeem(state: &AuthState, printed: &str) -> axum::http::StatusCode {
+        let request = Request::builder()
+            .uri(format!("/dashboard?bootstrap={printed}"))
+            .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                12345,
+            ))))
+            .body(Body::empty())
+            .expect("request builds");
+        try_dashboard_bootstrap(state, &request)
+            .expect("a bootstrap link is always answered here")
+            .status()
+    }
+
+    #[test]
+    fn an_admin_api_key_is_an_admin_credential_for_the_bootstrap_link() {
+        let (state, printed) = bootstrap_state(None, vec![admin_key(true)]);
+        assert_eq!(
+            redeem(&state, &printed),
+            axum::http::StatusCode::SEE_OTHER,
+            "an install administered by API key must be able to open its own dashboard"
+        );
+    }
+
+    /// The other half: a key that is not admin is not an admin credential.
+    ///
+    /// Without this, a repair that only checks the list is non-empty hands a
+    /// full-admin dashboard session to an install that deliberately issued
+    /// nothing but restricted keys.
+    #[test]
+    fn a_restricted_api_key_does_not_open_the_dashboard() {
+        let (state, printed) = bootstrap_state(None, vec![admin_key(false)]);
+        assert_eq!(
+            redeem(&state, &printed),
+            axum::http::StatusCode::UNAUTHORIZED,
+            "a restricted key is not an admin credential"
+        );
     }
 }
