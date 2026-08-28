@@ -133,6 +133,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: an agent's key material is checked at startup.** With
+  `agent_auth.enabled = true`, a config that previously loaded is now refused
+  when an agent:
+
+  - sets an `hs256_secret` shorter than 32 bytes, or one whose `env:` variable
+    is unset. `DecodingKey::from_secret(b"")` is a valid key, so an empty or
+    short shared secret verifies a token anyone can sign — that agent
+    authenticates the world;
+  - sets both `hs256_secret` and `rs256_public_key`. The algorithm is read
+    from the token header, so the caller picks which key verifies it and the
+    agent is only as strong as the weaker one. Configure exactly one;
+  - sets neither, and so can verify nothing.
+
+  The refusal names the agent and the reason. To upgrade: rotate any secret
+  below 32 bytes, and drop one key from any agent holding both.
+
 - **BREAKING: server management requires a credential.** With `auth.enabled =
   false`, `gateway_kill_server`, `gateway_revive_server`,
   `gateway_reload_config` and `gateway_reload_capabilities` are unavailable.
@@ -212,6 +228,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `auth.mode=mesh`. That renders `server.allow_unauthenticated_network_bind`
   AND removes the credential and its Secret reference; setting the override on
   its own leaves credential mode active and the pod still demanding a token.
+
+  **Both templates now also declare `server.public_url`.** On a `0.0.0.0` bind
+  the Host gate admits a NAME only when it is declared, so an install that did
+  not declare one answered the kubelet's numeric probes — staying green —
+  while refusing every caller that dialled the Service DNS name. The chart
+  derives the name from the release and namespace; the raw Kubernetes base
+  carries the default `mcp-gateway` namespace and a comment saying to edit it.
+  **Applying the base into another namespace, or fronting it with an ingress,
+  means editing that one line**, and a refusal is logged with the Host it
+  rejected.
 
   The Docker Compose template needed no credential: it publishes to
   `127.0.0.1:39400` on the host, so the container's `0.0.0.0` is the container's

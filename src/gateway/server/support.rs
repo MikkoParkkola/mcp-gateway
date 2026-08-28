@@ -78,14 +78,17 @@ pub(super) fn log_startup_banner(
         if crate::gateway::router::is_loopback_bind(&config.server.host)
             && let Some(value) = bootstrap.and_then(DashboardBootstrap::peek)
         {
-            info!(
-                "DASHBOARD (opens once, then remembered in this browser): \
-                 {}://{}:{}/dashboard?bootstrap={}",
-                if config.mtls.enabled { "https" } else { "http" },
-                config.server.host,
-                config.server.port,
-                value
-            );
+            if let Some(reason) = dashboard_link_refusal(config) {
+                warn!("DASHBOARD link not printed: {reason}");
+            } else {
+                info!(
+                    "DASHBOARD (opens once, then remembered in this browser): \
+                     {}://{}/dashboard?bootstrap={}",
+                    if config.mtls.enabled { "https" } else { "http" },
+                    url_authority(&config.server.host, config.server.port),
+                    value
+                );
+            }
         }
 
         let key_count = config.auth.api_keys.len();
@@ -467,6 +470,41 @@ const TOOL_ROUTE: &str = "/mcp";
 /// distinguishes a path SEGMENT from a name that merely begins with the same
 /// letters, and `/mcp-status` is not a tool route.
 const TOOL_ROUTE_PREFIX: &str = "/mcp/";
+
+/// Format a host and port as a URL authority, bracketing an IPv6 literal.
+///
+/// `::1` written into a URL unbracketed parses as an empty host followed by
+/// port `:1`, so the link a browser is handed is not navigable. Names and IPv4
+/// literals pass through unchanged.
+fn url_authority(host: &str, port: u16) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// Why the printed dashboard link would not work, when it would not.
+///
+/// Redemption sets a `Secure` session cookie whenever a `public_url` declares
+/// HTTPS, because a proxy may terminate TLS in front of this listener. The link
+/// is plain HTTP on a loopback bind, and a browser discards a `Secure` cookie
+/// that arrives over HTTP — so following the link would spend the single-use
+/// value and land on a dashboard that still reads as logged out. Printing the
+/// reason instead of the dead link is what tells the operator which knob moved.
+fn dashboard_link_refusal(config: &Config) -> Option<String> {
+    let public = config.server.public_url.as_deref()?;
+    if config.mtls.enabled || !public.starts_with("https://") {
+        return None;
+    }
+    Some(format!(
+        "server.public_url is {public}, so the dashboard session cookie is marked Secure and \
+         a browser discards it over this plain-HTTP listener. Set mtls.enabled to serve this \
+         listener over HTTPS, or remove server.public_url while you redeem the link — \
+         redemption is loopback-only, so the HTTPS front end cannot perform it."
+    ))
+}
+
 
 /// Why an unauthenticated gateway must not serve HTTP on this bind, if it must not.
 ///
