@@ -3027,3 +3027,48 @@ async fn sampling_prompt_is_delivered_to_the_requesting_session() {
 
     call.abort();
 }
+
+#[tokio::test]
+async fn sampling_without_a_live_stream_fails_instead_of_hanging() {
+    // GIVEN: a caller that only POSTs — it never opened a notification stream
+    let state = test_router_app_state();
+    let router = create_router(Arc::clone(&state));
+
+    // WHEN: it asks the gateway for a sampling round trip
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": "sample-nostream",
+                "method": "sampling/createMessage",
+                "params": {
+                    "messages": [{"role": "user", "content": {"type": "text", "text": "hi"}}],
+                    "maxTokens": 16
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    // THEN: it is told there is nobody to ask, rather than waiting out the
+    // 120-second response timeout on a prompt only the handler could hear.
+    let response = tokio::time::timeout(Duration::from_secs(5), router.oneshot(request))
+        .await
+        .expect("an undeliverable prompt must fail fast, not hang until the timeout")
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["code"], -32002, "body: {body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("No sampling-capable client connected"),
+        "body: {body}"
+    );
+}

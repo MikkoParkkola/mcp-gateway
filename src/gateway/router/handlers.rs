@@ -447,13 +447,19 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state.multiplexer.get_or_create_session_for(
+    let (session_id, session_rx) = state.multiplexer.get_or_create_session_for(
         existing_session_id.as_deref(),
         // The identity that owns the session. Every caller is "anonymous"
         // when authentication is off, so a single-user gateway behaves
         // exactly as before.
         &session_owner(client.as_ref()),
     );
+    // This handler is not a stream reader. Holding the subscription would make
+    // a server-to-client prompt look deliverable to a caller with no live SSE
+    // stream: the send succeeds into a receiver nobody polls, and the caller
+    // waits out the 120-second response timeout instead of being told there is
+    // nobody to ask.
+    drop(session_rx);
 
     // Optionally sanitize input
     let request = if state.sanitize_input {
