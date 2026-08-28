@@ -179,6 +179,9 @@ impl ProxyManager {
         // destructive-action confirmation, which made that gate a lottery
         // rather than a control on a gateway with more than one client.
         if !self.multiplexer.send_to_session(session_id, notification) {
+            // The entry was registered before the send; an undeliverable
+            // prompt has no responder, so nothing would ever remove it.
+            self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
         }
         debug!(%id, %session_id, "Sent sampling/createMessage to the originating session");
@@ -235,6 +238,9 @@ impl ProxyManager {
         // To the originating session only, for the same reason as sampling: a
         // confirmation another client can answer is not a confirmation.
         if !self.multiplexer.send_to_session(session_id, notification) {
+            // Same reason as sampling: registered before the send, and an
+            // undeliverable prompt never reaches a responder that clears it.
+            self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
         }
         debug!(%id, %session_id, "Sent elicitation/create to the originating session");
@@ -737,5 +743,65 @@ mod tests {
 
         // WHEN / THEN: no panic
         proxy.broadcast_tools_list_changed();
+    }
+
+    // ── Undeliverable prompts must not leak their pending entry ────────
+
+    #[tokio::test]
+    async fn undeliverable_sampling_leaves_no_pending_entry() {
+        // GIVEN: a proxy with no connected sessions
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+        let params = SamplingCreateMessageParams {
+            messages: vec![SamplingMessage {
+                role: "user".to_string(),
+                content: Content::Text {
+                    text: "Hello".to_string(),
+                    annotations: None,
+                },
+            }],
+            tools: None,
+            tool_choice: None,
+            model_preferences: None,
+            system_prompt: None,
+            max_tokens: 100,
+        };
+
+        // WHEN: delivery to a session that does not exist fails
+        let result = proxy
+            .forward_sampling_with_response("absent", &params, Duration::from_millis(50))
+            .await;
+
+        // THEN: the caller sees NoSession and nothing is left allocated
+        assert!(matches!(result, Err(SamplingError::NoSession)));
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an undeliverable prompt must not leave a pending entry behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn undeliverable_elicitation_leaves_no_pending_entry() {
+        // GIVEN: a proxy with no connected sessions
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+        let params = ElicitationCreateParams {
+            message: "Confirm?".to_string(),
+            requested_schema: Some(json!({"type": "object"})),
+        };
+
+        // WHEN: delivery to a session that does not exist fails
+        let result = proxy
+            .forward_elicitation_with_response("absent", &params, Duration::from_millis(50))
+            .await;
+
+        // THEN: the caller sees NoSession and nothing is left allocated
+        assert!(matches!(result, Err(SamplingError::NoSession)));
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an undeliverable prompt must not leave a pending entry behind"
+        );
     }
 }
