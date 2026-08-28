@@ -116,6 +116,23 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     rename_with_retry(&tmp_path, path).map_err(|e| cleanup(&e, "replace"))
 }
 
+/// Say once, per process, that secret files inherit directory ACLs here.
+///
+/// Once rather than per write: an admin UI that saves config repeatedly would
+/// otherwise bury the message it exists to deliver.
+#[cfg(not(unix))]
+pub(crate) fn warn_once_about_inherited_acls(what: &str, path: &Path) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            path = %path.display(),
+            "This platform has no owner-only file mode: the {what} inherits the \
+             directory's permissions and may be readable by other users. Store \
+             it in a directory only this account can read."
+        );
+    });
+}
+
 /// Claim a scratch file next to `path` that no other writer holds.
 ///
 /// The create is exclusive, so a name already in use is refused rather than
@@ -140,6 +157,14 @@ fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, P
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
+        // Windows has no equivalent in `std`: the file inherits the directory's
+        // ACL, so a config holding a bearer token is as readable as wherever it
+        // was put. Restricting the DACL needs a Win32 call, and this crate
+        // denies `unsafe`, so the honest move is to tell the operator rather
+        // than write a permission we did not set. Documented in SECURITY.md
+        // under "Windows file permissions"; warned once so it is not silent.
+        #[cfg(not(unix))]
+        warn_once_about_inherited_acls("config", path);
         match opts.open(&candidate) {
             Ok(file) => return Ok((file, candidate)),
             // Someone else's scratch file. Not ours to write to, and not ours

@@ -52,6 +52,19 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
 - **Rate limiting**: Token-bucket per-backend rate limiting
 - **Audit logging**: NDJSON audit trail for all tool invocations
 
+### Known limitations
+
+- **Windows file permissions**: files holding secrets — the config with its
+  admin token, generated mTLS private keys, stored OAuth tokens — are created
+  owner-only (`0600`) on Unix. Windows has no equivalent in the Rust standard
+  library: the file inherits the ACL of the directory it is written to.
+  Restricting the DACL requires a Win32 call, and this crate denies `unsafe`
+  code, so the gateway does not claim a permission it cannot set. It warns once
+  per process when it writes such a file. **On Windows, put the config and any
+  key material in a directory only the gateway's account can read.** Tracked
+  rather than silently accepted; a safe wrapper for the Win32 call is the fix,
+  and it needs a Windows host to verify on.
+
 ### Security Testing
 
 - **53 dedicated security integration tests** (`tests/security_tests.rs`)

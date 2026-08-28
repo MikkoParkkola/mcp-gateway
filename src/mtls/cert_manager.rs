@@ -298,6 +298,11 @@ fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     options.mode(0o600);
+    // No owner-only mode on this platform, and no DACL call without `unsafe`.
+    // A private key is the worst file to leave at the directory's permissions,
+    // so say so rather than let it look protected. See SECURITY.md.
+    #[cfg(not(unix))]
+    crate::config_persistence::warn_once_about_inherited_acls("private key", path);
 
     let mut file = options
         .open(path)
