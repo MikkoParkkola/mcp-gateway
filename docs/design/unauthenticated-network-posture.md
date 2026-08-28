@@ -12,6 +12,9 @@ OUT, tracked separately: authentication on by default and credential
 provisioning (MIK-7243), the destructive-confirmation gate (MIK-7246),
 capabilities taking a caller-supplied URL (MIK-7247).
 
+This scope moved once, on 2026-08-28, to take in two more members of the same
+class found by the final review — see Decision D.
+
 ## Which adversaries
 
 From the threat model in `origin-validation-anon-admin.md`. The origin gate
@@ -520,3 +523,56 @@ nothing enforces it. If it ever changes, the inverse hole opens — disabling au
 and setting a `public_url` in one edit would slip through — and every other row
 here stays green, because they all read `auth` from `running` and would keep
 agreeing with themselves. This row is what fails on that day.
+
+## Decision D — an agent may hold one key type, and a token file is replaced, never written into
+
+Receipt update, 2026-08-28. The scope declared at the top of this document moves
+to include two credential paths that the final review found, and that belong to
+the class this change is about: a secret an unauthenticated caller can reach, or
+a secret left where another local user can read it. Both were pre-existing code.
+They are fixed here rather than filed, because filing them would ship a release
+whose stated purpose is this class while leaving two members of it open.
+
+### An agent configured with both key types is refused at startup
+
+`validate_agent_token` reads the algorithm from the **token header**, which the
+caller controls, and then picks the verifying key from that algorithm. An agent
+carrying both `hs256_secret` and `rs256_public_key` therefore verifies against
+whichever the caller names — the deployment is only as strong as its weaker key,
+and a shared HMAC secret sitting beside an RSA public key is exactly the pairing
+an operator adds while migrating. `AgentDefinition` already documented "exactly
+one of" as a rule. Nothing enforced it.
+
+Validation now refuses the configuration and names both keys. This eliminates
+the finding rather than patching it: with the pairing unrepresentable, no
+algorithm-confusion path exists to defend. A both-keys deployment that starts
+today will refuse to start after upgrading, and the error says which agent and
+what to remove — the intended outcome, since such a deployment is already
+verifying tokens against its weaker key.
+
+### The OAuth token file is created owner-only, not chmodded afterwards
+
+`save` wrote the token with `fs::write` and then narrowed the mode. Between those
+two calls the file holds a backend refresh token at whatever the process umask
+allowed, and a pre-existing world-readable file is written *into*, keeping its
+mode and its inode. The same module already had the safe shape for the far less
+sensitive client-id file: create exclusively at `0600`, write, then link into
+place. Token writes now use those same helpers, renamed to say "secret" rather
+than "client", and land with `fs::rename` because a refresh legitimately
+replaces the previous token, where a client id must not.
+
+The non-Unix arm now emits the inherited-ACL warning the config path already
+emits, so a Windows operator hears about the token file for the same reason and
+in the same words as the config file.
+
+### Test plan (Decision D)
+
+| AC | Case | Level | Type |
+|----|------|-------|------|
+| An agent cannot hold both key types | validation returns `Err` naming the agent and both keys | unit | security |
+| A token never lands in a pre-existing readable file | pre-create the path `0644`, save, assert the inode changed and the mode is `0600` | unit | security |
+| The Windows warning covers tokens | the `cfg(not(unix))` arm compiles and calls the shared warning helper | compile | security |
+
+The inode assertion is the load-bearing one. A test asserting only the final
+mode passes against the old code, which did reach `0600` — one syscall late, and
+without ever detaching from the file it inherited.
