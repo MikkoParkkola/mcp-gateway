@@ -380,7 +380,7 @@ impl Gateway {
     /// # Errors
     ///
     /// Returns an error if backend registration fails.
-    #[allow(clippy::unused_async)] // async for future initialization needs
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
     pub async fn new_with_path(
         config: Config,
         config_path: Option<std::path::PathBuf>,

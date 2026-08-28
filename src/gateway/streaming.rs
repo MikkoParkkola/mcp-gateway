@@ -269,7 +269,7 @@ impl NotificationMultiplexer {
     /// # Errors
     ///
     /// Returns an error if the backend is not found in the registry.
-    #[allow(clippy::unused_async)] // async for future streaming implementation
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future streaming implementation
     pub async fn subscribe_backend(&self, session_id: &str, backend_name: &str) -> Result<()> {
         // Verify backend exists
         let _backend = self
