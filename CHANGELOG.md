@@ -30,17 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Opening it exchanges a single-use value for a session cookie and redirects,
   so nothing stays in the address bar. The value in the link is **not** the
-  admin credential; it works once, dies with the process, and is redeemable
-  only from this machine, so a link in a shell history is spent and a declared
-  `server.public_url` cannot make it usable from elsewhere. The cookie carries
+  admin credential; it works once, dies with the process, and is refused unless
+  the request's `Host` names a loopback address, so a link left in a shell
+  history is spent. That check reads a header the caller supplies, so treat the
+  printed value as sensitive rather than as safe-by-construction — hardening it
+  is tracked and the link is printed only on a loopback bind in the meantime. The cookie carries
   an opaque handle rather than the credential, `HttpOnly` and
   `SameSite=Strict`, and `Secure` when the listener speaks TLS. Details in
   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#opening-the-dashboard).
 
-- **Config files are written readable only by you** (`0600`), on every path
-  that writes one — `init`, the dashboard's edits, and the config-export
+- **Config files are written readable only by you** (`0600`) on Unix, on every
+  path that writes one — `init`, the dashboard's edits, and the config-export
   command. The file holds this gateway's credentials, and until now it
   inherited the process umask.
+
+  Windows has no equivalent here and the file takes the directory's inherited
+  permissions; stated rather than silently implied by the sentence above.
 
   An existing file is **reported, not changed**: the startup log names it, its
   mode, and the `chmod` to fix it. Silently re-permissioning a file you own is

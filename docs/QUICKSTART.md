@@ -43,7 +43,7 @@ mcp-gateway init --profile local
 This writes `gateway.yaml` with sensible defaults and two free capability files under `capabilities/knowledge/`.
 
 It also generates an **admin credential** for this install and writes it into
-that file, which is created readable only by you. Tool calls do not need it —
+that file, which is created readable only by you on Unix. Tool calls do not need it —
 `init` lists `/health` and `/mcp` under `auth.public_paths` so the client you
 configure keeps working. Managing the gateway does: the four tools that change
 it for every session, and the operator dashboard.

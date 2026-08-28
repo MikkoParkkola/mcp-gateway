@@ -168,7 +168,7 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "# because an unauthenticated gateway cannot tell its operator from\n",
             "# anything else that reaches the port.\n",
             "#\n",
-            "# This file is written readable only by you. Do not commit it.\n",
+            "# On Unix this file is written readable only by you. Do not commit it.\n",
             "auth:\n",
             "  enabled: true\n",
             "  bearer_token: \"{admin_token}\"\n",
@@ -295,9 +295,9 @@ fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samp
     // dashboard need it, tool calls do not. Saying so here reaches the person
     // who never opens the docs.
     println!("An admin credential was generated and written into that file,");
-    println!("which is readable only by you. Tool calls do not need it; managing");
-    println!("the gateway and opening the dashboard do. `serve` prints a");
-    println!("single-use dashboard link on startup.");
+    println!("which on Unix is readable only by you. Tool calls do not need it;");
+    println!("managing the gateway and opening the dashboard do. `serve` prints");
+    println!("a single-use dashboard link on startup.");
     println!();
     println!("Next steps:");
     println!("  1. Run diagnostics:");
