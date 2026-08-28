@@ -262,7 +262,12 @@ jobs:
 
   npm-publish:
     needs: release
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    # GitHub-hosted on purpose. npm rejects a provenance bundle signed on a
+    # self-hosted runner ("Unsupported GitHub Actions runner environment:
+    # self-hosted"), so publishing from avrea-* costs the build attestation.
+    # This package is a thin wrapper that needs nothing from that fleet.
+    # https://docs.npmjs.com/generating-provenance-statements
+    runs-on: ubuntu-latest
     permissions:
       id-token: write     # OIDC for npm trusted publishing + provenance attestation
       contents: read
