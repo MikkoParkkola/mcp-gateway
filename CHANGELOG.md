@@ -286,6 +286,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authentication is enabled with tool paths left public, which is the shape that
   escape hatch is most often reached from.
 
+### Fixed
+
+- **A config file reached through a symlink now reloads when its target is
+  written.** The watcher followed the path it was given and nothing else, so a
+  deployment that points `gateway.yaml` at a released file and rewrites that
+  file in place produced no matching event, and the gateway kept serving the
+  configuration it started with. The link is resolved on every filesystem
+  event, so repointing it at a new release and editing that file is picked up
+  too, as long as the new target sits in a directory watched at startup — the
+  link's own directory and the directory of the target it pointed at then. A
+  plain config file is unaffected: it resolves to itself.
+
 ## [3.4.0] - 2026-07-27
 
 ### Added
