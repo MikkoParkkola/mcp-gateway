@@ -96,6 +96,7 @@ jobs:
         # cargo refuses to publish against a replaced source unless the target
         # registry is named explicitly. The replacement is not carried in
         # CARGO_HOME, so overriding that does not clear it.
+        # https://doc.rust-lang.org/cargo/reference/source-replacement.html
         run: cargo publish --locked --dry-run --registry crates-io
 
   build:
