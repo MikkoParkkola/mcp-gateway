@@ -48,9 +48,16 @@ trap cleanup EXIT
   HOME="$home" "$bin" init --profile local --output gateway.yaml >/dev/null
 )
 
+# Mirrors deploy/single-node/docker-compose.yaml, including the reason. A
+# container must bind 0.0.0.0 to receive anything, and the init config keeps
+# /mcp public so tool calls work — which is a reachable surface needing no
+# credential, and the gateway refuses to serve it. The boundary here is the
+# publish above: 127.0.0.1 only, so nothing off this host reaches the port.
+# Without this the smoke exits instead of proving health and a tool call.
 docker run -d \
   --name "$container" \
   -p "127.0.0.1:$port:39400" \
+  -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -v "$work/gateway.yaml:/config.yaml:ro" \
   -v "$work/capabilities:/capabilities:ro" \
   "$image" \
