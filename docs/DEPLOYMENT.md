@@ -583,9 +583,8 @@ the hostname it refused.
 **Declare authentication in the same breath, and restart.** A `public_url`
 naming a tunnel says the gateway is reached from off this machine. Over tools
 that need no credential, that is the gateway serving every configured backend
-to whoever reaches the tunnel — so the reload is refused, and the gateway keeps
-running on the configuration that was in force before it. Anything an earlier
-reload applied, backends included, stays applied:
+to whoever reaches the tunnel — so the reload is refused. No backend is started
+or stopped and no configuration is published:
 
 ```
 config reload refused: refusing to serve HTTP, reachable at the declared

@@ -232,10 +232,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enabling authentication in one edit does not pass the check.
 
   It then says which of two things a restart does with that same file, because
-  they differ. A file that also enables authentication is *accepted* by a
-  restart: set both and restart, and that is the documented fix. A file that
-  only declares the name will *refuse* at the next start, planned or not, so
-  revert it or close the tool paths.
+  they differ. A file that also enables authentication would not be refused for
+  this reason on a restart: set both and restart, and that is the documented
+  fix. A file that only declares the name will *refuse* at the next start,
+  planned or not, so revert it or close the tool paths.
+
+  Not refused *for this reason* is the whole promise. A restart reads the whole
+  file, so a missing `env:` reference or an unreadable certificate can still
+  stop it — this check answers its own question and no other.
 
 - The startup log states what the anonymous identity cannot do and how to
   restore it, reports when the gateway binds to a non-loopback address while
