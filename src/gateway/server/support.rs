@@ -549,6 +549,27 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
     if config.auth.enabled && !tools_are_public {
         return None;
     }
+
+    // `auth` is not the only credential the tool surface can demand, and this
+    // check used to behave as though it were — refusing to start two shapes the
+    // project ships and documents as secure:
+    //
+    // - mTLS with `require_client_cert`, where a caller without a certificate
+    //   signed by the configured CA is rejected during the TLS handshake, before
+    //   any HTTP exists to be public (`mtls::config`, `serve_tls`).
+    // - `agent_auth`, whose middleware wraps every route and answers 401 to a
+    //   request carrying no valid agent JWT (`gateway::oauth`, layered inside
+    //   the standard auth layer in `router::create_router_with`).
+    //
+    // Either one means the tools are NOT invocable without a credential, which
+    // is the whole question. Refusing them denied service to precisely the most
+    // carefully secured deployments — the third time this refusal has been
+    // wrong in the over-refusing direction, and the reason the test below
+    // enumerates the gates rather than trusting this list to stay complete.
+    let mtls_gates_tools = config.mtls.enabled && config.mtls.require_client_cert;
+    if mtls_gates_tools || config.agent_auth.enabled {
+        return None;
+    }
     // The message names the condition that actually fired. Saying only
     // "authentication is disabled" invited the wrong fix: an operator turns auth
     // on, keeps /mcp public, and the tools stay open to the network.
@@ -706,6 +727,55 @@ mod network_bind_tests {
         assert!(
             network_bind_refusal(&without).is_some(),
             "the compose template's escape hatch is not what makes it start"
+        );
+    }
+
+    /// Every native credential gate counts, not only `auth`.
+    ///
+    /// Each of these rejects a caller that presents nothing, so a gateway
+    /// carrying one does not have tools "reachable without a credential" — the
+    /// question this refusal actually asks. Refusing them stops the most
+    /// carefully secured deployments from starting, which is a denial of
+    /// service dressed as a security control.
+    ///
+    /// Enumerated one gate per case rather than asserted in a lump, because the
+    /// failure this guards against is a gate being FORGOTTEN: mTLS and
+    /// `agent_auth` both were.
+    #[test]
+    fn a_native_credential_gate_means_the_tools_are_not_open() {
+        // mTLS that requires a client certificate: rejected during the TLS
+        // handshake, before any HTTP exists.
+        let mut mtls = config("0.0.0.0", false, false);
+        mtls.mtls.enabled = true;
+        mtls.mtls.require_client_cert = true;
+        assert!(
+            network_bind_refusal(&mtls).is_none(),
+            "an mTLS gateway requiring client certificates was refused"
+        );
+
+        // ...but mTLS WITHOUT that requirement is encryption, not
+        // authentication, and its own doc comment says so. It must still refuse.
+        let mut encryption_only = mtls.clone();
+        encryption_only.mtls.require_client_cert = false;
+        assert!(
+            network_bind_refusal(&encryption_only).is_some(),
+            "TLS without client certificates authenticates nobody"
+        );
+
+        // Agent JWT auth: the middleware wraps every route and answers 401 to a
+        // request with no valid token.
+        let mut agent = config("0.0.0.0", false, false);
+        agent.agent_auth.enabled = true;
+        assert!(
+            network_bind_refusal(&agent).is_none(),
+            "a gateway requiring an agent JWT was refused"
+        );
+
+        // And with none of them, the same bind is still refused, so the cases
+        // above pass on the gate rather than on the fixture.
+        assert!(
+            network_bind_refusal(&config("0.0.0.0", false, false)).is_some(),
+            "the control case must refuse, or these prove nothing"
         );
     }
 

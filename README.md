@@ -161,7 +161,8 @@ mcp-gateway doctor --fix           # auto-fix issues where possible
 The web dashboard is at <http://localhost:39400/ui> once `serve` is running. The
 operator dashboard at `/dashboard` needs the admin credential, and a browser
 cannot send one on a navigation — so `serve` prints a single-use link to open it
-with, on a loopback bind. See
+with, on a loopback bind. A network-bound gateway prints none and is managed
+through `/ui` with the token instead. See
 [Opening the dashboard](docs/DEPLOYMENT.md#opening-the-dashboard).
 
 ### Connect AI clients (if you skipped Option A)

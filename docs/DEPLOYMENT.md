@@ -638,10 +638,13 @@ it; managing the gateway and reading the dashboard need it.
 A browser cannot attach an `Authorization` header to a navigation, so `serve`
 prints a link — **on a loopback bind only**, and redeemable only from this
 machine. A gateway bound to a network address prints none, because a link that
-grants an admin session should not travel in a log that leaves the host. Reach
-such a gateway's dashboard over a local port-forward (`ssh -L`) so the browser
-arrives on loopback, or manage it through the credential rather than the
-dashboard.
+grants an admin session should not travel in a log that leaves the host.
+
+There is therefore no link to use on such a gateway, and a port-forward does not
+produce one: the value is never emitted, so nothing arrives to redeem. Manage a
+network-bound gateway through `/ui`, which can present the bearer token, or
+through the meta-tools with that same credential. `/dashboard` is for the
+loopback case.
 
 ```
 DASHBOARD (opens once, then remembered in this browser):

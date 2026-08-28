@@ -6,4 +6,20 @@ metadata:
     {{- include "mcp-gateway.labels" . | nindent 4 }}
 data:
   gateway.yaml: |
-    {{- toYaml .Values.config | nindent 4 }}
+    {{- /*
+      A pod binds 0.0.0.0 — one that binds loopback receives nothing — and the
+      gateway refuses to serve when a network-reachable surface needs no
+      credential. So exactly one of the two answers below is rendered, and the
+      chart picks it rather than asking the operator to keep two settings
+      consistent by hand. Setting the mesh flag while a credential block was
+      still rendered produced an unresolvable env:MCP_GATEWAY_TOKEN and a
+      crash-looping pod.
+    */}}
+    {{- $cfg := deepCopy .Values.config }}
+    {{- if eq .Values.auth.mode "mesh" }}
+    {{- $_ := unset $cfg "auth" }}
+    {{- $_ := set $cfg.server "allow_unauthenticated_network_bind" true }}
+    {{- else }}
+    {{- $_ := set $cfg "auth" (dict "enabled" true "bearer_token" "env:MCP_GATEWAY_TOKEN" "public_paths" (list "/health")) }}
+    {{- end }}
+    {{- toYaml $cfg | nindent 4 }}
