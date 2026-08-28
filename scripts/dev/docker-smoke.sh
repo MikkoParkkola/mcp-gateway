@@ -93,14 +93,14 @@ try:
     b = json.load(sys.stdin).get("capability_backend") or {}
 except Exception:
     sys.exit(1)
-sys.exit(0 if b.get("capabilities_count", 0) > 0 else 1)'; then
+sys.exit(0 if "weather_current" in (b.get("capabilities") or []) else 1)'; then
     capabilities_ready="yes"
     break
   fi
   sleep 0.2
 done
 if [ -z "$capabilities_ready" ]; then
-  echo "capability backend never reported a loaded capability" >&2
+  echo "capability backend never exposed weather_current" >&2
   docker logs "$container" >&2 || true
   exit 1
 fi
