@@ -184,13 +184,42 @@
         },
         "secretKey": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "default": "token"
         }
       },
       "required": [
         "mode"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "credential"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "existingSecret",
+              "secretKey"
+            ],
+            "properties": {
+              "existingSecret": {
+                "minLength": 1
+              },
+              "secretKey": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }
