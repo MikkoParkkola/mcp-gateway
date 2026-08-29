@@ -31,7 +31,7 @@ fn payload() -> Payload {
 
 #[test]
 fn ac_mrtr_2_a_minted_envelope_round_trips() {
-    let keyring = Keyring::for_test();
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("minting must succeed");
     let opened = keyring
         .open(&token, 1_500)
@@ -48,7 +48,7 @@ fn ac_mrtr_2_the_backends_state_is_not_readable_by_the_client() {
     // Confidentiality, not just integrity. A backend's state may encode its own
     // authorization; handing the client a signed-but-readable copy gives it a
     // token it should never hold.
-    let keyring = Keyring::for_test();
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("mint");
     assert!(
         !token.contains("AEAD-protected"),
@@ -62,7 +62,7 @@ fn ac_mrtr_2_the_backends_state_is_not_readable_by_the_client() {
 
 #[test]
 fn ac_mrtr_3_a_tampered_envelope_is_refused() {
-    let keyring = Keyring::for_test();
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("mint");
 
     // Flip one character of the ciphertext. Every position must fail closed:
@@ -83,7 +83,7 @@ fn ac_mrtr_3_a_tampered_envelope_is_refused() {
 
 #[test]
 fn ac_mrtr_3_a_garbage_envelope_is_refused_without_panicking() {
-    let keyring = Keyring::for_test();
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     for junk in ["", "not-base64!!", "AAAA", "v1", &"A".repeat(10_000)] {
         assert!(
             keyring.open(junk, 1_500).is_err(),
@@ -94,7 +94,7 @@ fn ac_mrtr_3_a_garbage_envelope_is_refused_without_panicking() {
 
 #[test]
 fn ac_mrtr_5_an_expired_envelope_is_refused() {
-    let keyring = Keyring::for_test();
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("mint");
     assert!(matches!(
         keyring.open(&token, 2_001),
@@ -116,7 +116,7 @@ fn ac_mrtr_5_an_expired_envelope_is_refused() {
 
 #[test]
 fn ac_mrtr_4_another_caller_cannot_redeem_it() {
-    let keyring = Keyring::for_test();
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("mint");
 
     // Caller B presents caller A's continuation. It decrypts — we minted it —
@@ -140,7 +140,7 @@ fn ac_mrtr_4_it_cannot_be_used_for_a_different_request() {
     // The specification confines these fields to the retry of the original
     // request: "They MUST NOT be used for any other request that the client may
     // be sending in parallel."
-    let keyring = Keyring::for_test();
+    let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("mint");
     let opened = keyring.open(&token, 1_500).expect("authentic");
 
@@ -965,6 +965,75 @@ mod mint_budget {
             keyring.open(&token, 1_500).expect("opens").jti,
             "jti-1",
             "an exhausted key must keep verifying envelopes it already minted"
+        );
+    }
+}
+
+mod envelope_size {
+    use mcp_gateway::protocol::continuation::{ContinuationError, Keyring, Payload};
+
+    fn payload_with_state(state: String) -> Payload {
+        Payload {
+            backend_id: "weather".into(),
+            backend_request_state: state,
+            principal_fingerprint: "sha256:caller-a".into(),
+            original_request_digest: "sha256:req-1".into(),
+            origin_replica: "gw-1".into(),
+            issued_at: 1_000,
+            expires_at: 2_000,
+            jti: "jti-1".into(),
+        }
+    }
+
+    #[test]
+    fn an_oversized_token_is_refused_before_it_is_decoded() {
+        // The token is client-controlled and arrives on every retry. Decoding
+        // first means an attacker sizes the gateway's allocation and its AEAD
+        // work with a string, which is a denial of service that needs no valid
+        // key. The bound is checked against the encoded length, so nothing is
+        // allocated on its behalf.
+        let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
+        let huge = "A".repeat(64 * 1024);
+
+        assert_eq!(
+            keyring.open(&huge, 1_500).err(),
+            Some(ContinuationError::TooLarge),
+            "an oversized continuation must be refused on its length alone"
+        );
+    }
+
+    #[test]
+    fn a_payload_too_large_to_open_is_never_minted() {
+        // Minting an envelope the gateway would then refuse to open is a bug
+        // that surfaces only on the retry, long after the cause. Both ends
+        // enforce the same bound so that cannot happen.
+        let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
+
+        assert_eq!(
+            keyring
+                .mint(&payload_with_state("s".repeat(32 * 1024)))
+                .err(),
+            Some(ContinuationError::TooLarge),
+            "a backend state too large to redeem must be refused at mint"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_envelope_is_unaffected_by_the_bound() {
+        // The bound must sit above real backend state, or it is an outage
+        // rather than a guard.
+        let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
+        let token = keyring
+            .mint(&payload_with_state("s".repeat(2_048)))
+            .expect("2 KiB of backend state is ordinary and must mint");
+
+        assert_eq!(
+            keyring
+                .open(&token, 1_500)
+                .expect("opens")
+                .backend_request_state
+                .len(),
+            2_048
         );
     }
 }

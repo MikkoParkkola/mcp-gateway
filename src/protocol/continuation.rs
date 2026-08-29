@@ -38,6 +38,21 @@ const VERSION: u8 = 1;
 /// AES-256-GCM nonce length.
 const NONCE_LEN: usize = 12;
 
+/// The largest envelope this gateway will mint or open, measured on the base64
+/// text as it arrives on the wire.
+///
+/// Checked before decoding, which is the only place it does any good: a token
+/// is client-controlled and arrives on every retry, so decoding first lets a
+/// caller size the gateway's allocation and its AEAD work with nothing but a
+/// long string, needing no key and no valid envelope.
+///
+/// Enforced at both ends deliberately. A bound applied only when opening would
+/// let the gateway mint an envelope it will later refuse to redeem, and that
+/// failure would surface on the retry — far from the backend whose state caused
+/// it. 8 KiB sits well above realistic backend state while keeping the work an
+/// unauthenticated caller can demand small.
+const MAX_ENVELOPE_LEN: usize = 8 * 1024;
+
 /// What the envelope carries. None of it is visible to the client.
 ///
 /// `Debug` is implemented by hand rather than derived, and the omissions are the
@@ -145,6 +160,8 @@ pub enum ContinuationError {
     Expired,
     /// This key has minted as many envelopes as it is permitted to.
     MintBudgetExhausted,
+    /// Larger than [`MAX_ENVELOPE_LEN`], either presented or asked to be minted.
+    TooLarge,
 }
 
 impl ContinuationError {
@@ -173,6 +190,7 @@ impl std::fmt::Display for ContinuationError {
             Self::MintBudgetExhausted => {
                 write!(f, "continuation key has exhausted its mint budget")
             }
+            Self::TooLarge => write!(f, "continuation exceeds the permitted size"),
         }
     }
 }
@@ -213,8 +231,22 @@ impl std::fmt::Debug for Keyring {
 /// birthday bound rather than never. NIST SP 800-38D §8.3 caps a key at 2^32
 /// invocations to hold the collision probability below 2^-32; a nonce reused
 /// under one key is a catastrophic loss of confidentiality, not a degradation.
-/// Rotation is what keeps a deployment under this, and this constant is what
-/// makes the requirement enforced rather than assumed.
+/// Rotation is what keeps a deployment under this.
+///
+/// **What this bound actually is, stated precisely because the difference
+/// matters**: the counter lives in memory, so it counts envelopes sealed by
+/// *this process* since it started — not by this *key* over its life. A
+/// restart, a config reload that rebuilds the keyring, or a second replica each
+/// begin again at zero. So the ceiling holds per process and the key's true
+/// total is the sum across all of them.
+///
+/// That is a real ceiling and a useful one — it bounds a single runaway process,
+/// which is the shape a nonce-collision risk takes when it arrives suddenly —
+/// but it is not the per-key guarantee the NIST bound is written about. Making
+/// it one requires the count to be durable and shared by key identity, which is
+/// the same shared-state gap [`ConsumedLedger`] names. Both are gates on
+/// multi-replica production, not on this change: `server.modern_protocol`
+/// defaults off and nothing mints yet.
 const MINT_BUDGET: u64 = 1 << 32;
 
 impl Keyring {
@@ -273,19 +305,14 @@ impl Keyring {
             .saturating_sub(self.minted.load(std::sync::atomic::Ordering::Relaxed))
     }
 
-    /// A keyring with one deterministic key, for tests only.
-    #[must_use]
-    pub fn for_test() -> Self {
-        Self::new(&[(1, [7u8; 32])]).expect("a fixed 32-byte key is valid")
-    }
-
     /// Seal a payload into an envelope for the client to echo back.
     ///
     /// # Errors
     ///
     /// Returns `Malformed` if the payload cannot be serialised or the system
     /// random source fails, and `MintBudgetExhausted` once this key has sealed
-    /// its budget of envelopes (see [`MINT_BUDGET`]).
+    /// its budget of envelopes (see [`MINT_BUDGET`]), and `TooLarge` when the
+    /// sealed envelope would exceed [`MAX_ENVELOPE_LEN`].
     pub fn mint(&self, payload: &Payload) -> Result<String, ContinuationError> {
         // Counted before the nonce is drawn, so a refusal cannot consume one.
         // Fetch-and-add rather than read-then-write: concurrent minters must not
@@ -319,7 +346,11 @@ impl Keyring {
         wire.extend_from_slice(&header);
         wire.extend_from_slice(&nonce_bytes);
         wire.extend_from_slice(&buffer);
-        Ok(B64.encode(wire))
+        let encoded = B64.encode(wire);
+        if encoded.len() > MAX_ENVELOPE_LEN {
+            return Err(ContinuationError::TooLarge);
+        }
+        Ok(encoded)
     }
 
     /// Open an envelope the client presented.
@@ -330,8 +361,13 @@ impl Keyring {
     ///
     /// # Errors
     ///
-    /// Returns the reason it was refused; see [`ContinuationError`].
+    /// Returns the reason it was refused; see [`ContinuationError`]. A token
+    /// longer than [`MAX_ENVELOPE_LEN`] is refused on its length alone.
     pub fn open(&self, token: &str, now: u64) -> Result<Payload, ContinuationError> {
+        // Before the decode, so an oversized token costs a length comparison.
+        if token.len() > MAX_ENVELOPE_LEN {
+            return Err(ContinuationError::TooLarge);
+        }
         let wire = B64
             .decode(token)
             .map_err(|_| ContinuationError::Malformed)?;
