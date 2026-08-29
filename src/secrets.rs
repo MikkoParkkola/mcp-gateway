@@ -90,11 +90,15 @@ impl SecretResolver {
         // Find all {env.X} patterns
         #[allow(clippy::unwrap_used)]
         let env_pattern = regex::Regex::new(r"\{env\.([^}]+)\}").unwrap();
+        // One snapshot for the whole value: a reload between two placeholders
+        // would otherwise splice a pre-reload half onto a post-reload half and
+        // produce a credential that never existed in either generation.
+        let env = self.env.get();
         for caps in env_pattern.captures_iter(&result.clone()) {
             let var_name = &caps[1];
             let placeholder = &caps[0];
 
-            let value = self.env.get().resolve(var_name).unwrap_or_default();
+            let value = env.resolve(var_name).unwrap_or_default();
             result = result.replace(placeholder, &value);
         }
 
