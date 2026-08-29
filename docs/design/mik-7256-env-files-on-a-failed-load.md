@@ -914,7 +914,10 @@ does — so a variable present in both resolves the same way on both paths.
 
 **`Config::load_with_overlay(path: Option<&Path>, env_files: &[PathBuf],
 previous: &EnvOverlay) -> Result<Evaluated>`**, `pub(crate)`, where
-`Evaluated { config: Config, overlay: Arc<EnvOverlay> }`. `previous` is the
+`Evaluated { config: Config, overlay: Arc<EnvOverlay>, env_paths:
+ResolvedEnvFiles }`. The third field is the recorded path sequence stated
+above, and it is on this signature as well as `load_evaluated`'s so the two
+entry points return the same shape. `previous` is the
 overlay in force: `&EnvOverlay::none()` at startup, `live_env.get()` on a
 reload. It is here for the same reason it is on the constructor — the owned
 set has to survive the replacement, and a signature that cannot express that
@@ -973,11 +976,14 @@ readers satisfy it today, found by reading every caller of `Config::load`,
   `ConfigMutation::Rejected` having changed no file and already changed the
   environment. Found by review; the first draft named only `load_config_patch`.
 
-Both supply the path list from **the config the running process actually
-applied at startup**, not from the published snapshot and not from the
-candidate. `LiveConfig` already keeps that second snapshot beside the published
-one — `running`, "what the running process actually applied, fixed at startup"
-(`src/config_reload/mod.rs:228-238`), reached through `running()` (`:253`).
+Both supply the paths as the `ResolvedEnvFiles` **the running process
+actually opened at startup**, not by resolving `running().env_files` again,
+not from the published snapshot and not from the candidate. It rides on
+`LiveConfig` beside `running`, "what the running process actually applied,
+fixed at startup" (`src/config_reload/mod.rs:228-238`, reached through
+`running()` at `:253`) — the same lifetime and the same reason. `running()`
+keeps supplying the raw list, which is what the restart-required rule reads
+for its `~` spellings; what it no longer supplies is anything to resolve.
 `load_config_patch` already takes `&Arc<LiveConfig>` (`:1233-1235`) and
 `mutate_and_reload_outcome_within` is a `ReloadContext` method with
 `live_config` on `self` (`:1258-1262`), so the list arrives at both sites with
