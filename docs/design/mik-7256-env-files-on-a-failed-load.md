@@ -336,38 +336,26 @@ reader:
   compile. **Infallible, and that is a decision, not an omission.** For each existing path in order it opens the
   file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
   inserts each pair; later files overwrite earlier ones, matching
-  `from_path_override`'s precedence. A leading `~` is expanded against the
-  `HOME` the overlay holds SO FAR if the files have already defined one, and
-  otherwise against the RECORDED SEED: the `dirs::home_dir()` result observed
-  once, before any env file was applied, and kept beside the baselines. The seed
-  is a recorded value rather than anything derived, and that is the whole point.
-  Startup calls `dirs::home_dir()` INSIDE its loop (`src/config/mod.rs:289-309`)
-  and applies each file in the same iteration, so by the time a reload runs the
-  process environment is no longer what startup's first expansion saw; calling
-  `dirs::home_dir()` again would expand the FIRST `~/...` path against a home
-  the env files themselves moved, read a different file than a restart reads,
-  and leave the watcher bound to the path nobody is reading. Deriving the seed
-  from `HOME`'s baseline does not fix that either, and an earlier draft of this
-  paragraph tried: `dirs` treats an empty or unset `HOME` as absent and falls
-  back to the passwd entry (`dirs-sys-0.5.0/src/lib.rs:33-37`), so a captured
-  baseline of "unset" is not the path startup actually used, and on Windows the
-  function reads a known folder rather than `HOME` at all. A seed that is
-  recorded cannot disagree with itself; a seed that is recomputed has to be
-  right about a platform, and this one was not. Startup already expands `~`
-  (`src/config/mod.rs:290-298`) and a `~/...` env file is a supported spelling
-  today, so an overlay that skipped expansion would silently stop rotating
-  those files. The so-far rule is what keeps the two paths identical: startup
-  applies each file to the process before it expands the NEXT path, so a `HOME`
-  set in an earlier file governs a later `~/...`; the reload path writes nothing
-  to the process, so without this rule every path on a reload would expand
-  against the pre-reload `HOME` and a gateway could read a different file than
-  its own restart would.
-  A resolved path set that differs from the one the watcher was started with is
-  a REBINDING the watcher cannot follow — it holds the startup paths
-  (`src/config_reload/mod.rs:1011-1014`) — so the reload reports it as
-  restart-required rather than silently rotating from a file nothing watches.
-  Startup, the watcher and the overlay share one resolver rather than three
-  copies of the same six lines. A missing path is skipped. A parse error
+  `from_path_override`'s precedence. **The constructor never expands anything.** It receives absolute paths and
+  opens them. `~` is resolved ONCE, by the shared resolver, at startup, before
+  any file has been applied; the sequence it returns is what startup opens,
+  what the watcher binds (`src/config_reload/mod.rs:1011-1014`), and what every
+  later reload re-reads. Three consumers, one resolution, and nothing to
+  disagree about — the earlier design had the reload re-expand, and the rule
+  governing that re-expansion was wrong three times running, each time about a
+  platform detail rather than about this change: `dirs` falls back to the
+  passwd entry when `HOME` is empty as well as when it is unset
+  (`dirs-sys-0.5.0/src/lib.rs:33-37`), Windows reads a known folder and
+  consults `HOME` not at all, and startup itself mutates `HOME` between one
+  path's expansion and the next because it applies each file inside the same
+  loop (`src/config/mod.rs:289-309`). A rule that has to be right about all
+  three is a rule this change has no reason to own. Resolving once is right
+  about all three by construction, because there is no second resolution to be
+  right about.
+  The residual is the same boundary the list already has: a `~/...` path whose
+  resolution WOULD move — because an env file now sets a different `HOME` —
+  does not move until a restart, exactly as a path ADDED to `env_files` does
+  not take effect until a restart. Both are reported, neither is silent. A missing path is skipped. A parse error
   ENDS that file at the offending line, keeping the pairs before it and taking
   none after it, then moves to the next file with a warning — byte-for-byte the
   behaviour of `load_env_files_from_paths` today, which calls
