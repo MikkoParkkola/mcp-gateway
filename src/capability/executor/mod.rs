@@ -203,6 +203,7 @@ impl CapabilityExecutor {
     /// environment.
     #[must_use]
     pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.secret_resolver = Arc::new(SecretResolver::new().with_env(Arc::clone(&env)));
         self.env = env;
         self
     }

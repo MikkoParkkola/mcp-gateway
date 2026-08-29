@@ -122,6 +122,8 @@ pub struct WebhookRegistry {
     webhooks: HashMap<String, (String, String, WebhookDefinition, Arc<EndpointStats>)>,
     /// Global webhook configuration
     config: WebhookConfig,
+    /// Where a `{env.VAR}` webhook secret is looked up.
+    env: Arc<crate::config::LiveEnv>,
 }
 
 impl WebhookRegistry {
@@ -131,7 +133,16 @@ impl WebhookRegistry {
         Self {
             webhooks: HashMap::new(),
             config,
+            env: Arc::new(crate::config::LiveEnv::default()),
         }
+    }
+
+    /// Resolve `{env.VAR}` webhook secrets against `env` rather than the
+    /// process environment, so a secret an env file assigns is visible.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.env = env;
+        self
     }
 
     /// Register webhooks from a capability definition.
@@ -220,6 +231,7 @@ impl WebhookRegistry {
                 definition: webhook_def.clone(),
                 config: self.config.clone(),
                 stats: Arc::clone(stats),
+                env: Arc::clone(&self.env),
             };
 
             let method_filter = method_to_filter(&webhook_def.method);
@@ -266,6 +278,7 @@ struct WebhookHandlerState {
     definition: WebhookDefinition,
     config: WebhookConfig,
     stats: Arc<EndpointStats>,
+    env: Arc<crate::config::LiveEnv>,
 }
 
 /// State for the dynamic webhook dispatcher.
@@ -322,7 +335,10 @@ async fn dynamic_webhook_handler(
             .into_response();
     }
 
-    let config = state.registry.read().config.clone();
+    let (config, env) = {
+        let registry = state.registry.read();
+        (registry.config.clone(), Arc::clone(&registry.env))
+    };
     let handler_state = WebhookHandlerState {
         multiplexer: Arc::clone(&state.multiplexer),
         capability_name,
@@ -330,6 +346,7 @@ async fn dynamic_webhook_handler(
         definition,
         config,
         stats: webhook_stats,
+        env,
     };
 
     webhook_handler(State(handler_state), headers, body)
@@ -366,7 +383,7 @@ async fn webhook_handler(
 
     // Validate HMAC signature if required.
     if (state.config.require_signature || state.definition.secret.is_some())
-        && let Err(e) = validate_signature(&headers, &body, &state.definition)
+        && let Err(e) = validate_signature(&headers, &body, &state.definition, &state.env)
     {
         state
             .stats
@@ -421,14 +438,24 @@ fn validate_signature(
     headers: &HeaderMap,
     raw_body: &[u8],
     definition: &WebhookDefinition,
+    env: &Arc<crate::config::LiveEnv>,
 ) -> Result<(), String> {
     let secret = match &definition.secret {
         Some(s) => {
-            let resolver = SecretResolver::new();
+            let resolver = SecretResolver::new().with_env(Arc::clone(env));
             resolver.resolve(s).map_err(|e| e.to_string())?
         }
         None => return Err("No secret configured".to_string()),
     };
+
+    // A placeholder naming something that does not resolve expands to the empty
+    // string rather than failing, and an empty HMAC key is computable by
+    // anyone. Treat an empty secret as a missing one: a signature check that
+    // cannot be failed is worse than no signature check, because it reports
+    // success.
+    if secret.is_empty() {
+        return Err("Configured secret resolved to an empty value".to_string());
+    }
 
     let Some(signature_header) = &definition.signature_header else {
         return Err("No signature header configured".to_string());

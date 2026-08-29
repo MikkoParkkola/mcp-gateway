@@ -35,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Those are read from the process environment under fixed names and are
   expected to come from the deployment, not from a config file.
 
+- **A `{env.VAR}` secret now reads the env-file overlay.** Env files no longer
+  load into the process environment, and secret resolution still read only that
+  environment, so a webhook secret or capability credential written as
+  `{env.VAR}` and supplied by an env file expanded to the empty string. The
+  resolver now consults the overlay first and the process environment after,
+  matching how `env:` credential keys already resolved.
+
+- **A webhook secret that resolves to nothing is refused.** An empty HMAC key is
+  one anyone can compute, so every forged signature verified. An empty resolved
+  secret is now rejected the same way a missing one is, whatever made it empty.
+
+- **The provenance signing key reads the env-file overlay.** Runtime provenance
+  stamping took `BNAUT_ATTESTATION_SIGNING_KEY` from the process environment, so
+  a key supplied by an env file no longer reached it and the signer stayed
+  uninstalled. The key and its id now resolve through the overlay.
+
 ### Added
 
 - **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The

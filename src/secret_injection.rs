@@ -171,6 +171,14 @@ impl SecretInjector {
         }
     }
 
+    /// Resolve `{env.VAR}` credentials against `env` rather than the process
+    /// environment, so a value an env file assigns is visible.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.resolver = Arc::new(SecretResolver::new().with_env(env));
+        self
+    }
+
     /// Returns `true` if any backend has credential rules configured.
     #[must_use]
     pub fn has_rules(&self) -> bool {

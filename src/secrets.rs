@@ -16,6 +16,9 @@ use crate::{Error, Result};
 pub struct SecretResolver {
     /// Cached resolved secrets for the session
     cache: DashMap<String, String>,
+    /// Where `{env.VAR}` is looked up. The default overlay assigns nothing, so
+    /// lookups fall through to the process environment.
+    env: std::sync::Arc<crate::config::LiveEnv>,
 }
 
 impl SecretResolver {
@@ -24,7 +27,19 @@ impl SecretResolver {
     pub fn new() -> Self {
         Self {
             cache: DashMap::new(),
+            env: std::sync::Arc::new(crate::config::LiveEnv::default()),
         }
+    }
+
+    /// Resolve `{env.VAR}` against `env` instead of the process environment.
+    ///
+    /// Env files are loaded into an in-memory overlay rather than into the
+    /// process environment, so a resolver that only reads `std::env` cannot see
+    /// a variable an env file assigns.
+    #[must_use]
+    pub fn with_env(mut self, env: std::sync::Arc<crate::config::LiveEnv>) -> Self {
+        self.env = env;
+        self
     }
 
     /// Resolve a value containing secret patterns
@@ -79,7 +94,7 @@ impl SecretResolver {
             let var_name = &caps[1];
             let placeholder = &caps[0];
 
-            let value = std::env::var(var_name).unwrap_or_default();
+            let value = self.env.get().resolve(var_name).unwrap_or_default();
             result = result.replace(placeholder, &value);
         }
 
@@ -210,6 +225,29 @@ mod tests {
         // Missing env var should resolve to empty string
         let result = resolver.resolve("Value: {env.NONEXISTENT_VAR}").unwrap();
         assert_eq!(result, "Value: ");
+    }
+
+    #[test]
+    fn resolve_reads_a_variable_the_env_overlay_assigns() {
+        // Env files load into an overlay rather than into the process
+        // environment, so a resolver reading only `std::env` cannot see them.
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        std::fs::write(&env_file, "SECRETS_OVERLAY_ONLY=from-the-overlay\n").unwrap();
+        let overlay =
+            crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+        let env = std::sync::Arc::new(crate::config::LiveEnv::new(
+            std::sync::Arc::new(overlay),
+            crate::config::ResolvedEnvFiles::default(),
+        ));
+
+        let resolver = SecretResolver::new().with_env(env);
+        let result = resolver
+            .resolve("Value: {env.SECRETS_OVERLAY_ONLY}")
+            .unwrap();
+
+        assert_eq!(result, "Value: from-the-overlay");
+        assert!(std::env::var("SECRETS_OVERLAY_ONLY").is_err());
     }
 
     #[cfg(target_os = "macos")]

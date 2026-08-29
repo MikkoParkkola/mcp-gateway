@@ -352,6 +352,20 @@ struct BuiltMetaMcp {
 /// inbound attestation-token verification so a leak in one channel cannot
 /// forge the other (MIK-6909 item 2).
 #[must_use]
+/// The provenance signing key and its key id.
+///
+/// Read through the env overlay rather than `std::env`: env files load into an
+/// in-memory overlay, so a key an env file assigns never reaches the process
+/// environment and a `std::env` read would leave the signer uninstalled.
+fn provenance_key(env: &crate::config::EnvOverlay) -> (String, String) {
+    (
+        env.resolve(crate::attestation::ATTESTATION_SIGNING_KEY_ENV)
+            .unwrap_or_default(),
+        env.resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
+            .unwrap_or_else(|| "gateway".to_string()),
+    )
+}
+
 fn resolve_provenance_signer(
     signing_key: &str,
     key_id: &str,
@@ -496,7 +510,8 @@ impl Gateway {
             &self.config.default_routing_profile,
         );
         let secret_injector =
-            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends);
+            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends)
+                .with_env(Arc::clone(&self.env));
 
         // ── Cost governance (feature-gated) ──────────────────────────────────
         #[cfg(feature = "cost-governance")]
@@ -605,10 +620,7 @@ impl Gateway {
         // `_meta.provenance` on every aggregated tool result, reusing the
         // gateway's attestation signing key (one signing identity, B4-PLATFORM).
         if self.config.security.provenance_stamping {
-            let key =
-                std::env::var(crate::attestation::ATTESTATION_SIGNING_KEY_ENV).unwrap_or_default();
-            let key_id = std::env::var(crate::attestation::ATTESTATION_KEY_ID_ENV)
-                .unwrap_or_else(|_| "gateway".to_string());
+            let (key, key_id) = provenance_key(&self.env.get());
             match resolve_provenance_signer(&key, &key_id) {
                 Some(signer) => {
                     Arc::get_mut(&mut meta_mcp)
@@ -820,9 +832,9 @@ impl Gateway {
         }
 
         // Create webhook registry
-        let webhook_registry = Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
-            self.config.webhooks.clone(),
-        )));
+        let webhook_registry = Arc::new(parking_lot::RwLock::new(
+            WebhookRegistry::new(self.config.webhooks.clone()).with_env(Arc::clone(&self.env)),
+        ));
 
         // Load capabilities if enabled. Capability directories can be large;
         // when webhook route construction does not depend on them, populate the
@@ -1990,7 +2002,9 @@ mod tests {
     use chrono::{Duration, Utc};
     use serde_json::json;
 
-    use super::{Gateway, load_configured_identity_grants, resolve_provenance_signer};
+    use super::{
+        Gateway, load_configured_identity_grants, provenance_key, resolve_provenance_signer,
+    };
     use crate::{
         backend::BackendRegistry,
         config::{
@@ -2682,6 +2696,34 @@ mod tests {
     // makes it deterministic to test directly and is exactly the seam
     // `resolve_attestation_wiring` (src/attestation/wiring.rs) already
     // established for the same class of problem.
+
+    #[test]
+    fn provenance_key_reads_a_key_an_env_file_assigns() {
+        // Env files load into an in-memory overlay rather than into the process
+        // environment, so a signing key an env file assigns is invisible to
+        // `std::env::var` — reading it there left the signer uninstalled and
+        // silently disabled a configured feature.
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        std::fs::write(
+            &env_file,
+            format!(
+                "{}=from-the-overlay\n{}=overlay-key-id\n",
+                crate::attestation::ATTESTATION_SIGNING_KEY_ENV,
+                crate::attestation::ATTESTATION_KEY_ID_ENV
+            ),
+        )
+        .unwrap();
+        // `none()` as the inherited base: whatever the developer's own
+        // environment holds cannot decide this test either way.
+        let overlay =
+            crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+
+        let (key, key_id) = provenance_key(&overlay);
+
+        assert_eq!(key, "from-the-overlay");
+        assert_eq!(key_id, "overlay-key-id");
+    }
 
     #[test]
     fn resolve_provenance_signer_fails_closed_on_empty_key() {

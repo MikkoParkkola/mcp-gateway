@@ -1362,14 +1362,14 @@ Items 4 and 5 are outside what this change is for. They are repaired here rather
 than filed because each repair is smaller than the ticket describing it, and
 both blocked the suite.
 
-## Open regression found in review (2026-08-29)
+## Regression found in review, since closed (2026-08-29)
 
 The change moves env-file assignments out of the process environment and into
 the overlay. A second placeholder syntax still reads the process environment
 directly, so env-file-declared values no longer reach it.
 
 `SecretResolver::resolve` expands `{env.VAR}` with
-`std::env::var(var_name).unwrap_or_default()` (`src/secrets.rs:81`). Two
+`std::env::var(var_name).unwrap_or_default()` (`src/secrets.rs`, in `SecretResolver::resolve`). Two
 consequences, both live:
 
 - an env-file-declared value expands to the empty string, where before this
@@ -1379,8 +1379,8 @@ consequences, both live:
   and an empty key is computable by anyone, so a forged webhook verifies.
 
 Three call sites construct a resolver and are affected the same way:
-`src/gateway/webhooks/mod.rs:427`, `src/secret_injection.rs:160`,
-`src/capability/executor/mod.rs:196`.
+`src/gateway/webhooks/mod.rs`, `src/secret_injection.rs`,
+`src/capability/executor/mod.rs`.
 
 Closing it needs both halves. Threading `LiveEnv` into `SecretResolver` so
 `{env.VAR}` resolves through the overlay restores the value. Rejecting an
@@ -1388,9 +1388,67 @@ unresolved placeholder rather than substituting an empty string is what stops
 the empty-key signature check, and it is required whether or not the overlay
 is threaded.
 
+Both halves are in place. `SecretResolver` now holds an `Arc<LiveEnv>`, and
+`{env.VAR}` resolves through `EnvOverlay::resolve`: the overlay's own
+assignments, then what it inherited, then the process environment. A resolver
+built without one carries `LiveEnv::default()`, whose overlay assigns nothing,
+so every consumer that has not been threaded behaves exactly as before. The
+three affected sites take the value startup published, through
+`WebhookRegistry::with_env`, `SecretInjector::with_env`, and
+`CapabilityExecutor::with_env` — the last already held that `LiveEnv` for `env:`
+credential keys and now shares it with its resolver. `validate_signature`
+refuses an empty resolved secret, so an unresolvable placeholder cannot become
+an HMAC key anyone can compute, whatever made it empty.
+
+An unresolvable placeholder is still not an error in the resolver itself.
+Making it one would change a documented contract — `src/secrets.rs` asserts that
+resolving a value containing an unknown `{env.VAR}` succeeds with the
+placeholder replaced by nothing — and that is a separate decision from the one
+this change makes. The signature path, where an empty value is exploitable
+rather than merely wrong, refuses it locally.
+
 A related divergence is recorded but not treated as a regression: a reload
-inherits the previous overlay (`EnvOverlay::inheriting`, `src/config/mod.rs:338`
-passes `live_env.get()`), so removing a key from an env file does not revoke
+inherits the previous overlay (`EnvOverlay::inheriting`, and
+`Config::load_with_overlay` passes `live_env.get()`), so removing a key from an env file does not revoke
 its value until a restart. The process-mutating loader this change replaced did
 not revoke either, so the behaviour is unchanged; it differs from a restart, and
 whether reload should match a restart is an open design question.
+
+### Sweeping the same defect class
+
+`{env.VAR}` was one instance of a class: code reading `std::env` for a value an
+env file can supply. Sweeping every `std::env::var` call in `src/` found one
+further live consumer and two diagnostics.
+
+The live one is the runtime provenance signing key. `GatewayServer::run` read
+`BNAUT_ATTESTATION_SIGNING_KEY` and its key id straight from the process
+environment, so a key declared in an env file no longer reached it and the
+signer refused to install. That fails closed — unsigned results rather than
+forgeable ones — but it silently disables a feature the operator configured.
+The server already holds the `LiveEnv` it publishes at startup, so both reads
+now go through `EnvOverlay::resolve`. The pair is read by `provenance_key`,
+extracted from the startup block so that the call site itself is testable: a
+test of `EnvOverlay::resolve` passes whether or not this caller uses it, which
+is exactly the mistake being fixed.
+
+Two diagnostics are left as they are, deliberately. `mcp-gateway doctor` and
+`mcp-gateway add` report whether a backend's required environment variables are
+set, and both test presence with `std::env::var` after loading the config
+through `Config::load`, which discards the overlay it evaluated. Under the
+loader this change replaced, an env file had already mutated the process
+environment, so those checks saw its values; now they report a key an env file
+assigns as missing. The report is wrong, and nothing depends on it: neither
+command connects a backend or signs anything, so the effect is a misleading
+line of output, not a behaviour change.
+
+Correcting them needs the overlay carried out of the load, which means those
+commands move from `Config::load` to `Config::load_evaluated` — and those two
+differ in more than their return type. `load` warns on a malformed env file and
+carries on; `load_evaluated` refuses. Whether a diagnostic command should
+refuse to run because an env file it is diagnosing is malformed is a question
+about what those commands are for, not about how env files load, so it is not
+settled here.
+
+Disposal, named so the default does not reassert itself: recorded as a design
+question, not filed. It has no runtime effect, and the `Warn`/`Fail` choice it
+turns on is outside what this change is for.
