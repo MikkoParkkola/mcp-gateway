@@ -123,3 +123,44 @@ is deleted with the watch that motivated it.
 - **MIK.ENVFILE.5** Given an env file whose contents change under a running
   gateway, Then no reload is triggered by that change alone, and the config
   reports `env_files` as restart-required.
+
+## Docs corrected here
+
+Four places state the current behaviour and stop being true with this change.
+All four are corrected inside it.
+
+- `CHANGELOG.md:333` and `docs/DEPLOYMENT.md:596` — both describe a candidate
+  config applying its `env_files` before validation. That stops happening.
+- `src/config_reload/mod.rs:1485` and `src/config_reload/tests.rs:1271,1295` —
+  comments explaining why the reload refusal message may not claim that nothing
+  was applied. The reasoning was correct when written; the reload path applies
+  nothing after this change.
+- `src/config_reload/mod.rs:6` — the module doc says the watcher watches
+  `config.env_files` for changes. It will not.
+- `docs/DEPLOYMENT.md:177` — describes `env_files` without saying when a change
+  to one takes effect. It now needs to say: at restart.
+
+## Out of scope
+
+**Whether the `env_files` list should be reloadable** is a separate feature.
+This change answers only what a failing reload may do to the process.
+
+**Strengthening the reload refusal message.** Once the reload path applies
+nothing, the gateway can honestly say so, and the message at
+`src/config_reload/mod.rs:1478` was deliberately weakened over three review
+rounds precisely because it could not. Still out: it changes user-visible
+security messaging, it has its own review history, and the tests guarding it
+assert the ABSENCE of those phrases — so they keep passing either way and would
+not catch a careless rewrite. Disposal: filed as a follow-up.
+
+## Open questions
+
+- *Does anything besides the watcher deliver env-file values into a running
+  gateway?* — checked by reading every `Config::load` caller and every
+  `env_files` reference. The watcher is the only one, and
+  `pending_restart_fields` already reported the list as restart-required.
+  Nothing changed as a result.
+- *Does the reload still need the environment for `${VAR}` and
+  `MCP_GATEWAY_*`?* — yes, and it has it: those variables are in the process
+  from startup and stay there. The reload resolves against the same environment
+  the running gateway has been using. Nothing changed as a result.
