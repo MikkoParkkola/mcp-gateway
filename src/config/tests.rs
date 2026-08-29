@@ -7,6 +7,71 @@ use std::io::Write;
 
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "this is: [invalid yaml").expect("write invalid config");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+        .expect("remove config read permission");
+
+    // Root and similarly privileged CI users can bypass mode 000. In that
+    // environment this fixture cannot exercise PermissionDenied, so say why
+    // the test is skipped instead of reporting a misleading pass or failure.
+    if std::fs::File::open(&path).is_ok() {
+        eprintln!("skipping unreadable-config regression: effective user can read mode 000");
+        return;
+    }
+
+    let err = Config::load(Some(&path)).expect_err("an unreadable config must fail before parsing");
+    let message = err.to_string();
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the diagnostic must name the selected config path: {message}"
+    );
+    assert!(
+        message.contains("1001"),
+        "the diagnostic must name the official container UID/GID: {message}"
+    );
+    assert!(
+        !message.contains("invalid type") && !message.contains("invalid YAML"),
+        "readability must be diagnosed before the deliberately invalid YAML is parsed: {message}"
+    );
+}
+
+#[test]
+fn missing_explicit_config_keeps_not_found_diagnostic() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("missing-gateway.yaml");
+
+    let err = Config::load(Some(&path)).expect_err("a missing explicit config must fail");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Configuration error: Config file not found: {}",
+            path.display()
+        )
+    );
+}
+
+#[test]
+fn readable_invalid_config_still_reports_parse_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "this is: [invalid yaml").expect("write invalid config");
+
+    let err = Config::load(Some(&path)).expect_err("invalid YAML must fail parsing");
+    let message = err.to_string();
+    assert!(
+        message.contains(&path.display().to_string())
+            && !message.contains("Cannot read config file"),
+        "a readable invalid file must retain the parser path: {message}"
+    );
+}
+
 #[test]
 fn test_load_env_files_sets_env_vars() {
     let dir = tempfile::tempdir().unwrap();
