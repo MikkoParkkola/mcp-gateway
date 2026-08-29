@@ -175,3 +175,67 @@ away from users, which is a thinner margin than "the switch is off" sounds.
 needs items 1–4 closed and re-reviewed. The realistic options are to ship 4.0.0 as the legacy-safe
 groundwork with the modern path documented as preview, or to hold the tag until the transport
 findings are closed. That is a scope decision, and it is the operator's.
+
+---
+
+## Rounds 4–7 — and the root cause they expose
+
+Four further module reviews returned **eighteen more findings**, every one gated NOW.
+
+| Round | Material | Findings | Verdict |
+|---|---|---|---|
+| 4 | `meta.rs` + `era.rs` (the era classifier) | 5 — 2 HIGH, 3 MEDIUM | SHIP-WITH-FIXES |
+| 5 | `headers.rs` + `mrtr.rs` | 3 — 2 CRITICAL, 1 HIGH | SHIP-WITH-FIXES |
+| 6 | `subscriptions.rs` + `tasks.rs` + `extensions.rs` | 7 — 4 HIGH, 2 MEDIUM, 1 LOW | SHIP-WITH-FIXES |
+| 7 | the security controls | 3 — all HIGH | SHIP-WITH-FIXES |
+
+### The root cause: three protocol areas were built without their specification
+
+This is the finding that matters, and it was found by checking a reviewer's claim at source
+rather than by accepting it.
+
+**The subscription model is wrong in four independent ways, and the specification says so
+directly.** Fetching `/specification/2026-07-28/basic/patterns/subscriptions` — a page that was
+**never cached during implementation** — confirms all four:
+
+| What the code does | What the specification says |
+|---|---|
+| parses filters at the `params` root | they nest under `params.notifications` |
+| treats `resourceSubscriptions` as a boolean | it is an array of URI strings: `["file:///project/config.json"]` |
+| mints a fresh `SubscriptionId` | *"The value is the JSON-RPC ID of the `subscriptions/listen` request"* |
+| tags `_meta` at the notification root | the example puts it under `params._meta` |
+
+The scratchpad holds seven cached specification pages. **There is no subscriptions page and no
+tasks page**, and `spec-caching.md` is **0 bytes** — a fetch that returned nothing and was never
+noticed, because nothing checked. Three protocol areas were implemented from the changelog and the
+index rather than from their own pages.
+
+**Why the conformance matrix did not catch this**: it compared the code against the requirements
+document, and the requirements document was written from the same incomplete reading. Both agreed,
+so the matrix went green. A conformance check that never reaches the specification is checking a
+copy of its own assumptions — which is the same defect class as a fixture that reimplements the
+production code it is meant to test, recorded earlier in this branch.
+
+### What was checked and found sound
+
+Not everything the reviewers raised survived contact with the source, and saying so is part of the record:
+
+- **`cacheable.rs` is correct.** It defaults to `private`, which is the conservative direction: the specification confirms `public` responses "may be shared between callers even if the Result is coming from an authenticated endpoint". Its doc comment cites the schema, so despite the empty cached page it was not written from nothing. One real gap: the specification requires the same `cacheScope` across all pages of a paginated list, which is not implemented — though a uniform `private` default satisfies it by accident rather than by design.
+- **The tasks findings are UNVERIFIED, not accepted.** The specification page for tasks returns 404 at the path the index itself links to. The reviewer's claims about required `createdAt`/`lastUpdatedAt`/`ttlMs` fields and `input_required`/`cancelled` states have no source this session could reach, so they are recorded as unverified rather than treated as fact.
+
+### Two security controls fail open
+
+- `firewall/mod.rs:346` converts an **unobservable** anomaly check into "no finding" and allows the request. A control that cannot observe its subject must refuse, not wave through — this is the exact failure mode already recorded in this repository's own lessons.
+- `session_lifecycle.rs:83` retains every deadline when one key is tracked twice, so a stale deadline can reclaim refreshed state and run cleanup on a live caller.
+
+## Revised verdict
+
+**Not ready to tag, and further from ready than rounds 1–3 suggested.** Seven review rounds,
+**thirty-six findings**. The 2026-07-28 implementation needs its wire models rebuilt against the
+specification pages, not patched finding by finding — per the repair protocol, a defect this
+systematic is an elimination, not a series of repairs.
+
+The 2025 path remains unchanged, fully tested and shippable. The recommendation is unchanged in
+shape and stronger in degree: **ship 4.0.0 as the legacy-safe groundwork with the modern path
+removed or documented as unbuilt, and rebuild the 2026 surface against the specification as its own
+piece of work.** That is a scope decision and it is the operator's.
