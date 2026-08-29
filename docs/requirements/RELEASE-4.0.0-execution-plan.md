@@ -65,7 +65,11 @@ The finder-unavailable clock under the repair protocol started at the round-18 l
 - Three are re-scoped and must not be implemented: MIK-7251, MIK-7250, MIK-7042.
 - In Review in Linear: MIK-7217, MIK-7214, MIK-7213, MIK-7215, MIK-7212, MIK-7116.
   Their Linear state must match the branch: implemented but unmerged, no PR.
-- Backlog: MIK-7218, MIK-7219, MIK-7216. MIK-6729 sits Blocked with no recorded blocker.
+- Backlog: MIK-7218, MIK-7219, MIK-7216.
+- MIK-6729 is no longer Blocked. Its blocker was recorded all along, in the description
+  rather than as a Linear relation: the identity-propagation trait. That trait exists on
+  this branch (`src/identity_propagation/mod.rs:160`) and the ticket's own strategy is
+  implemented against it, so the block was satisfied and stale. Now In Review.
 - No GitHub milestone or open PR exists for 4.0.0.
 
 ## Order
