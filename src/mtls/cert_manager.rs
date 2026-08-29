@@ -17,6 +17,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -294,20 +295,59 @@ impl CertGenerator {
 }
 
 fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
+    // `OpenOptions::mode` applies only to a file it creates. Writing over an
+    // existing key would reuse that file's inode and its original mode, so the
+    // new key would sit in a possibly world-readable file until the chmod that
+    // followed the write. Create a fresh owner-only file and rename it over the
+    // destination instead, so the key is never readable at a wider mode.
+    static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
-    let mut file = options
-        .open(path)
-        .map_err(|e| Error::Config(format!("Cannot write key: {e}")))?;
-    file.write_all(key_pem.as_bytes())
-        .map_err(|e| Error::Config(format!("Cannot write key: {e}")))?;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("private");
 
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|e| Error::Config(format!("Cannot set key permissions: {e}")))?;
+    let mut tmp_path = None;
+    for _ in 0..8 {
+        let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
+        let candidate = dir.join(format!("{stem}.tmp.{}.{nonce}", std::process::id()));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        // No owner-only mode on this platform, and no DACL call without `unsafe`.
+        // A private key is the worst file to leave at the directory's permissions,
+        // so say so rather than let it look protected. See SECURITY.md.
+        #[cfg(not(unix))]
+        crate::config_persistence::warn_once_about_inherited_acls("private key", path);
+
+        match options.open(&candidate) {
+            Ok(mut file) => {
+                if let Err(e) = file
+                    .write_all(key_pem.as_bytes())
+                    .and_then(|()| file.sync_all())
+                {
+                    let _ = fs::remove_file(&candidate);
+                    return Err(Error::Config(format!("Cannot write key: {e}")));
+                }
+                tmp_path = Some(candidate);
+                break;
+            }
+            // Stale temp collided; try the next nonce.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(Error::Config(format!("Cannot write key: {e}"))),
+        }
+    }
+
+    let tmp_path = tmp_path.ok_or_else(|| {
+        Error::Config("Cannot write key: no unique temp file after 8 attempts".to_string())
+    })?;
+
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        Error::Config(format!("Cannot write key: {e}"))
+    })?;
 
     Ok(())
 }
@@ -774,5 +814,34 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("TLS config error"), "unexpected error: {msg}");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod private_key_permission_tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt as _;
+
+    /// `OpenOptions::mode` only applies to a file it creates, so writing over an
+    /// existing key would leave that file's original — possibly world-readable —
+    /// mode in place. The new key must land on a fresh, owner-only inode.
+    #[test]
+    fn rewriting_a_key_replaces_the_file_rather_than_writing_into_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("server.key");
+
+        // GIVEN: a key file left behind by an earlier run at a permissive mode.
+        fs::write(&path, "old key").expect("seed key");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("seed mode");
+        let before = fs::metadata(&path).expect("seed metadata").ino();
+
+        // WHEN: we write a new key to the same path.
+        write_private_key(&path, "new key").expect("write key");
+
+        // THEN: it is a different file, owner-only, holding the new key.
+        let after = fs::metadata(&path).expect("metadata");
+        assert_ne!(before, after.ino(), "key was written into the old inode");
+        assert_eq!(after.permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read_to_string(&path).expect("read key"), "new key");
     }
 }

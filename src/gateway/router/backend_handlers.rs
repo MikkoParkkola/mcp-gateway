@@ -971,6 +971,21 @@ pub(super) async fn costs_handler(
 ) -> impl IntoResponse {
     use std::collections::HashMap;
 
+    // Spend per session and per API key is cross-tenant inventory, and this
+    // endpoint consulted no identity at all. `/ui/api/costs` already requires
+    // admin; the two views of the same data now agree.
+    if !request
+        .extensions()
+        .get::<AuthenticatedClient>()
+        .is_some_and(|c| c.admin)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Admin authentication required" })),
+        )
+            .into_response();
+    }
+
     let query: HashMap<String, String> = request
         .uri()
         .query()
@@ -1011,7 +1026,7 @@ pub(super) async fn costs_handler(
         })
     };
 
-    (StatusCode::OK, Json(body))
+    (StatusCode::OK, Json(body)).into_response()
 }
 
 #[cfg(test)]

@@ -7,6 +7,71 @@ use std::io::Write;
 
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "this is: [invalid yaml").expect("write invalid config");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+        .expect("remove config read permission");
+
+    // Root and similarly privileged CI users can bypass mode 000. In that
+    // environment this fixture cannot exercise PermissionDenied, so say why
+    // the test is skipped instead of reporting a misleading pass or failure.
+    if std::fs::File::open(&path).is_ok() {
+        eprintln!("skipping unreadable-config regression: effective user can read mode 000");
+        return;
+    }
+
+    let err = Config::load(Some(&path)).expect_err("an unreadable config must fail before parsing");
+    let message = err.to_string();
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the diagnostic must name the selected config path: {message}"
+    );
+    assert!(
+        message.contains("1001"),
+        "the diagnostic must name the official container UID/GID: {message}"
+    );
+    assert!(
+        !message.contains("invalid type") && !message.contains("invalid YAML"),
+        "readability must be diagnosed before the deliberately invalid YAML is parsed: {message}"
+    );
+}
+
+#[test]
+fn missing_explicit_config_keeps_not_found_diagnostic() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("missing-gateway.yaml");
+
+    let err = Config::load(Some(&path)).expect_err("a missing explicit config must fail");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Configuration error: Config file not found: {}",
+            path.display()
+        )
+    );
+}
+
+#[test]
+fn readable_invalid_config_still_reports_parse_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "this is: [invalid yaml").expect("write invalid config");
+
+    let err = Config::load(Some(&path)).expect_err("invalid YAML must fail parsing");
+    let message = err.to_string();
+    assert!(
+        message.contains(&path.display().to_string())
+            && !message.contains("Cannot read config file"),
+        "a readable invalid file must retain the parser path: {message}"
+    );
+}
+
 #[test]
 fn test_load_env_files_sets_env_vars() {
     let dir = tempfile::tempdir().unwrap();
@@ -960,5 +1025,133 @@ fn retired_key_detector_reads_the_loaded_file() {
             .collect::<Vec<_>>(),
         vec!["idle_timeout"],
         "the file-reading path Config::load uses must find the retired key"
+    );
+}
+
+// -------------------------------------------------------------------------
+// Agent key material (MIK-7258)
+//
+// `DecodingKey::from_secret(b"")` is a valid key anyone can sign for, so an
+// agent whose HS256 secret is empty verifies a token from any caller while the
+// config reads as authenticated. Nothing rejected it, and the network-posture
+// refusal then treated `agent_auth.enabled` as proof the tools demand a
+// credential — an exemption meant to recognise security, recognising none.
+//
+// The check lives here rather than in that refusal because three attempts to
+// judge key strength there each missed the next case.
+// -------------------------------------------------------------------------
+
+/// A config with agent auth on and one agent holding `secret`.
+fn agent_config(secret: Option<&str>, rsa: Option<&str>) -> Config {
+    let mut c = Config::default();
+    c.agent_auth.enabled = true;
+    c.agent_auth.agents = vec![crate::config::AgentDefinitionConfig {
+        client_id: "svc".to_string(),
+        name: "svc".to_string(),
+        hs256_secret: secret.map(str::to_string),
+        rs256_public_key: rsa.map(str::to_string),
+        scopes: Vec::new(),
+        issuer: None,
+        audience: None,
+    }];
+    c
+}
+
+#[test]
+fn an_agent_secret_that_could_not_reject_anybody_fails_validation() {
+    for (label, secret) in [
+        ("empty", ""),
+        ("one character", "x"),
+        (
+            "thirty-one bytes, one short of the floor",
+            &"k".repeat(31)[..],
+        ),
+    ] {
+        let err = agent_config(Some(secret), None)
+            .validate()
+            .expect_err(&format!("an agent secret that is {label} was accepted"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("svc") && msg.contains("hs256_secret"),
+            "the message must name the agent and the field: {msg}"
+        );
+    }
+}
+
+#[test]
+fn a_usable_agent_secret_validates() {
+    agent_config(Some(&"k".repeat(32)), None)
+        .validate()
+        .expect("a 32-byte secret is the documented minimum and must be accepted");
+    agent_config(
+        None,
+        Some("-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----"),
+    )
+    .validate()
+    .expect("an RSA public key needs no shared secret");
+}
+
+#[test]
+fn an_agent_with_no_key_material_at_all_fails_validation() {
+    let err = agent_config(None, None)
+        .validate()
+        .expect_err("an agent that can verify nothing was accepted");
+    assert!(
+        err.to_string().contains("can verify nothing"),
+        "the message must say what is wrong: {err}"
+    );
+}
+
+#[test]
+fn one_sound_agent_does_not_excuse_a_forgeable_sibling() {
+    // A caller forges the WEAKEST agent's token and gets that agent's scopes,
+    // so every enabled agent has to hold up. An earlier version of this check
+    // asked whether ANY agent was sound, which is exactly backwards.
+    let mut c = agent_config(Some(&"k".repeat(32)), None);
+    c.agent_auth
+        .agents
+        .push(crate::config::AgentDefinitionConfig {
+            client_id: "weak".to_string(),
+            name: "weak".to_string(),
+            hs256_secret: Some(String::new()),
+            rs256_public_key: None,
+            scopes: Vec::new(),
+            issuer: None,
+            audience: None,
+        });
+    let err = c
+        .validate()
+        .expect_err("a forgeable agent beside a sound one was accepted");
+    assert!(
+        err.to_string().contains("weak"),
+        "the message must name the agent that is wrong, not the sound one: {err}"
+    );
+}
+
+#[test]
+fn agent_auth_disabled_ignores_key_material_entirely() {
+    let mut c = agent_config(Some(""), None);
+    c.agent_auth.enabled = false;
+    c.validate()
+        .expect("a disabled agent_auth block verifies nothing and gates nothing");
+}
+
+#[test]
+fn an_agent_holding_both_key_types_fails_validation() {
+    // The algorithm is read from the TOKEN HEADER (src/gateway/oauth/jwt.rs:120),
+    // so a caller chooses which of the two keys verifies its token. An agent
+    // configured with both is therefore only as strong as its WEAKER key, while
+    // the operator who added an RSA key believes RSA is what is in force.
+    // `AgentDefinition` already documents "exactly one"; nothing enforced it.
+    let err = agent_config(
+        Some("short"),
+        Some("-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----"),
+    )
+    .validate()
+    .expect_err("an agent holding both key types was accepted");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("svc") && msg.contains("both"),
+        "the message must name the agent and the ambiguity: {msg}"
     );
 }

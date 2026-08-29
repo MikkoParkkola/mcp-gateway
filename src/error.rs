@@ -17,6 +17,30 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     Config(String),
 
+    /// Authorization refused this call.
+    ///
+    /// A distinct variant, not an opaque `JsonRpc`, so a consumer can ask "is
+    /// this a denial?" without matching on message text. The playbook engine
+    /// needs exactly that: a denial must not be retried, while a timeout must
+    /// be, and the two are indistinguishable once flattened to a string.
+    ///
+    /// `code` is the code the router's own refusal envelope would carry, so a
+    /// caller sees one classification whichever gate rejected.
+    #[error("{message}")]
+    Forbidden {
+        /// JSON-RPC error code the refusal envelope carries.
+        code: i32,
+        /// HTTP status the refusal deserves.
+        ///
+        /// Carried rather than derived: the router gate already answers a
+        /// refusal with 403, and a denial that only the chokepoint can see —
+        /// a playbook step — must not come back 200 with an error buried in
+        /// the body. One refusal, one status, whichever gate produced it.
+        status: u16,
+        /// Human-readable refusal reason, safe to return to the caller.
+        message: String,
+    },
+
     /// Configuration validation failure — semantically invalid config.
     ///
     /// Use this instead of `Internal` when a config value fails a semantic
@@ -168,7 +192,7 @@ impl Error {
     #[must_use]
     pub fn to_rpc_code(&self) -> i32 {
         match self {
-            Self::JsonRpc { code, .. } => *code,
+            Self::JsonRpc { code, .. } | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => -32700,     // Parse error
             Self::Protocol(_) => -32600, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
