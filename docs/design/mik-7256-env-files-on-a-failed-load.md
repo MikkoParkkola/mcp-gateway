@@ -642,10 +642,9 @@ produces. **`env_paths` is the third field, and it is what stops the one
 resolution becoming two.** It is a `ResolvedEnvFiles` — an opaque wrapper over
 the absolute paths startup recorded as it opened them, constructible ONLY by
 the resolver and carrying no `~` spelling to expand a second time. The watcher
-and every reload take it from the startup result instead of calling
-`resolve_env_file_paths(&config.env_files)` themselves
-(`src/config_reload/mod.rs:1011-1014` is the call that changes), and
-`load_with_overlay`'s `env_files: &[PathBuf]` argument is fed from it. Without
+and every reload take it from the startup result instead of resolving
+`config.env_files` themselves (`src/config_reload/mod.rs:1011-1014` is the
+call that goes), and it is what `load_with_overlay` takes. Without
 a named owner every consumer has `Config.env_files` in reach and rebuilding
 the list from it is the obvious thing to write — which is the divergence this
 rule exists to remove, arriving through the back door. A type that cannot be
@@ -882,8 +881,8 @@ activated as credentials during evaluation; under D it is sharper still,
 because acceptance would then publish those contents to every runtime reader
 in the process. So the
 path list is an input to the load, not a field read out of the candidate:
-`load_with_overlay` takes `&[PathBuf]` from the caller, and the reload path
-passes the list the running gateway started with. A path the candidate ADDS
+`load_with_overlay` takes the recorded `ResolvedEnvFiles` from the caller, and
+the reload path passes the sequence the running gateway started with. A path the candidate ADDS
 contributes nothing to the load: not to the overlay, not to the process, not to
 any reader — it takes effect at the next restart,
 which is what adding a path already required (below). A path the candidate
