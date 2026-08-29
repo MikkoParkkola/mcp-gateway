@@ -90,6 +90,8 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 | MIK-7215.STATELESS.6 | On the modern path the gateway MUST refuse `ping`, `logging/setLevel` and `notifications/roots/list_changed`. It MUST continue to serve them on the legacy path. | Spec §5 major change | T |
 | MIK-7215.STATELESS.7 | The gateway MUST NOT emit `notifications/message` for a request that did not carry `io.modelcontextprotocol/logLevel` in `_meta`. | Spec §5: *"servers MUST NOT emit"* | T |
 | MIK-7215.STATELESS.8 | A dual-era server MUST serve both eras on one endpoint, selecting from how the caller opens: `initialize` selects legacy, per-request `_meta` selects modern. | Spec: *"A dual-era server MAY serve both eras concurrently"* — adopted as MUST because the alternative is a second port operators must know about | T, D |
+| MIK-7215.STATELESS.9 | A modern request MUST carry both `io.modelcontextprotocol/protocolVersion` **and** `io.modelcontextprotocol/clientCapabilities` in `_meta`; both are **required**. A request missing either is malformed and MUST be rejected with JSON-RPC `-32602`, and HTTP `400 Bad Request` on the HTTP path. | Spec, `_meta` per-request fields: *"A request missing any required field is malformed; the server MUST reject it with … `-32602` … the response status MUST be `400 Bad Request`"* | T |
+| MIK-7215.STATELESS.10 | The gateway MUST NOT rely on a capability the client did not declare. Where processing needs one, it MUST return `MissingRequiredClientCapabilityError` (`-32021`) whose `data.requiredCapabilities` lists what was missing, with HTTP 400. | Spec: *"A server MUST NOT rely on capabilities the client has not declared"* | T |
 
 ### 3.3 Headers
 
