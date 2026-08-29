@@ -63,6 +63,23 @@ impl SessionLifecycle {
         // Whatever brought us here, this key is done: drop its deadline so a
         // later reap cannot fire the handlers for it a second time.
         self.untrack(session_id);
+        self.fire_cleanup(session_id);
+    }
+
+    /// Run the cleanup handlers for a key whose deadline is already gone.
+    ///
+    /// Separate from [`Self::on_disconnect`] because reaping has **already**
+    /// removed the key. Removing it a second time cannot remove the entry
+    /// reaping took — that one is gone — so the only thing a second removal can
+    /// delete is a deadline some other caller re-registered in between, taking
+    /// a live caller's state with it.
+    ///
+    /// **Residual, stated rather than implied**: a key re-tracked between
+    /// reaping's removal and this call still has its handlers fired, because
+    /// nothing holds the two together. Closing that needs the ownership model
+    /// this module does not yet have — it is not reached from production at all
+    /// (MIK-7291), and the fix belongs with the decision to wire it.
+    fn fire_cleanup(&self, session_id: &str) {
         let cbs = self.callbacks.read();
         if cbs.is_empty() {
             return;
@@ -118,7 +135,9 @@ impl SessionLifecycle {
             expired
         };
         for key in expired {
-            self.on_disconnect(&key);
+            // Already removed above. `on_disconnect` would remove it again, and
+            // a second removal can only take an entry someone re-registered.
+            self.fire_cleanup(&key);
         }
     }
 
