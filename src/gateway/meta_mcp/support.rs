@@ -13,6 +13,7 @@ use crate::playbook::ToolInvoker;
 
 use super::super::meta_mcp_helpers::extract_optional_str;
 use super::MetaMcp;
+use crate::gateway::meta_mcp::MetaMcpCallerContext;
 
 // ============================================================================
 // Idempotency
@@ -148,18 +149,28 @@ pub(super) fn ranked_results_to_code_mode_json(
 // ============================================================================
 
 /// Bridges `MetaMcp::invoke_tool` to the `ToolInvoker` trait for playbook execution.
-pub(super) struct MetaMcpInvoker<'a> {
+pub(super) struct MetaMcpInvoker<'a, 'c> {
     pub(super) meta: &'a MetaMcp,
+    /// The caller that invoked the playbook, carried whole.
+    ///
+    /// Whole, and not field by field, because it holds the authorizer: each
+    /// step faces exactly the checks the caller would face invoking that tool
+    /// directly. An earlier version carried the caller's identity without the
+    /// authorizer, which nothing on this path consulted — an identity no check
+    /// reads is not a check.
+    pub(super) caller: &'c MetaMcpCallerContext<'c>,
 }
 
 #[async_trait::async_trait]
-impl ToolInvoker for MetaMcpInvoker<'_> {
+impl ToolInvoker for MetaMcpInvoker<'_, '_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         let args = internal_invoke_args(server, tool, arguments);
-        // Playbook steps are internal invocations with no caller agent.
-        self.meta
-            .invoke_tool(&args, None, None, None, None, None)
-            .await
+        // Steps inherit the invoking caller's standing, admin included.
+        // Hard-coding non-admin meant an operator's own playbook failed on a
+        // step they could run directly, which is a regression rather than a
+        // control: a playbook is not a way AROUND a check, so it faces the same
+        // one — now including the scope checks, at the chokepoint.
+        self.meta.invoke_tool(&args, None, self.caller).await
     }
 }
 

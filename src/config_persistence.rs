@@ -82,6 +82,19 @@ const SCRATCH_ATTEMPTS: u64 = 8;
 /// This path is deliberately not platform-gated. An earlier version wrote in
 /// place on Windows, so the one platform without a crash-safe write was also
 /// the one no test covered.
+/// Write pre-rendered config text through the same secure path as [`write_config`].
+///
+/// Exposed for `init`, which renders a starter config as text rather than
+/// serialising a `Config`. It must not use `std::fs::write`: the starter config
+/// carries a generated admin credential.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be created or replaced.
+pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
+    write_yaml(path, yaml)
+}
+
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
 
@@ -103,6 +116,23 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     rename_with_retry(&tmp_path, path).map_err(|e| cleanup(&e, "replace"))
 }
 
+/// Say once, per process, that secret files inherit directory ACLs here.
+///
+/// Once rather than per write: an admin UI that saves config repeatedly would
+/// otherwise bury the message it exists to deliver.
+#[cfg(not(unix))]
+pub(crate) fn warn_once_about_inherited_acls(what: &str, path: &Path) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            path = %path.display(),
+            "This platform has no owner-only file mode: the {what} inherits the \
+             directory's permissions and may be readable by other users. Store \
+             it in a directory only this account can read."
+        );
+    });
+}
+
 /// Claim a scratch file next to `path` that no other writer holds.
 ///
 /// The create is exclusive, so a name already in use is refused rather than
@@ -116,11 +146,26 @@ fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
 fn create_scratch_exclusive(path: &Path, first: u64) -> Result<(std::fs::File, PathBuf), String> {
     for seed in first..first.wrapping_add(SCRATCH_ATTEMPTS) {
         let candidate = scratch_candidate(path, seed);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        // Set the mode AT CREATION, not on the finished file. A config can hold
+        // a bearer token, and the scratch file sits next to it for the whole
+        // write; creating it at the umask and tightening afterwards leaves the
+        // window open. `rename` preserves the mode, so the config inherits it.
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        // Windows has no equivalent in `std`: the file inherits the directory's
+        // ACL, so a config holding a bearer token is as readable as wherever it
+        // was put. Restricting the DACL needs a Win32 call, and this crate
+        // denies `unsafe`, so the honest move is to tell the operator rather
+        // than write a permission we did not set. Documented in SECURITY.md
+        // under "Windows file permissions"; warned once so it is not silent.
+        #[cfg(not(unix))]
+        warn_once_about_inherited_acls("config", path);
+        match opts.open(&candidate) {
             Ok(file) => return Ok((file, candidate)),
             // Someone else's scratch file. Not ours to write to, and not ours
             // to delete either.
@@ -196,6 +241,38 @@ mod tests {
         let config = load_existing_or_default(&path).unwrap();
 
         assert!(config.backends.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_written_config_is_not_readable_by_other_users() {
+        // A config can hold a bearer token and API keys. Loopback isolates
+        // machines, not users, so another account on the same host can already
+        // reach the port; it must not also be able to read the credential.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        write_config(&path, &Config::default()).expect("write");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config wrote mode {mode:o}, expected 600");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_scratch_file_is_not_readable_by_other_users_either() {
+        // The scratch file exists next to the config for the duration of the
+        // write. Creating it at the umask and tightening the final file after
+        // the rename leaves exactly the window this is meant to close.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let (file, scratch) = create_scratch_exclusive(&path, 1).expect("scratch");
+        let mode = file.metadata().expect("stat").permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&scratch);
+        assert_eq!(mode, 0o600, "scratch wrote mode {mode:o}, expected 600");
     }
 
     #[test]

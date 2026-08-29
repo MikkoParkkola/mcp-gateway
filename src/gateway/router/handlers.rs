@@ -15,8 +15,8 @@ use tracing::{debug, info, warn};
 
 use super::AppState;
 use super::authorization::{
-    authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
-    require_admin_tool_access,
+    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
+    refusal_principal, require_admin_tool_access,
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
@@ -126,10 +126,35 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
+/// A stable owner key for a session.
+///
+/// Not the display name: `name` is operator-configured and two API keys may
+/// share one, which would let them attach to each other's sessions. The key
+/// records whether a credential was actually validated, so an API key named
+/// "anonymous" cannot claim the unauthenticated identity's sessions.
+fn session_owner(client: Option<&AuthenticatedClient>) -> String {
+    client.map_or_else(
+        || "unauthenticated:anonymous".to_string(),
+        |c| {
+            if c.authenticated && !c.principal.is_empty() {
+                // A digest of the validated secret. Two API keys configured
+                // with the same display name are different principals, and
+                // keying on the name would let either attach to the other's
+                // sessions.
+                format!("credential:{}", c.principal)
+            } else {
+                format!("unauthenticated:{}", c.name)
+            }
+        },
+    )
+}
+
 pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
+    client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let client = client.map(|axum::Extension(c)| c);
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
         return build_http_error_response(
@@ -168,9 +193,13 @@ pub(super) async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state
-        .multiplexer
-        .get_or_create_session(existing_session_id.as_deref());
+    let (session_id, _rx) = state.multiplexer.get_or_create_session_for(
+        existing_session_id.as_deref(),
+        // The identity that owns the session. Every caller is "anonymous"
+        // when authentication is off, so a single-user gateway behaves
+        // exactly as before.
+        &session_owner(client.as_ref()),
+    );
 
     info!(session_id = %session_id, "Client connected to SSE stream");
 
@@ -279,11 +308,13 @@ pub(super) async fn health_handler(
     let capability_healthy = capability_status.as_ref().is_none_or(|s| s.healthy);
     let healthy = backends_overall_healthy(&statuses) && capability_healthy;
 
-    // Check if the caller is an authenticated (non-public) client
+    // Admin is a grant, not a name. Comparing against "public"/"anonymous"
+    // gave full backend detail to every authenticated non-admin key the moment
+    // an operator removed /health from `auth.public_paths`.
     let is_admin = request
         .extensions()
         .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.name != "public" && c.name != "anonymous");
+        .is_some_and(|c| c.admin);
 
     let backends_json = if is_admin {
         // Full details for authenticated clients
@@ -416,9 +447,19 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state
-        .multiplexer
-        .get_or_create_session(existing_session_id.as_deref());
+    let (session_id, session_rx) = state.multiplexer.get_or_create_session_for(
+        existing_session_id.as_deref(),
+        // The identity that owns the session. Every caller is "anonymous"
+        // when authentication is off, so a single-user gateway behaves
+        // exactly as before.
+        &session_owner(client.as_ref()),
+    );
+    // This handler is not a stream reader. Holding the subscription would make
+    // a server-to-client prompt look deliverable to a caller with no live SSE
+    // stream: the send succeeds into a receiver nobody polls, and the caller
+    // waits out the 120-second response timeout instead of being told there is
+    // nobody to ask.
+    drop(session_rx);
 
     // Optionally sanitize input
     let request = if state.sanitize_input {
@@ -516,6 +557,22 @@ pub(super) async fn meta_mcp_handler(
                     cert_identity.as_ref(),
                     target.as_target(),
                 ) {
+                    // This gate returns without entering the meta layer, so the
+                    // chokepoint's emitter never fires for a shape the router
+                    // covers. Both gates call the one helper, or HTTP scope
+                    // denials — the ones most worth seeing — go unrecorded.
+                    crate::gateway::authz::audit_refusal(
+                        crate::gateway::authz::Transport::Http,
+                        refusal_principal(
+                            client.as_ref(),
+                            oauth_agent_identity.as_ref(),
+                            cert_identity.as_ref(),
+                        )
+                        .as_deref(),
+                        &target.server,
+                        &target.tool,
+                        &e.message,
+                    );
                     return build_error_response(
                         Some(id),
                         e.code,
@@ -584,10 +641,16 @@ pub(super) async fn meta_mcp_handler(
                 oauth_agent_identity.as_ref(),
             );
 
-            // OWASP ASI09 — destructive meta-tool confirmation gate.
+            // Destructive meta-tool confirmation. NOT the control — the admin
+            // requirement is, and `gateway_kill_server`, the only tool carrying
+            // `destructiveHint: true`, is in the admin set. This is the prompt
+            // an honest client shows its user before proceeding.
             //
-            // For any meta-tool carrying `destructiveHint: true`, require explicit
-            // human confirmation via MCP elicitation before execution proceeds.
+            // Deliberately not labelled OWASP ASI09 here. An earlier version
+            // was, and `destructive_confirmation`'s own header was corrected to
+            // say why: the citation reads as a control and invites over-trust in
+            // a prompt that a client may simply not support, in which case the
+            // action proceeds after a warning.
             // Non-destructive tools and all backend tool calls skip this check.
             if is_destructive_meta_tool(tool_name) {
                 let action_desc = describe_destructive_action(tool_name, params.as_ref());
@@ -611,6 +674,23 @@ pub(super) async fn meta_mcp_handler(
                 // Confirmed or Unsupported → fall through to execute
             }
 
+            // The same policy the pre-check above applied, handed to the
+            // dispatch chokepoint so the shapes the pre-check cannot see — a
+            // playbook step, whose targets are not in the request — face it
+            // too. Constructed concretely rather than taken as a parameter, so
+            // the weaker stdio authorizer cannot reach the network path.
+            let router_authorizer = RouterAuthorizer {
+                state: state.as_ref(),
+                client: client.as_ref(),
+                oauth_agent_identity: oauth_agent_identity.as_ref(),
+                cert_identity: cert_identity.as_ref(),
+                principal: refusal_principal(
+                    client.as_ref(),
+                    oauth_agent_identity.as_ref(),
+                    cert_identity.as_ref(),
+                ),
+            };
+
             let mut call_response = state
                 .meta_mcp
                 .handle_tools_call(
@@ -619,10 +699,12 @@ pub(super) async fn meta_mcp_handler(
                     arguments,
                     Some(session_id.as_str()),
                     MetaMcpCallerContext {
+                        authorizer: &router_authorizer,
                         api_key_name,
                         agent_id,
                         grant_subject,
                         verified_identity: verified_identity.as_ref(),
+                        is_admin: client.as_ref().is_some_and(|c| c.admin),
                     },
                 )
                 .await;
@@ -712,11 +794,11 @@ pub(super) async fn meta_mcp_handler(
                 Err(resp) => return resp,
             };
 
-            // Broadcast to all sessions — first responder wins.
+            // To the session that asked, and only that one.
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_sampling_with_response("broadcast", &sampling_params, timeout)
+                .forward_sampling_with_response(&session_id, &sampling_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
@@ -731,11 +813,11 @@ pub(super) async fn meta_mcp_handler(
                 Err(resp) => return resp,
             };
 
-            // Broadcast to all sessions — first responder wins.
+            // To the session that asked, and only that one.
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_elicitation_with_response("broadcast", &elicitation_params, timeout)
+                .forward_elicitation_with_response(&session_id, &elicitation_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
@@ -770,8 +852,31 @@ pub(super) async fn meta_mcp_handler(
         }
     }
 
-    // Return response with session ID header
-    build_response(response, &session_id, StatusCode::OK)
+    // A refusal the router gate caught already answered 403 above. A refusal
+    // only the dispatch chokepoint can see — a playbook step, whose targets the
+    // router never inspects — arrives here as a JSON-RPC error, and answering
+    // it 200 tells every caller and intermediary the call succeeded. The status
+    // travels on the error precisely so this line can honour it.
+    let status = refusal_status(&response).unwrap_or(StatusCode::OK);
+    build_response(response, &session_id, status)
+}
+
+/// The HTTP status a response deserves when it carries an authorization
+/// refusal, or `None` for anything else.
+///
+/// Reads the status the dispatch layer stamped, rather than inferring one from
+/// the JSON-RPC code — see `HTTP_STATUS_DATA_KEY` for why inference is wrong
+/// here. An error with no stamp is not a refusal and keeps its own status, so
+/// nothing else is reclassified.
+pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
+    let raw = response
+        .error
+        .as_ref()?
+        .data
+        .as_ref()?
+        .get(crate::gateway::authz::HTTP_STATUS_DATA_KEY)?
+        .as_u64()?;
+    StatusCode::from_u16(u16::try_from(raw).ok()?).ok()
 }
 
 // ── destructive-confirmation helpers ─────────────────────────────────────────
