@@ -33,7 +33,7 @@ extracts it a second time at `:199`, deliberately after the apply — so an env
 file setting `MCP_GATEWAY_PORT` reaches the config through Figment, not
 through `${VAR}`. `Env` reads `std::env::vars_os()` and takes no substitute.
 This is the one constraint that cannot be met by passing an overlay to an
-existing function, and it is why `OverlayEnv` below is a provider of our own
+existing function, and it is why `EffectiveEnv` below is a provider of our own
 rather than a modified `Env`.
 
 **`${VAR}` expansion, by contrast, is entirely ours.** `expand_env_vars`
@@ -168,7 +168,7 @@ it means published.
 YAML file too.** `${VAR}` expansion, every `env:` reference, capability
 credentials and `MCP_GATEWAY_*` keys all reach the config on a reload:
 the first three through the overlay their readers now take, the last through
-`OverlayEnv`. What remains is the ordinary restart-required set, and it is a
+`EffectiveEnv`. What remains is the ordinary restart-required set, and it is a
 property of the FIELD rather than of where the value came from.
 `MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND` reaches
 `server.allow_unauthenticated_network_bind`, read once inside `run` at bind
@@ -227,8 +227,15 @@ of the process. Across files it is the common shape; within one file it
 appears as soon as the referenced key was applied at startup.
 
 **So a reload REFUSES a config whose env files substitute a key those same env
-files define.** One scan of the raw text of each listed file for a substitution
-naming a `K` that appears as a key in any of them, self included; a match ends
+files define.** Each listed file is read ONCE into a buffer, and both the scan
+and `dotenvy` consume that buffer — the parser through `from_read_iter`, never
+a second `from_path`. Two reads of the same path are two different files
+whenever anything writes between them, and the reload is triggered by a watcher
+on exactly those paths, so the interleaving is the expected case rather than an
+exotic one: a scan reading a clean file and a parser reading a rewritten one
+publishes the substitution the refusal exists to prevent. One scan of that
+buffer for a substitution naming a `K` that appears as a key in any of them,
+self included; a match ends
 the reload with the file and the key named, and neither value. **Both spellings
 count.** `dotenvy` substitutes the unbraced `$K` as well as `${K}`: the `{`
 merely selects `SubstitutionMode::EscapedBlock` over `Block`, and the unbraced
@@ -322,6 +329,17 @@ reader:
   replace an operator's configuration with defaults. Parity with startup makes
   that unreachable rather than merely unlikely.
 
+  **The warning is ours, and it never carries `dotenvy`'s message.**
+  `Error::LineParse(line, index)` formats as `Error parsing line: '<line>',
+  error at line index: <n>` (`dotenvy-0.15.7/src/errors.rs:40-44`) — the whole
+  offending line, so a malformed `TOKEN=secret` is a secret in the log. The
+  reload logs the file path, the line NUMBER and a category, never the line and
+  never `{e}`. This is not only a new requirement: the startup loader already
+  logs `Failed to load env file {expanded}: {e}` (`src/config/mod.rs:305`) and
+  has the leak today. Fixing it is smaller than a ticket describing it, so it is
+  fixed here and the fixture asserting the value never reaches a log covers both
+  call sites.
+
 - `EnvOverlay::resolve(&self, name: &str) -> Option<String>` — the single
   reader every overlay-aware site calls. An owned key answers from the map
   alone, absent meaning unset; anything else falls through to
@@ -341,7 +359,22 @@ then absent from the child rather than present with a stale value. This is the
 third reader the enumeration missed — first `SecretResolver::resolve`, now
 this — which is the argument for the rule and the source scan over any list.
 
-**`OverlayEnv` — the overlay as a Figment provider.** Figment merges
+**And the scan itself missed two, which is the argument for what it matches
+on.** `MCP_GATEWAY_FIREWALL_SKIP_KEYS` is read with `std::env::var`
+(`src/security/firewall/input_scanner.rs:72`) and keeps its startup value, so
+an operator narrowing a firewall exclusion during an incident gets the old set
+until a restart. `src/discovery/config_scanner.rs:212` iterates `env::vars()`
+through an aliased import, which no scan spelled `std::env::var` can see, and
+it discovers backend endpoints — so a rotated endpoint stays at its startup
+value with nothing reporting it. Both route through `LiveEnv`, and both get a
+behavioural case rather than a scan entry, because the scan is what missed
+them. The scan matches on the CALL, whatever the path is spelled as — an
+aliased `env::vars`, a `use std::env::var as getenv`, a helper wrapping either
+— and a prefix-wide exemption is replaced by named, reviewed call sites, since
+an exemption covering a prefix covers every future reader that happens to
+start with it.
+
+**`EffectiveEnv` — the reload's environment as a Figment provider.** Figment merges
 `Env::prefixed("MCP_GATEWAY_").split("__")` over the YAML file
 (`src/config/mod.rs:286`), and that provider reads `std::env::vars_os()` with
 no way to supply a different source: `Env`'s whole key transformation lives in
@@ -349,17 +382,45 @@ a private closure applied inside `iter()`, which is hard-wired to the process
 (`figment-0.10.19/src/providers/env.rs:504-520`). So the overlay gets its own
 provider rather than a modified `Env`. It is small, because the two pieces that
 matter are public: `figment::util::nest` (`src/util.rs:271`) and `Dict::merge`,
-which are the entirety of `Env::data()` (`env.rs:521-535`). `OverlayEnv`
-applies the same transformation over the overlay map — strip the prefix
+which are the entirety of `Env::data()` (`env.rs:614-625`).
+
+**It replaces the `Env` merge on the reload path; it does not join it.** An
+earlier form of this section merged `OverlayEnv` alongside the real `Env` and
+had to pick an order, which was wrong twice over. It picked the order from a
+precedence claim that is false at source — startup calls
+`dotenvy::from_path_override` (`src/config/mod.rs:303`), so an env file
+OVERRIDES a value already exported into the process, and each listed file
+overrides the ones before it. And with no process write on the reload path, the
+process still holds the values startup wrote there, so keeping the real `Env`
+in the merge at all means a rotated key is overwritten by its own startup value
+and a key DELETED from the env file is resurrected from the process. Neither is
+a precedence to be tuned; both are the same defect, that a second provider is
+reading a snapshot the reload deliberately refuses to update.
+
+So there is one provider, `EffectiveEnv`, computing the environment the process
+WOULD have if the accepted env files were loaded into it — process variables,
+minus the keys the startup env files owned, plus the current overlay — and
+applying the transformation once over that map: strip the prefix
 case-insensitively, replace `__` with `.`, reject a key with an empty
-dot-segment, `nest` each pair and merge — and is merged immediately BEFORE the
-real `Env`, so a value exported into the process still wins over one from an
-env file, which is the precedence startup gives today.
+dot-segment, `nest` each pair, merge. Overlay-owned means present in the
+startup overlay: `from_path_override` semantics make the process value for
+every such key the env file's own, so removing it removes exactly what the env
+files put there and leaves a genuinely shell-exported variable untouched. A key
+the operator exported and never wrote in a file keeps working; a key removed
+from a file goes away on the reload, as it would across a restart. With one
+provider there is no merge order left to get wrong.
 
 Reimplementing a transformation is how two implementations drift, so this one
-is pinned by an oracle rather than by care: for a given key set, `OverlayEnv`'s
-`data()` must equal the real `Env` provider's `data()` when those same keys are
-in the process environment. The oracle is the library itself, so the test
+is pinned by an oracle rather than by care: for a given key set,
+`EffectiveEnv`'s `data()` must equal the real `Env` provider's `data()` when
+those same keys are in the process environment — the WHOLE return, a
+`Map<Profile, Dict>`, not the inner `Dict`. Comparing the full return is what
+makes the oracle cover the transformations this prose does not enumerate:
+`Env::data()` ends `self.profile.collect(dict)` (`env.rs:624`) and `iter()`
+lowercases each key on the way through (`env.rs:513-516`), so a provider that
+emitted the wrong profile, or skipped the lowercasing and left
+`MCP_GATEWAY_SERVER__PORT` nesting as `SERVER.PORT` onto nothing, fails here
+without either being named as a rule to follow. The oracle is the library itself, so the test
 cannot pass by agreeing with the thing it is checking.
 
 **Validation reads the overlay too.** `validate_env_reference`
@@ -483,10 +544,17 @@ already is, a property of the patch.
 **And once it runs there, `no_changes` is the wrong thing to say.** The patch
 is empty, so nothing about the CONFIG changed; the overlay is not the config,
 and a rotation that replaced a live credential is not a no-op. Two corrections,
-both on the accepted-with-empty-patch exit:
+both on every accepting exit, not on the empty-patch one. Scoping them there
+would have reproduced the defect they exist to close, one reload over: an
+operator who rotates a compromised credential in an env file AND edits anything
+else in the same reload produces a NON-empty patch, and reporting keyed on
+patch-emptiness goes quiet on precisely that reload. The overlay diff is
+computed once per accepted reload and reported the same way whatever the patch
+contains:
 
 - The outcome names the rotation. An accepted reload whose overlay differs from
-  the one it replaces reports the keys that changed — added, changed, removed,
+  the one it replaces reports the keys that changed, alongside whatever the
+  config patch reports — added, changed, removed,
   by name, never by value — instead of `no_changes`. An operator who rotates a
   secret and is told nothing happened cannot distinguish a rotation that took
   from a watcher that fired on the wrong file.
@@ -743,10 +811,11 @@ observation, not a ticket.
   the change's own headline case, rotation without a config edit.
 - **MIK.ENVFILE.10.4** Given an env-file-only edit that rotates a key which the
   running config references from one of the four eager auth forms, When the
-  reload is accepted with an empty patch, Then the outcome names the changed key
-  and reports `restart_required` rather than `no_changes`, and the value appears
-  in neither. The case where believing the outcome means believing a revoked
-  credential was revoked.
+  reload is accepted, Then the outcome names the changed key and reports
+  `restart_required`, and the value appears in neither. This holds whatever the
+  config patch contains: an empty patch reports it instead of `no_changes`, and
+  a non-empty one reports it alongside the patch. The case where believing the
+  outcome means believing a revoked credential was revoked.
 - **MIK.ENVFILE.10.2** Given an accepted reload whose changes are not fully
   applied — the registry shutdown abort — Then nothing is published, because
   the reload did not commit.
@@ -819,7 +888,7 @@ requires a restart. This change is about what a failing reload may do to the
 process, and about the contents of paths already listed.
 
 **Making Figment's env layer overlay-aware was here, and is now IN scope** as
-`OverlayEnv`. It moved when the asked question came back: restart-only was not
+`EffectiveEnv`. It moved when the asked question came back: restart-only was not
 acceptable for values that arrive through an env file. The deferral had rested
 on the affected keys being startup-shaped anyway, which is true of some of them
 and was never true of all of them.
@@ -891,10 +960,11 @@ rather than default is an operator's call, not a repair.
   back to them rather than assumed. The bullet below is that second question,
   and its answer removed the deepening entirely.
 - *Is restart-only acceptable for `MCP_GATEWAY_*` values that arrive through an
-  env file?* — asked, answered: no. A live change is wanted wherever it can be
-  made safely, and where it cannot, the operator is to be told which setting
-  needs a restart rather than left to discover it. Changed the design: the
-  Figment item is no longer out of scope and appears below as `OverlayEnv`, and
+  env file?* — asked 2026-08-29, offered as restart-only, live-apply, or
+  live-now-restart-later; answered: apply live wherever safe. Where a value
+  genuinely cannot be applied to a running process, the operator is to be told
+  which setting needs a restart rather than left to discover it. Changed the design: the
+  Figment item is no longer out of scope and appears below as `EffectiveEnv`, and
   the narrowing this bullet was about no longer exists — an `MCP_GATEWAY_*`
   value in an env file is evaluated on a reload exactly as one in the YAML file
   is. What genuinely cannot be applied to a running process — a listener
