@@ -649,8 +649,9 @@ because acceptance would then publish those contents to every runtime reader
 in the process. So the
 path list is an input to the load, not a field read out of the candidate:
 `load_with_overlay` takes `&[PathBuf]` from the caller, and the reload path
-passes the list the running gateway started with. A path the candidate ADDS is
-parsed by nobody and applied by nobody — it takes effect at the next restart,
+passes the list the running gateway started with. A path the candidate ADDS
+contributes nothing to the load: not to the overlay, not to the process, not to
+any reader — it takes effect at the next restart,
 which is what adding a path already required (below). A path the candidate
 REMOVES stays applied until restart, matching the fact that nothing unsets a
 variable today either.
@@ -661,8 +662,21 @@ with the credential resolved to empty. `${VAR}` expansion yields the empty
 string rather than failing, so nothing refuses and the backend registers
 broken. The design does not change what is applied — the restart-only rule
 stands — but it does add a warn-level log when a `${VAR}` resolves empty at
-reload while a candidate-added, unread env file defines that name. It names the
-key and the file, never the value. The `env:` form needs no such log: it
+reload while a candidate-added env file defines that name. It names the key
+and the file, never the value.
+
+**That diagnostic opens the file, and saying so is the point.** An earlier
+draft claimed a candidate-added path was "parsed by nobody", which cannot be
+true of a warn that knows the file supplies the missing name — one of the two
+statements had to go, and the one that had to go was the absolute. A DESIGN
+DECISION, named here because it moves a security property: the file is read for
+its KEY NAMES ONLY, on the failure path, to answer one question — does this
+name exist here. Nothing it contains is applied, published, resolvable or
+logged; a value never leaves the parse. The path is operator-supplied through
+the same config the operator is already editing, so opening it grants no reach
+the edit did not already have, and a read that cannot influence a value cannot
+activate a credential. The rule that matters is unchanged and is about
+APPLYING, not about opening. The `env:` form needs no such log: it
 resolves through `validate_env_reference`, which refuses, so the operator is
 told by the refusal.
 
