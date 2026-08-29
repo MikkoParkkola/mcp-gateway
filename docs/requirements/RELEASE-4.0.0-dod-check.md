@@ -242,6 +242,37 @@ Four findings remain open. None is reachable by a client while `server.modern_pr
    states put the final `result` on `completed` and the JSON-RPC `error` object on
    `failed`. A client parsing the error would get a message where an object is required.
 
+### Disposition of 3 and 4 — the extension ships not implemented
+
+4.0.0 does not advertise the tasks extension, and the code already behaves that way.
+`ExtensionSet::gateway_declares()` (`src/protocol/extensions.rs:52-56`) is the only site
+that names `Extension::Tasks`, and it has no caller outside its own module, so the
+capability key never reaches an advertised capabilities object. `tasks/get` and
+`tasks/update` appear only in the documentation constant `src/protocol/meta.rs:240`, which
+lists what the revision added; no dispatcher routes either method. No client can negotiate
+the extension and none can reach the partial task model.
+
+That is currently true by omission rather than by decision, and this records it as the
+decision. It also makes `gateway_declares()` an unwired public symbol, which §2 does not
+allow: recorded here rather than repaired, because the repair is to call it, and calling it
+is exactly what this disposition declines to do until the implementation is conformant. It
+stays in the tree as the entry point that implementation will use.
+
+Chosen over making it conformant before the tag. Conformance is two statuses, the whole
+mid-flight input exchange, cooperative cancellation, two required fields, an error payload
+change and a per-request capability check — real construction on a branch that had already
+converged, and it reopens review rounds on everything it touches. Shipping the subset with
+a note was rejected outright: a client reading the extension identifier expects five
+states, and an honest release note does not stop that call from breaking.
+
+**This disposition was put to the operator and no answer came back within the window.** It
+is the reversible branch — a later release turns the capability on once the implementation
+matches the specification, and nothing shipped in 4.0.0 has to be withdrawn to do it. One
+line overturns it.
+
+Owner of the conformant implementation: a 4.1.0 ticket, filed before the tag, alongside the
+one that owns gaps 1 and 2.
+
 ### Closed since: `subscriptions/listen` now streams
 
 The handler returned an acknowledgement that closed, so a client reading it as a

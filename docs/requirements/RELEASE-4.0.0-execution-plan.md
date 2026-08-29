@@ -78,10 +78,12 @@ The finder-unavailable clock under the repair protocol started at the round-18 l
 2. MIK-7256 through the process: failing tests, implementation, self-QA, review, docs.
 3. Gaps 3 and 4 are resolved as checks and turned into defects: the tasks specification
    was found at `/extensions/tasks/overview`, and the branch is short of it by two
-   statuses, two required fields, an error payload shape and a capability check. Decide
-   whether the tasks extension ships conformant in 4.0.0 or ships disabled; either way the
-   DoD check records what it is. File the 4.1.0 ticket that owns gaps 1 and 2, and put the
-   single-replica constraint into shipped text.
+   statuses, two required fields, an error payload shape and a capability check. The
+   extension ships not implemented — the capability key is not advertised, so no client
+   negotiates it (DoD check, disposition of 3 and 4). Verify in code that nothing offers
+   the key, and say so in the release notes. File the 4.1.0 tickets: one owning tasks
+   conformance, one owning gaps 1 and 2. Put the single-replica constraint into shipped
+   text.
 4. Re-run §3, §4 and §5 on Spark at the final head.
 5. Second-vendor review pass when quota returns; then the DoD comment on each ticket.
 6. Open the PR, land it, then §P5 housekeeping.
