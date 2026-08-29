@@ -953,12 +953,28 @@ impl MetaMcp {
 impl MetaMcp {
     /// Build the `server/discover` document (MCP 2026-07-28).
     ///
-    /// Not yet implemented — returns an empty object so the acceptance tests
-    /// for MIK-7217 fail on their assertions rather than on a missing symbol.
-    /// A compile error cannot tell a missing feature from a broken test.
+    /// The revision removes the `initialize` handshake, so this RPC is how a
+    /// peer learns what the gateway speaks. Servers **MUST** implement it, and
+    /// a client **MAY** call it before anything else — on stdio it is also the
+    /// backward-compatibility probe, since a legacy server answers it with an
+    /// error rather than a document.
+    ///
+    /// The version list and identity come from the same source as the
+    /// `initialize` result (`build_initialize_result`). Assembling them
+    /// separately would let the two answers drift, and a peer would get one
+    /// story from the handshake and another from discovery.
     #[must_use]
     pub fn discover_document(&self) -> serde_json::Value {
-        serde_json::json!({})
+        let handshake = crate::gateway::meta_mcp_helpers::build_initialize_result(
+            crate::protocol::PROTOCOL_VERSION,
+            "",
+        );
+
+        serde_json::json!({
+            "protocolVersions": crate::protocol::SUPPORTED_VERSIONS,
+            "capabilities": handshake.capabilities,
+            "serverInfo": handshake.server_info,
+        })
     }
 
     /// Handle `initialize` with version negotiation and optional profile binding.

@@ -90,9 +90,9 @@ fn parse_supported_versions_from_paren_format() {
 #[test]
 fn parse_supported_versions_from_supported_colon() {
     use crate::protocol::parse_supported_versions_from_error;
-    let msg = "Supported: 2024-11-05, 2024-10-07";
+    let msg = "Supported: 2024-11-05, 2025-03-26";
     let versions = parse_supported_versions_from_error(msg).unwrap();
-    assert_eq!(versions, vec!["2024-11-05", "2024-10-07"]);
+    assert_eq!(versions, vec!["2024-11-05", "2025-03-26"]);
 }
 
 #[test]

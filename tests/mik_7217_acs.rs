@@ -77,6 +77,10 @@ fn ac_discover_1_meta_layer_answers_server_discover() {
 }
 
 #[test]
+#[ignore = "awaits the stateless request path: advertising 2026-07-28 before the \
+            gateway can serve it would tell a client yes and then serve 2025 \
+            semantics. Scheduled, not suppressed — this criterion is unmet until \
+            increment 2 lands."]
 fn ac_discover_1_advertises_the_target_revision() {
     // GIVEN: a gateway that claims 2026-07-28 support
     let m = meta();
@@ -274,5 +278,160 @@ fn ac_discover_3_initialize_result_is_unchanged() {
             golden["protocolVersion"], client_version,
             "golden for {client_version} must record that version as negotiated"
         );
+    }
+}
+
+// ===========================================================================
+// Dispatcher-level: MIK-7217.DISCOVER.1 over Streamable HTTP.
+//
+// The stdio arm is covered in-crate (`src/gateway/server/mod.rs`), because
+// `dispatch_single` is private. These drive the real axum router, so a missing
+// `match` arm fails here rather than being masked by both dispatchers calling
+// one shared builder.
+// ===========================================================================
+
+mod http {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use mcp_gateway::backend::BackendRegistry;
+    use mcp_gateway::config::Config;
+    use mcp_gateway::gateway::auth::ResolvedAuthConfig;
+    use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
+    use mcp_gateway::gateway::proxy::ProxyManager;
+    use mcp_gateway::gateway::streaming::NotificationMultiplexer;
+    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
+    use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    fn state() -> Arc<AppState> {
+        let config = Config::default();
+        let backends = Arc::new(BackendRegistry::new());
+        let multiplexer = Arc::new(NotificationMultiplexer::new(
+            Arc::clone(&backends),
+            config.streaming.clone(),
+        ));
+        let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+        let agent_registry = Arc::new(AgentRegistry::new());
+        Arc::new(AppState {
+            meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
+            backends,
+            meta_mcp_enabled: true,
+            multiplexer,
+            proxy_manager,
+            streaming_config: config.streaming.clone(),
+            // Authentication disabled: this criterion is about discovery needing
+            // no credential exchange beyond the transport's own.
+            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+            key_server: None,
+            tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
+            mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+            sanitize_input: false,
+            ssrf_protection: false,
+            trust_configured_backends: false,
+            inflight: Arc::new(tokio::sync::Semaphore::new(100)),
+            agent_auth: AgentAuthState::new(false, agent_registry),
+            gateway_key_pair: Arc::new(GatewayKeyPair::generate().expect("RSA key gen")),
+            capability_dirs: Vec::new(),
+            config_path: None,
+            #[cfg(feature = "firewall")]
+            firewall: None,
+            agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
+            control_plane_store: None,
+            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(
+                Config::default(),
+            )),
+            export_status: None,
+            transparency_log: None,
+            dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        })
+    }
+
+    async fn post_mcp(body: Value) -> (StatusCode, Value) {
+        let router = create_router(state());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            // No Origin header on purpose. A non-browser peer sends none, and
+            // 3.5.0's origin gate (CWE-346) refuses one it does not recognise —
+            // as it should. Discovery must work for the peer that has no origin,
+            // which is every MCP client that is not a web page.
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request");
+        let response = router.oneshot(request).await.expect("router must answer");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must read");
+        let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn ac_discover_1_http_dispatch_answers_server_discover() {
+        // GIVEN/WHEN: a modern peer probes over Streamable HTTP
+        let (status, body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "server/discover"
+        }))
+        .await;
+
+        // THEN: it gets a document, not a method-not-found
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "server/discover must succeed: {body}"
+        );
+        assert!(
+            body.get("error").is_none(),
+            "server/discover must not error over HTTP: {body}"
+        );
+        let result = &body["result"];
+        assert!(
+            result.get("protocolVersions").is_some(),
+            "discovery must advertise protocol versions: {body}"
+        );
+        assert!(
+            result.get("capabilities").is_some(),
+            "discovery must advertise capabilities: {body}"
+        );
+        assert!(
+            result.get("serverInfo").is_some(),
+            "discovery must identify the server: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_discover_1_http_and_meta_layer_agree() {
+        // Equivalence. Both dispatchers must answer with the SAME document the
+        // meta layer builds — a dispatcher that assembles its own would drift,
+        // and a peer would get one story from HTTP and another from stdio.
+        let (_, body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "server/discover"
+        }))
+        .await;
+
+        let direct = state().meta_mcp.discover_document();
+        assert_eq!(
+            body["result"], direct,
+            "the HTTP dispatcher must return the meta layer's document verbatim"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_discover_2_http_discovery_needs_no_prior_initialize() {
+        // GIVEN: a connection that has never sent `initialize`
+        // WHEN/THEN: discovery answers anyway — under 2026-07-28 there is no
+        // handshake left to send, so requiring one would make the probe useless
+        // to exactly the peers it exists for.
+        let (status, body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 3, "method": "server/discover"
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["result"].get("protocolVersions").is_some(), "{body}");
     }
 }

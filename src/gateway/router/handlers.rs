@@ -526,6 +526,12 @@ pub(super) async fn meta_mcp_handler(
 
     // Route to appropriate handler
     let response = match method.as_str() {
+        // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
+        // a peer calls when it has no handshake to make.
+        "server/discover" => crate::protocol::JsonRpcResponse::success_serialized(
+            id,
+            state.meta_mcp.discover_document(),
+        ),
         "initialize" => state.meta_mcp.handle_initialize(
             id,
             params.as_ref(),

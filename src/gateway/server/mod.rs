@@ -1634,6 +1634,12 @@ impl Gateway {
         };
 
         let response = match method.as_str() {
+            // 2026-07-28 MUST. Answered before anything else and without a
+            // handshake, because on stdio this is also the backward-compatibility
+            // probe: a legacy server answers it with an error, not a document.
+            "server/discover" => {
+                JsonRpcResponse::success_serialized(id, meta_mcp.discover_document())
+            }
             "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
             "tools/list" => {
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
@@ -2284,6 +2290,64 @@ mod tests {
 
         assert_eq!(response["error"]["code"], -32600);
         assert_eq!(response["error"]["message"], "Missing id");
+    }
+
+    // ── MIK-7217: server/discover over stdio ───────────────────────────────
+    //
+    // Dispatcher-level on purpose. Both dispatchers call one builder, so a test
+    // that calls the builder proves nothing about whether either `match` routes
+    // to it — and a missing arm is exactly the regression this guards.
+
+    #[tokio::test]
+    async fn ac_discover_1_stdio_dispatch_answers_server_discover() {
+        let response = Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover"}),
+            "stdio-session",
+        )
+        .await
+        .expect("server/discover must return a response");
+
+        assert!(
+            response.get("error").is_none(),
+            "server/discover must not error on stdio: {response}"
+        );
+        let result = &response["result"];
+        assert!(
+            result.get("protocolVersions").is_some(),
+            "discovery must advertise protocol versions: {response}"
+        );
+        assert!(
+            result.get("capabilities").is_some(),
+            "discovery must advertise capabilities: {response}"
+        );
+        assert!(
+            result.get("serverInfo").is_some(),
+            "discovery must identify the server: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_discover_2_stdio_discovery_needs_no_prior_initialize() {
+        // The session argument is what the transport supplies today; the point
+        // is that no `initialize` ran before this call, and discovery answers
+        // anyway. Under 2026-07-28 there is no handshake to run.
+        let response = Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({"jsonrpc": "2.0", "id": 7, "method": "server/discover"}),
+            "never-initialized",
+        )
+        .await
+        .expect("discovery must answer without a handshake");
+
+        assert!(
+            response["result"].get("protocolVersions").is_some(),
+            "discovery must answer on a connection that never handshook: {response}"
+        );
     }
 
     // ── MIK-7252: stdio authorization ──────────────────────────────────────
