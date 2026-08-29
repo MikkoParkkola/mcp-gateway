@@ -491,4 +491,95 @@ mod http {
             assert!(session.is_some(), "modern={modern}: {body}");
         }
     }
+
+    #[tokio::test]
+    async fn ac_stateless_5_an_unknown_method_is_404_with_a_json_rpc_body() {
+        // The status distinguishes this from a legacy HTTP+SSE server that does
+        // not host the modern endpoint at all: that 404 has no JSON-RPC body,
+        // and a client uses the difference to decide whether to fall back.
+        let mut request = modern_tools_list(13);
+        request["method"] = json!("does/not/exist");
+        let (status, _, body) = post_mcp(request).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"]["code"], -32601, "{body}");
+        assert_eq!(
+            body["jsonrpc"], "2.0",
+            "the body is what tells this apart from a transport-level 404: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_10_an_undeclared_capability_is_named_in_the_refusal() {
+        // The gateway must not rely on a capability the client did not declare.
+        // When it needs one, the refusal says which — a client cannot fix what
+        // it is not told.
+        let mut request = modern_tools_list(14);
+        request["method"] = json!("sampling/createMessage");
+        let (status, _, body) = post_mcp(request).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], -32021, "{body}");
+        let required = &body["error"]["data"]["requiredCapabilities"];
+        assert!(
+            required
+                .as_array()
+                .is_some_and(|c| c.iter().any(|v| v == "sampling")),
+            "the refusal must name the capability that was missing: {body}"
+        );
+    }
+}
+
+// ===========================================================================
+// MIK-7215.STATELESS.7 — the gateway MUST NOT emit `notifications/message` for
+// a request that carried no `io.modelcontextprotocol/logLevel`.
+//
+// Satisfied by absence: the gateway emits no log notifications at all today
+// (searched 2026-08-29 — the only occurrence of the method name in `src/` is a
+// doc comment). An absence is a fine way to satisfy a MUST NOT, and a terrible
+// way to keep satisfying it, because the day someone adds emission nothing
+// says the rule exists.
+//
+// So the absence is pinned rather than assumed. When log notifications are
+// implemented, this test fails — and the fix is not to delete it but to replace
+// it with one that asserts the gate at the emission site.
+// ===========================================================================
+
+#[test]
+fn ac_stateless_7_the_gateway_emits_no_log_notifications() {
+    use std::path::Path;
+
+    fn scan(dir: &Path, hits: &mut Vec<String>) {
+        let entries = std::fs::read_dir(dir).expect("source tree must be readable");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, hits);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                for (n, line) in text.lines().enumerate() {
+                    // The emission shape, not the mention: a doc comment naming
+                    // the method is not an emission, and this test is about
+                    // what the gateway sends.
+                    if line.contains("\"notifications/message\"") {
+                        hits.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut hits = Vec::new();
+    scan(
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+        &mut hits,
+    );
+
+    assert!(
+        hits.is_empty(),
+        "the gateway now emits log notifications at {hits:?} — MIK-7215.STATELESS.7 \
+         requires that none is sent for a request carrying no \
+         `io.modelcontextprotocol/logLevel`. Enforce it at that site and replace \
+         this test with one that asserts the gate."
+    );
 }

@@ -154,3 +154,32 @@ pub const REMOVED_IN_2026_07_28: &[&str] = &[
     "logging/setLevel",
     "notifications/roots/list_changed",
 ];
+
+/// The client capability a method needs, if it needs one.
+///
+/// A server **MUST NOT** rely on a capability the client has not declared, so
+/// this is consulted before dispatch rather than discovered inside it — a
+/// handler that finds out halfway through has already had an effect.
+#[must_use]
+pub fn required_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "sampling/createMessage" => Some("sampling"),
+        "elicitation/create" => Some("elicitation"),
+        "roots/list" => Some("roots"),
+        _ => None,
+    }
+}
+
+impl RequestFields {
+    /// Whether the client declared a capability by name.
+    ///
+    /// Absent and explicitly-absent are the same answer: the specification's
+    /// rule is that the server may not rely on what was not declared, and a
+    /// capability the client did not mention was not declared.
+    #[must_use]
+    pub fn declares_capability(&self, name: &str) -> bool {
+        self.client_capabilities
+            .get(name)
+            .is_some_and(|v| !v.is_null())
+    }
+}

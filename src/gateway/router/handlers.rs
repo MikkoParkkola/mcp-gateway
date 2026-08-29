@@ -560,6 +560,24 @@ pub(super) async fn meta_mcp_handler(
             return build_response(rpc, &session_id, StatusCode::BAD_REQUEST);
         }
 
+        // A capability the client never declared. Checked before dispatch:
+        // a handler that discovers this halfway through has already acted.
+        if let Some(capability) = crate::protocol::meta::required_capability(&method)
+            && !fields.declares_capability(capability)
+        {
+            let mut rpc = crate::protocol::JsonRpcResponse::error(
+                Some(id.clone()),
+                -32021,
+                format!("client did not declare the '{capability}' capability"),
+            );
+            if let Some(ref mut error) = rpc.error {
+                error.data = Some(serde_json::json!({
+                    "requiredCapabilities": [capability],
+                }));
+            }
+            return build_response(rpc, &session_id, StatusCode::BAD_REQUEST);
+        }
+
         // Methods this revision removed. Refusing them is the difference
         // between claiming the revision and speaking it.
         if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method.as_str()) {
@@ -920,6 +938,20 @@ pub(super) async fn meta_mcp_handler(
     // travels on the error precisely so this line can honour it.
     let status = refusal_status(&response).unwrap_or(StatusCode::OK);
     if is_modern {
+        // An unimplemented method is 404 on this revision, not 200-with-error.
+        // The status is what a client uses to tell "this server does not have
+        // that method" from "this is not a modern endpoint at all" — and the
+        // JSON-RPC body is what tells it apart from a legacy transport's bare
+        // 404. Both halves are needed; neither alone decides it.
+        let status = if response
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == -32601)
+        {
+            StatusCode::NOT_FOUND
+        } else {
+            status
+        };
         // A stateless client has no handshake in which to learn who answered,
         // so every result says. And it holds no session, so it is sent no
         // session header — the legacy path below keeps both unchanged.
