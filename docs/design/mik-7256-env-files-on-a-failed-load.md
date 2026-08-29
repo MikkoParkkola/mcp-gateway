@@ -489,16 +489,33 @@ reason: `RwLock<Arc<EnvOverlay>>`, `get()` cheap on the request path, `set()`
 called once by an accepted reload.
 
 **Startup publishes the overlay its own load returned, never a second read of
-the same paths.** `Config::load` is `load_with_overlay` with
-`EnvOverlay::none()`, so the bytes it applied and validated are already in an
-`Evaluated`; `LiveEnv` is constructed from that value and handed to both the
-reload context and the executor. Re-parsing the configured paths to build the
-overlay would open the same window at boot that *One snapshot, read once*
-closes at reload: a file edited between the two reads gives a process holding
-one set of values and an overlay serving another, with the second parse's
-validation the only one anything sees. It would also duplicate the ordering,
-BOM and malformed-line rules, and a duplicated rule is one that gets fixed in
-one copy.
+the same paths.** The gateway's own startup calls `Config::load_evaluated`,
+which applies the env files to the process exactly as today AND returns the map
+it applied, as the same `Evaluated { config, overlay }` the reload path
+produces. `LiveEnv` is seeded from that value and handed to the reload context
+and the executor. `Config::load` is a thin wrapper that calls it and drops the
+overlay, so its signature and behaviour are unchanged for all 35 call sites,
+and the CLI paths that hold only a `Config` still have no overlay to pass —
+both of which the shape section below relies on.
+
+Re-parsing the configured paths to build the overlay would open the same window
+at boot that *One snapshot, read once* closes at reload: a file edited between
+the two reads gives a process holding one set of values and an overlay serving
+another, with the second parse's validation the only one anything sees. It
+would also duplicate the ordering, BOM and malformed-line rules, and a
+duplicated rule is one that gets fixed in one copy.
+
+**One read of the bytes, not one call.** `dotenvy::from_path_override` opens
+the file itself, so calling it and then building the map would be two reads
+however it is phrased. So the apply reads each file once into memory, parses
+that buffer once, applies the pairs to the process with override semantics in
+file order, and keeps the same pairs as the overlay's map. A DESIGN DECISION,
+named: startup stops delegating to `from_path_override` and performs the write
+itself. What is preserved is every observable — same order, same override
+precedence, same skip-if-absent, same warn on a failed file — and what is
+gained is that the process and the overlay cannot disagree, because they came
+from one buffer. `ENVFILE.6d` is the case that fails if this is implemented as
+two reads.
 
 **The overlay owns a key domain, or removal cannot work.** Startup applies the
 env files to the process, so a key deleted from a file at reload time is still
