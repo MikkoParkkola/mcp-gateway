@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The
+  revision removes the `initialize` handshake, protocol sessions and the
+  `Mcp-Session-Id` header, `ping`, `logging/setLevel` and server-initiated
+  requests; it adds `server/discover`, per-request metadata, multi-round-trip
+  requests, required result and cacheability fields, and the standard request
+  headers.
+
+  **The switch is off by default and stays off until the revision is served
+  completely.** With it off, a client asking for 2026-07-28 is refused with
+  `UnsupportedProtocolVersion` — an answer it can act on — rather than served
+  half a revision, where the half that works hides the half that does not.
+  Clients on 2025-11-25 and earlier are unaffected either way, and the gateway
+  serves both generations on one endpoint.
+
+  `server/discover` is answered regardless of the switch, on stdio and
+  Streamable HTTP. It is additive, and it is the only probe that works in both
+  directions once the handshake is gone.
+
+### Changed
+
+- **`2024-10-07` is no longer advertised as a supported protocol version.** It
+  is not a revision the specification has ever defined; it was introduced with
+  the first version-negotiation commit in January and has been offered to every
+  client since. It was inert for negotiation — no conforming client can request
+  a revision that does not exist — but `server/discover` publishes this list as
+  the gateway's own statement of what it speaks, which turns an unused constant
+  into a claim.
+
+- **`gateway_search` no longer emits ranking signals that never vary.** Thirteen
+  of sixteen were the constant `1.0` in every response. The per-tool ranking
+  block falls from 534 to 304 bytes.
+
+### Security
+
+- **Anomaly detection reports when it cannot see, instead of scoring a call
+  neutral.** It was keyed on the session, and a per-request session makes every
+  call look like a first call — scoring 0.5 against a 0.7 threshold, forever.
+  The control kept running and stopped protecting.
+
+- **Per-caller state is reclaimed on a deadline as well as on disconnect.** The
+  disconnect trigger fires on an SSE close or `DELETE /mcp`, neither of which
+  exists in the new revision, so every registered cleanup handler would simply
+  never run.
+
+- **A destructive call that cannot be confirmed is refused on the modern path.**
+  The gate proceeded on a warning when elicitation was unsupported *or there was
+  no session*; with sessions removed, every modern destructive call would take
+  that branch. The legacy path keeps its documented behaviour. The governed set
+  now comes from the `destructiveHint` annotation rather than one hardcoded
+  name.
+
+- **Multi-round-trip continuations are sealed, bound and single-use.** A
+  backend's opaque state is encrypted inside the gateway's own envelope rather
+  than handed to the client, bound to the caller and the original request, and
+  redeemable once.
+
+- **`tools/call` no longer drops a retry's `inputResponses` and
+  `requestState`.** Both were silently discarded, so an elicitation could never
+  complete and the destructive-confirmation gate ran without the answer it
+  exists to collect.
+
+- **Dynamic client registration declares `application_type`, and a returned
+  `iss` is validated before an authorization code is redeemed** (RFC 9207).
+  Persisted credentials gain an issuer-keyed storage key, since a credential is
+  not valid with an authorization server that never issued it.
+
 ## [3.5.0] - 2026-08-28
 
 ### Added

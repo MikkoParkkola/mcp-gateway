@@ -342,7 +342,7 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 ### Protocol and transport
 
-- **MCP version**: 2025-11-25 (latest spec)
+- **MCP version**: 2025-11-25, with 2026-07-28 available behind `server.modern_protocol` (off by default while its support is completed)
 - **Transports**: stdio, Streamable HTTP, SSE, WebSocket
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
 - **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
@@ -554,6 +554,6 @@ Full model: [LICENSES.md](LICENSES.md).
 
 ## Credits
 
-Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25.
+Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25, with 2026-07-28 available behind a switch.
 
 [Changelog](CHANGELOG.md) | [Releases](https://github.com/MikkoParkkola/mcp-gateway/releases)
