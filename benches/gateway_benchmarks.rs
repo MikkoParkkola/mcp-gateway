@@ -637,6 +637,83 @@ fn bench_semantic_search(_c: &mut Criterion) {}
 
 // ── criterion wiring ──────────────────────────────────────────────────────────
 
+
+/// NFR.PERF.1 / NFR.PERF.2 — what the 2026-07-28 path costs per request.
+///
+/// The requirement is a budget (P50 within 5%, P99 within 10% of 3.5.0), and a
+/// budget needs a number. These measure the work the modern path adds that the
+/// legacy path does not do at all: classifying a request from its metadata, and
+/// validating the mirrored headers against the body.
+///
+/// Both run per request on the hot path, so their cost is the release's
+/// per-request overhead — everything else the revision changed is a different
+/// shape of the same work rather than extra work.
+///
+/// NFR.PERF.2 says a performance change without a number does not ship. This is
+/// how header-first routing gets its number before anyone claims it is faster:
+/// `classify_request` here is the parse that routing would avoid.
+fn bench_modern_request_path(c: &mut Criterion) {
+    use mcp_gateway::protocol::headers::HeaderCheck;
+    use mcp_gateway::protocol::meta::classify_request;
+
+    let modern = serde_json::json!({
+        "name": "get_weather",
+        "arguments": { "location": "Helsinki" },
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": { "name": "bench", "version": "1.0.0" }
+        }
+    });
+    let legacy = serde_json::json!({
+        "name": "get_weather",
+        "arguments": { "location": "Helsinki" }
+    });
+
+    let mut group = c.benchmark_group("modern_request_path");
+
+    // The classification every request pays, modern or not.
+    group.bench_function("classify_modern", |b| {
+        b.iter(|| std::hint::black_box(classify_request(Some(&modern))));
+    });
+    group.bench_function("classify_legacy", |b| {
+        b.iter(|| std::hint::black_box(classify_request(Some(&legacy))));
+    });
+
+    // The header check, which only a modern request pays.
+    group.bench_function("validate_headers", |b| {
+        b.iter(|| {
+            let check = HeaderCheck {
+                header_protocol_version: Some("2026-07-28"),
+                body_protocol_version: Some("2026-07-28"),
+                header_method: Some("tools/call"),
+                body_method: "tools/call",
+                header_name: Some("get_weather"),
+                body_name: Some("get_weather"),
+            };
+            std::hint::black_box(check.validate())
+        });
+    });
+
+    // The same check when the name arrives sentinel-encoded, which is the
+    // expensive shape: it decodes before comparing.
+    group.bench_function("validate_headers_encoded_name", |b| {
+        b.iter(|| {
+            let check = HeaderCheck {
+                header_protocol_version: Some("2026-07-28"),
+                body_protocol_version: Some("2026-07-28"),
+                header_method: Some("tools/call"),
+                body_method: "tools/call",
+                header_name: Some("=?base64?SGVsbG8sIOS4lueVjA==?="),
+                body_name: Some("Hello, \u{4e16}\u{754c}"),
+            };
+            std::hint::black_box(check.validate())
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_tool_registry,
@@ -648,5 +725,6 @@ criterion_group!(
     bench_redactor,
     bench_budget_enforcer,
     bench_semantic_search,
+    bench_modern_request_path,
 );
 criterion_main!(benches);

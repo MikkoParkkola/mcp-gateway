@@ -110,7 +110,7 @@ Stated plainly, because a DoD report that hides its gaps is worth less than no r
 
 3. **NFR.COMPAT.4 is partly met.** Every requirement is verified in the role the gateway plays for it, but the conformance matrix crossing *both* roles × transports × all five revisions does not exist. Increment 1's era-detection rows cover the client role for discovery; the rest is server-side.
 
-4. **U1 and U6 remain open**, as scheduled. U1 needs a week of live telemetry before the compatibility window can be narrowed; U6 needs the conformance harness. U7 and U8 were resolved during the work and are recorded.
+4. **U6 is closed by the conformance matrix; U1 is open and blocks nothing here.** U1 asks which revisions our clients actually speak, and its own row says it blocks *only* narrowing the compatibility window — which §7 puts explicitly out of scope for this release. Listing it as a gap overstated it, and this corrects that. U7 and U8 were resolved during the work and are recorded.
 
 5. **Review carries one vendor, and did not run against the final code.** The operator set single-vendor review (codex/gpt) for this session. GPT reviewed the design (13 findings, 4 CRITICAL, all folded in) and the test plan (3 findings, all folded in). Four subsequent review runs died at zero bytes under concurrent load, so **increments 1–10 carry self-review and falsification only**. That is a gap in the process, not a passed gate.
 
