@@ -236,6 +236,26 @@ once the decision table proves a case where it does not.
 
 ---
 
+## U8 — RESOLVED: the era pairs are constructible
+
+**Checked 2026-08-29.** The design made this the first thing to run, because a continuation
+contract that cannot be exercised is a contract nobody can hold.
+
+`Transport` is a four-method trait, two of them defaulted (`src/transport/mod.rs:20`), and the repo
+already builds fixtures against it — `MockTransport` and `RecoveryMock` in `src/backend/tests.rs`
+are eleven lines each. A backend that answers with an `InputRequiredResult` is the same shape with a
+different constant. Both client eras are constructible against the real router, which increments 2
+and 3 already demonstrate: a legacy request is a bare JSON-RPC body, a modern one is the same body
+with the protocol fields and the mirrored headers.
+
+So all four pairs can be built in-process, with no live peer and no network. **The contract stands
+and this increment proceeds.**
+
+What the check does *not* say, stated so it is not read as more than it is: that the pairs are
+constructible is not that the bridge is correct. It removes the reason to stop, and nothing else.
+
+---
+
 ## Later increments — planned, not yet detailed
 
 Listed so the shape of the whole is visible and so no increment is quietly dropped. Each gets its own

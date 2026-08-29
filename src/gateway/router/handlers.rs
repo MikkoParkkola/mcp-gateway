@@ -645,7 +645,30 @@ pub(super) async fn meta_mcp_handler(
             code_mode_url_active,
         ),
         "tools/call" => {
-            let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+            let (tool_name, mut arguments) = extract_tools_call_params(params.as_ref());
+
+            // A multi-round-trip retry carries `inputResponses` and
+            // `requestState` as siblings of `name` and `arguments`, and this
+            // extraction returned only the pair — so both were dropped in
+            // silence. A modern client's elicitation never completed, and the
+            // confirmation gate on a destructive tool ran without the answer it
+            // exists to collect (MIK-7212).
+            //
+            // Carried on the arguments object rather than through a widened
+            // signature: four call sites take that pair, and a fifth return
+            // value is a thing three of them would ignore by default. The
+            // backend sees the fields where the specification puts them.
+            let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+            if retry.is_retry()
+                && let Some(object) = arguments.as_object_mut()
+            {
+                if let Some(responses) = retry.input_responses {
+                    object.insert("inputResponses".to_string(), responses);
+                }
+                if let Some(state) = retry.request_state {
+                    object.insert("requestState".to_string(), serde_json::Value::String(state));
+                }
+            }
 
             if is_admin_meta_tool(tool_name)
                 && let Err(e) = require_admin_tool_access(client.as_ref(), tool_name)
