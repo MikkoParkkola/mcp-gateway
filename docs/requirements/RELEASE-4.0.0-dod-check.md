@@ -190,6 +190,26 @@ to `check_request` landed on `check_response` too, and a forced-block landed in 
 entirely. Verifying each batch rather than at the end is what turned both into build errors instead
 of shipped defects.
 
+### Round 8's own controls, and the two that were not controls
+
+Seven probes against the round-8 repairs. Five failed only their own rows on the first attempt.
+The other two are the reason this step exists:
+
+| Control | Probe | Rows that failed |
+|---|---|---|
+| Unscoreable calls refused | blind no longer forces a block | 1 |
+| Identity is real or absent | empty string used as an identity | 2 |
+| Modern era declared broadly | only exactly-served versions count | 1 |
+| Identity map bounded | ceiling removed | 1 |
+| Duplicate header refused | resolved to the first value instead | 1 |
+
+- **The bound probe found a deadlock in the fix it was testing.** The eviction path held a shard guard from the map's iterator and then asked the same shard for a write, so the thread blocked against itself. It could only run once the map reached 100,000 entries, which no ordinary test does — the row written to prove the ceiling existed is the only thing that reached it, and it hung for six minutes rather than failing. Fixed by binding the victim in its own statement so the guard drops first.
+- **The duplicate-header row was not a control at all.** It passed whether or not the fix was present, because its body declared itself modern and the request was therefore refused by the duplicate check *inside* the modern block — a different mechanism from the classification the row is named for. Rewritten to use a body with no protocol metadata, which is the only shape where misreading the header actually sends the request down the legacy path. It now fails when reverted.
+
+A hung test also taught something about reading a build: `cargo test` with a live test binary and no
+compiler children emits nothing, so a log filtered for `^test result` looks identical to a job that
+died. That was misread twice here before anyone looked at the process tree.
+
 ## What is honestly NOT finished
 
 Five findings remain open. None is reachable by a client while `server.modern_protocol` defaults off.
