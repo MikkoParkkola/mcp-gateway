@@ -135,10 +135,11 @@ Nine repairs, each with a probe above, re-checked by the vendor that raised them
 Four improvements were also taken: per-key mint budget, explicit completion release, duplicate-key-id
 rejection, and one generic client-facing refusal message.
 
-## Findings: 31 of 36 closed
+## Findings by area
 
-Seven review rounds produced 36 findings. Thirty-one are closed, each with a probe that makes its
-fix fail. The five that remain are named below with the reason each is still open.
+The totals are stated once, at the top of this document; this section only says where the closed
+findings fell and what each area got wrong. The ones still open are named under "What is honestly
+NOT finished".
 
 | Area | Closed | What was wrong |
 |---|---|---|
