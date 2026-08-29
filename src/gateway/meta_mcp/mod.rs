@@ -951,6 +951,16 @@ impl MetaMcp {
 // ============================================================================
 
 impl MetaMcp {
+    /// Build the `server/discover` document (MCP 2026-07-28).
+    ///
+    /// Not yet implemented — returns an empty object so the acceptance tests
+    /// for MIK-7217 fail on their assertions rather than on a missing symbol.
+    /// A compile error cannot tell a missing feature from a broken test.
+    #[must_use]
+    pub fn discover_document(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
     /// Handle `initialize` with version negotiation and optional profile binding.
     pub fn handle_initialize(
         &self,
