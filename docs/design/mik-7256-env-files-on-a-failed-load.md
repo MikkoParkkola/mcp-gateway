@@ -107,14 +107,17 @@ temporary map and consulted by `${VAR}` expansion and by validation, as in C,
 so nothing is written while the outcome is still unknown. When the reload is accepted —
 after validation, after the posture check, after the shutdown abort could
 still have fired — the files are applied for real with
-`dotenvy::from_path_override`, exactly as startup applies them.
+the captured map, with the same later-wins precedence startup gets from
+chained `dotenvy::from_path_override` calls. The commit applies what evaluation
+read; it does not re-read the files.
 
 **Chosen: D.** The ticket's invariant is that a *failed* reload leaves the
 environment untouched, and D holds it: on every failing path the map is
 dropped and nothing was written. On the succeeding path the process ends up
-where a restart would have put it, so every lazy `env:` reader — capability
-credentials, bearer token, api keys, agent secrets, admin token — keeps
-working with no plumbing at all. After D the finding cannot be stated: there
+where a restart would have put it, so the one reader that resolves lazily —
+capability credentials, through `fetch_credential` — keeps working with no
+plumbing at all. The auth family resolves once at startup and is restart-only
+regardless; the narrowing that follows is stated under Shape. After D the finding cannot be stated: there
 is no reload outcome that mutates the environment without proceeding.
 
 ## What D costs
@@ -213,20 +216,86 @@ through `validate` on the same parameter. Without this a candidate that adds
 validation, because the value is not in the process yet — the hot-add case,
 failing at the last gate before it would have worked.
 
-The lazy `env:` readers — `fetch_credential`
-(`src/capability/executor/credentials.rs:20-56`), `resolve_key`,
-`resolved_hs256_secret`, `resolve_admin_token` — are **not** touched. They read
-the process environment at call time, and by the time they run on an accepted
-config the apply has happened. That is the whole reason D exists: the
-alternative is threading an overlay handle into the capability executor and
-four resolver methods for a value the process will hold anyway.
+**One reader is lazy, and it is the one that matters.** `fetch_credential`
+(`src/capability/executor/credentials.rs:22-56`) reads `std::env::var` on every
+call, for all three conventions (`env:VAR`, `{env.VAR}`, a bare `UPPER_SNAKE`
+name). It is not touched: by the time it runs on an accepted config the apply
+has happened, and the alternative is threading an overlay handle into the
+capability executor for a value the process will hold anyway. That is the whole
+reason D exists.
 
-**The apply happens on acceptance.** `load_config_patch` evaluates the
-candidate with an overlay and returns it; the reload path applies the env files
-with `load_env_files_from_paths` at the point the reload is committed — after
-validation, after the posture refusal (`src/config_reload/mod.rs:1478`), after
-the shutdown abort. One call, on one path, and it is the same function startup
-uses. Every earlier exit drops the overlay and leaves the process untouched.
+`resolve_key`, `resolved_hs256_secret` and `resolve_admin_token` are **not**
+lazy, and an earlier draft of this paragraph said they were. They run exactly
+once, at startup: `ResolvedAuthConfig::try_from_config` resolves the bearer
+token and every API key eagerly (`src/gateway/auth.rs:126-127,148`) and is
+constructed once (`src/gateway/server/mod.rs:912`), beside the key-server admin
+token (`:957`) and each agent HS256 secret (`:982`). Nothing reconstructs them
+on a reload — and nothing should, because `auth`, `key_server` and `agent_auth`
+are all in `tracked_sections` (`src/config_reload/mod.rs`), which makes an edit
+to any of them restart-only by an older decision than this one.
+
+So the narrowing, stated rather than implied: **a successful reload rotates
+capability credentials and nothing else.** An operator who rotates
+`auth.bearer_token` gets a reload that validates against the overlay and a
+`restart_required` outcome, exactly as they do today for any auth edit. Making
+those holders atomically reloadable is a larger change to the restart-only
+boundary, it is what the review asked for, and it is OUT of this change's
+scope — recorded as an observation, not filed, because nobody has asked for
+live auth rotation.
+
+**The apply happens on acceptance — and acceptance, not a non-empty diff, is
+what gates it.** `load_config_patch` evaluates the candidate with an overlay and
+returns it; the reload path applies at the point the reload is committed, after
+validation, after the posture refusal (`src/config_reload/mod.rs:1500`), after
+the shutdown abort (`:1517-1522`). Every earlier exit drops the snapshot and
+leaves the process untouched.
+
+The word *acceptance* is doing work the first draft left to the diff, and the
+review found the gap. `load_config_patch` returns `Ok(None)` when the patch is
+empty (`:1242-1243`) and `reload_outcome_locked` turns that into a `no_changes`
+outcome and returns (`:1442-1450`) — a successful reload that never reaches the
+publish. A pure credential rotation IS that case: the operator edits only the
+env file, the watcher fires (`:1225`, "env file changed, triggering reload"),
+the config bytes are identical, the patch is empty. Hanging the apply off the
+non-empty branch would leave the change's own success case broken — the
+rotation would take effect at the next reload that happened to change something
+else, or never.
+
+So the apply is a step of the accepted reload, not a step of applying a patch.
+Both accepting exits run it: the `no_changes` return and the published one. The
+empty patch stops being an early exit from the function and becomes what it
+already is, a property of the patch.
+
+**One snapshot, read once.** Evaluation and commit MUST NOT each read the files
+from disk. `EnvOverlay::from_paths` produces the map; that same map is what the
+commit applies, through a `set_var` loop over its entries rather than a second
+`load_env_files_from_paths` call. Two independent reads would leave a window in
+which the bytes validated and the bytes applied differ — a rotation landing
+between them applies a value nothing checked. The overlay is also what makes
+the two agree on *meaning*: it is built cumulatively, each file's `${VAR}`
+references resolving against the entries earlier files already contributed and
+falling back to the process, which is what the chained `from_path_override`
+calls do at startup. A per-file table with no cumulative view resolves a
+cross-file reference from the stale process value instead.
+
+**Where the apply sits: after the last abort, immediately before the publish.**
+The last way an accepted reload can still fail is the shutdown abort
+(`:1517-1522`), which fires after `apply_patch` has already stopped and started
+backends. The apply goes below it and above `self.live_config.set(new_config)`
+(`:1524`). `set` is a lock write and cannot fail (`:281-283`), and there is no
+await between the two, so no reader observes the new environment paired with the
+old config, and no failure path exists between mutating the process and
+committing the config. Apply-before-`apply_patch` would read better for backends
+this reload restarts, and would reopen the ticket's exact defect: a shutdown
+abort would leave the environment mutated with nothing published.
+
+Named residual: a backend that this same reload restarts is spawned before the
+new values land, so a `${VAR}` in its `env` map that the rotation changed
+carries the old value until it next restarts. Bounded, not general — children
+get `env_clear()` and only the keys the config names
+(`src/transport/stdio.rs:40,71-73`), so nothing leaks in by inheritance, and a
+capability credential is unaffected because `fetch_credential` reads per call.
+Pinned by a test rather than left as a caveat.
 
 **Both the overlay and the apply read the RUNNING gateway's `env_files` list,
 never the candidate's.** A candidate is an unvalidated file on disk, and its
@@ -240,7 +309,28 @@ passes the list the running gateway started with. A path the candidate ADDS is
 parsed by nobody and applied by nobody — it takes effect at the next restart,
 which is what adding a path already required (below). A path the candidate
 REMOVES stays applied until restart, matching the fact that nothing unsets a
-variable today either. This is also why `Config::load` keeps reading the list
+variable today either.
+
+That leaves the hot-add workflow silent, and it should not be: an operator who
+adds a path, a credential and a backend in one edit gets a reload that succeeds
+with the credential resolved to empty. `${VAR}` expansion yields the empty
+string rather than failing, so nothing refuses and the backend registers
+broken. The design does not change what is applied — the restart-only rule
+stands — but it does add a warn-level log when a `${VAR}` resolves empty at
+reload while a candidate-added, unread env file defines that name. It names the
+key and the file, never the value. The `env:` form needs no such log: it
+resolves through `validate_env_reference`, which refuses, so the operator is
+told by the refusal.
+
+The same asymmetry answers the admin-UI write path, which revalidates through
+`write_config` (`src/config_persistence.rs:42`) against the running
+environment: an edit referencing a variable only a candidate-added env file
+supplies is rejected in the `env:` form and warned in the `${VAR}` form. That
+is the restart-only rule reaching the UI, not a defect. An overlay-aware
+write-validation path — resolving a candidate against files the running process
+has never read — would let the UI accept exactly the configuration a restart
+would need, and it is OUT of scope for the same reason making Figment's env
+layer overlay-aware is. This is also why `Config::load` keeps reading the list
 out of the file: at startup the config on disk *is* the running config, and
 there is no earlier list to prefer.
 
@@ -286,10 +376,25 @@ readers satisfy it today, found by reading every caller of `Config::load`,
   `ConfigMutation::Rejected` having changed no file and already changed the
   environment. Found by review; the first draft named only `load_config_patch`.
 
-Both supply the path list from the config the gateway is currently serving —
-`load_config_patch` from the running config the reload manager already holds,
-the admin-UI path from the same handle it uses to publish the reload. Neither
-reads `env_files` out of the candidate.
+Both supply the path list from **the config the running process actually
+applied at startup**, not from the published snapshot and not from the
+candidate. `LiveConfig` already keeps that second snapshot beside the published
+one — `running`, "what the running process actually applied, fixed at startup"
+(`src/config_reload/mod.rs:228-238`), reached through `running()` (`:253`).
+`load_config_patch` already takes `&Arc<LiveConfig>` (`:1233-1235`) and
+`mutate_and_reload_outcome_within` is a `ReloadContext` method with
+`live_config` on `self` (`:1258-1262`), so the list arrives at both sites with
+no new plumbing.
+
+`running()` and not `get()`, and the difference is the whole point: the
+published snapshot can carry a restart-only edit the process never applied. If
+the list came from `get()`, a successful reload that ADDED an env-file path
+would leave that path in the published config, and the NEXT reload would parse
+and apply its contents — while `pending_restart_fields` was still telling the
+operator a restart was required. The file would activate before the restart it
+was documented to need, with nobody having validated it. Pinned by a test on
+the reload that FOLLOWS a path-adding reload, not just on the path-adding
+reload itself.
 
 `load_config_or_default` keeps its signature — five of its seven callers are
 CLI commands (`src/commands/setup.rs`, `src/commands/add_remove.rs`) where
@@ -383,7 +488,7 @@ nothing the gateway can honestly say so, and the message at
 `src/config_reload/mod.rs:1478` was deliberately weakened over three review
 rounds because it could not. Still out: it changes user-visible security
 messaging and the tests guarding it assert the ABSENCE of those phrases, so
-they keep passing either way. Disposal: filed as a follow-up.
+they keep passing either way. Disposal: filed as a follow-up, MikkoParkkola/mcp-gateway#463.
 
 **`load_config_or_default` turning a config error into `Config::default()`.**
 `src/config_persistence.rs:14-23` logs a warning and returns defaults for any
@@ -392,8 +497,9 @@ result to disk — a YAML syntax error in a config an operator is editing can
 replace it with defaults. Pre-existing, on a path this change does not create,
 and `load_existing_or_default` (`:29-35`) already shows the fallible shape a
 fix would take. This change avoids *adding* to it by keeping the overlay
-builder infallible. Disposal: filed as a ticket, because whether the admin
-path should refuse rather than default is an operator's call, not a repair.
+builder infallible. Disposal: filed as a ticket, MikkoParkkola/mcp-gateway#462, because
+whether the admin path should refuse rather than default is an operator's call,
+not a repair.
 
 ## Open questions
 
