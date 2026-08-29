@@ -3,6 +3,7 @@
 
 //! MCP Protocol types (version 2025-11-25)
 
+pub mod era;
 mod messages;
 mod negotiate;
 mod types;

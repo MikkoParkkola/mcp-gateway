@@ -435,3 +435,91 @@ mod http {
         assert!(body["result"].get("protocolVersions").is_some(), "{body}");
     }
 }
+
+// ===========================================================================
+// MIK-7217.DISCOVER.4 — as a client, the gateway MUST determine each backend's
+// era by probing `server/discover` first, and MUST treat ANY non-modern
+// outcome — arbitrary error, silence, timeout — as legacy. Only a recognised
+// modern error proves a modern peer.
+//
+// These were written after the classifier, which is a process violation. The
+// falsifier probe that recovers from it is recorded in the commit: the
+// classifier was inverted, every row below failed, and it was restored.
+// ===========================================================================
+
+mod era {
+    use mcp_gateway::protocol::era::{
+        Era, HEADER_MISMATCH, MISSING_REQUIRED_CLIENT_CAPABILITY, ProbeOutcome,
+        UNSUPPORTED_PROTOCOL_VERSION, classify,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn ac_discover_4_a_discovery_document_means_modern() {
+        let outcome = ProbeOutcome::Result(json!({
+            "protocolVersions": ["2026-07-28"],
+            "capabilities": {},
+            "serverInfo": { "name": "peer", "version": "1.0.0" }
+        }));
+        assert_eq!(classify(&outcome), Era::Modern);
+    }
+
+    #[test]
+    fn ac_discover_4_a_recognised_modern_error_means_modern() {
+        // The boundary row. A peer that answers `UnsupportedProtocolVersion`
+        // has implemented this revision — it is telling us which versions it
+        // speaks. Reading that as legacy would downgrade a peer that was ready
+        // to talk, and the tempting implementation ("any error means legacy")
+        // does exactly that.
+        for code in [
+            UNSUPPORTED_PROTOCOL_VERSION,
+            HEADER_MISMATCH,
+            MISSING_REQUIRED_CLIENT_CAPABILITY,
+        ] {
+            assert_eq!(
+                classify(&ProbeOutcome::Error(code)),
+                Era::Modern,
+                "error {code} is defined by 2026-07-28, so only a modern peer emits it"
+            );
+        }
+    }
+
+    #[test]
+    fn ac_discover_4_method_not_found_means_legacy() {
+        // The honest legacy answer: the method does not exist there.
+        assert_eq!(classify(&ProbeOutcome::Error(-32601)), Era::Legacy);
+    }
+
+    #[test]
+    fn ac_discover_4_an_arbitrary_error_means_legacy() {
+        // The sloppy legacy answer. The specification allows a legacy server to
+        // reject with "an implementation-defined error", so no particular code
+        // can be relied on — which is why modernity needs positive evidence.
+        for code in [-32603, -32000, -1, 42] {
+            assert_eq!(
+                classify(&ProbeOutcome::Error(code)),
+                Era::Legacy,
+                "error {code} is not defined by 2026-07-28, so it is no evidence of modernity"
+            );
+        }
+    }
+
+    #[test]
+    fn ac_discover_4_silence_means_legacy() {
+        // The common answer, and the one that makes this asymmetric. A peer we
+        // could not reach is not thereby modern; treating it as modern would
+        // send it requests it cannot parse.
+        assert_eq!(classify(&ProbeOutcome::NoAnswer), Era::Legacy);
+    }
+
+    #[test]
+    fn ac_discover_4_a_result_without_versions_is_not_a_discovery_document() {
+        // Some other server's idea of what `server/discover` means. A result
+        // alone is not evidence; the document has to say what it speaks.
+        assert_eq!(
+            classify(&ProbeOutcome::Result(json!({ "hello": "world" }))),
+            Era::Legacy
+        );
+        assert_eq!(classify(&ProbeOutcome::Result(json!({}))), Era::Legacy);
+    }
+}
