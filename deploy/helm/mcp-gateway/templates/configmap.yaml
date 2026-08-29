@@ -6,4 +6,44 @@ metadata:
     {{- include "mcp-gateway.labels" . | nindent 4 }}
 data:
   gateway.yaml: |
-    {{- toYaml .Values.config | nindent 4 }}
+    {{- /*
+      A pod binds 0.0.0.0 — one that binds loopback receives nothing — and the
+      gateway refuses to serve when a network-reachable surface needs no
+      credential. So exactly one of the two answers below is rendered, and the
+      chart picks it rather than asking the operator to keep two settings
+      consistent by hand. Setting the mesh flag while a credential block was
+      still rendered produced an unresolvable env:MCP_GATEWAY_TOKEN and a
+      crash-looping pod.
+    */}}
+    {{- $mode := .Values.auth.mode }}
+    {{- if not (has $mode (list "credential" "mesh")) }}
+    {{- fail (printf "auth.mode must be \"credential\" or \"mesh\", got %q. A value neither template recognises used to render a credential block with no Secret behind it, which is a crash-looping pod rather than an install error." $mode) }}
+    {{- end }}
+    {{- $cfg := deepCopy (.Values.config | default dict) }}
+    {{- if not $cfg.server }}
+    {{- fail "config.server must set host and port: the chart writes the posture answer into that section, and overriding config without it renders a gateway that cannot be reasoned about." }}
+    {{- end }}
+    {{- if eq $mode "mesh" }}
+    {{- $_ := unset $cfg "auth" }}
+    {{- $_ := set $cfg.server "allow_unauthenticated_network_bind" true }}
+    {{- else }}
+    {{- $_ := set $cfg "auth" (dict "enabled" true "bearer_token" "env:MCP_GATEWAY_TOKEN" "public_paths" (list "/health")) }}
+    {{- /* And the mesh override is REMOVED, not merely left unset. The two modes
+           are described as mutually exclusive; a value carried over from
+           config.server would leave a credential deployment with the escape
+           hatch still on, warning on every start about a check it is not
+           relying on. */}}
+    {{- $_ := unset $cfg.server "allow_unauthenticated_network_bind" }}
+    {{- end }}
+    {{- /* The name clients dial. On a 0.0.0.0 bind — the only bind a pod can
+           be reached on — the Host gate admits a NAME only when it is declared,
+           and refuses every other one as a rebinding attempt. Numeric probes are
+           admitted regardless, so leaving this unset reads as a healthy gateway
+           that answers no caller by name. The chart knows its own Service and
+           namespace, so it declares them; set config.server.public_url to the
+           ingress hostname when one fronts this pod. Exactly ONE name is
+           admitted and it must be the one callers use. */}}
+    {{- if not $cfg.server.public_url }}
+    {{- $_ := set $cfg.server "public_url" (printf "http://%s.%s.svc.cluster.local:%v" (include "mcp-gateway.fullname" .) .Release.Namespace .Values.service.port) }}
+    {{- end }}
+    {{- toYaml $cfg | nindent 4 }}

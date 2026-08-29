@@ -48,9 +48,16 @@ trap cleanup EXIT
   HOME="$home" "$bin" init --profile local --output gateway.yaml >/dev/null
 )
 
+# Mirrors deploy/single-node/docker-compose.yaml, including the reason. A
+# container must bind 0.0.0.0 to receive anything, and the init config keeps
+# /mcp public so tool calls work — which is a reachable surface needing no
+# credential, and the gateway refuses to serve it. The boundary here is the
+# publish above: 127.0.0.1 only, so nothing off this host reaches the port.
+# Without this the smoke exits instead of proving health and a tool call.
 docker run -d \
   --name "$container" \
   -p "127.0.0.1:$port:39400" \
+  -e MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND=true \
   -v "$work/gateway.yaml:/config.yaml:ro" \
   -v "$work/capabilities:/capabilities:ro" \
   "$image" \
@@ -71,6 +78,33 @@ if ! curl -fsS "$health_url" >/dev/null; then
   exit 1
 fi
 
+# /health reports "healthy" as soon as the listener binds; capabilities load in
+# a background task that deliberately waits for that bind. Invoking on health
+# alone races the load and fails with "Not found: 'gateway'". Wait for the
+# readiness the admin health view reports — a backend that never loads still
+# fails this smoke. The product gap making it necessary is MIK-7268.
+admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" | head -1)"
+[[ -n "$admin_token" ]] || { echo "could not read admin token from gateway.yaml" >&2; exit 1; }
+capabilities_ready=""
+for _ in $(seq 1 150); do
+  if curl -fsS -H "Authorization: Bearer $admin_token" "$health_url" 2>/dev/null \
+    | python3 -c 'import json,sys
+try:
+    b = json.load(sys.stdin).get("capability_backend") or {}
+except Exception:
+    sys.exit(1)
+sys.exit(0 if "weather_current" in (b.get("capabilities") or []) else 1)'; then
+    capabilities_ready="yes"
+    break
+  fi
+  sleep 0.2
+done
+if [ -z "$capabilities_ready" ]; then
+  echo "capability backend never exposed weather_current" >&2
+  docker logs "$container" >&2 || true
+  exit 1
+fi
+
 cat >"$tmp/invoke.json" <<'JSON'
 {
   "jsonrpc": "2.0",
@@ -79,7 +113,7 @@ cat >"$tmp/invoke.json" <<'JSON'
   "params": {
     "name": "gateway_invoke",
     "arguments": {
-      "server": "capabilities",
+      "server": "gateway",
       "tool": "weather_current",
       "arguments": {
         "latitude": 60.1699,
@@ -95,23 +129,7 @@ curl -fsS \
   --data-binary "@$tmp/invoke.json" \
   "$mcp_url" >"$tmp/response.json"
 
-python3 - "$tmp/response.json" <<'PY'
-import json
-import sys
-
-payload = json.load(open(sys.argv[1], encoding="utf-8"))
-if "error" in payload:
-    raise SystemExit(f"JSON-RPC error: {payload['error']}")
-content = payload.get("result", {}).get("content", [])
-if not content:
-    raise SystemExit("missing MCP result content")
-text = content[0].get("text")
-if not text:
-    raise SystemExit("missing MCP text content")
-inner = json.loads(text)
-if not isinstance(inner, dict):
-    raise SystemExit("weather_current returned non-object payload")
-PY
+python3 "$repo_root/scripts/dev/assert_capability_response.py" "$tmp/response.json"
 
 echo "docker smoke passed on http://127.0.0.1:$port"
 echo "workdir: $tmp"

@@ -3,6 +3,7 @@
 //! Gateway server implementation
 
 pub mod auth;
+pub(crate) mod authz;
 pub(crate) mod destructive_confirmation;
 mod differential;
 mod http_error;
@@ -29,6 +30,7 @@ pub use oauth::{
 };
 pub use proxy::ProxyManager;
 pub use server::Gateway;
+pub(crate) use server::{next_start_refusal, reload_posture_refusal};
 pub use streaming::{NotificationMultiplexer, TaggedNotification};
 pub use webhooks::WebhookRegistry;
 

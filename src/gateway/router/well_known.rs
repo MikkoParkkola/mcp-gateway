@@ -60,7 +60,7 @@ use super::AppState;
 
 /// `true` when `host` names the loopback interface, for which advertising an
 /// `http` origin is RFC-legal (OAuth loopback exception).
-fn is_loopback_host(host: &str) -> bool {
+pub(super) fn is_loopback_host(host: &str) -> bool {
     // Strip an IPv6 literal's brackets before parsing (`[::1]` -> `::1`).
     let bare = host
         .strip_prefix('[')
