@@ -1159,13 +1159,15 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
+            subscriptions: Arc::new(
+                crate::gateway::subscription_registry::SubscriptionRegistry::new(
+                    crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
+                ),
+            ),
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
             dashboard_bootstrap: std::sync::Arc::new(
-subscriptions: Arc::new(
-    crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-),
                 crate::gateway::auth::DashboardBootstrap::new(),
             ),
         });

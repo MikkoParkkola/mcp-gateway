@@ -389,7 +389,6 @@ pub fn create_sse_response(
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
 }
 
-
 /// The response body of a `subscriptions/listen` request.
 ///
 /// An SSE stream that stays open, per the transport specification: the
@@ -412,7 +411,9 @@ pub fn subscription_stream(
     let stream = stream! {
         // The acknowledgement rides the stream it opens, so a client has one
         // thing to read rather than a body and then a stream.
-        yield Ok(Event::default().event("message").data(ack));
+        // Annotated because this function erases the stream into a
+        // `Response`, so nothing else pins the error type.
+        yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
 
         loop {
             match listener.recv().await {

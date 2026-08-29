@@ -143,9 +143,6 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
-subscriptions: Arc::new(
-    crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-),
         tls_enabled: {
             let c = state.live_config.get();
             // Also when a proxy terminates TLS in front: the browser speaks

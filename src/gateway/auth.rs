@@ -815,9 +815,6 @@ pub struct AuthState {
     pub key_server: Option<Arc<KeyServer>>,
     /// Single-use value that opens the dashboard from a printed link.
     pub dashboard_bootstrap: Arc<DashboardBootstrap>,
-subscriptions: Arc::new(
-    crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-),
     /// Whether this listener speaks TLS, so the session cookie can be `Secure`.
     pub tls_enabled: bool,
 }
@@ -1558,9 +1555,6 @@ mod tests {
                 auth_config: Arc::new(config),
                 key_server: None,
                 dashboard_bootstrap: bootstrap,
-subscriptions: Arc::new(
-    crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-),
                 tls_enabled: false,
             },
             printed,

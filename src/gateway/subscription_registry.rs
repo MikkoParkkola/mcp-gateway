@@ -31,6 +31,13 @@ use crate::protocol::subscriptions::{ListenRequest, NotificationKind};
 ///
 /// A slow reader is disconnected rather than quietly starved, so this only has
 /// to absorb an ordinary burst.
+/// How many `subscriptions/listen` streams may be open at once.
+///
+/// A ceiling rather than a configured value because the specification's own
+/// guidance is that a server must not assume a client closes what it opens:
+/// this is the bound that makes an abandoned stream cost something finite.
+pub const DEFAULT_MAX_LISTENERS: usize = 256;
+
 const CHANNEL_DEPTH: usize = 256;
 
 /// Whether a filter asked for this notification.
