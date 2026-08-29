@@ -97,3 +97,29 @@ The finder-unavailable clock under the repair protocol started at the round-18 l
    so a stamp minted against the older diff does not cover what is being pushed. Then the
    DoD comment on each ticket.
 7. Open the PR, land it, then §P5 housekeeping.
+
+## Design events during implementation (§P3)
+
+Decisions taken while implementing MIK-7256 that the design did not make, named here at
+the moment they were made rather than discovered in review.
+
+**The overlay reaches every lazily-resolved reader, not only the ones a test reaches.**
+`fetch_credential`, `auth.bearer_token`, `api_keys[].key`, `agent_auth.hs256_secret`,
+`key_server.admin_token`, `SecretResolver::resolve`'s `{env.NAME}` and
+`validate_env_reference` all take the overlay. The eight test rows exercise a subset. A
+reader still calling `std::env::var` directly reintroduces this defect in a different
+spelling, so shipping only the tested subset would deliver the failed-reload guarantee on
+some paths and not others. This widens the diff on a branch already at final review, and
+that cost is accepted deliberately.
+
+**Startup resolves configuration through `Config::load_evaluated`, which is fallible, and
+a malformed env file terminates startup.** `Config::load` and `load_config_or_default`
+are untouched, so the design's objection — that a fallible startup routes a typo into
+`load_config_or_default`'s swallow at `src/config_persistence.rs:14-23` and yields
+`Config::default()` — does not apply: the swallow is on a path this change does not use.
+The production entry point moves onto `load_evaluated`; a `load_evaluated` nothing calls
+would leave the defect in place while the tests passed.
+
+**The malformed-line diagnostic is rebuilt, not forwarded.** `dotenvy::Error::LineParse`
+echoes the offending line in its `Display`. The diagnostic carries file, line number and
+category only, because the offending line is the secret.
