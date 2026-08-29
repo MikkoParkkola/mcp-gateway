@@ -637,10 +637,25 @@ on a reload — and nothing should, because `auth`, `key_server` and `agent_auth
 are all in `tracked_sections` (`src/config_reload/mod.rs`), which makes an edit
 to any of them restart-only by an older decision than this one.
 
-So the narrowing, stated rather than implied: **a successful reload rotates
-capability credentials and nothing else.** An operator who rotates
-`auth.bearer_token` gets a reload that validates against the overlay and a
-`restart_required` outcome, exactly as they do today for any auth edit. Making
+So the narrowing, stated rather than implied: **a successful reload rebuilds no
+holder that a tracked section owns.** It does NOT say the reload changes nothing
+else, and an earlier draft that wrote it as *rotates capability credentials and
+nothing else* was falsified by this design's own live readers: `EffectiveEnv`,
+the firewall's exclusion set, discovery's scanner and every runtime child read
+the new overlay live, and ENVFILE.19b asserts two of them. An operator who
+rotates `auth.bearer_token` gets a reload that validates against the overlay and
+a `restart_required` outcome, exactly as they do today for any auth edit.
+
+**A live value can outlive its binding, and that is the boundary rather than a
+window.** The ordering argument above — overlay first, config second — bounds
+the mismatch to one request only when the config catches up on the same reload.
+For a tracked section it never does: rotate a credential and its destination in
+one edit and the credential is live while the destination stays as it was until
+a restart. What keeps this visible rather than silent is the outcome itself,
+which reports `restart_required` and names the changed section (ENVFILE.10c);
+what remains is that the new credential is in use against the old binding for as
+long as the operator leaves the gateway running. Stated because the ordering
+paragraph reads as though every mismatch were bounded by a request. Making
 those holders atomically reloadable is a larger change to the restart-only
 boundary, it is what the review asked for, and it is OUT of this change's
 scope — recorded as an observation, not filed, because nobody has asked for
@@ -838,10 +853,13 @@ it builds an `EnvOverlay` from the `env_files` ARGUMENT and `previous` — the
 running gateway's list, never the candidate's own
 `env_file_config.env_files` — instead of calling `load_env_files_from_paths`,
 and passes it to
-`expand_env_vars`. `Config::load` keeps its signature, calls
-`load_env_files_from_paths` exactly as today, and expands with
-`EnvOverlay::none()` — byte-for-byte the current behaviour for all 35 call
-sites, which is why none of them is edited.
+`expand_env_vars`. `Config::load` is unchanged in signature and behaviour for
+all 35 call sites, which is why none of them is edited. HOW it stays unchanged
+is stated once, above: it is a thin wrapper over `load_evaluated` that drops the
+overlay. This paragraph deliberately does not restate it. An earlier draft did,
+and the restatement said it calls `load_env_files_from_paths` directly — which
+contradicts the wrapper and would cost exactly the single-read provenance the
+wrapper exists to give.
 
 The two bodies share a private `load_inner(path, EnvSource)` with
 `enum EnvSource<'a> { ApplyToProcess, Overlay { paths: &'a [PathBuf],
