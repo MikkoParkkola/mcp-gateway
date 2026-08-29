@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
+use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::Stream;
 use parking_lot::RwLock;
@@ -386,6 +387,65 @@ pub fn create_sse_response(
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
+}
+
+
+/// The response body of a `subscriptions/listen` request.
+///
+/// An SSE stream that stays open, per the transport specification: the
+/// acknowledgement is its first event, and each notification the client
+/// subscribed to follows on the same stream.
+///
+/// No resumability and no event ids — MCP 2026-07-28 removed both, so there is
+/// nothing for a client to resume from and nothing to number.
+pub fn subscription_stream(
+    mut listener: crate::gateway::subscription_registry::Listener,
+    filter: crate::protocol::subscriptions::ListenRequest,
+    subscription: crate::protocol::subscriptions::SubscriptionId,
+    acknowledgement: &crate::protocol::JsonRpcResponse,
+    keep_alive_interval: Duration,
+) -> axum::response::Response {
+    use crate::gateway::subscription_registry::delivers;
+
+    let ack = serde_json::to_string(acknowledgement).unwrap_or_default();
+
+    let stream = stream! {
+        // The acknowledgement rides the stream it opens, so a client has one
+        // thing to read rather than a body and then a stream.
+        yield Ok(Event::default().event("message").data(ack));
+
+        loop {
+            match listener.recv().await {
+                Ok(notification) => {
+                    // Filtered per listener, never at the publisher: one
+                    // client's filter must not decide what another receives.
+                    if !delivers(&filter, &notification) {
+                        continue;
+                    }
+                    let tagged = subscription.tag(notification);
+                    yield Ok(Event::default()
+                        .event("message")
+                        .data(tagged.to_string()));
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    // Delivering the remainder would leave this client holding
+                    // stale state with no way to learn it. Closing makes the
+                    // gap visible, and re-subscribing is the recovery the
+                    // revision leaves available now that resumability is gone.
+                    warn!(
+                        missed,
+                        "subscription stream fell behind; closing so the client re-subscribes"
+                    );
+                    break;
+                }
+            }
+        }
+    };
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping"))
+        .into_response()
 }
 
 #[cfg(test)]

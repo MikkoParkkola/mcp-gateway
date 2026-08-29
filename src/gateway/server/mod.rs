@@ -1163,6 +1163,9 @@ impl Gateway {
             export_status,
             transparency_log,
             dashboard_bootstrap: std::sync::Arc::new(
+subscriptions: Arc::new(
+    crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+),
                 crate::gateway::auth::DashboardBootstrap::new(),
             ),
         });

@@ -121,6 +121,9 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(
+subscriptions: Arc::new(
+    mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
+),
             mcp_gateway::gateway::auth::DashboardBootstrap::new(),
         ),
     })
@@ -196,6 +199,9 @@ fn make_app_state_with_reload(
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: std::sync::Arc::new(
+subscriptions: Arc::new(
+    mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
+),
                 mcp_gateway::gateway::auth::DashboardBootstrap::new(),
             ),
         }),

@@ -118,6 +118,9 @@ async fn test_stdio_initialize_produces_valid_response() {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     });
 
     // Call handle_initialize directly — this is what dispatch_single calls

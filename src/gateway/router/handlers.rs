@@ -746,50 +746,66 @@ pub(super) async fn meta_mcp_handler(
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
             //
-            // What is served here is the ACKNOWLEDGEMENT only. The stream
-            // itself is not built: the specification's response is an SSE body
-            // that stays open and carries the opted-in notifications, and this
-            // handler has no shape for one. Acknowledging and closing is
-            // therefore incomplete, and it is recorded as such rather than
-            // dressed up — a client that reads the acknowledgement as a live
-            // subscription waits forever for notifications nothing will send.
-            match crate::protocol::subscriptions::ListenRequest::from_params(params.as_ref()) {
-                Some(request) => {
-                    // The id is the request's own, never minted: the
-                    // specification defines the subscription id as the JSON-RPC
-                    // id of the listen request, and it is how a client
-                    // correlates a notification with the subscription that
-                    // asked for it.
-                    let subscription =
-                        crate::protocol::subscriptions::SubscriptionId::of_request(id.clone());
-                    debug!(
-                        empty = request.is_empty(),
-                        resources = request.resource_uris().len(),
-                        "subscriptions/listen acknowledged; stream not implemented"
-                    );
-                    crate::protocol::JsonRpcResponse::success(
-                        id,
-                        serde_json::json!({
-                            "_meta": {
-                                "io.modelcontextprotocol/subscriptionId":
-                                    subscription.as_value(),
-                            },
-                        }),
-                    )
-                }
-                None => {
-                    // No `notifications` filter at all. An *empty* filter is
-                    // valid and handled above; this is a request that never
-                    // said what it wanted.
-                    return build_error_response(
-                        Some(id),
-                        -32602,
-                        "subscriptions/listen requires a 'notifications' filter",
-                        &session_id,
-                        StatusCode::BAD_REQUEST,
-                    );
-                }
-            }
+            // Returns EARLY with an SSE body rather than falling through to the
+            // ordinary response builder: the specification's response to this
+            // method is a stream that stays open, and an acknowledgement that
+            // closes is a subscription the client waits on forever.
+            let Some(request) =
+                crate::protocol::subscriptions::ListenRequest::from_params(params.as_ref())
+            else {
+                // No `notifications` filter at all. An *empty* filter is valid
+                // and opens a quiet stream; this is a request that never said
+                // what it wanted.
+                return build_error_response(
+                    Some(id),
+                    -32602,
+                    "subscriptions/listen requires a 'notifications' filter",
+                    &session_id,
+                    StatusCode::BAD_REQUEST,
+                );
+            };
+
+            // The permit IS the admission. A caller may open streams and walk
+            // away — the specification says a server must not assume otherwise
+            // — so this ceiling is a resource bound, and one checked as a count
+            // before subscribing can be raced past by concurrent callers.
+            let Some(listener) = state.subscriptions.subscribe() else {
+                return build_error_response(
+                    Some(id),
+                    -32003,
+                    "too many open subscriptions",
+                    &session_id,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                );
+            };
+
+            // The request's own id, never minted: the specification defines the
+            // subscription id as the JSON-RPC id of the listen request, and it
+            // is how a client correlates a notification with the subscription
+            // that asked for it.
+            let subscription =
+                crate::protocol::subscriptions::SubscriptionId::of_request(id.clone());
+            let acknowledgement = crate::protocol::JsonRpcResponse::success(
+                id,
+                serde_json::json!({
+                    "_meta": {
+                        "io.modelcontextprotocol/subscriptionId": subscription.as_value(),
+                    },
+                }),
+            );
+            debug!(
+                empty = request.is_empty(),
+                resources = request.resource_uris().len(),
+                "subscriptions/listen opened"
+            );
+
+            return crate::gateway::streaming::subscription_stream(
+                listener,
+                request,
+                subscription,
+                &acknowledgement,
+                state.streaming_config.keep_alive_interval,
+            );
         }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.
