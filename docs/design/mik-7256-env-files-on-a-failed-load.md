@@ -288,17 +288,29 @@ invisible in every test that does not write a BOM.
 **No design event on the watcher.** Under D an edit to a watched env file
 genuinely changes the resulting config — the overlay re-reads it — so
 `ReloadTrigger::EnvFile` (`src/config_reload/mod.rs:1227`),
-`resolve_env_file_paths` (`:941`), `matching_env_file` (`:967`) and their six
-tests (`src/config_reload/tests.rs:399,414,485,502,518,533`) all keep doing
-what they claim. Nothing is deleted. An earlier draft of this design removed
-them; that followed from option B and goes with it. `resolve_env_file_paths`
-stays the resolver and keeps its behaviour; what moves is WHO calls it and
-WHEN — startup only, expanding each entry as it is applied and in that order,
-never the whole list up front. Startup ends holding the resulting
-`ResolvedEnvFiles`, which the watcher binds instead of resolving the list again
-at `:1011-1014`. "Once" describes the number of TIMES the list is resolved, not
-a single whole-list pass: per the Shape rule, expansion happens per open,
-against the overlay as it stands at that point. One consequence is a seam:
+`matching_env_file` (`:967`) and the four watcher tests
+(`src/config_reload/tests.rs:485,502,518,533`) all keep doing what they claim.
+An earlier draft of this design removed the watcher machinery wholesale; that
+followed from option B and goes with it, and it is not proposed here.
+
+**`resolve_env_file_paths` (`:941`) IS deleted, and its two tests
+(`:399,414`) with it.** Not as tidying: a function that takes the whole list
+and returns the whole list is the wrong SHAPE for the rule this design just
+established. Expansion happens per open, against the overlay as it stands at
+that moment — a whole-list signature invites exactly the up-front pass
+ENVFILE.19c exists to catch, and no amount of caller discipline makes that
+signature honest. It is replaced by a single-entry resolver that expands one
+spelling and RECORDS the absolute path as it hands it over to be opened, so
+the sequence accumulates as a consequence of opening rather than as a separate
+step someone could hoist. Its two tests move with it, retargeted at the
+single-entry form; the sequential-order property they cannot reach is
+ENVFILE.19c's.
+
+After the change the whole-list resolver has no production caller at all — the
+sole one is the watcher at `:1011-1014`, which now binds the recorded
+`ResolvedEnvFiles` startup already holds. Keeping the function would leave a
+second, unused way to compute the paths, and a second way to compute them is
+the defect. One consequence is a seam:
 the expansion reaches its home through an injected resolver rather than
 calling `dirs::home_dir()` inline as `src/config/mod.rs:291-292` does today.
 That is what lets a test install a resolver which fails after startup, so a
@@ -922,12 +934,17 @@ and defers the rest to `env::var`, then to the `:-` default.
 Overlay-before-environment mirrors `from_path_override`, which is what startup
 does — so a variable present in both resolves the same way on both paths.
 
-**`Config::load_with_overlay(path: Option<&Path>, env_files: &[PathBuf],
-previous: &EnvOverlay) -> Result<Evaluated>`**, `pub(crate)`, where
+**`Config::load_with_overlay(path: Option<&Path>, env_paths:
+&ResolvedEnvFiles, previous: &EnvOverlay) -> Result<Evaluated>`**, `pub(crate)`, where
 `Evaluated { config: Config, overlay: Arc<EnvOverlay>, env_paths:
 ResolvedEnvFiles }`. The third field is the recorded path sequence stated
 above, and it is on this signature as well as `load_evaluated`'s so the two
-entry points return the same shape. `previous` is the
+entry points return the same shape. The reload path also TAKES that type
+rather than a bare `&[PathBuf]`: provenance is then a property of the
+signature, and a caller cannot hand it a list it resolved itself. The
+asymmetry is the point — `load_evaluated` takes the raw spellings because
+startup is what produces the recorded sequence; `load_with_overlay` consumes
+it because a reload must never produce one. `previous` is the
 overlay in force: `&EnvOverlay::none()` at startup, `live_env.get()` on a
 reload. It is here for the same reason it is on the constructor — the owned
 set has to survive the replacement, and a signature that cannot express that
