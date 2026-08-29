@@ -5,38 +5,43 @@ omission. Criteria are in `docs/design/mik-7256-env-files-on-a-failed-load.md`.
 
 | AC | case | level | type | fails before the fix because |
 |---|---|---|---|---|
-| ENVFILE.1 | reload a candidate whose already-listed env file sets `MIK7256_FAIL_<uniq>`, with a config that fails validation; assert the variable is still absent from the process afterwards | integration (config_reload) | negative | `Config::load` applies the env file before it validates, so the variable is set |
+| ENVFILE.1 | run one ACCEPTED reload first so a non-default overlay is published, then reload a candidate whose already-listed env file sets three `MIK7256_FAIL_<uniq>*` names, with a config that fails validation; assert the process environment equals its pre-reload snapshot AND `LiveEnv::get()` is the same `Arc` as before | integration (config_reload) | negative | `Config::load` applies the env file before it validates. The overlay half is the one that keeps biting after the fix: the process half is structurally guaranteed once nothing calls `set_var`, so a test that only checked the process would pass against a build that published a failed candidate's values. The accepted reload first is what makes the `Arc` assertion falsifiable at all: from a fresh process both snapshots are the same default `Arc`, so the case would pass against a build that never publishes |
 | ENVFILE.1b | same, but the reload is refused by the network posture rather than by validation | integration | negative | the apply happens before the refusal is computed |
-| ENVFILE.2 | reload a candidate that SUCCEEDS, its already-listed env file sets `MIK7256_OK_<uniq>`; assert the variable IS readable from the process afterwards, with the file's value | integration | positive | passes before and after — the no-regression pin that keeps every lazy `env:` reader working. It is here because the previous draft asserted the opposite, and reversing an assertion silently is how a requirement gets lost |
+| ENVFILE.2 | reload a candidate that SUCCEEDS, its already-listed env file sets `MIK7256_OK_<uniq>`; assert `fetch_credential` resolves the file's value afterwards, and that the process environment is unchanged | integration | negative + positive | before the fix the value reaches a reader only through the process write. Both halves are load-bearing: the positive proves the publish happened, the negative proves it happened without mutation |
 | ENVFILE.3 | process holds nothing for `MIK7256_INH_<uniq>`; the already-listed env file now sets it; reload FAILS validation; spawn a backend that does not reference it; assert the child does not see it at all | integration (transport) | negative | today the failed reload has already set the process value; the child still does not inherit it, so the assertion that bites is on the gateway process, and the child half only pins that `env_clear` keeps holding |
-| ENVFILE.4 | `Config::load(path)` with two env files, the second overriding the first; assert both variables land in the process and the override order holds | unit (config) | positive | passes before and after — the startup-parity pin |
-| ENVFILE.5 | reload a candidate that adds a backend whose `env` map contains `${MIK7256_NEW_<uniq>}`, with an already-listed env file now defining it; assert the resolved backend config carries the value | integration (config_reload) | positive | passes before and after by a different mechanism — pair with .1 over the same fixture, which is what proves the value arrived through the overlay rather than through a mutation |
-| ENVFILE.6 | process holds `MCP_GATEWAY_PORT=18081` from startup; the env file's contents change to `18082`; assert the reloaded config's port is `18081`, and that a SECOND reload of the same config yields `18082` | integration (config_reload) | negative + positive | today the candidate file is applied first, so Figment's second extract reads `18082` on the first reload. The second half pins the lag as a lag rather than a loss |
-| ENVFILE.6b | same fixture; assert a warn-level log names the `MCP_GATEWAY_PORT` key AND that neither the old nor the new port value appears in the record | integration | positive + negative | no such log exists; the negative half is what keeps it compatible with PR #439's removal of configured values from diagnostic output |
-| ENVFILE.7 | `mutate_and_reload_outcome_within` with a closure that REJECTS, over a config whose env file sets `MIK7256_UI_<uniq>`; assert `ConfigMutation::Rejected` and the variable still absent | integration (config_reload) | negative | `load_config_or_default` applies the file before the closure runs, so a rejected edit still mutates the environment |
-| ENVFILE.7b | `mutate_and_reload_outcome_within` with a closure that SUCCEEDS, over a config whose already-listed env file sets `MIK7256_UIOK_<uniq>` referenced by a backend it adds; assert `ConfigMutation::Applied`, the file on disk carries the edit, and the resolved backend config carries the value | integration (config_reload) | positive | .7's twin. Without it, .7 passes against a UI path that reads nothing and applies nothing, which is the failure the plan's own pairing rule exists to catch |
-| ENVFILE.7c | same path, with the config file made unwritable so `write_config` fails after the closure succeeded; assert the error surfaces and `MIK7256_UIW_<uniq>` is absent | integration (config_reload) | negative | today `load_config_or_default` applies the env file before the write is attempted, so a write failure leaves the process mutated with nothing on disk — the same defect as .7 at a later exit |
-| ENVFILE.1c | reload a candidate that is malformed TOML, over a config whose already-listed env file sets `MIK7256_PARSE_<uniq>`; assert the parse error surfaces and the variable is absent | integration (config_reload) | negative | `Config::load` applies env files before it parses far enough to fail, so the earliest failing exit mutates the process too. One case per enumerated exit; this is the first |
+| ENVFILE.4 | `Config::load(path)` with two env files, the second overriding the first; assert both variables land in the process and the override order holds | unit (config) | positive | passes before and after — the startup-parity pin, and the only case in the suite that expects a process write |
+| ENVFILE.5 | reload a candidate that adds a backend whose `env` map contains `${MIK7256_NEW_<uniq>}`, with an already-listed env file now defining it; assert the running backend's resolved config carries the value | integration | positive | the value must reach the resolved config from the evaluation overlay, before anything is published |
+| ENVFILE.6 | process holds `MCP_GATEWAY_PORT=18081` from startup; the env file's contents change to `18082`; assert the reloaded config still reports 18081, and that a SECOND reload also reports 18081 | integration | negative | the second reload is the half the earlier draft got wrong: it asserted the value landed at the next config load, which was true only of the `set_var` commit. Figment reads the process and nothing writes it, so the answer is 18081 until restart |
+| ENVFILE.6b | same fixture; assert a warn-level log names the `MCP_GATEWAY_PORT` key AND that neither the old nor the new value appears in it | integration | positive | the lag is diagnosable, and #439's no-values rule is not reintroduced by this change's own log |
+| ENVFILE.7 | `mutate_and_reload_outcome_within` with a closure that REJECTS, over a config whose env file sets `MIK7256_UI_<uniq>`; assert the process and the published overlay both equal their pre-call snapshots | integration (config_reload) | negative | `load_config_or_default` applies the candidate's env files before the closure runs |
+| ENVFILE.7b | same path with a closure that SUCCEEDS, over a config whose already-listed env file sets `MIK7256_UIOK_<uniq>` referenced by a backend it adds; assert `ConfigMutation::Applied`, the file on disk carries the edit, and the resolved backend config carries the value | integration (config_reload) | positive | .7's twin. Without it, .7 passes against a UI path that reads nothing and applies nothing |
+| ENVFILE.7c | same path, with the config file's PARENT DIRECTORY made unwritable so the atomic rename in `write_config` fails after the closure succeeded; assert the error surfaces and the overlay is unpublished | integration (config_reload) | negative | a read-only file does not fail a rename — `write_config` writes a temp file and renames over the target, and rename needs the directory's write bit, not the file's. Making the file unwritable would produce a test that passes for the wrong reason |
+| ENVFILE.1c | reload a candidate whose YAML parses far enough to yield `env_files` but fails the second extraction — a typed field given the wrong type — over a config whose already-listed env file sets `MIK7256_PARSE_<uniq>`; assert the error surfaces and nothing is published | integration (config_reload) | negative | the exit has to be one that occurs AFTER env application. `Config::load` extracts `EnvFileConfig` first (`src/config/mod.rs:193-198`) and only then applies the files, so a syntactically malformed candidate never reaches the apply and cannot falsify the defect — the earlier version of this row named exactly that case, and the config is YAML, not TOML |
 | ENVFILE.1d | same, for a config that parses but fails Figment type extraction (a string where a port is expected) | integration (config_reload) | negative | the exit between parse and validation. Named in ENVFILE.1's criterion and previously untested |
-| ENVFILE.8 | an already-listed env file rewritten with a `EF BB BF` prefix, first line `MIK7256_BOM_<uniq>=v`; reload a config whose backend env references `${MIK7256_BOM_<uniq>}`; assert it resolves to `v` | integration (config_reload) | negative | there is no overlay yet, so nothing to strip a BOM from — the case exists to pin new code, and MUST be written against the overlay builder before it is called correct |
-| ENVFILE.9 | running watcher over a config naming an env file; edit the env file's value for a `${VAR}` a backend uses; assert a reload IS published and the resolved backend config carries the new value | integration (config_reload) | positive + control | passes before and after — the pin that this design did not remove hot-reload of env-file contents |
-| ENVFILE.10 | reload a candidate adding `auth.bearer_token: env:MIK7256_TOK_<uniq>`, with the value defined only in an already-listed env file; assert the reload VALIDATES, AND that the outcome reports `restart_required`, AND that the live `ResolvedAuthConfig` still holds the old token | integration (config_reload) | positive + negative | validation resolves `env:` through `std::env` only, and today the file happens to have been applied first — so the validation half passes before the fix and fails against an overlay-only design. It is the case that killed option C. The two added halves pin the narrowing the design now states: `auth` is in `tracked_sections`, so this edit is restart-only, and a test asserting the running token CHANGED would be asserting a feature nobody built |
-| ENVFILE.10b | same shape for a capability credential, driven through the live `fetch_credential` rather than a resolution helper: reload succeeds, then invoke a capability whose auth references the rotated name; assert the call carries the NEW value and that a call authorised with the old one is rejected | integration (capability) | positive + negative | this is the only credential a reload actually rotates, so it is the only one whose end-to-end behaviour can be asserted. Driving the helper instead would pass against a design that resolves correctly and never applies |
-| ENVFILE.10c | env file ONLY is edited — config bytes byte-identical — watcher fires a reload; assert the reload succeeds with a `no_changes` outcome AND `fetch_credential` returns the new value afterwards | integration (config_reload) | positive | `load_config_patch` returns `Ok(None)` on an empty patch (`src/config_reload/mod.rs:1242-1243`) and `reload_outcome_locked` returns early (`:1442-1450`), so an apply hung off the published branch never runs. This is the change's own success case and the previous draft had no case for it |
-| ENVFILE.10d | accepted reload whose `apply_patch` reports not-fully-applied (registry shutdown latch), over a candidate whose already-listed env file sets `MIK7256_ABORT_<uniq>`; assert the error is the shutdown abort AND the variable is absent | integration (config_reload) | negative | pins the apply BELOW the abort check (`:1517-1522`). An apply placed before `apply_patch` — which reads better for restarted backends — passes every other case in this plan and fails only this one |
-| ENVFILE.10e | a reload that FOLLOWS a successful path-adding reload: reload 1 adds `extra.env` to `env_files` and is published; reload 2 changes something unrelated; assert `extra.env`'s variables are STILL absent from the process and `restart_required` is still reported | integration (config_reload) | negative | the list must come from `running()` (`:253`), not `get()` (`:276`). Sourcing it from the published snapshot passes ENVFILE.11 — the path-adding reload itself — and activates the file one reload later, before the restart the operator was told to do |
-| ENVFILE.11 | candidate ADDS `extra.env` to `env_files`, defining `MIK7256_ADD_<uniq>` and a `${MIK7256_ADD_<uniq>}` reference in a backend; reload succeeds; assert the reference resolves empty, the variable is absent from the process, AND a warn-level log names the key and the unread file without the value | integration (config_reload) | negative + positive | today the candidate's own list drives the apply, so naming a file is enough to activate its contents |
+| ENVFILE.8 | an already-listed env file rewritten with a `EF BB BF` prefix, first line `MIK7256_BOM_<uniq>=v`; reload and assert the overlay carries the unprefixed name | integration | negative | `dotenvy`'s iterator path does not strip the BOM, so without an explicit strip the overlay names the variable `\u{feff}MIK7256_BOM_<uniq>` |
+| ENVFILE.9 | running watcher over a config naming an env file; edit the env file's value for a `${VAR}` a backend uses; assert the new value reaches the running backend's resolved config | integration | positive | the behaviour option B would have removed |
+| ENVFILE.10a | reload adding an `env:` reference in each of the five forms in turn, value defined only in an already-listed env file; assert validation PASSES for all five | integration | negative | `validate_env_reference` and the inline agent-key path read the process at validation time, so today all five are rejected. Five forms, not one: the funnel covers four and the agent-key site stands alone, and a design that threads the overlay into the funnel only passes a one-form case |
+| ENVFILE.10b | the capability-credential form of .10a, driven through the live `fetch_credential` on an accepted reload; assert the new value is in use with no restart | integration | positive | the one reader that resolves per call — the proof the publish reaches a runtime consumer |
+| ENVFILE.10c | the four auth forms of .10a on an accepted reload; assert the outcome reports `restart_required` and the resolved holder still carries the startup value | integration | negative | asserts the narrowing rather than the capability. A single criterion previously asserted .10b's outcome for all five, which the source check disproved: `ResolvedAuthConfig::try_from_config` runs once at startup and nothing rebuilds it |
+| ENVFILE.10.1 | env file ONLY is edited — config bytes byte-identical — watcher fires a reload; assert the rotation is in use afterwards | integration | negative | `load_config_patch` returns `Ok(None)` on an empty patch and `reload_outcome_locked` returns early, so a publish hung off the non-empty branch never runs — the change's own success case |
+| ENVFILE.10.2 | accepted reload whose `apply_patch` reports not-fully-applied (registry shutdown latch), over a candidate whose env file rotates a credential; assert nothing is published | integration | negative | the shutdown abort is the last exit an accepted reload can take, and a publish placed above it would fire on a reload that never committed |
+| ENVFILE.10.3 | a reload that FOLLOWS a successful path-adding reload: reload 1 adds `extra.env` to `env_files` and is published; reload 2 changes something unrelated; assert reload 2 still does not read `extra.env` | integration | negative | the list must come from `LiveConfig::running()`, not `get()`. Taken from `get()`, reload 2 activates an unvalidated file while `pending_restart_fields` still says a restart is required |
+| ENVFILE.11 | candidate ADDS `extra.env` to `env_files`, defining `MIK7256_ADD_<uniq>` and a `${MIK7256_ADD_<uniq>}` reference; reload succeeds; assert the reference resolved empty, the variable is in neither the process nor the overlay, and a warn names the key and the file | integration | negative | an unvalidated file cannot activate a credential by being named. Positive twin is .5, the same fixture with the file already listed |
+| ENVFILE.12 | two already-listed env files, the second containing `B=${A}` where the first defines `A`; attempt a reload; assert it is REFUSED, the message names the file and the key `A`, no value appears in it, and nothing is published. Second half: `Config::load` on the same fixture at startup succeeds and resolves `B` | integration + unit | negative | today the reload succeeds and `B` silently carries whatever the process held since startup — a rotation of `A` that never reaches `B`. The startup half pins that the refusal is scoped to the reload path |
+| ENVFILE.12-inert | env files carrying `${K}` inside a `#` comment, inside a single-quoted value, and escaped, where `K` is a key those files define; assert the reload is ACCEPTED | integration | negative | the refusal must key on tokens `dotenvy` would substitute, not on the three characters. Without this case the cheapest implementation — a raw substring scan — passes .12 and refuses reloads over bytes that change no value |
+| ENVFILE.13 | accepted reload after a key is REMOVED from an already-listed env file whose value the process still holds from startup; assert the reader fails rather than resolving the startup value, and still fails after a second accepted reload that touches nothing — the removal is durable only if each overlay inherits the previous owned set | integration | negative | the case that distinguishes an overlay that owns a key domain from one consulted first and then fallen through. A fall-through implementation passes every rotation case in this plan and serves a deleted secret forever |
+| ENVFILE.14 | accepted reload rotating a name referenced as `{env.NAME}` through `SecretResolver`; assert the next resolution returns the new value | integration | positive | the second lazy runtime reader (`src/secrets.rs:82`), reached from webhook signing, secret injection and the executor. `fetch_credential` alone was the enumeration this plan shipped with, and it is not the whole set |
+| ENVFILE.15 | rotate a key in an already-listed env file through an accepted reload, then write an admin-UI edit that references it; assert the write validates | integration | positive | the regression the fix itself creates: the value now lives in the overlay and no longer in the process, so a write path validating against the process alone rejects a configuration that works. Passes trivially before the change, which is why it is paired with .13 rather than standing alone |
 
 Two rules the design states but no criterion owns, pinned as one case each:
 
 | case | level | type | asserts |
 |---|---|---|---|
-| env-file `${VAR}`, same file | integration | positive | candidate env file `A=1` then `B=${A}`, with `A` absent from the process; assert `B` resolves to `1`. `dotenvy`'s `apply_substitution` consults `env::var` first and its per-file table second (dotenvy 0.15.7, `parse.rs:260-273`), so the file's own value wins when the process has none — identical to startup |
-| env-file `${VAR}`, across files | integration | positive | first file `A=1`, second file `B=${A}`, `A` absent from the process; assert `B` resolves to `1` on the reload path, the same as startup. An earlier draft accepted a divergence here because each file got its own table; the design now builds the overlay cumulatively, so the parity is the requirement and this row is what holds it |
+| the refusal is not keyed on file boundaries | integration + unit | negative | ENVFILE.12's fixture puts `A` and `B=${A}` in DIFFERENT files; this one puts both in the SAME file. Assert the reload is refused there too, and that startup still resolves `B` to `1`. `dotenvy`'s `apply_substitution` consults `env::var` first and its per-file table second (dotenvy 0.15.7, `parse.rs:260-273`), so the same-file case is the one that resolves correctly at startup and is refused anyway — the refusal keys on the set of keys the env files define, not on which file defines them. A rule keyed on file boundaries passes ENVFILE.12 and fails this |
 | duplicate key across files | unit (config) | positive | first file `A=1`, second `A=2`; assert the overlay yields `2`, matching `from_path_override`'s later-file-wins precedence |
-| the applied bytes are the validated bytes | integration (config_reload) | negative | build the overlay, then rewrite the env file before the commit runs; assert the process receives the value the overlay captured, not the value now on disk. A commit that re-reads the files passes every other case and fails this one |
+| the applied bytes are the validated bytes | integration (config_reload) | negative | build the overlay, then rewrite the env file before the commit runs; assert the PUBLISHED overlay carries the value the evaluation captured, not the value now on disk. A commit that re-reads the files passes every other case and fails this one |
 | overlay precedence | unit (config) | positive | overlay entry wins over a process variable of the same name, matching `from_path_override` |
-| no `Config::load` inside a running gateway | compile-time | negative | a source-text scan was the first plan and it is the weaker mechanism: it passes against an alias, a re-export, or a helper that wraps the call. The rule becomes a type instead — the gateway-facing readers take the loader through a `pub(crate)` seam that exposes only `load_with_overlay`, so the mutating startup operation is not nameable from `src/config_reload/`. What remains testable is the seam itself: a `trybuild` or doc-level assertion that the startup loader is not reachable from the runtime module. Cheaper to hold, and it fails at build time rather than at review time |
+| every operator-declared reference resolves through the overlay | unit (source scan) | negative | `pub(crate)` buys nothing here: `src/config_reload/` is the same crate, so the startup loader stays nameable and the compile-time claim this row used to make could never fail. What is checkable is the reader set: a test walks the source, collects every `std::env::var`/`var_os` call site outside tests, and fails on any that is not either overlay-aware or on the named infrastructure allowlist (`PATH`, `HOME`, `TMPDIR`, `NO_COLOR`, `MCP_GATEWAY_*`). It fails when a new reader is added and nobody thought about the overlay, which is the actual failure mode — a scan is weak against an alias and strong against the omission this change is about |
 
 ## Can any of these pass while broken?
 
@@ -49,9 +54,9 @@ Two rules the design states but no criterion owns, pinned as one case each:
 - .11 is an absence with a positive twin in .5: the same fixture with the file
   already listed must resolve, which is what proves the path list is the only
   difference. Without .5 it passes against code that reads no env file at all.
-- .5, .9 and .10 fail if the overlay is never consulted; .6 fails if the
-  overlay is wired into Figment after all; .2 and .10 fail if the commit-time
-  apply is dropped. The five together fix the boundary from both sides. Any
+- .5, .9 and .10a fail if the overlay is never consulted; .6 fails if the
+  overlay is wired into Figment after all; .2 and .10b fail if the commit-time
+  publish is dropped. The five together fix the boundary from both sides. Any
   one alone can pass with the boundary in the wrong place — which is exactly
   what happened to the previous design, where every case then written passed
   against a design that broke `env:`.
@@ -61,7 +66,7 @@ Two rules the design states but no criterion owns, pinned as one case each:
   fails on the variable name. Written and shown failing, not asserted to fail.
 - Every negative case asserts ONE absent sentinel, which cannot see a partial
   apply that stopped before that name. The env-file fixtures for `.1`, `.1b`,
-  `.1c`, `.1d`, `.7`, `.7c` and `.10d` therefore define three variables, and
+  `.1c`, `.1d`, `.7`, `.7c` and `.10.2` therefore define three variables, and
   each case compares the full `std::env::vars_os()` set before and after
   against the snapshot taken at case start — equality, not the absence of one
   key. A failed reload that set two of the three passes the sentinel form and
@@ -74,14 +79,33 @@ Two rules the design states but no criterion owns, pinned as one case each:
   binary would be the alternative and it is weaker: any test added later
   without the marker silently breaks the comparison.
 - No test calls `std::env::set_var`, so none needs `#[allow(unsafe_code)]`.
-  Where a case needs a value in the real process environment (.2, .4, .6) it
-  gets there through `Config::load` on a startup-shaped fixture, which writes
-  it inside `dotenvy`. The workspace lint stays intact and the tests exercise
-  the real apply path rather than a hand-rolled substitute.
-- The suite runs threads in parallel and .2, .4 and .6 mutate the process.
-  Unique suffixed names per test, and no test asserts on a variable another
-  writes. `MCP_GATEWAY_PORT` in .6 is the exception it cannot avoid: it must
-  run serialised.
+  Only .4 and .6 need a value in the real process environment, and it gets
+  there through `Config::load` on a startup-shaped fixture, which writes it
+  inside `dotenvy` — the only path in the design that still writes the process
+  at all. The workspace lint stays intact and the tests exercise the real apply
+  path rather than a hand-rolled substitute.
+- The suite runs threads in parallel and .4 and .6 are the only cases that
+  mutate the process. Neither is serialised by a lock, because a lock is a
+  convention every later test has to know about; both are separated by
+  PROCESS instead. .4 writes uniquely suffixed names and stays in the config
+  unit binary, where nothing compares a whole environment. .6 writes
+  `MCP_GATEWAY_PORT`, a name it cannot choose — figment reads that exact key
+  — so it gets its own integration binary,
+  `tests/env_files_startup_precedence.rs`, separate from the whole-environment
+  cases in `tests/env_files_on_failed_load.rs`. Two binaries, no shared
+  mutable process, and a test added later to either one cannot break the other
+  by forgetting a marker. Every other case is safe under parallelism by
+  construction, because the reload path it drives cannot write the process at
+  all.
+- .12 asserts a REFUSAL, which passes trivially against a reload that refuses
+  for some other reason. The assertion is on the message naming the file and
+  the key, and its startup half must SUCCEED over the same bytes — a blanket
+  refusal fails that half.
+- .10.1 is the change's own success case and has no pre-fix failure to show:
+  the early return it exercises is reached today, and what is missing is the
+  publish that does not yet exist. It is a retrofit and needs the falsifier
+  probe — place the publish on the non-empty-patch branch, run it, and show the
+  assertion fail.
 - .9's positive half passes trivially if filesystem events do not work in the
   test environment at all. The assertion is on the resolved VALUE reaching the
   backend config, not on a reload being published — a published reload that
@@ -92,9 +116,33 @@ Two rules the design states but no criterion owns, pinned as one case each:
 `expand_env_vars` is a private method with one call site
 (`src/config/mod.rs:313`), so the overlay parameter is compiler-enforced
 there — but a compiler guarantee is not a test, which is why .5, .6, .8 and
-.10 drive the loader end to end rather than calling `expand_string` directly.
+.10a drive the loader end to end rather than calling `expand_string` directly.
 Validation is the second seam: `validate_env_reference`
 (`src/config/mod.rs:651`) funnels four call sites and the agent-key path
-(`:433`) stands alone, so .10 must cover both — a design that threads the
-overlay into the funnel and forgets the inline site passes .10 and fails on
-agent secrets in production.
+(`:433`) stands alone, so .10a must cover both — a design that threads the
+overlay into the funnel and forgets the inline site passes a one-form case and
+fails on agent secrets in production.
+
+The third seam is the publish, and it is the one with no compiler help at all.
+`LiveEnv` is a process global, so a reload path that forgets to publish, or
+publishes on the wrong branch, still compiles and still passes every case that
+only reads the resolved config. The cases that hold it are .2 (published on
+the ordinary success path), .10.1 (published on the empty-patch early return),
+.10.2 and .7c (NOT published on the two late aborts) and .1/.1b/.1c/.1d (not
+published on the four early exits). One publish site reachable from every exit
+is what makes that set pass together; any arrangement that satisfies a subset
+is the bug this table exists to catch.
+
+The fourth seam is the reader set, and it is the one that leaks over time.
+Nothing about the type system says a new `std::env::var` call has to know the
+overlay exists, and the enumeration this plan shipped with was already wrong
+once: it named `fetch_credential` and missed `SecretResolver::resolve`
+(`src/secrets.rs:82`), which resolves `{env.NAME}` on the webhook, injection
+and executor paths. So the set is held mechanically by the source-scan row
+rather than by the enumeration, and the behavioural cases hold its two ends —
+.10b for the credential reader, .14 for the resolver.
+
+The fifth is the owned key domain. An overlay that answers owned keys itself
+and one that merely answers first are indistinguishable on every rotation
+case in this plan; they differ only on a removal, which is .13. That case
+carries the whole distinction, so it cannot be dropped as an edge.
