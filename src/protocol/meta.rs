@@ -153,7 +153,18 @@ pub const REMOVED_IN_2026_07_28: &[&str] = &[
     "ping",
     "logging/setLevel",
     "notifications/roots/list_changed",
+    // Replaced by `subscriptions/listen`, not merely deprecated. A client that
+    // can still reach the old methods has no reason to move to the new one.
+    "resources/subscribe",
+    "resources/unsubscribe",
 ];
+
+/// Methods this revision *added*, which a legacy peer must not reach.
+///
+/// The mirror of the list above, and needed for the same reason: serving a
+/// 2026 method to a 2025 client tells it the gateway speaks a revision that
+/// client cannot hold up its end of.
+pub const ADDED_IN_2026_07_28: &[&str] = &["subscriptions/listen", "tasks/get", "tasks/update"];
 
 /// The client capability a method needs, if it needs one.
 ///

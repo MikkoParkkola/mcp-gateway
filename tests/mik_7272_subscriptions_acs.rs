@@ -158,3 +158,196 @@ mod reissue {
         assert_ne!(a.request_state, b.request_state);
     }
 }
+
+// ===========================================================================
+// Through the transport. The rows above prove the model; these prove the
+// gateway serves it — which is the difference between a type and a feature.
+// ===========================================================================
+
+mod http {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use mcp_gateway::backend::BackendRegistry;
+    use mcp_gateway::config::Config;
+    use mcp_gateway::gateway::auth::ResolvedAuthConfig;
+    use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
+    use mcp_gateway::gateway::proxy::ProxyManager;
+    use mcp_gateway::gateway::streaming::NotificationMultiplexer;
+    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
+    use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    fn state(modern: bool) -> Arc<AppState> {
+        let mut config = Config::default();
+        config.server.modern_protocol = modern;
+        let backends = Arc::new(BackendRegistry::new());
+        let multiplexer = Arc::new(NotificationMultiplexer::new(
+            Arc::clone(&backends),
+            config.streaming.clone(),
+        ));
+        let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+        let agent_registry = Arc::new(AgentRegistry::new());
+        Arc::new(AppState {
+            meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
+            backends,
+            meta_mcp_enabled: true,
+            multiplexer,
+            proxy_manager,
+            streaming_config: config.streaming.clone(),
+            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+            key_server: None,
+            tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
+            mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+            sanitize_input: false,
+            ssrf_protection: false,
+            trust_configured_backends: false,
+            inflight: Arc::new(tokio::sync::Semaphore::new(100)),
+            agent_auth: AgentAuthState::new(false, agent_registry),
+            gateway_key_pair: Arc::new(GatewayKeyPair::generate().expect("RSA key gen")),
+            capability_dirs: Vec::new(),
+            config_path: None,
+            #[cfg(feature = "firewall")]
+            firewall: None,
+            agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
+            control_plane_store: None,
+            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
+            export_status: None,
+            transparency_log: None,
+            dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        })
+    }
+
+    async fn post(modern: bool, body: Value, headers: &[(&str, &str)]) -> (StatusCode, Value) {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let response = create_router(state(modern))
+            .oneshot(
+                builder
+                    .body(Body::from(serde_json::to_vec(&body).expect("body")))
+                    .expect("request"),
+            )
+            .await
+            .expect("router must answer");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must read");
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    fn modern_call(method: &str, params: Value) -> (Value, Vec<(&'static str, String)>) {
+        let mut full = params;
+        if let Some(object) = full.as_object_mut() {
+            object.insert(
+                "_meta".to_string(),
+                json!({
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }),
+            );
+        }
+        (
+            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": full }),
+            vec![
+                ("mcp-protocol-version", "2026-07-28".to_string()),
+                ("mcp-method", method.to_string()),
+            ],
+        )
+    }
+
+    async fn post_modern(method: &str, params: Value) -> (StatusCode, Value) {
+        let (body, owned) = modern_call(method, params);
+        let borrowed: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        post(true, body, &borrowed).await
+    }
+
+    #[tokio::test]
+    async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
+        let (status, body) =
+            post_modern("subscriptions/listen", json!({ "toolsListChanged": true })).await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            id.starts_with("sub-"),
+            "the acknowledgement carries the subscription id the client will see \
+             on every notification: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_sub_1_a_subscription_to_nothing_is_refused() {
+        let (status, body) = post_modern("subscriptions/listen", json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], -32602, "{body}");
+    }
+
+    #[tokio::test]
+    async fn ac_sub_1_resources_subscribe_is_refused_on_the_modern_path() {
+        // Replaced, not merely deprecated. A client that can still reach the old
+        // method has no reason to move to the new one.
+        let (status, body) =
+            post_modern("resources/subscribe", json!({ "uri": "file:///x" })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"]["code"], -32601, "{body}");
+    }
+
+    #[tokio::test]
+    async fn ac_sub_1_resources_subscribe_still_works_on_the_legacy_path() {
+        // The regression. A 2025 client subscribes this way and always has.
+        let (status, body) = post(
+            false,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "resources/subscribe",
+                    "params": { "uri": "file:///x" } }),
+            &[],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the legacy method is untouched: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_task_1_the_gateway_serves_tasks_get() {
+        // An unknown handle is a clean "no such task", not a 500 and not a
+        // fabricated working state.
+        let (status, body) = post_modern("tasks/get", json!({ "taskId": "task-unknown" })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["result"]["status"], "not_found",
+            "a handle nobody minted must say so: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path() {
+        // The extension belongs to a revision the legacy client does not speak.
+        let (status, body) = post(
+            false,
+            json!({ "jsonrpc": "2.0", "id": 3, "method": "tasks/get",
+                    "params": { "taskId": "task-x" } }),
+            &[],
+        )
+        .await;
+        assert!(
+            body.get("error").is_some() || status != StatusCode::OK,
+            "a 2025 client has no tasks extension: {body}"
+        );
+    }
+}

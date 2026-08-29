@@ -624,8 +624,63 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
+    if !is_modern && crate::protocol::meta::ADDED_IN_2026_07_28.contains(&method.as_str()) {
+        // A 2026 method reached by a 2025 client. Serving it would tell that
+        // client the gateway speaks a revision it cannot hold up its end of.
+        return build_error_response(
+            Some(id.clone()),
+            -32601,
+            format!("method '{method}' requires MCP 2026-07-28"),
+            &session_id,
+            StatusCode::NOT_FOUND,
+        );
+    }
+
     // Route to appropriate handler
     let response = match method.as_str() {
+        "subscriptions/listen" => {
+            // The single long-lived stream that replaces the GET endpoint. This
+            // acknowledges the subscription and names it; the notifications
+            // themselves ride the response stream, tagged with this id.
+            match crate::protocol::subscriptions::ListenRequest::from_params(params.as_ref()) {
+                Some(_) => {
+                    let id_value = crate::protocol::subscriptions::SubscriptionId::mint();
+                    crate::protocol::JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({
+                            "_meta": {
+                                "io.modelcontextprotocol/subscriptionId": id_value.as_str(),
+                            },
+                        }),
+                    )
+                }
+                None => {
+                    // A subscription naming nothing is a stream held open
+                    // forever carrying no traffic — allocatable by accident.
+                    return build_error_response(
+                        Some(id),
+                        -32602,
+                        "subscriptions/listen must name at least one notification type",
+                        &session_id,
+                        StatusCode::BAD_REQUEST,
+                    );
+                }
+            }
+        }
+        "tasks/get" => {
+            let task_id = params
+                .as_ref()
+                .and_then(|p| p.get("taskId"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            // No task store yet, so every handle is unknown — and saying so is
+            // the honest answer. Fabricating a working state would have a client
+            // poll forever for something nobody started.
+            crate::protocol::JsonRpcResponse::success(
+                id,
+                serde_json::json!({ "taskId": task_id, "status": "not_found" }),
+            )
+        }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.
         "server/discover" => crate::protocol::JsonRpcResponse::success_serialized(
