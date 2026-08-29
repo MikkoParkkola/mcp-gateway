@@ -413,13 +413,23 @@ reading a snapshot the reload deliberately refuses to update.
 
 So there is one provider, `EffectiveEnv`, computing the environment the process
 WOULD have if the accepted env files were loaded into it — process variables,
-minus the keys the startup env files owned, plus the current overlay — and
-applying the transformation once over that map: strip the prefix
-case-insensitively, replace `__` with `.`, reject a key with an empty
-dot-segment, `nest` each pair, merge. Overlay-owned means present in the
-startup overlay: `from_path_override` semantics make the process value for
-every such key the env file's own, so removing it removes exactly what the env
-files put there and leaves a genuinely shell-exported variable untouched. A key
+minus the keys the overlay owns, plus the current overlay — and applying the
+transformation once over that map: strip the prefix case-insensitively, replace
+`__` with `.`, reject a key with an empty dot-segment, `nest` each pair, merge.
+
+**Which keys those are is not a question `EffectiveEnv` answers.** It calls
+`overlay.owns(key)`, the same predicate `resolve` uses, and holds no key set of
+its own. An earlier draft had it strip the keys the STARTUP env files owned
+while the overlay's owned set was the cumulative union carried forward from the
+overlay it replaced. The two agreed on the first reload and diverged on the
+next: add a key to a file, remove it again, reload twice, and a variable also
+exported into the process is unset to `resolve` and present to `EffectiveEnv` —
+the config provider and every credential reader then disagree about the same
+name. All three reviewers found it independently, which is the argument for
+having one owner rather than two careful implementations. `from_path_override`
+semantics make the process value for an owned key the env file's own, so
+removing it removes exactly what the env files put there and leaves a genuinely
+shell-exported variable untouched. A key
 the operator exported and never wrote in a file keeps working; a key removed
 from a file goes away on the reload, as it would across a restart. With one
 provider there is no merge order left to get wrong.
