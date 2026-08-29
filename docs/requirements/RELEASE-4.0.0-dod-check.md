@@ -1,6 +1,6 @@
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
-**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `fa811e4b`
+**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `28585647`
 **Requirements**: `RELEASE-4.0.0-requirements.md` · **Plan**: `RELEASE-4.0.0-test-plan.md`
 
 Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, because an N/A
@@ -13,11 +13,11 @@ the head, that is said in the same line rather than rounded up.
 previous revision of this document claimed.** It is sound as an increment behind a switch that
 defaults off. It is not a shippable modern protocol implementation.
 
-**HEAD contains code that has never been compiled.** Commit `2c774d4c` changes the mirrored-header
-security check — the field it validates and its handling of repeated header lines — and was authored
-while the machine's build guard blocked every `cargo` command. It is committed so the work is
-durable, not because it is verified. Nothing in this document should be read as evidence about that
-commit until the gates are re-run against it.
+**Two of the CRITICAL findings are now fixed and verified**, and the gates below were run against
+the head commit rather than an earlier one. The mirrored-header check no longer validates a decoy
+field, and a repeated header line is refused. Both are driven through the real router, not only
+their helper — a unit test of a helper passes even if the handler stops calling it, which is a
+defect class this branch has already shipped once.
 
 Two things changed the picture since the last revision, both from review:
 
@@ -29,7 +29,7 @@ Two things changed the picture since the last revision, both from review:
 
 Detail below.
 
-## §3 Static checks — PASS at `c850cdc4`, unverified at head
+## §3 Static checks — PASS at head
 
 | Gate | Command | Result |
 |---|---|---|
@@ -37,14 +37,15 @@ Detail below.
 | Formatter | `cargo fmt --check` | clean |
 | Secret scan | private-key / API-key patterns over the branch diff | 0 |
 
-The head commit `a2319c8c` adds an envelope size bound and removes a constructor. Its own test
-module passes (50/50). **The full suite and the linter have not been run against it**: the machine's
-build guard halted all `cargo` commands at 4.6 GB free disk, and clearing another session's build
-cache was not mine to decide. Stated rather than assumed away.
+Run on the Linux build host, not this laptop: a local guard halted every `cargo` command at 4.6 GB
+free disk. Clearing another session's build cache was not this session's to decide, so verification
+moved to the machine with room for it — which is where heavy builds belong regardless. Only this
+branch's own debug artifacts were removed locally, which is housekeeping the rules already assign to
+the change that created them.
 
-## §4 Testing — PASS at `c850cdc4`, partially verified at head
+## §4 Testing — PASS at head
 
-- **4,456 tests passing across 45 binaries, 0 failing** — measured at `c850cdc4`, not quoted from a previous run.
+- **4,463 tests passing across 45 binaries, 0 failing** — measured at the head commit with `--no-fail-fast`, so no binary was skipped because an earlier one failed.
 - **41 doc-tests pass.**
 - **23 tests are `#[ignore]`d.** Twelve are doc-test examples and ten are pre-existing integration tests needing Docker or a live API. **One is this branch's**: `ac_discover_1_advertises_the_target_revision`, which asserts the gateway advertises 2026-07-28 — deliberately false while the switch is off. The previous revision of this document said "one test is ignored" and meant one of *mine*; as written it was a false claim about the suite, and this corrects it.
 
@@ -68,6 +69,16 @@ round's security repairs are below, each failing **only** the rows that observe 
 | Envelope bound, opening | size check removed | 1 |
 | Envelope bound, minting | size check removed | 1 |
 | Envelope bound, value | bound lowered below real backend state | 13 — it is load-bearing on the ordinary path |
+| Mirrored field selection | `resources/read` reads `name` again | 2 — the helper row and the router row |
+| Decoy-name bypass, end to end | name-then-`uri` fallback restored in the handler | 1 |
+| Repeated header line | first occurrence taken, as before | 1 |
+
+**A probe that reported less than it found**, worth recording because it nearly passed for a
+methodology reason rather than a code one: running two test binaries in one `cargo test` invocation
+stops after the first one fails, so the second never runs and its rows are silently absent from the
+result. One probe appeared to leave the router row untouched. Re-run against that binary alone, it
+failed it — 19 passed, 1 failed. **A falsifier must name one binary, or pass `--no-fail-fast`**;
+otherwise an unrun test reads exactly like an insensitive one.
 
 **Two probes exposed holes in the controls rather than in the code**, which is the point of running
 them:
