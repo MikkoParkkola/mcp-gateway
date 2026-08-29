@@ -716,28 +716,47 @@ pub(super) async fn meta_mcp_handler(
     // Route to appropriate handler
     let response = match method.as_str() {
         "subscriptions/listen" => {
-            // The single long-lived stream that replaces the GET endpoint. This
-            // acknowledges the subscription and names it; the notifications
-            // themselves ride the response stream, tagged with this id.
+            // The single long-lived stream that replaces the GET endpoint.
+            //
+            // What is served here is the ACKNOWLEDGEMENT only. The stream
+            // itself is not built: the specification's response is an SSE body
+            // that stays open and carries the opted-in notifications, and this
+            // handler has no shape for one. Acknowledging and closing is
+            // therefore incomplete, and it is recorded as such rather than
+            // dressed up — a client that reads the acknowledgement as a live
+            // subscription waits forever for notifications nothing will send.
             match crate::protocol::subscriptions::ListenRequest::from_params(params.as_ref()) {
-                Some(_) => {
-                    let id_value = crate::protocol::subscriptions::SubscriptionId::mint();
+                Some(request) => {
+                    // The id is the request's own, never minted: the
+                    // specification defines the subscription id as the JSON-RPC
+                    // id of the listen request, and it is how a client
+                    // correlates a notification with the subscription that
+                    // asked for it.
+                    let subscription =
+                        crate::protocol::subscriptions::SubscriptionId::of_request(id.clone());
+                    debug!(
+                        empty = request.is_empty(),
+                        resources = request.resource_uris().len(),
+                        "subscriptions/listen acknowledged; stream not implemented"
+                    );
                     crate::protocol::JsonRpcResponse::success(
                         id,
                         serde_json::json!({
                             "_meta": {
-                                "io.modelcontextprotocol/subscriptionId": id_value.as_str(),
+                                "io.modelcontextprotocol/subscriptionId":
+                                    subscription.as_value(),
                             },
                         }),
                     )
                 }
                 None => {
-                    // A subscription naming nothing is a stream held open
-                    // forever carrying no traffic — allocatable by accident.
+                    // No `notifications` filter at all. An *empty* filter is
+                    // valid and handled above; this is a request that never
+                    // said what it wanted.
                     return build_error_response(
                         Some(id),
                         -32602,
-                        "subscriptions/listen must name at least one notification type",
+                        "subscriptions/listen requires a 'notifications' filter",
                         &session_id,
                         StatusCode::BAD_REQUEST,
                     );

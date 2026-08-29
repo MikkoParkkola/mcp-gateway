@@ -13,16 +13,34 @@
 //! That last part is why this increment carries a safety rule rather than only
 //! a shape: re-issuing a side-effecting call is how one booking becomes two.
 
+use mcp_gateway::protocol::RequestId;
 use mcp_gateway::protocol::subscriptions::{ListenRequest, NotificationKind, SubscriptionId};
 use serde_json::json;
+
+// The filter shape below is the specification's own example, verbatim from
+// /specification/2026-07-28/basic/patterns/subscriptions:
+//
+//   "params": {
+//     "notifications": {
+//       "toolsListChanged": true,
+//       "resourceSubscriptions": ["file:///project/config.json"]
+//     }
+//   }
+//
+// The first version of these rows was written from the changelog and the index
+// rather than this page, and encoded three wire errors that all agreed with the
+// implementation. Quoting the page is what makes them tests rather than a
+// second copy of the same assumption.
 
 #[test]
 fn ac_sub_1_a_client_opts_in_by_notification_type() {
     // Opt-in, not a firehose. A client that asked for tool-list changes must
     // not be sent resource updates it never wanted and cannot interpret.
     let request = ListenRequest::from_params(Some(&json!({
-        "toolsListChanged": true,
-        "resourcesListChanged": false
+        "notifications": {
+            "toolsListChanged": true,
+            "resourcesListChanged": false
+        }
     })))
     .expect("a well-formed listen request");
 
@@ -35,40 +53,114 @@ fn ac_sub_1_a_client_opts_in_by_notification_type() {
 }
 
 #[test]
-fn ac_sub_1_a_listen_request_naming_nothing_is_refused() {
-    // A subscription to nothing is a stream held open forever carrying no
-    // traffic — a resource the client can allocate by accident and never
-    // notice.
+fn ac_sub_1_the_filter_is_nested_under_notifications() {
+    // Read at the params root, every conforming request looked empty and was
+    // refused — the opt-ins were never where they were looked for.
     assert!(
-        ListenRequest::from_params(Some(&json!({}))).is_none(),
-        "a subscription must name at least one type"
+        ListenRequest::from_params(Some(&json!({ "toolsListChanged": true }))).is_none(),
+        "opt-ins at the params root are not a filter"
     );
-    assert!(ListenRequest::from_params(None).is_none());
     assert!(
-        ListenRequest::from_params(Some(&json!({ "toolsListChanged": false }))).is_none(),
-        "asking for nothing explicitly is still asking for nothing"
+        ListenRequest::from_params(Some(&json!({
+            "notifications": { "toolsListChanged": true }
+        })))
+        .is_some_and(|r| r.wants(NotificationKind::ToolsListChanged))
     );
 }
 
 #[test]
-fn ac_sub_1_the_server_tags_what_it_sends() {
-    // The client is told which subscription a notification belongs to, because
-    // it may hold several and the payloads do not otherwise say.
-    let id = SubscriptionId::mint();
-    let tagged = id.tag(json!({ "method": "notifications/tools/list_changed" }));
+fn ac_sub_1_resource_subscriptions_names_uris_not_a_boolean() {
+    // The one field in the filter table that is not a boolean. Read as one, a
+    // client's resource list was silently dropped and it received nothing for
+    // the resources it named.
+    let request = ListenRequest::from_params(Some(&json!({
+        "notifications": {
+            "toolsListChanged": true,
+            "resourceSubscriptions": ["file:///project/config.json"]
+        }
+    })))
+    .expect("the specification's own example must parse");
+
+    assert!(request.wants(NotificationKind::ResourceSubscriptions));
+    assert_eq!(
+        request.resource_uris(),
+        ["file:///project/config.json"],
+        "the subscribed resource URIs must survive parsing"
+    );
+}
+
+#[test]
+fn ac_sub_1_a_request_without_a_filter_is_invalid_but_an_empty_filter_is_not() {
+    // Two different answers. No filter at all is invalid params. An empty
+    // filter is a client asking for nothing, which the specification permits
+    // and which is acknowledged rather than refused.
+    assert!(ListenRequest::from_params(None).is_none());
+    assert!(
+        ListenRequest::from_params(Some(&json!({}))).is_none(),
+        "a listen request must carry a notifications filter"
+    );
+
+    let empty = ListenRequest::from_params(Some(&json!({ "notifications": {} })))
+        .expect("an empty filter is a valid request");
+    assert!(empty.is_empty(), "it asked for nothing, and that is allowed");
+}
+
+#[test]
+fn ac_sub_1_an_unrecognised_notification_type_is_ignored_not_refused() {
+    // A server is expected to handle unsupported types gracefully; refusing
+    // them would make every future notification type a breaking change.
+    let request = ListenRequest::from_params(Some(&json!({
+        "notifications": { "toolsListChanged": true, "somethingFuture": true }
+    })))
+    .expect("an unknown key must not sink the request");
+
+    assert!(request.wants(NotificationKind::ToolsListChanged));
+}
+
+#[test]
+fn ac_sub_1_the_subscription_id_is_the_requests_own_id() {
+    // "The value is the JSON-RPC ID of the subscriptions/listen request."
+    // A minted id looks authoritative and leaves the client unable to correlate
+    // a notification with the subscription that asked for it.
+    let numeric = SubscriptionId::of_request(RequestId::Number(1));
+    assert_eq!(numeric.as_value(), json!(1), "a numeric id stays numeric");
+
+    let textual = SubscriptionId::of_request(RequestId::String("sub-a".into()));
+    assert_eq!(textual.as_value(), json!("sub-a"));
+}
+
+#[test]
+fn ac_sub_1_the_server_tags_what_it_sends_under_params_meta() {
+    // The specification's own notification example puts the tag in
+    // `params._meta`. At the notification root it is well-formed, present, and
+    // in a place no conforming client looks.
+    let id = SubscriptionId::of_request(RequestId::Number(1));
+    let tagged = id.tag(json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": { "uri": "file:///project/config.json" }
+    }));
 
     assert_eq!(
-        tagged["_meta"]["io.modelcontextprotocol/subscriptionId"],
-        json!(id.as_str()),
-        "the subscription id travels under the specification's own key"
+        tagged["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"],
+        json!(1),
+        "the tag belongs under params._meta, as a number when the id was one"
+    );
+    assert_eq!(
+        tagged["params"]["uri"], "file:///project/config.json",
+        "tagging must not disturb the notification's own params"
+    );
+    assert!(
+        tagged.get("_meta").is_none(),
+        "nothing should be left at the notification root"
     );
 }
 
 #[test]
 fn ac_sub_1_two_subscriptions_are_distinguishable() {
     assert_ne!(
-        SubscriptionId::mint().as_str(),
-        SubscriptionId::mint().as_str()
+        SubscriptionId::of_request(RequestId::Number(1)),
+        SubscriptionId::of_request(RequestId::Number(2))
     );
 }
 
@@ -275,22 +367,25 @@ mod http {
 
     #[tokio::test]
     async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
-        let (status, body) =
-            post_modern("subscriptions/listen", json!({ "toolsListChanged": true })).await;
+        let (status, body) = post_modern(
+            "subscriptions/listen",
+            json!({ "notifications": { "toolsListChanged": true } }),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::OK, "{body}");
-        let id = body["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"]
-            .as_str()
-            .unwrap_or_default();
-        assert!(
-            id.starts_with("sub-"),
-            "the acknowledgement carries the subscription id the client will see \
-             on every notification: {body}"
+        assert_eq!(
+            body["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"], body["id"],
+            "the subscription id is the request's own id, so the client can \
+             correlate every notification with the subscription that asked for \
+             it: {body}"
         );
     }
 
     #[tokio::test]
-    async fn ac_sub_1_a_subscription_to_nothing_is_refused() {
+    async fn ac_sub_1_a_listen_without_a_filter_is_refused() {
+        // A request that never said what it wanted. An *empty* filter is a
+        // different thing and is accepted.
         let (status, body) = post_modern("subscriptions/listen", json!({})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], -32602, "{body}");
