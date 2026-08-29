@@ -291,7 +291,12 @@ genuinely changes the resulting config — the overlay re-reads it — so
 `resolve_env_file_paths` (`:941`), `matching_env_file` (`:967`) and their six
 tests (`src/config_reload/tests.rs:399,414,485,502,518,533`) all keep doing
 what they claim. Nothing is deleted. An earlier draft of this design removed
-them; that followed from option B and goes with it.
+them; that followed from option B and goes with it. `resolve_env_file_paths`
+stays the resolver and keeps its behaviour; what moves is WHO calls it and how
+often — startup, once, producing the `ResolvedEnvFiles` the watcher then binds
+instead of resolving the list again at `:1011-1014`. `matching_env_file` goes
+on matching a changed file against that list, which is the same list it
+matched against before.
 
 ## Shape
 
