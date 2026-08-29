@@ -84,3 +84,64 @@ fn ac_oauth_3_two_backends_on_one_issuer_stay_separate() {
         storage_key("payments", "https://auth.example.com")
     );
 }
+
+// ===========================================================================
+// MIK-7272.OAUTH.1 — validate `iss` on the authorization response before
+// redeeming the code (RFC 9207).
+//
+// The attack this closes is mix-up: a client talking to several authorization
+// servers receives a code at its one redirect endpoint and cannot tell which
+// server sent it. An attacker who controls one server obtains a code from
+// another and has the client redeem it at the wrong token endpoint. `state`
+// does not close it — the attacker's own flow carries a valid state.
+// ===========================================================================
+
+mod issuer {
+    use mcp_gateway::oauth::client::validate_issuer;
+
+    #[test]
+    fn ac_oauth_1_a_matching_issuer_is_accepted() {
+        assert!(
+            validate_issuer(Some("https://auth.example.com"), "https://auth.example.com").is_ok()
+        );
+    }
+
+    #[test]
+    fn ac_oauth_1_a_different_issuer_is_refused_before_redemption() {
+        // The mix-up, exactly. The code is real and the state is valid; the
+        // only thing wrong is which server sent it.
+        assert!(
+            validate_issuer(Some("https://attacker.example"), "https://auth.example.com").is_err(),
+            "a code from another issuer must not be redeemed here"
+        );
+    }
+
+    #[test]
+    fn ac_oauth_1_an_absent_issuer_is_permitted_because_it_is_only_a_should() {
+        // The specification says an authorization server SHOULD include `iss`,
+        // and a client MUST validate a **present** one. Refusing its absence
+        // would break every server that has not adopted RFC 9207 — a stricter
+        // rule than the specification states, imposed on peers we do not
+        // control.
+        assert!(validate_issuer(None, "https://auth.example.com").is_ok());
+    }
+
+    #[test]
+    fn ac_oauth_1_the_comparison_is_exact() {
+        // Issuer identifiers compare as exact strings. A trailing slash, a case
+        // change or an added port is a different issuer, and treating any of
+        // them as equal reopens the mix-up through a URL that merely looks the
+        // same.
+        for spoofed in [
+            "https://auth.example.com/",
+            "https://AUTH.example.com",
+            "https://auth.example.com:443",
+            "http://auth.example.com",
+        ] {
+            assert!(
+                validate_issuer(Some(spoofed), "https://auth.example.com").is_err(),
+                "{spoofed} is not the recorded issuer"
+            );
+        }
+    }
+}

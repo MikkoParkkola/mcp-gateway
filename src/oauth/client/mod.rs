@@ -63,6 +63,42 @@ pub fn registration_body(backend_name: &str, redirect_uri: &str) -> serde_json::
     })
 }
 
+/// Check the `iss` an authorization server returned against the one recorded.
+///
+/// MCP 2026-07-28, adopting RFC 9207: authorization servers **SHOULD** include
+/// `iss` in the authorization response, and MCP clients **MUST** validate a
+/// present `iss` against the recorded issuer before redeeming the code.
+///
+/// The attack is mix-up. A client that talks to several authorization servers
+/// receives codes at one redirect endpoint and cannot otherwise tell which
+/// server sent one; an attacker who controls a server it trusts can obtain a
+/// code from a different one and have the client redeem it at the wrong token
+/// endpoint. `state` does not close this — the attacker's own flow carries a
+/// state the client itself issued.
+///
+/// Absence is allowed, deliberately. The specification makes including `iss` a
+/// SHOULD and validating a **present** one a MUST; refusing its absence would
+/// be a stricter rule than the specification states, imposed on servers this
+/// gateway does not control and many of which have not adopted RFC 9207.
+///
+/// # Errors
+///
+/// Returns the mismatch when a present `iss` is not the recorded issuer.
+pub fn validate_issuer(returned: Option<&str>, recorded: &str) -> std::result::Result<(), String> {
+    match returned {
+        None => Ok(()),
+        // Exact string comparison, as issuer identifiers are defined. A
+        // trailing slash, a case change or an explicit default port makes a
+        // different identifier, and normalising any of them would reopen the
+        // mix-up through a URL that merely looks the same.
+        Some(iss) if iss == recorded => Ok(()),
+        Some(iss) => Err(format!(
+            "authorization response came from issuer '{iss}', not the recorded '{recorded}'; \
+             the code was not redeemed"
+        )),
+    }
+}
+
 /// The storage key for a credential, keyed by the issuer that granted it.
 ///
 /// MCP 2026-07-28: a client **MUST** key persisted credentials by the issuer
