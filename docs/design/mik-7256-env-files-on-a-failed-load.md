@@ -488,9 +488,18 @@ name. All three reviewers found it independently, which is the argument for
 having one owner rather than two careful implementations. `from_path_override` overwrites, so
 the process value for an owned key is the env file's own — but it may have
 overwritten a shell-exported value, and that older value is what a restart
-would produce. So `EnvOverlay` carries `baseline` as well: the process values
-of the owned keys, snapshotted once at startup BEFORE any env file is loaded,
-carried forward across reloads with the owned set. Removing an owned key
+would produce. So `EnvOverlay` carries `baseline` as well: the process value of an
+owned key as it was BEFORE any env file supplied that key, captured at the
+moment the key ENTERS the owned set and carried forward across reloads with the
+set itself. At startup that is one snapshot taken before the first file is
+read. It cannot be only that snapshot: the owned set grows, and a key first
+named by a file on a LATER reload would then have no baseline at all, so
+removing it would unset a variable the shell exported rather than restoring it
+— the very defect the baseline exists to prevent, one reload later. Capture on
+entry is well defined precisely because the reload path writes nothing to the
+process: a key not owned at startup still holds whatever the shell exported,
+never a file's value, so the value read when it first becomes owned is the
+pre-file one. Removing an owned key
 restores its baseline value where one exists and unsets it where none does.
 Without the snapshot, `FOO=shell` exported into the process, `FOO=file` in an
 env file, then the line deleted, leaves `FOO` absent in the running gateway and
