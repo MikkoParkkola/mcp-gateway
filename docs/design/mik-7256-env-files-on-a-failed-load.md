@@ -337,19 +337,23 @@ reader:
   file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
   inserts each pair; later files overwrite earlier ones, matching
   `from_path_override`'s precedence. A leading `~` is expanded against the
-  `HOME` the overlay holds SO FAR if the files have already defined one; where
-  they have not, against `HOME`'s BASELINE if one was captured, and only then
-  against `dirs::home_dir()`. The baseline seed is not a third case for
-  symmetry: startup calls `dirs::home_dir()` INSIDE its loop
-  (`src/config/mod.rs:289-309`) and applies each file in the same iteration, so
-  by the time a reload runs, the process `HOME` is whatever the env files last
-  set it to. Seeding a reload from `dirs::home_dir()` would therefore expand the
-  FIRST `~/...` path against a `HOME` startup itself had already moved, read a
-  different file than a restart reads, and leave the watcher bound to the path
-  nobody is reading. `HOME`'s baseline is by construction the value before any
-  env file supplied it, which is exactly what startup's first expansion saw; and
-  where no baseline exists, no env file has ever named `HOME`, so the process
-  value IS the pristine one and `dirs::home_dir()` is correct. Startup already expands `~`
+  `HOME` the overlay holds SO FAR if the files have already defined one, and
+  otherwise against the RECORDED SEED: the `dirs::home_dir()` result observed
+  once, before any env file was applied, and kept beside the baselines. The seed
+  is a recorded value rather than anything derived, and that is the whole point.
+  Startup calls `dirs::home_dir()` INSIDE its loop (`src/config/mod.rs:289-309`)
+  and applies each file in the same iteration, so by the time a reload runs the
+  process environment is no longer what startup's first expansion saw; calling
+  `dirs::home_dir()` again would expand the FIRST `~/...` path against a home
+  the env files themselves moved, read a different file than a restart reads,
+  and leave the watcher bound to the path nobody is reading. Deriving the seed
+  from `HOME`'s baseline does not fix that either, and an earlier draft of this
+  paragraph tried: `dirs` treats an empty or unset `HOME` as absent and falls
+  back to the passwd entry (`dirs-sys-0.5.0/src/lib.rs:33-37`), so a captured
+  baseline of "unset" is not the path startup actually used, and on Windows the
+  function reads a known folder rather than `HOME` at all. A seed that is
+  recorded cannot disagree with itself; a seed that is recomputed has to be
+  right about a platform, and this one was not. Startup already expands `~`
   (`src/config/mod.rs:290-298`) and a `~/...` env file is a supported spelling
   today, so an overlay that skipped expansion would silently stop rotating
   those files. The so-far rule is what keeps the two paths identical: startup
