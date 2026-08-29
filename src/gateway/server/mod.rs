@@ -334,6 +334,20 @@ struct BuiltMetaMcp {
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
+/// The provenance signing key and its key id.
+///
+/// Read through the env overlay rather than `std::env`: env files load into an
+/// in-memory overlay, so a key an env file assigns never reaches the process
+/// environment and a `std::env` read would leave the signer uninstalled.
+fn provenance_key(env: &crate::config::EnvOverlay) -> (String, String) {
+    (
+        env.resolve(crate::attestation::ATTESTATION_SIGNING_KEY_ENV)
+            .unwrap_or_default(),
+        env.resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
+            .unwrap_or_else(|| "gateway".to_string()),
+    )
+}
+
 /// Decide whether to install a provenance-receipt signer for runtime
 /// stamping (MIK-6905) — the unit-testable core of the bootstrap decision in
 /// [`Gateway::build_meta_mcp`], which performs no process-environment reads
@@ -352,20 +366,6 @@ struct BuiltMetaMcp {
 /// inbound attestation-token verification so a leak in one channel cannot
 /// forge the other (MIK-6909 item 2).
 #[must_use]
-/// The provenance signing key and its key id.
-///
-/// Read through the env overlay rather than `std::env`: env files load into an
-/// in-memory overlay, so a key an env file assigns never reaches the process
-/// environment and a `std::env` read would leave the signer uninstalled.
-fn provenance_key(env: &crate::config::EnvOverlay) -> (String, String) {
-    (
-        env.resolve(crate::attestation::ATTESTATION_SIGNING_KEY_ENV)
-            .unwrap_or_default(),
-        env.resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
-            .unwrap_or_else(|| "gateway".to_string()),
-    )
-}
-
 fn resolve_provenance_signer(
     signing_key: &str,
     key_id: &str,
@@ -565,7 +565,9 @@ impl Gateway {
         // Default posture is OBSERVE: audit every presented token at the
         // `gateway_invoke` boundary but never block a call. `off` attaches no
         // validator (pure no-op). Enforce is intentionally not yet a wired mode.
-        if let Some((validator, mode)) = crate::attestation::attestation_wiring_from_env() {
+        if let Some((validator, mode)) =
+            crate::attestation::attestation_wiring_from_overlay(&self.env.get())
+        {
             info!(
                 ?mode,
                 "Per-action attestation wired at gateway_invoke boundary"
@@ -724,7 +726,7 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt));
+            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt).with_env(&self.env.get()));
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }
@@ -1151,7 +1153,7 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, tt));
+            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(&self.env.get()));
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }
@@ -2689,7 +2691,7 @@ mod tests {
     // These exercise `resolve_provenance_signer` directly rather than driving
     // `Gateway::build_meta_mcp` end-to-end: the bootstrap path also reads
     // `GATEWAY_ATTESTATION_SIGNING_KEY` for the unrelated attestation-validator
-    // wiring (`attestation_wiring_from_env`, above), so mutating that
+    // wiring (`attestation_wiring_from_overlay`, above), so mutating that
     // process-global env var here would race against every other test in
     // this binary that constructs a `Gateway`. `resolve_provenance_signer`
     // is the pure decision core with no process-environment reads, which
