@@ -5,6 +5,7 @@
 
 pub mod era;
 mod messages;
+pub mod meta;
 mod negotiate;
 mod types;
 
