@@ -704,6 +704,19 @@ contains:
   `auth.bearer_token` through the env file alone, sees a successful reload, and
   the old token stays valid until a restart nobody knew to perform. The value is
   not logged; the key and the holder are.
+- **Live or startup-only is a property of the CALL SITE, never of the key.** A
+  site that resolves per use is a live reader and answers from the resolution
+  table; a site that resolves once and keeps the value registers. The same key
+  may legitimately have one of each — a live reader then sees the rotation
+  immediately AND the report names the key for the holder that cached it, which
+  is two true statements rather than a contradiction. What is NOT permitted is a
+  single site claimed as both. `MCP_GATEWAY_FIREWALL_SKIP_KEYS` is the case that
+  forced this: an earlier draft had it in the registry while a criterion asserted
+  the scanner applies the new exclusion set on the next scan, and only one can
+  hold. Source settles it — `free_text_keys` reads the variable inside the
+  per-key loop with no caching (`src/security/firewall/input_scanner.rs:71,150`)
+  — so it is a live reader with no registry entry, and the criterion asserting
+  live application is the correct one.
 
 Both are the same defect seen twice — the reload reporting on the patch when it
 should report on what it applied — and one of them decides whether a revoked
