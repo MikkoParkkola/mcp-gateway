@@ -83,14 +83,37 @@ pub enum RequestShape {
     },
 }
 
-/// Decide what a request declared itself to be, from its `params`.
+/// Decide what a request declared itself to be.
+///
+/// Reads the body **and** the `MCP-Protocol-Version` header, because a request
+/// that declares itself modern in one and says nothing in the other is the
+/// exact split this revision's mirrored headers exist to close. Classifying on
+/// the body alone let a caller put `2026-07-28` in a header an upstream
+/// intermediary routes on, omit the body metadata, and take the legacy path
+/// past the feature gate and every mirrored-header check behind it.
+///
+/// Only a header naming a **modern** version counts as a declaration. 2025
+/// defines `MCP-Protocol-Version` too, so treating mere presence as modern
+/// would refuse every conforming 2025 client — the likelier mistake, and the
+/// more damaging one.
 #[must_use]
-pub fn classify_request(params: Option<&Value>) -> RequestShape {
-    let Some(meta) = params
+pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) -> RequestShape {
+    let header_declares_modern = header_version.is_some_and(|v| MODERN_VERSIONS.contains(&v));
+
+    let meta = params
         .and_then(|p| p.get("_meta"))
-        .and_then(Value::as_object)
-    else {
-        return RequestShape::Legacy;
+        .and_then(Value::as_object);
+
+    let Some(meta) = meta else {
+        return if header_declares_modern {
+            // Declared modern where an intermediary can see it, and carried
+            // none of what that declaration requires.
+            RequestShape::Malformed {
+                missing: vec![KEY_PROTOCOL_VERSION, KEY_CLIENT_CAPABILITIES],
+            }
+        } else {
+            RequestShape::Legacy
+        };
     };
 
     let version = meta.get(KEY_PROTOCOL_VERSION);
@@ -99,7 +122,16 @@ pub fn classify_request(params: Option<&Value>) -> RequestShape {
     // Declaration, not presence: only the protocol keys count. `_meta` also
     // carries tracing and vendor extensions, and a 2025 client that sends a
     // trace context has not declared an era.
-    if version.is_none() && capabilities.is_none() {
+    //
+    // All four defined keys declare it, not just the required pair. `clientInfo`
+    // and `logLevel` are this revision's own keys, so a request carrying one and
+    // omitting the required pair has begun a declaration and failed to finish
+    // it — malformed, rather than quietly legacy.
+    let declared = version.is_some()
+        || capabilities.is_some()
+        || meta.contains_key(KEY_CLIENT_INFO)
+        || meta.contains_key(KEY_LOG_LEVEL);
+    if !declared && !header_declares_modern {
         return RequestShape::Legacy;
     }
 
@@ -123,9 +155,18 @@ pub fn classify_request(params: Option<&Value>) -> RequestShape {
         };
     };
 
+    // Present but unusable is not satisfied. The required-field check above
+    // asks only whether the key exists; a null, a number or an array would
+    // reach dispatch as a capability declaration nothing can read.
+    let Some(capabilities) = capabilities.filter(|c| c.is_object()) else {
+        return RequestShape::Malformed {
+            missing: vec![KEY_CLIENT_CAPABILITIES],
+        };
+    };
+
     RequestShape::Modern(Box::new(RequestFields {
         protocol_version: protocol_version.to_string(),
-        client_capabilities: capabilities.cloned().unwrap_or(Value::Null),
+        client_capabilities: capabilities.clone(),
         client_info_name: meta
             .get(KEY_CLIENT_INFO)
             .and_then(|i| i.get("name"))

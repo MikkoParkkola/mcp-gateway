@@ -510,7 +510,17 @@ pub(super) async fn meta_mcp_handler(
     // Which protocol generation is this request written against? Decided per
     // request, not per connection: 2026-07-28 removed the handshake precisely so
     // one connection can carry both.
-    let shape = crate::protocol::meta::classify_request(params.as_ref());
+    //
+    // The header is read here as well as the body. A request declaring
+    // `2026-07-28` in the header an upstream routes on, while carrying no body
+    // metadata, would otherwise classify as legacy and pass the feature gate
+    // and every mirrored-header check behind it.
+    let shape = crate::protocol::meta::classify_request(
+        params.as_ref(),
+        headers
+            .get("mcp-protocol-version")
+            .and_then(|v| v.to_str().ok()),
+    );
     if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
         // Declared itself modern and then omitted a required field. The
         // specification is specific about both halves of the answer: -32602,
@@ -527,15 +537,6 @@ pub(super) async fn meta_mcp_handler(
 
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
-    // Handle notifications (no id) - return 202 Accepted with empty body
-    if method.starts_with("notifications/") {
-        debug!(notification = %method, "Handling notification");
-        return build_accepted_response(&session_id);
-    }
-
-    // For requests, id is guaranteed to exist (checked in parse_request)
-    let id = id.expect("id should exist for non-notification requests");
-
     if let crate::protocol::meta::RequestShape::Modern(ref fields) = shape {
         // A version we cannot serve statelessly. The client is told which ones
         // we can, so it can retry on a shared revision rather than guess.
@@ -544,7 +545,7 @@ pub(super) async fn meta_mcp_handler(
             || !crate::protocol::meta::MODERN_VERSIONS.contains(&fields.protocol_version.as_str())
         {
             let mut rpc = crate::protocol::JsonRpcResponse::error(
-                Some(id.clone()),
+                id.clone(),
                 -32022,
                 format!("unsupported protocol version '{}'", fields.protocol_version),
             );
@@ -587,7 +588,7 @@ pub(super) async fn meta_mcp_handler(
         };
         let duplicated = |name: &'static str| {
             build_error_response(
-                Some(id.clone()),
+                id.clone(),
                 -32020,
                 format!("{name} appears more than once"),
                 &session_id,
@@ -620,7 +621,7 @@ pub(super) async fn meta_mcp_handler(
         };
         if let Err(mismatch) = check.validate() {
             return build_error_response(
-                Some(id.clone()),
+                id.clone(),
                 -32020,
                 mismatch.to_string(),
                 &session_id,
@@ -634,7 +635,7 @@ pub(super) async fn meta_mcp_handler(
             && !fields.declares_capability(capability)
         {
             let mut rpc = crate::protocol::JsonRpcResponse::error(
-                Some(id.clone()),
+                id.clone(),
                 -32021,
                 format!("client did not declare the '{capability}' capability"),
             );
@@ -650,7 +651,7 @@ pub(super) async fn meta_mcp_handler(
         // between claiming the revision and speaking it.
         if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method.as_str()) {
             return build_error_response(
-                Some(id.clone()),
+                id.clone(),
                 -32601,
                 format!("method '{method}' was removed in MCP 2026-07-28"),
                 &session_id,
@@ -658,6 +659,18 @@ pub(super) async fn meta_mcp_handler(
             );
         }
     }
+
+    // Validated first, answered second. A notification carries no id and gets no
+    // response body, but "no body" is not "no checks": returning 202 before the
+    // era, version, mirrored-header and removed-method checks ran accepted a
+    // malformed or disabled modern notification as though it had been honoured.
+    if method.starts_with("notifications/") {
+        debug!(notification = %method, "Handling notification");
+        return build_accepted_response(&session_id);
+    }
+
+    // For requests, id is guaranteed to exist (checked in parse_request)
+    let id = id.expect("id should exist for non-notification requests");
 
     // Extract optional profile hint from X-MCP-Profile header (used at initialize time).
     let header_profile: Option<String> = headers

@@ -673,10 +673,10 @@ fn bench_modern_request_path(c: &mut Criterion) {
 
     // The classification every request pays, modern or not.
     group.bench_function("classify_modern", |b| {
-        b.iter(|| std::hint::black_box(classify_request(Some(&modern))));
+        b.iter(|| std::hint::black_box(classify_request(Some(&modern), None)));
     });
     group.bench_function("classify_legacy", |b| {
-        b.iter(|| std::hint::black_box(classify_request(Some(&legacy))));
+        b.iter(|| std::hint::black_box(classify_request(Some(&legacy), None)));
     });
 
     // The header check, which only a modern request pays.

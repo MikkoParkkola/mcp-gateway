@@ -36,7 +36,7 @@ fn modern_params() -> serde_json::Value {
 
 #[test]
 fn ac_stateless_1_a_request_carrying_its_own_version_is_modern() {
-    match classify_request(Some(&modern_params())) {
+    match classify_request(Some(&modern_params()), None) {
         RequestShape::Modern(fields) => {
             assert_eq!(fields.protocol_version, "2026-07-28");
             assert_eq!(
@@ -60,8 +60,8 @@ fn ac_stateless_1_each_request_carries_its_own_version() {
     let mut second = modern_params();
     second["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!("2027-01-01");
 
-    let a = classify_request(Some(&first));
-    let b = classify_request(Some(&second));
+    let a = classify_request(Some(&first), None);
+    let b = classify_request(Some(&second), None);
 
     match (a, b) {
         (RequestShape::Modern(x), RequestShape::Modern(y)) => {
@@ -85,7 +85,7 @@ fn ac_stateless_9_missing_protocol_version_is_malformed() {
         .expect("_meta is an object")
         .remove("io.modelcontextprotocol/protocolVersion");
 
-    match classify_request(Some(&params)) {
+    match classify_request(Some(&params), None) {
         RequestShape::Malformed { missing } => assert!(
             missing.contains(&"io.modelcontextprotocol/protocolVersion"),
             "the error must name what was missing, got {missing:?}"
@@ -105,7 +105,7 @@ fn ac_stateless_9_missing_client_capabilities_is_malformed() {
         .expect("_meta is an object")
         .remove("io.modelcontextprotocol/clientCapabilities");
 
-    match classify_request(Some(&params)) {
+    match classify_request(Some(&params), None) {
         RequestShape::Malformed { missing } => assert!(
             missing.contains(&"io.modelcontextprotocol/clientCapabilities"),
             "the error must name what was missing, got {missing:?}"
@@ -130,7 +130,7 @@ fn ac_stateless_9_a_request_with_no_protocol_meta_is_legacy_not_malformed() {
     // is a worse error than telling a broken 2026 client its method is unknown.
     let legacy = json!({ "name": "get_weather", "arguments": {} });
     assert!(
-        matches!(classify_request(Some(&legacy)), RequestShape::Legacy),
+        matches!(classify_request(Some(&legacy), None), RequestShape::Legacy),
         "a request with no protocol metadata is a 2025 client, not a broken 2026 one"
     );
 
@@ -138,12 +138,12 @@ fn ac_stateless_9_a_request_with_no_protocol_meta_is_legacy_not_malformed() {
     // extension field and its mere presence declares nothing about the era.
     let empty_meta = json!({ "name": "get_weather", "_meta": {} });
     assert!(
-        matches!(classify_request(Some(&empty_meta)), RequestShape::Legacy),
+        matches!(classify_request(Some(&empty_meta), None), RequestShape::Legacy),
         "`_meta` carries more than protocol fields; an empty one declares no era"
     );
 
     // And no params at all.
-    assert!(matches!(classify_request(None), RequestShape::Legacy));
+    assert!(matches!(classify_request(None, None), RequestShape::Legacy));
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn ac_stateless_9_a_partially_declared_request_is_malformed_not_legacy() {
     });
     assert!(
         matches!(
-            classify_request(Some(&params)),
+            classify_request(Some(&params), None),
             RequestShape::Malformed { .. }
         ),
         "declaring a version and omitting capabilities is a broken modern request"
@@ -174,7 +174,7 @@ fn ac_stateless_9_other_meta_keys_do_not_make_a_request_modern() {
         "_meta": { "traceparent": "00-abc-def-01", "vendor.example/thing": 1 }
     });
     assert!(
-        matches!(classify_request(Some(&params)), RequestShape::Legacy),
+        matches!(classify_request(Some(&params), None), RequestShape::Legacy),
         "unrelated _meta keys declare no era"
     );
 }

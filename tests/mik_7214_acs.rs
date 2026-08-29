@@ -390,6 +390,98 @@ mod http {
     }
 
     #[tokio::test]
+    async fn a_modern_notification_is_validated_before_it_is_accepted() {
+        // A notification carries no id and gets no response body, but "no body"
+        // is not "no checks". While 202 was returned before the mirrored-header
+        // comparison ran, a notification whose header named one method and whose
+        // body carried another was accepted as though it had been honoured —
+        // the same header/body split the check exists to close, on the one
+        // message shape that skipped it.
+        let mut body = modern_body("notifications/tools/list_changed");
+        body.as_object_mut().expect("object").remove("id");
+
+        let (status, _) = post_with_headers(
+            body,
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "notifications/resources/updated"),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a notification whose header disagrees with its body must be refused, not accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_valid_modern_notification_is_still_accepted() {
+        // Validation must not turn into refusal: a well-formed modern
+        // notification still gets its 202.
+        let mut body = modern_body("notifications/tools/list_changed");
+        body.as_object_mut().expect("object").remove("id");
+
+        let (status, _) = post_with_headers(
+            body,
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "notifications/tools/list_changed"),
+            ],
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_notification_is_still_accepted() {
+        // The regression that matters: 2025 clients send notifications and must
+        // keep getting 202 for them.
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+
+        let (status, _) = post_with_headers(body, &[]).await;
+
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "a legacy notification must still be accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_header_declared_modern_request_cannot_slip_through_as_legacy() {
+        // The bypass end to end: 2026-07-28 declared in the header an upstream
+        // routes on, with no body metadata at all. Classifying on the body alone
+        // answered Legacy and walked past the feature gate.
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        });
+
+        let (status, response) = post_with_headers(
+            body,
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/list"),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a header-declared modern request with no body metadata must be refused: {response}"
+        );
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+    }
+
+    #[tokio::test]
     async fn a_repeated_mirrored_header_is_refused_over_http() {
         // Two lines of one header let one intermediary route on the first and
         // another act on the second. The disagreement between them is the

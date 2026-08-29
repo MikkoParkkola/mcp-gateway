@@ -29,7 +29,7 @@ fn request_claiming_to_be(name: &str) -> serde_json::Value {
 #[test]
 fn ac_ident_1_client_info_is_carried_but_is_not_an_identity() {
     // It parses. It is available. It is a string the caller chose.
-    let RequestShape::Modern(fields) = classify_request(Some(&request_claiming_to_be("admin")))
+    let RequestShape::Modern(fields) = classify_request(Some(&request_claiming_to_be("admin")), None)
     else {
         panic!("a request carrying the protocol fields is modern");
     };
@@ -46,8 +46,8 @@ fn ac_ident_1_two_callers_claiming_the_same_name_are_not_the_same_caller() {
     // The impersonation, made concrete. If `clientInfo` fed identity, these two
     // requests would be indistinguishable — and one of them is whoever asked
     // second.
-    let first = classify_request(Some(&request_claiming_to_be("trusted-ops-tool")));
-    let second = classify_request(Some(&request_claiming_to_be("trusted-ops-tool")));
+    let first = classify_request(Some(&request_claiming_to_be("trusted-ops-tool")), None);
+    let second = classify_request(Some(&request_claiming_to_be("trusted-ops-tool")), None);
 
     let (RequestShape::Modern(a), RequestShape::Modern(b)) = (first, second) else {
         panic!("both are modern requests");
@@ -73,7 +73,7 @@ fn ac_ident_2_capabilities_govern_what_a_client_can_receive_not_what_it_can_reac
             }
         }
     });
-    let RequestShape::Modern(fields) = classify_request(Some(&params)) else {
+    let RequestShape::Modern(fields) = classify_request(Some(&params), None) else {
         panic!("modern request");
     };
 
@@ -96,7 +96,7 @@ fn ac_ident_2_an_empty_capability_object_declares_it() {
             "io.modelcontextprotocol/clientCapabilities": { "sampling": {} }
         }
     });
-    let RequestShape::Modern(fields) = classify_request(Some(&params)) else {
+    let RequestShape::Modern(fields) = classify_request(Some(&params), None) else {
         panic!("modern request");
     };
     assert!(fields.declares_capability("sampling"));
@@ -114,7 +114,7 @@ fn ac_ident_2_a_null_capability_is_not_a_declaration() {
             "io.modelcontextprotocol/clientCapabilities": { "sampling": null }
         }
     });
-    let RequestShape::Modern(fields) = classify_request(Some(&params)) else {
+    let RequestShape::Modern(fields) = classify_request(Some(&params), None) else {
         panic!("modern request");
     };
     assert!(!fields.declares_capability("sampling"));
