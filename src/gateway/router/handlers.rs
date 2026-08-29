@@ -507,6 +507,24 @@ pub(super) async fn meta_mcp_handler(
         }
     };
 
+    // Which protocol generation is this request written against? Decided per
+    // request, not per connection: 2026-07-28 removed the handshake precisely so
+    // one connection can carry both.
+    let shape = crate::protocol::meta::classify_request(params.as_ref());
+    if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
+        // Declared itself modern and then omitted a required field. The
+        // specification is specific about both halves of the answer: -32602,
+        // and 400 on HTTP.
+        return build_error_response(
+            id,
+            -32602,
+            format!("missing required request metadata: {}", missing.join(", ")),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let is_modern = matches!(shape, crate::protocol::meta::RequestShape::Modern(_));
+
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
     // Handle notifications (no id) - return 202 Accepted with empty body
@@ -864,7 +882,42 @@ pub(super) async fn meta_mcp_handler(
     // it 200 tells every caller and intermediary the call succeeded. The status
     // travels on the error precisely so this line can honour it.
     let status = refusal_status(&response).unwrap_or(StatusCode::OK);
+    if is_modern {
+        // A stateless client has no handshake in which to learn who answered,
+        // so every result says. And it holds no session, so it is sent no
+        // session header — the legacy path below keeps both unchanged.
+        return build_modern_response(response, status);
+    }
     build_response(response, &session_id, status)
+}
+
+/// Build a response for a request written against 2026-07-28.
+///
+/// Two differences from the legacy path, and they are the same difference: the
+/// connection carries no state. There is no `Mcp-Session-Id`, because the
+/// revision deleted protocol sessions; and the result names the server, because
+/// there was no handshake in which to say so.
+fn build_modern_response(
+    mut response: crate::protocol::JsonRpcResponse,
+    status: StatusCode,
+) -> axum::response::Response {
+    if let Some(ref mut result) = response.result
+        && let Some(object) = result.as_object_mut()
+    {
+        let meta = object
+            .entry("_meta")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(meta) = meta.as_object_mut() {
+            meta.insert(
+                crate::protocol::meta::KEY_SERVER_INFO.to_string(),
+                serde_json::json!({
+                    "name": "mcp-gateway",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }),
+            );
+        }
+    }
+    (status, axum::Json(response)).into_response()
 }
 
 /// The HTTP status a response deserves when it carries an authorization

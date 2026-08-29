@@ -178,3 +178,198 @@ fn ac_stateless_9_other_meta_keys_do_not_make_a_request_modern() {
         "unrelated _meta keys declare no era"
     );
 }
+
+// ===========================================================================
+// Integration: the modern request as it arrives over Streamable HTTP.
+//
+// STATELESS.2 (serverInfo on every result), STATELESS.3 (no Mcp-Session-Id on
+// the modern path, still there on the legacy one) and STATELESS.9 (a malformed
+// modern request is refused) are all properties of one seam — what a modern
+// response looks like — so they are exercised together against the real router.
+// ===========================================================================
+
+mod http {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use mcp_gateway::backend::BackendRegistry;
+    use mcp_gateway::config::Config;
+    use mcp_gateway::gateway::auth::ResolvedAuthConfig;
+    use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
+    use mcp_gateway::gateway::proxy::ProxyManager;
+    use mcp_gateway::gateway::streaming::NotificationMultiplexer;
+    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
+    use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    fn state() -> Arc<AppState> {
+        let config = Config::default();
+        let backends = Arc::new(BackendRegistry::new());
+        let multiplexer = Arc::new(NotificationMultiplexer::new(
+            Arc::clone(&backends),
+            config.streaming.clone(),
+        ));
+        let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+        let agent_registry = Arc::new(AgentRegistry::new());
+        Arc::new(AppState {
+            meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
+            backends,
+            meta_mcp_enabled: true,
+            multiplexer,
+            proxy_manager,
+            streaming_config: config.streaming.clone(),
+            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
+            key_server: None,
+            tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
+            mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+            sanitize_input: false,
+            ssrf_protection: false,
+            trust_configured_backends: false,
+            inflight: Arc::new(tokio::sync::Semaphore::new(100)),
+            agent_auth: AgentAuthState::new(false, agent_registry),
+            gateway_key_pair: Arc::new(GatewayKeyPair::generate().expect("RSA key gen")),
+            capability_dirs: Vec::new(),
+            config_path: None,
+            #[cfg(feature = "firewall")]
+            firewall: None,
+            agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
+            control_plane_store: None,
+            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(
+                Config::default(),
+            )),
+            export_status: None,
+            transparency_log: None,
+            dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+        })
+    }
+
+    /// POST to `/mcp`, returning status, the session header if any, and the body.
+    async fn post_mcp(body: Value) -> (StatusCode, Option<String>, Value) {
+        let router = create_router(state());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request");
+        let response = router.oneshot(request).await.expect("router must answer");
+        let status = response.status();
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must read");
+        (
+            status,
+            session,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// A modern `tools/list`, transcribed from the specification's shape.
+    fn modern_tools_list(id: i64) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "ExampleClient", "version": "1.0.0"
+                    }
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_3_a_modern_response_carries_no_session_header() {
+        let (status, session, body) = post_mcp(modern_tools_list(1)).await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            session, None,
+            "2026-07-28 removed protocol sessions and the Mcp-Session-Id header; \
+             emitting one tells a modern client to carry state that no longer exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_3_a_legacy_response_still_carries_the_session_header() {
+        // The regression that matters. A change that strips the header
+        // unconditionally satisfies the row above and breaks every 2025 client.
+        let (status, session, body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+        }))
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(
+            session.is_some(),
+            "a 2025 client must keep the session header it has always received"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_2_a_modern_result_identifies_the_server() {
+        let (_, _, body) = post_mcp(modern_tools_list(3)).await;
+
+        let info = &body["result"]["_meta"]["io.modelcontextprotocol/serverInfo"];
+        assert!(
+            info["name"].is_string() && info["version"].is_string(),
+            "a stateless client has no handshake to learn who it is talking to, \
+             so every result identifies the server: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_2_a_legacy_result_is_unchanged() {
+        // The mirror. Adding serverInfo to the shared result builder would
+        // change the 2025 wire format for every existing client.
+        let (_, _, body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/list"
+        }))
+        .await;
+
+        assert!(
+            body["result"].get("_meta").is_none(),
+            "a 2025 result gains no fields: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_9_a_malformed_modern_request_is_refused() {
+        // Declared a version, omitted the capabilities. Refused, not served.
+        let (status, _, body) = post_mcp(json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/list",
+            "params": {
+                "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" }
+            }
+        }))
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "the specification requires 400 for a malformed request: {body}"
+        );
+        assert_eq!(body["error"]["code"], -32602, "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("clientCapabilities"),
+            "the error names the field that was missing: {body}"
+        );
+    }
+}
