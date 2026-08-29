@@ -288,6 +288,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backend that was not listening when the gateway started is no longer
+  invisible for the rest of the process.** Warm-start made one attempt, and a
+  backend that missed it kept an empty tool cache forever. Discovery skips a
+  backend with an empty cache and a semantic query never fills one, so
+  `gateway_search` could not see a backend that `gateway_execute` reached
+  perfectly well. Warm-start now retries on a slow cadence, re-resolving the
+  backend by name each attempt so a config reload is respected.
+
+- **An empty tool list is no longer believed the first time.** A backend that
+  answered with no tools had that emptiness cached like any other answer, so an
+  earlier bounded retry re-read the same cached emptiness within microseconds
+  and never reached the backend again. The cache entry is now invalidated
+  between attempts, so the retry asks the question it was written to ask.
+
+- **A mistyped backend command is reported instead of retried forever.** A
+  spawn failure lost its error kind at the transport boundary, so a command
+  that does not exist looked exactly like a port that was not listening yet —
+  and warm-start respawned it once a minute for the life of the process with
+  nothing saying the configuration was wrong. A missing command and a
+  non-executable file are now permanent failures that stop both retry
+  predicates. HTTP statuses are deliberately left unclassified: this protocol
+  overloads 404 and 400 to mean the session expired, so a status-only
+  classifier would be unsafe.
+
+- **stdio mode has a health loop.** It never had one, so a backend that died
+  while the gateway ran in stdio mode stayed dead until restart. The loop is
+  now shared with the HTTP path. Both background tasks — the reaper and the
+  health loop — are aborted through a guard on every exit path; previously the
+  reaper was aborted only on the EOF path, and a dropped task handle detaches
+  rather than stops, so a host cancelling `run_stdio` left both holding the
+  backend registry alive.
+
+- **Retry backoff is jittered, as it was already documented to be.** The module
+  described full-jitter backoff and slept the plain exponential, so callers
+  backing off from one failure woke together and hit the recovering service as
+  a single burst — precisely the thundering herd the jitter was named for.
+
+- **The Homebrew formula no longer mutates quarantine attributes during
+  install.** It also emits an explicit release version rather than inferring
+  one.
+
 - **A config file reached through a symlink now reloads when its target is
   written.** The watcher followed the path it was given and nothing else, so a
   deployment that points `gateway.yaml` at a released file and rewrites that
