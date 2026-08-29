@@ -29,7 +29,8 @@ can be restored, and nothing can be applied by halves.
 **One config consumer reads the real process environment, and the library
 offers no way to redirect it.** `Self::figment` merges
 `Env::prefixed("MCP_GATEWAY_")` (`src/config/mod.rs:286`) and `Config::load`
-extracts it a second time at `:199`, deliberately after the apply — so an env
+extracts it a second time at `:201-203`, deliberately after the apply call at
+`:199` — so an env
 file setting `MCP_GATEWAY_PORT` reaches the config through Figment, not
 through `${VAR}`. `Env` reads `std::env::vars_os()` and takes no substitute.
 This is the one constraint that cannot be met by passing an overlay to an
