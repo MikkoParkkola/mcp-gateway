@@ -6,12 +6,14 @@
 pub mod cacheable;
 pub mod continuation;
 pub mod era;
+pub mod extensions;
 pub mod headers;
 mod messages;
 pub mod meta;
 pub mod mrtr;
 mod negotiate;
 pub mod subscriptions;
+pub mod trace;
 mod types;
 
 pub use messages::*;
