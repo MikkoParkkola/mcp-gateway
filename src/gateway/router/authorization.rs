@@ -2,57 +2,19 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared authorization for backend tool invocations.
 
-use axum::http::StatusCode;
 use serde_json::Value;
 use tracing::warn;
 
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
+pub(super) use crate::gateway::authz::{AuthorizationError, OwnedToolTarget, ToolTarget};
+use crate::gateway::authz::{ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_agent_scope_and_audit_reason,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::{validate_tool_name, validate_url_not_ssrf};
-
-pub(super) struct OwnedToolTarget {
-    pub server: String,
-    pub tool: String,
-    pub arguments: Value,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct ToolTarget<'a> {
-    pub server: &'a str,
-    pub tool: &'a str,
-    pub arguments: &'a Value,
-}
-
-impl OwnedToolTarget {
-    pub(super) fn as_target(&self) -> ToolTarget<'_> {
-        ToolTarget {
-            server: &self.server,
-            tool: &self.tool,
-            arguments: &self.arguments,
-        }
-    }
-}
-
-pub(super) struct AuthorizationError {
-    pub code: i32,
-    pub status: StatusCode,
-    pub message: String,
-}
-
-impl AuthorizationError {
-    fn forbidden(code: i32, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            status: StatusCode::FORBIDDEN,
-            message: message.into(),
-        }
-    }
-}
 
 pub(super) fn backend_tool_targets_for_call(
     meta_mcp: &MetaMcp,
@@ -76,16 +38,40 @@ pub(super) fn backend_tool_targets_for_call(
     }
 }
 
-pub(super) fn is_admin_meta_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "gateway_kill_server"
-            | "gateway_revive_server"
-            | "gateway_set_profile"
-            | "gateway_set_state"
-            | "gateway_reload_config"
-            | "gateway_reload_capabilities"
-    )
+/// Meta-tools that change the gateway for everyone, and so require a credential.
+///
+/// The test is global effect, not "sounds administrative". Killing or reviving a
+/// backend flips a shared kill switch; reloading config or capabilities replaces
+/// state every session reads. Those four are gated.
+///
+/// `gateway_set_profile` and `gateway_set_state` were gated here and should not
+/// have been. Both write only the caller's own session — `set_profile` calls
+/// `session_profiles.set_profile(sid, ..)` and `set_state` calls
+/// `session_state.set_state(sid, ..)` — and neither can widen what that caller
+/// reaches, because the per-client backend and tool scope checks and the global
+/// tool policy are evaluated independently at dispatch.
+///
+/// Gating them was worse than useless. `handle_initialize` binds a
+/// caller-supplied profile to the session through the very same call, with no
+/// credential, so the gate on `gateway_set_profile` stopped nothing: a caller
+/// who wanted a different profile asked for it at connect time instead. What
+/// the gate did achieve was breaking a non-admin client that switched its own
+/// profile through the documented tool. A control that blocks the legitimate
+/// path and leaves the equivalent one open is not a control.
+///
+/// The alternative — gating profile selection at initialize as well — was
+/// rejected: it would refuse a client that legitimately picks its own routing
+/// at connect time, to prevent something that grants no access it did not
+/// already have.
+pub(crate) const ADMIN_META_TOOLS: &[&str] = &[
+    "gateway_kill_server",
+    "gateway_revive_server",
+    "gateway_reload_config",
+    "gateway_reload_capabilities",
+];
+
+pub(crate) fn is_admin_meta_tool(tool_name: &str) -> bool {
+    ADMIN_META_TOOLS.contains(&tool_name)
 }
 
 pub(super) fn require_admin_tool_access(
@@ -248,4 +234,74 @@ fn parse_qualified_tool_ref(tool_ref: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((server, tool))
+}
+
+/// Name the principal a refusal should be recorded against.
+///
+/// An HTTP caller can be authenticated three ways, and only one of them is an
+/// API key. Reporting just the key name labels an agent-authenticated or
+/// certificate-authenticated caller as unauthenticated, which is the opposite
+/// of what an audit line is for — those are exactly the refusals worth
+/// attributing. Preference order matches specificity: the API key names a
+/// configured client, an agent identity names a delegated actor, a certificate
+/// names a machine.
+pub(super) fn refusal_principal(
+    client: Option<&AuthenticatedClient>,
+    oauth_agent_identity: Option<&OAuthAgentIdentity>,
+    cert_identity: Option<&CertIdentity>,
+) -> Option<String> {
+    if let Some(client) = client
+        && client.authenticated
+    {
+        return Some(client.name.clone());
+    }
+    if let Some(agent) = oauth_agent_identity {
+        return Some(format!("agent:{}", agent.agent_name));
+    }
+    if let Some(cert) = cert_identity {
+        return Some(format!("cert:{}", cert.display_name));
+    }
+    None
+}
+
+/// The HTTP authorizer: the full policy set, against the caller's real identity.
+///
+/// Borrows everything. It is built per request and handed to the meta layer
+/// through the caller context, so nothing here is ever stored — which is what
+/// keeps `AppState` (owner of `meta_mcp`) out of `MetaMcp` and avoids a
+/// reference cycle.
+pub(super) struct RouterAuthorizer<'a> {
+    pub(super) state: &'a AppState,
+    pub(super) client: Option<&'a AuthenticatedClient>,
+    pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
+    pub(super) cert_identity: Option<&'a CertIdentity>,
+    /// The principal a refusal is recorded against, resolved once at
+    /// construction.
+    ///
+    /// Resolved and stored rather than derived in `caller_name`, which returns
+    /// a borrow and so could only ever hand back the API-key name. An
+    /// agent-authenticated or certificate-authenticated caller would otherwise
+    /// be audited as unauthenticated — and those are the refusals an incident
+    /// responder most needs to attribute.
+    pub(super) principal: Option<String>,
+}
+
+impl ToolAuthorizer for RouterAuthorizer<'_> {
+    fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
+        authorize_tool_target(
+            self.state,
+            self.client,
+            self.oauth_agent_identity,
+            self.cert_identity,
+            target,
+        )
+    }
+
+    fn transport(&self) -> Transport {
+        Transport::Http
+    }
+
+    fn caller_name(&self) -> Option<&str> {
+        self.principal.as_deref()
+    }
 }

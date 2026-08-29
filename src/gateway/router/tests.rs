@@ -5,7 +5,7 @@ use super::helpers::{
     build_http_error_response, build_json_response, extract_request_id, extract_tools_call_params,
     is_notification_method, parse_elicitation_params, parse_request,
 };
-use super::{AppState, create_router};
+use super::{AppState, create_router, create_router_with};
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{
     ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig, StreamingConfig, SurfacedToolConfig,
@@ -72,6 +72,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -120,6 +121,7 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -164,6 +166,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -227,6 +230,7 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -302,6 +306,7 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -349,6 +354,7 @@ fn test_router_app_state_with_ssrf(
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -410,6 +416,7 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         )),
         export_status: None,
         transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
     })
 }
 
@@ -1903,4 +1910,1165 @@ async fn tools_list_static_code_mode_unaffected_by_absent_param() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"gateway_search"));
     assert!(names.contains(&"gateway_execute"));
+}
+
+// ── Origin / Host validation (CWE-346) ────────────────────────────────────────
+//
+// The gateway binds loopback and, with auth off, treats every caller as an
+// anonymous identity. A web page can therefore reach `/mcp` either by rebinding
+// a hostname to 127.0.0.1 or, because the handler never checks Content-Type, by
+// a preflight-free cross-origin POST. A browser always sends `Origin`; a CLI MCP
+// client never does. That asymmetry is the gate.
+
+fn mcp_request_with(header: Option<(&str, &str)>) -> axum::http::Request<axum::body::Body> {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json");
+    if let Some((name, value)) = header {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn mcp_rejects_foreign_origin() {
+    let router = create_router(test_router_app_state());
+    let response = router
+        .oneshot(mcp_request_with(Some((
+            "origin",
+            "http://attacker.example",
+        ))))
+        .await
+        .unwrap();
+    // Must fail on the gate, not on a parse error: the body above is valid.
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_allows_absent_origin() {
+    let router = create_router(test_router_app_state());
+    let response = router.oneshot(mcp_request_with(None)).await.unwrap();
+    assert_ne!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a CLI MCP client sends no Origin and must keep working"
+    );
+}
+
+#[tokio::test]
+async fn mcp_allows_bind_origin() {
+    let router = create_router(test_router_app_state());
+    let response = router
+        .oneshot(mcp_request_with(Some(("origin", "http://127.0.0.1:39400"))))
+        .await
+        .unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_rejects_foreign_host() {
+    let router = create_router(test_router_app_state());
+    // No Origin at all: this is the rebinding shape, where the browser's own
+    // Origin may be suppressed but Host carries the attacker's name.
+    let response = router
+        .oneshot(mcp_request_with(Some(("host", "attacker.example"))))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn health_is_reachable_by_a_probe_and_refused_cross_site() {
+    // No exemption. A monitoring probe sends no Origin and passes on the
+    // general rules; a web page sends one and is refused like anywhere else,
+    // so the boundary is the whole port with no special cases to audit.
+    let router = create_router(test_router_app_state());
+
+    let probe = axum::http::Request::builder()
+        .method("GET")
+        .uri("/health")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(probe).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let page = axum::http::Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header("origin", "http://attacker.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.oneshot(page).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[test]
+fn anonymous_denied_admin_meta_tools() {
+    use super::authorization::{ADMIN_META_TOOLS, require_admin_tool_access};
+    let anon = crate::gateway::auth::anonymous_client();
+
+    // Iterates the one list rather than a copy of it. The copy had drifted:
+    // it still named two tools removed from the admin set, and the assertion
+    // did not notice because `require_admin_tool_access` never reads the tool
+    // name — it answers from the client's admin bit alone, so the loop asserted
+    // the same thing once per entry whatever the entries were.
+    for tool in ADMIN_META_TOOLS {
+        assert!(
+            super::authorization::is_admin_meta_tool(tool),
+            "{tool} is in the admin list, so the predicate must say so"
+        );
+        assert!(
+            require_admin_tool_access(Some(&anon), tool).is_err(),
+            "anonymous must not reach {tool}"
+        );
+    }
+
+    for session_local in ["gateway_set_profile", "gateway_set_state"] {
+        assert!(
+            !super::authorization::is_admin_meta_tool(session_local),
+            "{session_local} writes only the caller's own session and must stay \
+             out of the admin list"
+        );
+    }
+}
+
+/// The deployment guide names exactly the tools the admin set contains.
+///
+/// A prose file cannot be derived from a constant, so it is compared to one.
+/// The guide, the startup banner, the changelog and the predicate were four
+/// hand-maintained copies of one roster, and they disagreed the moment the
+/// roster changed. Three now read the constant; this makes the fourth fail
+/// loudly instead of quietly misleading an operator about what they can run.
+#[test]
+fn deployment_guide_matches_the_admin_tool_set() {
+    let guide = include_str!("../../../docs/DEPLOYMENT.md");
+
+    for tool in super::authorization::ADMIN_META_TOOLS {
+        assert!(
+            guide.contains(tool),
+            "DEPLOYMENT.md must name {tool} among the tools needing a credential"
+        );
+    }
+
+    for session_local in ["gateway_set_profile", "gateway_set_state"] {
+        assert!(
+            !guide.contains(session_local),
+            "DEPLOYMENT.md still lists {session_local} as needing a credential, \
+             which it no longer does"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_rejects_no_cors_get_from_a_page() {
+    // The Fetch standard omits `Origin` from a no-CORS GET, so the
+    // absent-Origin allowance would admit it. Fetch Metadata is what catches it.
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/mcp")
+        .header("sec-fetch-site", "cross-site")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_rejects_opaque_origin() {
+    // A sandboxed iframe and a cross-site redirect both send `Origin: null`.
+    let router = create_router(test_router_app_state());
+    let response = router
+        .oneshot(mcp_request_with(Some(("origin", "null"))))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_allows_same_origin_browser_request() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("origin", "http://127.0.0.1:39400")
+        .header("sec-fetch-site", "same-origin")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mcp_rejects_foreign_authority_without_host_header() {
+    // HTTP/2 carries the target in the `:authority` pseudo-header, not `Host`,
+    // so a gate that reads only `Host` is inert over HTTP/2 and the rebinding
+    // refusal disappears on exactly the protocol browsers prefer.
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("http://attacker.example/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    assert!(
+        request.headers().get(axum::http::header::HOST).is_none(),
+        "the case is only meaningful with no Host header present"
+    );
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// Build router state whose live config binds a wildcard address.
+fn wildcard_bind_app_state() -> Arc<AppState> {
+    let state = test_router_app_state();
+    let mut config = crate::config::Config::default();
+    config.server.host = "0.0.0.0".to_string();
+    state.live_config.set(config);
+    state
+}
+
+#[tokio::test]
+async fn wildcard_bind_refuses_a_rebound_name_through_the_middleware() {
+    // The policy unit tests assert the rule; this asserts the middleware
+    // actually applies it on the real route, so the wildcard allowance cannot
+    // widen back into a rebinding path during a refactor.
+    let router = create_router(wildcard_bind_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn wildcard_bind_admits_a_numeric_host_through_the_middleware() {
+    let router = create_router(wildcard_bind_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "192.168.1.5:39400")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn merged_routes_are_behind_the_origin_gate() {
+    // Routes merged after the layer stack would skip the gate entirely. That
+    // set includes the key server's token exchange and revocation endpoints,
+    // JWKS, the protected-resource metadata, /metrics and the UI HTML.
+    let router = create_router(test_router_app_state());
+    for uri in [
+        "/.well-known/jwks.json",
+        "/.well-known/oauth-protected-resource",
+        "/metrics",
+    ] {
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("origin", "http://attacker.example")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{uri} must be refused for a cross-site Origin"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_route_merged_after_create_router_is_still_gated() {
+    // Round 4 fixed merges INSIDE create_router; a merge OUTSIDE it reopened
+    // the same hole for the webhook routes. The guard is therefore applied to
+    // extra routes handed in, not to whatever happened to be merged by then.
+    let extra = axum::Router::new().route(
+        "/webhooks/test",
+        axum::routing::post(|| async { axum::http::StatusCode::OK }),
+    );
+    let router = create_router_with(test_router_app_state(), Some(extra));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/webhooks/test")
+        .header("origin", "http://attacker.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_numeric_origin_must_match_the_request_authority() {
+    // Round 6 admitted ANY numeric Origin on a non-loopback bind, reasoning
+    // that a browser sets Origin from where the page came so an attacker
+    // cannot claim one. An attacker can: host the page on a public IP and the
+    // browser sends that address as the Origin. It is only safe when it names
+    // the gateway the request is actually addressed to.
+    let router = create_router(wildcard_bind_app_state());
+
+    let attacker = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "192.168.1.5:39400")
+        .header("origin", "http://203.0.113.5")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(attacker).await.unwrap().status(),
+        StatusCode::FORBIDDEN,
+        "a numeric Origin naming another host must be refused"
+    );
+
+    let own_page = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("host", "192.168.1.5:39400")
+        .header("origin", "http://192.168.1.5:39400")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+    assert_ne!(
+        router.oneshot(own_page).await.unwrap().status(),
+        StatusCode::FORBIDDEN,
+        "the gateway's own page must still work"
+    );
+}
+
+// ===========================================================================
+// MIK-7252 — a playbook step faces the invoking caller's real scope.
+//
+// The meta-layer cases in `meta_mcp::authz_tests` prove the chokepoint is
+// reached, using a test authorizer. These prove the thing that actually
+// matters: the REAL policy — `RouterAuthorizer` over an `AuthenticatedClient`
+// — refuses a playbook step, which no test double can demonstrate.
+// ===========================================================================
+
+use crate::gateway::auth::AuthenticatedClient;
+
+/// A client restricted to one backend, with optional tool scoping.
+fn scoped_client(
+    name: &str,
+    backends: Vec<String>,
+    allowed_tools: Option<Vec<String>>,
+) -> AuthenticatedClient {
+    AuthenticatedClient {
+        name: name.to_string(),
+        rate_limit: 0,
+        backends,
+        allowed_tools,
+        denied_tools: None,
+        admin: false,
+        principal: format!("principal-{name}"),
+        authenticated: true,
+    }
+}
+
+/// As [`run_step_as`], but carrying a certificate or agent identity.
+///
+/// Separate rather than a fourth parameter on `run_step_as`, so the many cases
+/// that have no such identity are not obliged to say `None, None` and mean it.
+async fn run_step_with_identity(
+    state: &Arc<AppState>,
+    client: &AuthenticatedClient,
+    cert_identity: Option<&crate::mtls::CertIdentity>,
+    oauth_agent_identity: Option<&crate::gateway::oauth::AgentIdentity>,
+    server: &str,
+    tool: &str,
+) -> JsonRpcResponse {
+    let yaml = format!(
+        "name: scoped\ndescription: one step\non_error: abort\nsteps:\n  - name: step\n    server: {server}\n    tool: {tool}\n"
+    );
+    let definition: crate::playbook::PlaybookDefinition =
+        serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(definition);
+    state.meta_mcp.set_playbook_engine(engine);
+
+    let authorizer = super::authorization::RouterAuthorizer {
+        state: state.as_ref(),
+        client: Some(client),
+        oauth_agent_identity,
+        cert_identity,
+        principal: super::authorization::refusal_principal(
+            Some(client),
+            oauth_agent_identity,
+            cert_identity,
+        ),
+    };
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &authorizer,
+        api_key_name: Some(client.name.as_str()),
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: client.admin,
+    };
+    state
+        .meta_mcp
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            serde_json::json!({ "name": "scoped", "arguments": {} }),
+            None,
+            caller,
+        )
+        .await
+}
+
+/// Run a one-step playbook through the production path, with the real router
+/// authorizer built exactly as `handlers.rs` builds it.
+///
+/// Most cases carry no certificate or agent identity, so [`run_step_as`] wraps
+/// this and passes `None` for both rather than making every call site say so.
+async fn run_step_as(
+    state: &Arc<AppState>,
+    client: &AuthenticatedClient,
+    server: &str,
+    tool: &str,
+) -> JsonRpcResponse {
+    run_step_with_identity(state, client, None, None, server, tool).await
+}
+
+/// The text a dispatch came back with, whether it succeeded or failed.
+///
+/// A refusal surfaces as a JSON-RPC error; a network failure surfaces inside a
+/// successful envelope. Both are strings to assert against — every case below
+/// asserts what the response WAS, not merely that it failed.
+fn response_text(response: &JsonRpcResponse) -> String {
+    response.error.as_ref().map_or_else(
+        || {
+            response
+                .result
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        },
+        |e| e.message.clone(),
+    )
+}
+
+#[tokio::test]
+async fn authz_1_playbook_step_outside_client_backend_scope_is_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+
+    let response = run_step_as(&state, &client, "beta", "read").await;
+
+    let msg = response_text(&response);
+    assert!(
+        response.error.is_some(),
+        "a step outside the client's backend scope must be refused: {msg}"
+    );
+    assert!(
+        msg.contains("beta"),
+        "the refusal must name the backend it refused: {msg}"
+    );
+    assert!(
+        msg.contains("scoped"),
+        "and the client it refused for: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn authz_1a_playbook_step_inside_client_backend_scope_is_not_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+
+    let response = run_step_as(&state, &client, "alpha", "read").await;
+
+    // The backend is unreachable, so this fails at the network — deliberately.
+    // What must NOT appear is an authorization refusal: the point is that the
+    // scope check passed and the call proceeded to dispatch.
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "a permitted backend must reach dispatch rather than be refused: {}",
+        response_text(&response)
+    );
+}
+
+#[tokio::test]
+async fn authz_2_playbook_step_outside_client_tool_scope_is_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client(
+        "scoped",
+        vec!["alpha".to_string()],
+        Some(vec!["safe_*".to_string()]),
+    );
+
+    let response = run_step_as(&state, &client, "alpha", "danger_tool").await;
+
+    let msg = response_text(&response);
+    assert!(
+        response.error.is_some(),
+        "a step outside the client's tool allowlist must be refused: {msg}"
+    );
+    assert!(
+        msg.contains("danger_tool"),
+        "the refusal must name the tool: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client(
+        "scoped",
+        vec!["alpha".to_string()],
+        Some(vec!["safe_*".to_string()]),
+    );
+
+    let response = run_step_as(&state, &client, "alpha", "safe_read").await;
+
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "a permitted tool must reach dispatch rather than be refused: {}",
+        response_text(&response)
+    );
+}
+
+/// A refusal only the chokepoint can see maps to 403.
+///
+/// The router gate answers 403 for the shapes it inspects. A playbook step is
+/// not one of them — its targets never appear in the request — so before the
+/// status travelled on the refusal, a denied playbook came back HTTP 200 with
+/// the refusal buried in the body, telling every caller and intermediary that
+/// the call had succeeded.
+///
+/// NOT end to end, and the name no longer claims it is. This drives the meta
+/// dispatch and asserts the mapping `refusal_status` performs; it does not
+/// drive the axum handler, so it would stay green if the handler stopped
+/// calling that mapping. The handler's use of it is one line
+/// (`let status = refusal_status(&response).unwrap_or(StatusCode::OK)`), and
+/// its control is code review, which is stated here rather than implied by a
+/// test name.
+#[tokio::test]
+async fn authz_playbook_denial_maps_to_forbidden() {
+    let state = test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec!["alpha".to_string()], None);
+
+    let response = run_step_as(&state, &client, "beta", "read").await;
+    assert!(
+        response.error.is_some(),
+        "the step must be refused: {}",
+        response_text(&response)
+    );
+    // Asserted through the mapping the handler applies, which reads the status
+    // the dispatch layer stamped onto the error. Handing a status to
+    // `build_response` instead would prove only that it uses its argument.
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        Some(StatusCode::FORBIDDEN),
+        "a refused dispatch must not answer 200"
+    );
+
+    let http = super::helpers::build_response(response, "sess-authz", StatusCode::FORBIDDEN);
+    assert_eq!(http.status(), StatusCode::FORBIDDEN);
+}
+
+/// The mapping must not reclassify an error that is not a refusal.
+///
+/// Choosing the control took two attempts, and both failures are worth
+/// recording. An unreachable backend does not work: dispatch returns a
+/// SUCCESSFUL envelope carrying `isError`, so no JSON-RPC error exists and the
+/// row could not fail whatever the mapping did. An invalid tool name does not
+/// work either, for a more interesting reason — `authorize_tool_target`
+/// validates the name first and returns a refusal, so a malformed name IS a
+/// refusal in this codebase's model and the router gate has always answered it
+/// 403. That is pre-existing behaviour and out of scope here; it is recorded
+/// because it looks like a bug in the mapping and is not.
+///
+/// An unknown playbook name is the control: a genuine JSON-RPC error, raised
+/// before any authorizer sees anything, so this row fails if the stamp were
+/// ever applied to every error rather than to refusals alone.
+#[tokio::test]
+async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec![], None);
+
+    let authorizer = super::authorization::RouterAuthorizer {
+        state: state.as_ref(),
+        client: Some(&client),
+        oauth_agent_identity: None,
+        cert_identity: None,
+        principal: super::authorization::refusal_principal(Some(&client), None, None),
+    };
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &authorizer,
+        api_key_name: Some(client.name.as_str()),
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    };
+    let response = state
+        .meta_mcp
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
+            None,
+            caller,
+        )
+        .await;
+
+    assert!(
+        response.error.is_some(),
+        "the control must actually produce a JSON-RPC error, or it cannot \
+         fail: {}",
+        response_text(&response)
+    );
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "only an authorization refusal may be mapped to 403: {}",
+        response_text(&response)
+    );
+}
+
+/// Four refusal branches carry the stamp: backend scope, tool scope, global
+/// policy and invalid tool name.
+///
+/// The claim "a refusal answers 403" is only as good as the narrowest branch
+/// that carries it, and each of these is minted in a different place. The
+/// certificate and agent-scope branches are pinned by `authz_10` and
+/// `authz_11`, which assert `refusal_status` directly; the SSRF branch has no
+/// case, and the name says four rather than "every" so that gap is visible.
+#[tokio::test]
+async fn authz_four_refusal_branches_carry_the_status() {
+    let scoped_state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+
+    let tool_scoped = scoped_client(
+        "scoped",
+        vec!["alpha".to_string()],
+        Some(vec!["safe_*".to_string()]),
+    );
+    let tool_refusal = run_step_as(&scoped_state, &tool_scoped, "alpha", "danger_tool").await;
+    assert_eq!(
+        super::handlers::refusal_status(&tool_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "a tool-allowlist refusal must answer 403: {}",
+        response_text(&tool_refusal)
+    );
+
+    let backend_scoped = scoped_client("scoped", vec!["alpha".to_string()], None);
+    let backend_state =
+        test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let backend_refusal = run_step_as(&backend_state, &backend_scoped, "beta", "read").await;
+    assert_eq!(
+        super::handlers::refusal_status(&backend_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "a backend-scope refusal must answer 403: {}",
+        response_text(&backend_refusal)
+    );
+
+    // Global policy is minted in a third place, and an invalid tool name in a
+    // fourth. The test's name claims EVERY branch, so it has to mean it.
+    let mut policy_state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut policy_state).expect("sole owner during setup");
+        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec!["globally_blocked".to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ));
+    }
+    let unrestricted = scoped_client("scoped", vec![], None);
+    let policy_refusal =
+        run_step_as(&policy_state, &unrestricted, "alpha", "globally_blocked").await;
+    assert_eq!(
+        super::handlers::refusal_status(&policy_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "a global-policy refusal must answer 403: {}",
+        response_text(&policy_refusal)
+    );
+
+    let name_refusal = run_step_as(&policy_state, &unrestricted, "alpha", "bad/name").await;
+    assert_eq!(
+        super::handlers::refusal_status(&name_refusal),
+        Some(StatusCode::FORBIDDEN),
+        "an invalid tool name is refused by the authorizer, so it answers 403 \
+         like any other refusal: {}",
+        response_text(&name_refusal)
+    );
+}
+
+/// AUTHZ.3 — a playbook step hitting a tool denied by GLOBAL policy is
+/// refused.
+///
+/// Distinct from AUTHZ.1 and AUTHZ.2 on purpose: the policy lives on
+/// `AppState`, not on the client, so a fix that threaded only the caller's
+/// identity into the chokepoint passes those two and fails this one.
+#[tokio::test]
+async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
+    let mut state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec!["globally_blocked".to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ));
+    }
+    let client = scoped_client("scoped", vec![], None);
+
+    let response = run_step_as(&state, &client, "alpha", "globally_blocked").await;
+
+    let msg = response_text(&response);
+    assert!(
+        response.error.is_some(),
+        "a globally denied tool must be refused even for an unrestricted client: {msg}"
+    );
+    assert!(
+        msg.contains("globally_blocked"),
+        "the refusal must name the tool: {msg}"
+    );
+}
+
+/// AUTHZ.3a — the same policy must not refuse a permitted tool.
+#[tokio::test]
+async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
+    let mut state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec!["globally_blocked".to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ));
+    }
+    let client = scoped_client("scoped", vec![], None);
+
+    let response = run_step_as(&state, &client, "alpha", "permitted").await;
+
+    assert_eq!(
+        super::handlers::refusal_status(&response),
+        None,
+        "a permitted tool must reach dispatch rather than be refused: {}",
+        response_text(&response)
+    );
+}
+
+/// A refusal must be attributed to whichever identity authenticated the caller.
+///
+/// The audit line exists so an incident responder can say who was refused.
+/// Reporting only the API-key name labels an agent-authenticated or
+/// certificate-authenticated caller as unauthenticated — precisely the
+/// refusals most worth attributing. Unwired from any assertion until now.
+#[test]
+fn authz_refusal_principal_names_the_authenticated_identity() {
+    use crate::gateway::oauth::AgentIdentity;
+    use crate::mtls::CertIdentity;
+
+    let api_key = scoped_client("keyed", vec![], None);
+    assert_eq!(
+        super::authorization::refusal_principal(Some(&api_key), None, None).as_deref(),
+        Some("keyed"),
+        "an API-key caller is named by its client name"
+    );
+
+    let agent = AgentIdentity {
+        client_id: "cid".to_string(),
+        agent_name: "runner".to_string(),
+        scopes: Vec::new(),
+        raw_scopes: Vec::new(),
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(None, Some(&agent), None).as_deref(),
+        Some("agent:runner"),
+        "an agent caller must not be reported as unauthenticated"
+    );
+
+    let cert = CertIdentity {
+        display_name: "machine-7".to_string(),
+        ..CertIdentity::default()
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(None, None, Some(&cert)).as_deref(),
+        Some("cert:machine-7"),
+        "a certificate caller must not be reported as unauthenticated"
+    );
+
+    let anonymous = AuthenticatedClient {
+        authenticated: false,
+        ..scoped_client("public", vec![], None)
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(Some(&anonymous), None, None),
+        None,
+        "an identity that presented no credential is genuinely unattributed, \
+         and must not borrow the name of a configured client"
+    );
+}
+
+/// AUTHZ.10 / 10a — certificate policy reaches a playbook step.
+///
+/// The allow row is not decoration. `MtlsPolicy::evaluate` returns `Deny` for a
+/// `None` identity once the policy is enabled, so the refusal row stays green
+/// even if the certificate identity were dropped on the way to the chokepoint
+/// and never consulted. Only a certificate the policy PERMITS proves the
+/// identity actually arrived.
+#[tokio::test]
+async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
+    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    use crate::mtls::{CertIdentity, MtlsPolicy};
+
+    let policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig {
+        enabled: true,
+        policies: vec![PolicyRuleConfig {
+            match_criteria: CertMatchConfig {
+                cn: Some("trusted-machine".to_string()),
+                ..CertMatchConfig::default()
+            },
+            allow: ToolScopeConfig {
+                backends: vec!["alpha".to_string()],
+                tools: vec!["permitted".to_string()],
+            },
+            deny: ToolScopeConfig::default(),
+        }],
+        ..MtlsConfig::default()
+    }));
+
+    let mut state =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        state_mut.mtls_policy = Arc::clone(&policy);
+    }
+    let client = scoped_client("scoped", vec![], None);
+    let cert = CertIdentity {
+        common_name: Some("trusted-machine".to_string()),
+        display_name: "trusted-machine".to_string(),
+        ..CertIdentity::default()
+    };
+
+    let refused =
+        run_step_with_identity(&state, &client, Some(&cert), None, "alpha", "blocked").await;
+    assert_eq!(
+        super::handlers::refusal_status(&refused),
+        Some(StatusCode::FORBIDDEN),
+        "a tool outside the certificate's allowed scope must be refused: {}",
+        response_text(&refused)
+    );
+
+    let permitted =
+        run_step_with_identity(&state, &client, Some(&cert), None, "alpha", "permitted").await;
+    assert_eq!(
+        super::handlers::refusal_status(&permitted),
+        None,
+        "a tool the certificate permits must reach dispatch — without this the \
+         refusal above passes with the identity dropped entirely: {}",
+        response_text(&permitted)
+    );
+}
+
+/// AUTHZ.11 / 11a — agent scope reaches a playbook step.
+///
+/// Same fail-closed trap as the certificate case, and worse: with agent auth
+/// enabled, a MISSING identity is refused outright, so the deny row alone stays
+/// green even if the identity never reaches the chokepoint. The allow row is
+/// what proves it arrives.
+#[tokio::test]
+async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
+    use crate::gateway::oauth::{AgentIdentity, Scope};
+
+    let mut state = test_router_app_state_with_agent_auth_enabled();
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
+        let _ = state_mut
+            .backends
+            .register(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    }
+    let client = scoped_client("scoped", vec![], None);
+
+    // Scoped to one tool on one backend.
+    let agent = AgentIdentity {
+        client_id: "agent-1".to_string(),
+        agent_name: "runner".to_string(),
+        scopes: vec![Scope::parse("tools:alpha:permitted:*").expect("scope must parse")],
+        raw_scopes: vec!["tools:alpha:permitted:*".to_string()],
+    };
+
+    let refused =
+        run_step_with_identity(&state, &client, None, Some(&agent), "alpha", "blocked").await;
+    assert_eq!(
+        super::handlers::refusal_status(&refused),
+        Some(StatusCode::FORBIDDEN),
+        "a tool outside the agent's scope must be refused: {}",
+        response_text(&refused)
+    );
+
+    let permitted =
+        run_step_with_identity(&state, &client, None, Some(&agent), "alpha", "permitted").await;
+    assert_eq!(
+        super::handlers::refusal_status(&permitted),
+        None,
+        "a tool the agent's scope permits must reach dispatch — without this \
+         the refusal above passes with the identity dropped entirely: {}",
+        response_text(&permitted)
+    );
+
+    // And with NO agent identity at all, agent auth being enabled must refuse:
+    // the check is fail-closed, and this pins that it still is.
+    let anonymous = run_step_with_identity(&state, &client, None, None, "alpha", "permitted").await;
+    assert_eq!(
+        super::handlers::refusal_status(&anonymous),
+        Some(StatusCode::FORBIDDEN),
+        "agent auth enabled with no agent identity must refuse: {}",
+        response_text(&anonymous)
+    );
+}
+
+/// An ordinary error must not carry the HTTP-status stamp.
+///
+/// The stamp is a plain JSON key on the error's `data`. Today nothing but the
+/// gateway writes that field — `JsonRpcResponse::error` starts it at `None` —
+/// but a future path forwarding a backend's error data would otherwise let a
+/// backend choose the gateway's HTTP status. The response builder assigns both
+/// arms, and this pins that: a non-refusal comes back with no `data` at all.
+#[tokio::test]
+async fn authz_ordinary_error_carries_no_status_stamp() {
+    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let client = scoped_client("scoped", vec![], None);
+
+    let authorizer = super::authorization::RouterAuthorizer {
+        state: state.as_ref(),
+        client: Some(&client),
+        oauth_agent_identity: None,
+        cert_identity: None,
+        principal: super::authorization::refusal_principal(Some(&client), None, None),
+    };
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &authorizer,
+        api_key_name: Some(client.name.as_str()),
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    };
+    let response = state
+        .meta_mcp
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            serde_json::json!({ "name": "no_such_playbook", "arguments": {} }),
+            None,
+            caller,
+        )
+        .await;
+
+    let error = response.error.as_ref().expect("the control must error");
+    assert!(
+        error.data.is_none(),
+        "an ordinary error must carry no data, so nothing can be mistaken for \
+         a status stamp: {:?}",
+        error.data
+    );
+}
+/// The admin gate covers the tools with global effect, and only those.
+///
+/// Both halves matter. Gating too little leaves a shared control open to any
+/// caller; gating too much breaks a legitimate workflow while stopping nothing,
+/// which is what happened to `gateway_set_profile`: it was announced as
+/// admin-only in the changelog, was never tested, and was bypassable anyway
+/// because `handle_initialize` binds a caller-supplied profile through the
+/// identical call with no credential.
+#[test]
+fn admin_gate_covers_global_tools_and_not_session_local_ones() {
+    for global in [
+        "gateway_kill_server",
+        "gateway_revive_server",
+        "gateway_reload_config",
+        "gateway_reload_capabilities",
+    ] {
+        assert!(
+            super::authorization::is_admin_meta_tool(global),
+            "{global} changes the gateway for every session and must need a credential"
+        );
+    }
+
+    for session_local in ["gateway_set_profile", "gateway_set_state"] {
+        assert!(
+            !super::authorization::is_admin_meta_tool(session_local),
+            "{session_local} writes only the caller's own session and cannot widen \
+             what that caller reaches, so gating it blocks the documented path \
+             while leaving the equivalent one at initialize open"
+        );
+    }
+}
+
+/// A non-admin caller can switch its own routing profile.
+///
+/// The regression guard for the half above that is easy to re-break: someone
+/// reading `set_profile` as "administrative" and adding it back to the gate.
+#[tokio::test]
+async fn non_admin_may_set_its_own_routing_profile() {
+    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .header("mcp-session-id", "sess-profile")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_set_profile",
+                    "arguments": { "profile": "does-not-exist" }
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    // The profile name is deliberately unknown: the assertion is about the
+    // GATE, not about profile resolution. A refusal for lacking admin is what
+    // must not happen; being told the profile is unknown means the call got
+    // past the gate and reached the tool.
+    assert_ne!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a non-admin must not be refused its own session's routing profile"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let message = json["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        !message.contains("admin access"),
+        "and must not be told it needs admin: {message}"
+    );
+}
+
+// ── Session-targeted prompts reach the session that asked ─────────────
+
+#[tokio::test]
+async fn sampling_prompt_is_delivered_to_the_requesting_session() {
+    // GIVEN: a live session listening on its own notification stream
+    let state = test_router_app_state();
+    let (session_id, mut rx) = state
+        .multiplexer
+        .get_or_create_session_for(Some("gw-caller"), "unauthenticated:anonymous");
+    let router = create_router(Arc::clone(&state));
+
+    // WHEN: that session asks the gateway for a sampling round trip
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-session-id", session_id.as_str())
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": "sample-1",
+                "method": "sampling/createMessage",
+                "params": {
+                    "messages": [{"role": "user", "content": {"type": "text", "text": "hi"}}],
+                    "maxTokens": 16
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let call = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+
+    // THEN: the prompt arrives on that session's stream
+    let delivered = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("the prompt must reach the requesting session, not a literal \"broadcast\" id")
+        .expect("the notification stream must stay open");
+    assert_eq!(delivered.data["method"], "sampling/createMessage");
+
+    call.abort();
+}
+
+#[tokio::test]
+async fn sampling_without_a_live_stream_fails_instead_of_hanging() {
+    // GIVEN: a caller that only POSTs — it never opened a notification stream
+    let state = test_router_app_state();
+    let router = create_router(Arc::clone(&state));
+
+    // WHEN: it asks the gateway for a sampling round trip
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": "sample-nostream",
+                "method": "sampling/createMessage",
+                "params": {
+                    "messages": [{"role": "user", "content": {"type": "text", "text": "hi"}}],
+                    "maxTokens": 16
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    // THEN: it is told there is nobody to ask, rather than waiting out the
+    // 120-second response timeout on a prompt only the handler could hear.
+    let response = tokio::time::timeout(Duration::from_secs(5), router.oneshot(request))
+        .await
+        .expect("an undeliverable prompt must fail fast, not hang until the timeout")
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["code"], -32002, "body: {body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("No sampling-capable client connected"),
+        "body: {body}"
+    );
 }

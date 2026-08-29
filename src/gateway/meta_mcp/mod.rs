@@ -102,8 +102,17 @@ impl CallerIdentityHeaderTrust {
 }
 
 /// Authenticated caller context for a `tools/call` dispatch.
-#[derive(Debug, Clone, Default)]
+///
+/// Deliberately has **no `Default`**: the authorizer is mandatory, and a
+/// derived default would let a construction site acquire one by omission. Every
+/// site names the authorizer it means, which in tests makes a permissive one
+/// visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
+    /// Decides whether this caller may invoke a given backend tool.
+    ///
+    /// Borrowed, never stored: `AppState` owns `meta_mcp`, so holding an
+    /// `Arc<AppState>` inside `MetaMcp` would be a cycle that never frees.
+    pub authorizer: &'a (dyn crate::gateway::authz::ToolAuthorizer + Sync),
     /// Static or temporary API-key name, used for accounting and fallback grants.
     pub api_key_name: Option<&'a str>,
     /// Optional caller agent identifier.
@@ -114,11 +123,44 @@ pub struct MetaMcpCallerContext<'a> {
     /// `grant_subject`) so the backend-invoke boundary can propagate the real
     /// user to a backend that requires it (MIK-6704 / ADR-007 R2).
     pub verified_identity: Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    /// Whether the caller holds admin. Carried here because meta-tools with
+    /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
+    /// `router::authorization`, which only knows whole tools.
+    pub is_admin: bool,
 }
 
 // ============================================================================
 // MetaMcp struct
 // ============================================================================
+
+/// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
+/// status when the error is an authorization refusal.
+///
+/// The refusal already knows its status; every other error does not carry one
+/// and gets the caller's default. The status rides in the error's optional
+/// `data` because that is the only channel that survives this conversion —
+/// `JsonRpcResponse` has no status of its own, and re-deriving one at the HTTP
+/// boundary from the JSON-RPC code cannot work: eight of the nine refusal
+/// branches emit the generic `-32600`, and `-32003` already means something
+/// else elsewhere.
+fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
+    let mut response = JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string());
+    if let Some(ref mut rpc_error) = response.error {
+        // Written unconditionally, so this function is the sole authority on
+        // the field. `JsonRpcResponse::error` starts it at `None` and nothing
+        // else in the gateway writes it today, but a future path that forwarded
+        // a backend's error data could otherwise hand a backend the power to
+        // choose the gateway's HTTP status. Assigning both arms closes that
+        // without depending on the audit staying true.
+        rpc_error.data = match error {
+            crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
+                crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
+            })),
+            _ => None,
+        };
+    }
+    response
+}
 
 /// Meta-MCP handler — the central dispatcher for all gateway meta-tools.
 pub struct MetaMcp {
@@ -1125,6 +1167,29 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
+        // Admin gate for the meta-tools that change the gateway for every
+        // session. Enforced HERE, at the dispatcher, and not only at the HTTP
+        // router that also checks it.
+        //
+        // The router checks this too, and stdio marks its caller admin because
+        // the client that spawned the process already holds whatever the
+        // operator holds. Neither fact is why the check lives here: a gate at
+        // one entry point is correct for every caller that exists today and
+        // silently absent for the next one added, which is the shape that hid
+        // the playbook defect. Placing it at the point of dispatch costs a
+        // redundant comparison on the router path and removes the possibility.
+        //
+        // It also caught a live one immediately. Moving it here refused stdio,
+        // because that path passed a default context whose `is_admin` is false
+        // and nothing had ever checked it.
+        if crate::gateway::router::is_admin_meta_tool(tool_name) && !caller.is_admin {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32600,
+                format!("Tool '{tool_name}' requires admin access"),
+            );
+        }
+
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
         if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
             let invoke_args = json!({
@@ -1132,16 +1197,7 @@ impl MetaMcp {
                 "tool": tool_name,
                 "arguments": arguments,
             });
-            let result = self
-                .invoke_tool(
-                    &invoke_args,
-                    session_id,
-                    caller.api_key_name,
-                    caller.agent_id,
-                    caller.grant_subject.clone(),
-                    caller.verified_identity,
-                )
-                .await;
+            let result = self.invoke_tool(&invoke_args, session_id, &caller).await;
             return match result {
                 // `invoke_tool` already returns a complete MCP tools/call result
                 // envelope ({content, structuredContent?, isError}) with output-
@@ -1152,7 +1208,7 @@ impl MetaMcp {
                 // (which spec-compliant clients such as Open WebUI require when the
                 // tool advertises an `outputSchema`).
                 Ok(content) => JsonRpcResponse::success_serialized(id, content),
-                Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+                Err(e) => error_response_preserving_status(id, &e),
             };
         }
 
@@ -1165,21 +1221,11 @@ impl MetaMcp {
             "gateway_list_servers" => self.list_servers(),
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
-            "gateway_invoke" => {
-                self.invoke_tool(
-                    &arguments,
-                    session_id,
-                    caller.api_key_name,
-                    caller.agent_id,
-                    caller.grant_subject,
-                    caller.verified_identity,
-                )
-                .await
-            }
-            "gateway_get_stats" => self.get_stats(&arguments).await,
-            "gateway_cost_report" => self.get_cost_report(&arguments, session_id).await,
+            "gateway_invoke" => self.invoke_tool(&arguments, session_id, &caller).await,
+            "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
+            "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
             "gateway_webhook_status" => self.webhook_status(),
-            "gateway_run_playbook" => self.run_playbook(&arguments).await,
+            "gateway_run_playbook" => self.run_playbook(&arguments, &caller).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_list_disabled_capabilities" => self.list_disabled_capabilities(),
@@ -1225,7 +1271,7 @@ impl MetaMcp {
                 let has_output_schema = tool_name == "gateway_search_tools";
                 wrap_tool_success(id, &content, has_output_schema)
             }
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+            Err(e) => error_response_preserving_status(id, &e),
         }
     }
 }
@@ -1334,3 +1380,7 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "authz_tests.rs"]
+mod authz_tests;

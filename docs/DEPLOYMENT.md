@@ -54,14 +54,25 @@ scripts/dev/service-template-smoke.sh
 ```bash
 mcp-gateway init --profile local
 docker build -t mcp-gateway:latest .
+# Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
+install -m 600 gateway.yaml gateway.container.yaml
+sudo chown 1001:1001 gateway.container.yaml
 
 docker run -d --name mcp-gateway \
   -p 39400:39400 \
-  -v ./gateway.yaml:/config.yaml:ro \
+  -v ./gateway.container.yaml:/config.yaml:ro \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
   mcp-gateway:latest
 ```
+
+On Linux, the image runs as UID/GID 1001. Bind-mount an owner-only deployment
+copy that this identity can read; do not change ownership on your working
+config or make a credential-bearing config world-readable. The same
+requirement applies to the Compose example below: create its `gateway.yaml`
+deployment copy with `install -m 600 <working-config> gateway.yaml && sudo chown
+1001:1001 gateway.yaml`. Docker Desktop handles bind-mount identity differently
+on macOS and Windows.
 
 ### Docker Compose
 
@@ -329,7 +340,7 @@ The exporter preserves unrelated client settings, creates a sibling backup befor
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/health` | GET | No (public by default) | Redacted backend health by default; authenticated admin callers also see backend status, circuit breaker state, and runtime profile lifecycle state |
-| `/ui/api/status` | GET | Depends on config | JSON API for dashboards |
+| `/ui/api/status` | GET | Redacted unless admin | JSON API for dashboards; counts only without an admin credential |
 
 Circuit breaker states: `Closed` (healthy), `Open` (failing), `HalfOpen` (testing recovery).
 
@@ -404,11 +415,39 @@ setting for that backend stops the leak at the cost of keeping it resident.
 mcp-gateway stats --url http://127.0.0.1:39400 --price 15.0
 ```
 
-Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools). Auto-refresh every 5s.
+Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools), which is admin-only — see [Opening the dashboard](#opening-the-dashboard). Auto-refresh every 5s.
 
 ## Authentication for Production
 
-**Never run without auth on a network-accessible port.** Default bind (`127.0.0.1`) limits to localhost. For networked deployments:
+**The gateway refuses to start when its tools can be called without a
+credential and it can be reached from off this machine.** The refusal happens
+before a listener is opened, because any caller who reaches such a gateway can
+invoke every configured backend with the gateway's own credentials.
+
+Both halves have to be true for it to fire:
+
+**Reachable** — either of:
+
+- a bind other than loopback; the default `127.0.0.1` is not one
+- a `server.public_url` naming a non-loopback host, because a tunnel or proxy
+  reaches the gateway by that name
+
+**AND tools open** — either of:
+
+- `auth.enabled = false`, where every path is open regardless of any list
+- an `auth.public_paths` entry covering `/mcp`. Entries match by prefix, so
+  `""`, `/`, `/m` and `/mcp` all count; `/health` and `/metrics` do not
+
+Both columns, not one. The pairing that surprises people is a wide bind with
+the `init` config's public `/mcp` — authentication is on, and the tools are
+still open.
+
+`auth.enabled = true` on its own is therefore not enough: authentication with
+`/mcp` left public is a gateway that reads as protected and serves every backend
+to whoever reaches it. The message names whichever half fired and the fix for
+that one.
+
+For networked deployments:
 
 ```yaml
 server:
@@ -420,6 +459,257 @@ auth:
 ```
 
 `env:VAR_NAME` references for auth, agent auth, and key-server admin secrets must be present at startup; missing secret variables fail configuration validation.
+
+A gateway whose tools already require a native credential is not refused, even
+with `auth.enabled = false`: mTLS with `require_client_cert`, mTLS with a
+non-empty policy — which denies any call arriving without a verified identity —
+and `agent_auth` each mean the tool surface admits nobody without one. The
+refusal asks whether the tools can be invoked without a credential, not whether
+one particular setting is on.
+
+`scripts/dev/mtls-serve-smoke.sh` starts a real gateway over mTLS and asserts it
+stays up; run it after changing anything on the serve path.
+
+If authentication terminates in front of the gateway — a sidecar, a service
+mesh, or a reverse proxy that authenticates before forwarding — the gateway
+itself may serve unauthenticated on a network address:
+
+```yaml
+server:
+  host: "0.0.0.0"
+  allow_unauthenticated_network_bind: true
+```
+
+This is logged at WARN on every start while it remains set. Set it only when
+that fronting layer exists; without one it restores the exposure the refusal
+prevents.
+
+Config files are written with mode `0600` on Unix, including the temporary file
+used during the write, since a config can hold a bearer token or API keys. An
+existing config with wider permissions is reported at startup and is tightened
+by the next write that replaces it.
+
+### Browser access to the gateway port
+
+A loopback bind stops remote callers. It does not stop a web page: a site the
+operator visits can rebind a hostname to `127.0.0.1`, and a cross-origin POST
+reaches a JSON endpoint without a preflight. The gateway therefore refuses a
+request whose `Origin`, `Host` or HTTP/2 `:authority` does not name it, and refuses any request a
+browser marks `Sec-Fetch-Site: cross-site` or `same-site`.
+
+A request with no `Origin` is allowed, because a non-browser MCP client never
+sends one. That is what keeps command-line clients, Prometheus scrapes of
+`/metrics`, and health probes working unchanged.
+
+The allow list is the loopback spellings of the bind address **at the bind
+port**, the configured bind address itself, and the `server.public_url` origin,
+which is re-read on every request so a config reload takes effect at once. A
+page served from `http://localhost:3000` is refused: being local does not make
+it trusted.
+
+There is deliberately no setting for allowing extra browser origins, and the
+reason is not the one it looks like. It is tempting to say such a setting would
+be inert because the gateway serves no CORS preflight responses — that is
+wrong. A form POST is a simple request and skips the preflight entirely, which
+is the very shape the origin check exists to refuse. An extra-origin setting
+would therefore be a real grant: every page on that origin could drive the
+gateway with whatever credentials it holds, and one cross-site scripting flaw
+on that origin would inherit them.
+
+Serve the page from the gateway's own origin, or use a non-browser client.
+
+When the bind is not loopback and no `public_url` is set, a `Host` naming a
+domain is refused and a numeric address is accepted. Such a gateway answers at
+an address it cannot predict, so the name cannot be checked, but rebinding
+always needs a hostname while a network client dials an address. Set
+`public_url` if clients legitimately reach the gateway by name.
+
+### What a config reload applies
+
+Most settings are read once at startup. A reload reports which changed fields
+are **not yet applied** and keeps reporting them on every reload until the
+process is restarted, rather than saying so once and forgetting.
+
+Enabling `auth.enabled` is the case that matters: it takes effect on restart, so
+a reload reports `NOT YET APPLIED, restart required for: auth`. Fields are
+treated as restart-required unless proven otherwise, so an occasional needless
+restart is possible; being told a security change took effect when it did not
+is not.
+
+Applied without a restart: backends, `server.public_url`, and
+`control_plane.role_mapping`.
+
+One reload is refused outright rather than applied: one that would leave the
+tools reachable without a credential — see the tunnel section below, which is
+where this is met in practice.
+
+### Capabilities that register an address with a third party
+
+A capability that hands a caller-chosen destination to a third party which then
+calls it — a webhook registration is the shape — creates persistent state
+outside the gateway, addressed by the caller and authorised by the operator's
+credential. It needs no readable response to be useful, so the browser and
+network gates do not constrain it. Those capabilities require an admin
+credential.
+
+The rule is derived from each capability's own definition: it is not read-only,
+and it takes a caller-supplied destination — a URL, but also a topic, queue or
+channel, since a delivery address need not be a URL. A capability can declare
+`metadata.registers_external_callback` explicitly where its shape is not
+obvious from the name. Posting a URL as data —
+archiving a page, attaching a link — is not covered, because nothing calls back
+and requiring a credential there would take an ordinary tool away for no gain.
+A capability added later inherits the rule rather than needing to be remembered
+on a list.
+
+### An existing config written before this release
+
+Config files are created `0600` now, but one written by an earlier version may
+still be readable by other local accounts — and it can hold a bearer token or
+API keys. The gateway reports it at startup rather than changing a file you own:
+
+```
+CONFIG READABLE BY OTHER LOCAL USERS: it holds this gateway's credentials.
+Fix with: chmod 600 <path>
+```
+
+### Inbound webhooks
+
+Webhook deliveries pass the same Host check as everything else, and a delivery
+arriving through a tunnel carries the tunnel's hostname. On a loopback bind that
+name is neither loopback nor declared, so it is refused.
+
+Declare the address the provider actually posts to:
+
+```yaml
+server:
+  public_url: "https://your-tunnel.example.com"
+```
+
+The Host check already admits `public_url`, and it is re-read on each request,
+so a reload applies it without a restart. Without it the provider sees a `403`
+and the gateway logs `Request blocked: Host does not name this gateway`, naming
+the hostname it refused.
+
+**Declare authentication in the same breath, and restart.** A `public_url`
+naming a tunnel says the gateway is reached from off this machine. Over tools
+that need no credential, that is the gateway serving every configured backend
+to whoever reaches the tunnel — so the reload is refused. No backend is started
+or stopped and no configuration is published:
+
+```
+config reload refused: refusing to serve HTTP, reachable at the declared
+public_url host your-tunnel.example.com: ...
+```
+
+The refusal names two things it did not do — no backend was started or stopped,
+and no configuration was published — and claims nothing beyond them. Reading a
+config file applies any `env_files` it names to the process environment before
+the file is validated, so a refused reload is not a complete no-op. If a
+capability resolves its credential from an environment variable, check that one
+after a refused reload. This is true of every failed reload rather than only
+this one.
+
+Enabling `auth.enabled` in the same edit does not get it through, and that is
+deliberate rather than an oversight: authentication is applied at startup, so
+until a restart the request path is still running without it while the tunnel
+hostname would already be admitted.
+
+**Enabling it is not sufficient either.** A config `init` wrote already has
+authentication on and lists `/mcp` under `auth.public_paths`, so its tools need
+no credential — and that, plus a declared hostname, is exactly what is refused.
+Publishing such a gateway means closing the tool paths and giving clients the
+credential, or fronting it with something that authenticates and setting
+`server.allow_unauthenticated_network_bind`. The refusal says which of the two
+a restart would do with the file in front of it, so follow that rather than
+guessing. Set both, then restart — the same start
+that applies the authentication is the one that admits the hostname.
+
+### Managing the gateway from your MCP client
+
+`mcp-gateway setup export` writes the gateway entry into each AI client's own
+config. Ordinary tools need no credential, so the entry works as written.
+
+Management tools do need one, and the exporter deliberately writes no
+credential. Three of the supported clients keep their config inside a working
+tree — Cursor, VS Code and Cline — and an exporter that writes a secret into
+some destinations and not others gets that decision wrong the first time
+somebody exports to all of them at once. It also has to print what it wrote.
+
+So management runs through the dashboard, or through stdio, where the client
+spawns the gateway itself and is the operator by construction.
+
+To manage from a proxy-mode client anyway, add the header yourself to a config
+that is not in a working tree:
+
+```json
+{ "mcpServers": { "gateway": {
+    "url": "http://127.0.0.1:39400/mcp",
+    "headers": { "Authorization": "Bearer <the token in gateway.yaml>" }
+} } }
+```
+
+### Opening the dashboard
+
+`mcp-gateway init` generates an admin credential for the install and writes it
+into `gateway.yaml`, which is created readable only by you on Unix (Windows
+takes the directory's inherited permissions). Tools work without
+it; managing the gateway and reading the dashboard need it.
+
+A browser cannot attach an `Authorization` header to a navigation, so `serve`
+prints a link — **on a loopback bind only**, and redeemable only from this
+machine. That is checked against the connection's own peer address, not against
+a header the caller writes: a request forwarded from elsewhere carries whatever
+`Host` the proxy chose, and the peer is the socket the kernel accepted.
+
+A reverse proxy running on this same machine connects from loopback too, so a
+request carrying a forwarding header (`X-Forwarded-For`, `Forwarded`,
+`X-Forwarded-Host`) is refused as well. **Residual, stated rather than implied
+away**: a proxy that strips those headers would still be indistinguishable from
+a local browser. Treat the printed value as sensitive. A gateway bound to a network address prints none, because a link that
+grants an admin session should not travel in a log that leaves the host.
+
+There is therefore no link to use on such a gateway, and a port-forward does not
+produce one: the value is never emitted, so nothing arrives to redeem. Manage a
+network-bound gateway through `/ui`, which can present the bearer token, or
+through the meta-tools with that same credential. `/dashboard` is for the
+loopback case.
+
+```
+DASHBOARD (opens once, then remembered in this browser):
+  http://127.0.0.1:39400/dashboard?bootstrap=...
+```
+
+Opening it exchanges a single-use value for a session cookie and redirects, so
+nothing stays in the address bar. The value in the link is **not** the admin
+credential — a query string reaches this gateway's own request log, which
+outlives the browser tab. It works once and dies with the process, so a link
+left in a shell history is spent.
+
+The cookie carries an opaque handle, never the admin credential: a bearer token
+in a cookie is long-lived and recoverable from the wire without TLS, while a
+handle means nothing outside the running process and dies with it. It is
+`HttpOnly` and `SameSite=Strict`, so script cannot read it and it is never sent
+cross-site, and it is marked `Secure` when the listener speaks TLS.
+
+### Admin requires a credential
+
+With `auth.enabled = false` every caller **over HTTP** is anonymous and holds
+**no admin**. A stdio caller is treated as admin: the client spawned the
+process, so it already holds whatever the operator holds.
+Ordinary tools work, so a local MCP client needs no configuration. These do not:
+
+- `gateway_kill_server`, `gateway_revive_server`, `gateway_reload_config`,
+  `gateway_reload_capabilities` — the four that change the gateway for every
+  session. Choosing a routing profile or a discovery state writes only the
+  caller's own session, so those stay available without a credential
+- `/dashboard` and the management endpoints under `/ui/api/`, which return
+  `403`. `/ui/api/status` still answers, with counts rather than backend names
+
+Set `auth.enabled = true` with a bearer token to get them back; that token is
+admin. An unauthenticated gateway cannot tell its operator apart from a web page
+or from any other process running as the same user, so admin is a grant that
+follows a credential.
 
 For multi-client setups with per-client tool scoping, see the [README auth section](../README.md#authentication).
 

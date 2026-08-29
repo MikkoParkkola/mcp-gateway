@@ -44,9 +44,11 @@ fn uptime_secs() -> u64 {
 
 /// Returns `true` when the caller has admin-level access.
 ///
-/// Admin access is explicit. The auth middleware marks the bearer token and
-/// auth-disabled anonymous client as admin; API keys must opt in with
-/// `admin: true`.
+/// Admin access is explicit and follows a credential. The auth middleware marks
+/// a bearer token as admin; API keys must opt in with `admin: true`. The
+/// identity used when authentication is disabled is NOT admin, because an
+/// unauthenticated gateway cannot tell its operator from any other caller that
+/// reaches the port.
 fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
     client.is_some_and(|c| c.admin)
 }
@@ -88,8 +90,48 @@ async fn index() -> impl IntoResponse {
     )
 }
 
+/// Served in place of the dashboard when the caller holds no admin credential.
+const DASHBOARD_ADMIN_REQUIRED_HTML: &str = "<!doctype html><meta charset=utf-8>\
+<title>Admin required</title>\
+<body style=\"font:16px/1.5 system-ui;margin:4rem auto;max-width:34rem\">\
+<h1>Admin required</h1>\
+<p>This dashboard shows backend names, tool names and call counts, so it needs \
+an admin credential.</p>\
+<p>On a config <code>mcp-gateway init</code> wrote, the credential already \
+exists and <code>serve</code> prints a single-use link to open this page with. \
+Look for DASHBOARD in its startup output.</p>\
+<p>That link is printed only when the gateway binds loopback. A gateway on a \
+network address prints none, so there is nothing to redeem and a port-forward \
+does not produce one: manage it through <a href=\"/ui\">/ui</a>, which can \
+present the bearer token, or through the meta-tools with that same \
+credential.</p>\
+<p>On a config without authentication, set <code>auth.enabled = true</code> \
+with a bearer token, keeping <code>/health</code> and <code>/mcp</code> in \
+<code>auth.public_paths</code> so tool calls keep working.</p>";
+
 /// `GET /dashboard` — operator dashboard: self-contained HTML, auto-refreshes every 5 s.
-pub async fn dashboard_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+///
+/// Admin only. The page renders backend names, tool names and call counts,
+/// which is the same inventory `/ui/api/status` redacts for a non-admin caller,
+/// so it follows the same rule rather than serving as a way around it.
+pub async fn dashboard_handler(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+) -> impl IntoResponse {
+    let client = client.map(|Extension(c)| c);
+    if !is_admin(client.as_ref()) {
+        // HTML, not JSON. A browser navigating here cannot attach an
+        // Authorization header, so a bare 403 would leave an operator staring at
+        // a JSON-RPC error with no way forward. The page says what is missing
+        // and points at `/ui`, which is a script that can send the header.
+        return (
+            StatusCode::FORBIDDEN,
+            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            DASHBOARD_ADMIN_REQUIRED_HTML,
+        )
+            .into_response();
+    }
+
     let backends = state.backends.all();
 
     // Collect per-backend health data.
@@ -169,6 +211,7 @@ pub async fn dashboard_handler(State(state): State<Arc<AppState>>) -> impl IntoR
         [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
         html,
     )
+        .into_response()
 }
 
 // ── Dashboard domain types ───────────────────────────────────────────

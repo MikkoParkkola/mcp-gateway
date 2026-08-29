@@ -92,6 +92,33 @@ const NO_CHANGES_SUMMARY: &str = "no changes detected";
 const SHUTDOWN_ABORTED_ERROR: &str = "config reload aborted: the gateway is shutting down and refused to register \
      one or more backends";
 
+/// Prefix of the error a reload returns when applying the file would leave the
+/// tool surface reachable without a credential — the state the gateway refuses
+/// to START in (`gateway::server::support::network_bind_refusal`).
+///
+/// A bare LABEL, deliberately. It used to read "config reload refused, the
+/// running gateway is unchanged:" — which is the very claim about what remains
+/// in force that this message states two bounded facts instead of making. The
+/// body was corrected and the prefix kept it, in compressed form, where a test
+/// written against the old phrasings did not look.
+///
+/// A PREFIX, matched with [`is_posture_refusal`], not compared whole like
+/// [`SHUTDOWN_ABORTED_ERROR`]: the refusal's own text names the exposure and
+/// carries the remedy, and rides behind this. An arm written `==` would never
+/// match, and the refusal would be logged as a broken config file — sending the
+/// operator to hunt YAML instead of reverting the `public_url`.
+const POSTURE_REFUSED_PREFIX: &str = "config reload refused:";
+
+/// `true` when `error` is the refusal [`POSTURE_REFUSED_PREFIX`] describes.
+///
+/// One predicate rather than a bare `starts_with`, so the day a second consumer
+/// needs to tell this apart there is one place that decides. The file watcher is
+/// the only one today; the meta-tool and the admin API forward the message
+/// whole, and it carries the prefix.
+fn is_posture_refusal(error: &str) -> bool {
+    error.starts_with(POSTURE_REFUSED_PREFIX)
+}
+
 /// Structured reload outcome for callers that need more than a log line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReloadOutcome {
@@ -200,15 +227,48 @@ impl ReloadOutcome {
 /// pointer-width CAS.
 pub struct LiveConfig {
     inner: RwLock<Arc<Config>>,
+    /// What the running process actually applied, fixed at startup.
+    ///
+    /// Kept apart from `inner` because the diff compares the file against the
+    /// published snapshot: publishing a restart-only edit into that snapshot
+    /// makes the next reload see no difference, so the warning fires once and
+    /// never again. Comparing against what is RUNNING keeps it true until a
+    /// restart makes the two agree.
+    running: Arc<Config>,
 }
 
 impl LiveConfig {
     /// Create a new `LiveConfig` seeded with the startup configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
+        let running = Arc::new(config);
         Self {
-            inner: RwLock::new(Arc::new(config)),
+            inner: RwLock::new(Arc::clone(&running)),
+            running,
         }
+    }
+
+    /// The configuration this process is actually running.
+    #[must_use]
+    pub fn running(&self) -> &Config {
+        &self.running
+    }
+
+    /// `true` when the file asks for something only a restart can apply.
+    ///
+    /// Fail-closed: every tracked field counts unless it is on the allow-list of
+    /// fields proven to be re-read on the request path. A field wrongly counted
+    /// tells an operator to restart when they need not, which is the safe
+    /// direction; the reverse tells them a change took effect when it did not.
+    #[must_use]
+    pub fn restart_required(&self) -> bool {
+        !pending_restart_fields(&self.running, &self.get()).is_empty()
+    }
+
+    /// Which fields the file asks for that the running process has not applied.
+    #[must_use]
+    pub fn pending_restart_fields(&self) -> Vec<&'static str> {
+        pending_restart_fields(&self.running, &self.get())
     }
 
     /// Clone the current active configuration snapshot.
@@ -254,6 +314,299 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigPatch {
     classify_backends(old, new, &mut patch);
 
     patch
+}
+
+#[cfg(test)]
+mod restart_required_tests {
+    use super::LiveConfig;
+    use crate::config::Config;
+
+    fn with_auth(enabled: bool) -> Config {
+        let mut c = Config::default();
+        c.auth.enabled = enabled;
+        c
+    }
+
+    #[test]
+    fn a_restart_only_change_keeps_reporting_until_a_restart() {
+        // The diff compares the file against the published snapshot. Publishing
+        // a restart-only edit into that snapshot makes the NEXT reload see no
+        // difference, so the warning appears once and never again: an operator
+        // who enables authentication, sees the warning, and later edits
+        // something unrelated is told everything is fine while authentication
+        // has never been on.
+        let live = LiveConfig::new(with_auth(false));
+
+        live.set(with_auth(true));
+        assert!(
+            live.restart_required(),
+            "the first reload must report that a restart is needed"
+        );
+
+        // An unrelated later edit. Authentication is still not running.
+        let mut later = with_auth(true);
+        later.server.max_body_size = 1234;
+        live.set(later);
+        assert!(
+            live.restart_required(),
+            "it must keep reporting until a restart makes the running process agree"
+        );
+    }
+
+    /// A restart-only edit can make the restart itself refuse to serve.
+    ///
+    /// The reload answers "restart required". The startup posture check
+    /// (MIK-7254) then refuses to bind a network-reachable gateway whose tools
+    /// need no credential — so an operator who disables authentication on a
+    /// `0.0.0.0` gateway is advised to do the one thing that takes the gateway
+    /// away. Exposure is not the risk here; availability is, and the operator
+    /// finds out only after the process they were serving with is gone.
+    #[test]
+    fn a_restart_that_would_refuse_is_named_in_the_outcome() {
+        fn reachable(auth: bool) -> Config {
+            let mut c = Config::default();
+            c.server.host = "0.0.0.0".to_string();
+            c.auth.enabled = auth;
+            c
+        }
+
+        let live = LiveConfig::new(reachable(true));
+        live.set(reachable(false));
+        let warned = super::with_pending_restart(
+            crate::config_reload::ReloadOutcome {
+                changes: "auth.enabled".to_string(),
+                restart_required: false,
+                restart_reason: None,
+            },
+            &live,
+        );
+        assert!(
+            warned.restart_required,
+            "the edit is restart-only, so the outcome must still say so"
+        );
+        assert!(
+            warned.changes.contains("a restart would not start"),
+            "the restart advice must carry its own consequence: {}",
+            warned.changes
+        );
+
+        // And it must stay quiet otherwise: the same restart-only edit on a
+        // loopback gateway starts fine, and a warning there would train the
+        // operator to ignore this one.
+        let local = LiveConfig::new(Config::default());
+        local.set(with_auth(false));
+        let quiet = super::with_pending_restart(
+            crate::config_reload::ReloadOutcome {
+                changes: "auth.enabled".to_string(),
+                restart_required: false,
+                restart_reason: None,
+            },
+            &local,
+        );
+        assert!(
+            !quiet.changes.contains("would not start"),
+            "a restart that starts must not be reported as refusing: {}",
+            quiet.changes
+        );
+    }
+
+    #[test]
+    fn every_tracked_section_is_covered() {
+        // The classifier used to name eight sections while the diff tracked
+        // seventeen, so a change to one of the other nine reported as applied
+        // while nothing read it — the hand-list this was meant to replace.
+        let running = Config::default();
+        let mut wanted = Config::default();
+        wanted.meta_mcp.enabled = !wanted.meta_mcp.enabled;
+        let pending = super::pending_restart_fields(&running, &wanted);
+        assert!(
+            pending.contains(&"meta_mcp"),
+            "a tracked section outside the original list must be reported: {pending:?}"
+        );
+
+        // Every restart-only server field, not a hand-picked few: `ws_port`,
+        // `request_timeout` and `shutdown_timeout` were all omitted before.
+        for (label, changed) in [
+            (
+                "ws_port",
+                Config {
+                    server: crate::config::ServerConfig {
+                        ws_port: Some(9),
+                        ..Config::default().server
+                    },
+                    ..Config::default()
+                },
+            ),
+            (
+                "request_timeout",
+                Config {
+                    server: crate::config::ServerConfig {
+                        request_timeout: std::time::Duration::from_secs(7),
+                        ..Config::default().server
+                    },
+                    ..Config::default()
+                },
+            ),
+            (
+                "env_files",
+                Config {
+                    env_files: vec!["x.env".to_string()],
+                    ..Config::default()
+                },
+            ),
+        ] {
+            let pending = super::pending_restart_fields(&running, &changed);
+            assert!(
+                !pending.is_empty(),
+                "a change to {label} must be reported as needing a restart"
+            );
+        }
+
+        // `public_url` is the one server field that IS re-read per request, so
+        // changing it alone must NOT demand a restart.
+        let public_url_only = Config {
+            server: crate::config::ServerConfig {
+                public_url: Some("https://mcp.example.com".to_string()),
+                ..Config::default().server
+            },
+            ..Config::default()
+        };
+        assert!(
+            super::pending_restart_fields(&running, &public_url_only).is_empty(),
+            "a hot-reloadable field must not demand a restart"
+        );
+
+        // Top-level scalars too: they sit outside every section and were
+        // reported as applied while nothing re-read them.
+        let profile_change = Config {
+            default_routing_profile: "research".to_string(),
+            ..Config::default()
+        };
+        assert!(
+            super::pending_restart_fields(&running, &profile_change)
+                .contains(&"default_routing_profile"),
+            "a top-level field must be reported too"
+        );
+
+        let names: Vec<&str> = super::tracked_sections(&running, &running)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        for expected in [
+            "auth",
+            "mtls",
+            "key_server",
+            "capabilities",
+            "playbooks",
+            "cache",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "{expected} must be tracked: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_pending_restart_when_the_file_matches_the_running_process() {
+        let live = LiveConfig::new(with_auth(false));
+        live.set(with_auth(false));
+        assert!(!live.restart_required());
+    }
+}
+
+/// Fields the file changes that only a restart can apply.
+///
+/// The allow-list below names every field proven to be re-read on the request
+/// path; everything else is restart-required by default. Each entry carries the
+/// consumer that reads it, so a reader can check the claim rather than trust it.
+///
+/// - `server.public_url` — `router/well_known.rs`, `router/origin_guard.rs`
+/// - `control_plane.role_mapping` — `ui/control_plane.rs`
+fn pending_restart_fields(running: &Config, wanted: &Config) -> Vec<&'static str> {
+    let mut pending = Vec::new();
+
+    // `server` wholesale, minus the one field that IS re-read per request.
+    // Listing the restart-only fields by hand is how `ws_port`,
+    // `request_timeout` and `shutdown_timeout` went unreported: subtracting the
+    // single live field from the whole cannot drift as fields are added.
+    let server_without_public_url = |c: &Config| {
+        let mut server = c.server.clone();
+        server.public_url = None;
+        canonical_json(&server)
+    };
+    if server_without_public_url(running) != server_without_public_url(wanted) {
+        pending.push("server");
+    }
+    // `control_plane` the same way as `server`: `role_mapping` IS re-read per
+    // request (`ui::control_plane`), so comparing the section whole would tell
+    // an operator to restart for a change that already took effect.
+    let control_plane_without_role_mapping = |c: &Config| {
+        let mut cp = c.control_plane.clone();
+        cp.role_mapping = crate::control_plane::ControlPlaneRoleMappingConfig::default();
+        canonical_json(&cp)
+    };
+    if control_plane_without_role_mapping(running) != control_plane_without_role_mapping(wanted) {
+        pending.push("control_plane");
+    }
+    if canonical_json(&running.env_files) != canonical_json(&wanted.env_files) {
+        pending.push("env_files");
+    }
+    if running.default_routing_profile != wanted.default_routing_profile {
+        pending.push("default_routing_profile");
+    }
+
+    // Everything else is compared WHOLESALE and reported by name. An earlier
+    // version listed the sections it knew about, which is the hand-list this
+    // was supposed to replace: a section added later reported as applied while
+    // nothing read it. Subtracting the live readers from the whole is the only
+    // form that stays true as the config grows.
+    for (name, differs) in tracked_sections(running, wanted) {
+        if differs {
+            pending.push(name);
+        }
+    }
+
+    pending
+}
+
+/// Every tracked section, paired with whether the file differs from the running
+/// process. Live-applied sections are excluded by name, and that list is short
+/// enough to check: `backends` is applied by the reload itself,
+/// `server.public_url` and `control_plane.role_mapping` are re-read per request
+/// (see `router::well_known`, `router::origin_guard`, `ui::control_plane`).
+fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, bool)> {
+    // A macro rather than sixteen hand-written comparisons: the point is that
+    // the list is exhaustive, and a shape that makes adding one a single line
+    // is the shape that stays exhaustive.
+    macro_rules! sections {
+        ($($name:literal => $field:ident),* $(,)?) => {
+            vec![$((
+                $name,
+                canonical_json(&running.$field) != canonical_json(&wanted.$field),
+            )),*]
+        };
+    }
+
+    sections![
+        "auth" => auth,
+        "mtls" => mtls,
+        "key_server" => key_server,
+        "agent_auth" => agent_auth,
+        "security" => security,
+        "webhooks" => webhooks,
+        "meta_mcp" => meta_mcp,
+        "capabilities" => capabilities,
+        "playbooks" => playbooks,
+        "routing_profiles" => routing_profiles,
+        "code_mode" => code_mode,
+        "marketplace" => marketplace,
+        "streaming" => streaming,
+        "failsafe" => failsafe,
+        "cache" => cache,
+        "runtime" => runtime,
+        "cost_governance" => cost_governance,
+    ]
 }
 
 /// Returns `true` when the TCP-listener address differs.
@@ -590,9 +943,23 @@ fn resolve_env_file_paths(raw: &[String]) -> Vec<PathBuf> {
 }
 
 /// Returns `true` for create/modify events on the watched config file.
-fn is_config_event(event: &Event, config_path: &std::path::Path) -> bool {
+fn is_config_event(event: &Event, config_paths: &[PathBuf]) -> bool {
     matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
-        && event.paths.iter().any(|p| p == config_path)
+        && event
+            .paths
+            .iter()
+            .any(|p| config_paths.iter().any(|watched| watched == p))
+}
+
+/// Returns `true` for create/modify events on the config the operator named,
+/// resolving the link target on every call.
+///
+/// The paths a config can arrive as are not fixed for the life of the process:
+/// a deployment can repoint the link at a new release and write that file. A
+/// list captured at startup keeps naming the release the link left behind, so
+/// the resolution happens per event instead.
+fn is_config_event_for(event: &Event, named_config_path: &std::path::Path) -> bool {
+    is_config_event(event, &config_watch_paths(named_config_path.to_path_buf()))
 }
 
 /// Returns `Some(path)` when the event matches any of the watched env files,
@@ -640,7 +1007,11 @@ impl ConfigWatcher {
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
-        let env_file_paths = resolve_env_file_paths(&initial_config.env_files);
+        let config_path = absolute_watch_path(config_path);
+        let env_file_paths: Vec<PathBuf> = resolve_env_file_paths(&initial_config.env_files)
+            .into_iter()
+            .map(absolute_watch_path)
+            .collect();
 
         let watcher = Self::create_notify_watcher(event_tx, &config_path, &env_file_paths)?;
 
@@ -672,14 +1043,15 @@ impl ConfigWatcher {
         config_path: &std::path::Path,
         env_file_paths: &[PathBuf],
     ) -> Result<RecommendedWatcher> {
-        let config_path_owned = config_path.to_path_buf();
+        let named_config_path = absolute_watch_path(config_path.to_path_buf());
+        let closure_config_path = named_config_path.clone();
         let env_paths_owned: Vec<PathBuf> = env_file_paths.to_vec();
 
         let mut watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
-                if is_config_event(&event, &config_path_owned) {
+                if is_config_event_for(&event, &closure_config_path) {
                     let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
                 } else if let Some(path) = matching_env_file(&event, &env_paths_owned) {
                     let _ = event_tx.try_send(ReloadTrigger::EnvFile(path));
@@ -691,26 +1063,28 @@ impl ConfigWatcher {
             crate::Error::ConfigWatcher(format!("Failed to create config watcher: {e}"))
         })?;
 
-        // Watch the config file's parent directory.
-        let config_dir = config_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
-        watcher
-            .watch(&config_dir, RecursiveMode::NonRecursive)
-            .map_err(|e| {
-                crate::Error::ConfigWatcher(format!("Failed to watch config path: {e}"))
-            })?;
-
-        // Watch each env file's parent directory (skip duplicates and missing).
+        // Watch the parent directory of every path the config can arrive as.
+        // A symlinked config has two: the link the operator named and the
+        // target an in-place write actually touches.
+        // Retargeting the link to a file in one of these directories is picked
+        // up, because the match resolves the link per event. A retarget to a
+        // directory that was not watched at startup is not: closing that needs
+        // the watcher to add directories from inside its own callback (#453).
         let mut watched_dirs = std::collections::HashSet::new();
-        watched_dirs.insert(config_dir);
+        for path in &config_watch_paths(named_config_path.clone()) {
+            let dir = watch_dir_of(path);
+            if !watched_dirs.insert(dir.clone()) {
+                continue;
+            }
+            watcher
+                .watch(&dir, RecursiveMode::NonRecursive)
+                .map_err(|e| {
+                    crate::Error::ConfigWatcher(format!("Failed to watch config path: {e}"))
+                })?;
+        }
 
         for env_path in env_file_paths {
-            let dir = env_path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .to_path_buf();
+            let dir = watch_dir_of(env_path);
 
             if watched_dirs.contains(&dir) {
                 continue;
@@ -798,6 +1172,13 @@ impl ConfigWatcher {
                                         restart_required = outcome.restart_required,
                                         "Config reload: complete"
                                     );
+                                }
+                                Err(e) if is_posture_refusal(&e) => {
+                                    // Its own arm, ahead of the generic one: a
+                                    // posture refusal is a decision about this
+                                    // config, not a file the operator must fix
+                                    // the syntax of.
+                                    warn!("Config reload: {e}");
                                 }
                                 Err(e) if e == SHUTDOWN_ABORTED_ERROR => {
                                     warn!(
@@ -1060,8 +1441,68 @@ impl ReloadContext {
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let Some((new_config, patch)) = load_config_patch(&self.config_path, &self.live_config)?
         else {
-            return Ok(ReloadOutcome::no_changes());
+            // No difference from the published snapshot does not mean nothing is
+            // outstanding: a restart-only edit was published on an earlier
+            // reload and the running process still has not applied it.
+            return Ok(with_pending_restart(
+                ReloadOutcome::no_changes(),
+                &self.live_config,
+            ));
         };
+
+        // Before `apply_patch`, which stops and starts backends: a refusal that
+        // ran after it could not say nothing was applied. And before the
+        // publish, which is what the origin gate would re-read.
+        if let Some(refusal) =
+            crate::gateway::reload_posture_refusal(self.live_config.running(), &new_config)
+        {
+            // What a restart does with this same file is the operator's next
+            // decision, and it differs. A file that also enables authentication
+            // is right on a restart and only wrong to apply live; a file that
+            // just declares the name refuses at the next start, planned or not.
+            let restart = if refusal.restart_would_also_refuse {
+                "This configuration is on disk, so the next start, including an \
+                 unplanned one, will refuse to serve. Revert it, or close the \
+                 tool paths."
+            } else {
+                // "accepts", not "is safe". The one file that reaches this
+                // branch while still leaving the tools open is the one that
+                // sets the escape hatch, and calling that safe would have the
+                // gateway endorse a choice the operator made deliberately and
+                // owns.
+                // "would not refuse it for this reason", not "accepts it".
+                // `network_bind_refusal` is the only question asked here; a
+                // restart still reads the whole file and can fail on a missing
+                // env: reference, an unreadable certificate, or anything else
+                // validation catches. Promising acceptance is how an operator
+                // restarts a working gateway into a different outage — the same
+                // overclaiming that cost this message three earlier rewrites.
+                "A restart would not refuse it for this reason, and applies the \
+                 parts a reload cannot."
+            };
+            // Two bounded facts, and no summary of "what is still in force".
+            //
+            // That summary is what kept being wrong. `Config::load` applies the
+            // candidate's `env_files` to the PROCESS environment before it
+            // returns, so by the time this check runs, that has happened — and
+            // it is not inert: `capability::executor` resolves an `env:` or
+            // `{env.VAR}` credential with `std::env::var` inside
+            // `dispatch_protocol`, per call. A later capability call can
+            // therefore use a value the refused file supplied.
+            //
+            // Three review rounds each narrowed that clause and each left it
+            // false, which is the shape of a claim that should be deleted
+            // rather than patched. The two facts below are checkable and the
+            // operator can act on them; the reassurance they wanted is the one
+            // the code cannot give. Pre-existing on every reload failure and
+            // filed as MIK-7256; overclaiming in a security message is how the
+            // next report starts.
+            return Err(format!(
+                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
+                 and no configuration was published. {restart}",
+                refusal.reason
+            ));
+        }
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(
@@ -1082,8 +1523,47 @@ impl ReloadContext {
 
         self.live_config.set(new_config);
 
-        Ok(outcome)
+        Ok(with_pending_restart(outcome, &self.live_config))
     }
+}
+
+/// Fold outstanding restart-only fields into a reload outcome.
+///
+/// Reported on every reload while they remain outstanding, not once. The diff
+/// alone cannot carry this: publishing a restart-only edit into the snapshot
+/// removes it from every later diff, so the operator who enables authentication
+/// and is distracted would never be told again.
+fn with_pending_restart(mut outcome: ReloadOutcome, live: &LiveConfig) -> ReloadOutcome {
+    let pending = live.pending_restart_fields();
+    if pending.is_empty() {
+        return outcome;
+    }
+    outcome.restart_required = true;
+    // Never overwrite an existing reason: it is documented as stable and
+    // machine-readable, so a consumer keying on `server_address_changed` must
+    // keep seeing it. Only fill it in when the patch had none.
+    outcome.restart_reason = outcome
+        .restart_reason
+        .or(Some("config changed in fields that only a restart applies"));
+    outcome.changes = format!(
+        "{} — NOT YET APPLIED, restart required for: {}",
+        outcome.changes,
+        pending.join(", ")
+    );
+    // The advice above is "restart", so it has to be advice that works. A
+    // restart-only edit is judged by the STARTUP check, not the reload overlay:
+    // the file is already published, so what a restart boots is `live.get()`.
+    // Telling an operator to restart into a refusal costs them the gateway,
+    // and the refusal message arrives after the process they were serving with
+    // is already gone (MIK-7255). Availability, not exposure — the edit that
+    // would have removed authentication is exactly the one that never applies.
+    if let Some(why) = crate::gateway::next_start_refusal(&live.get()) {
+        outcome.changes = format!(
+            "{outcome_changes} — WARNING: a restart would not start: {why}",
+            outcome_changes = outcome.changes
+        );
+    }
+    outcome
 }
 
 /// How long a config write waits for the reload lock before reporting busy.
@@ -1218,6 +1698,60 @@ where
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// Resolve a watched path to the absolute form `notify` reports.
+///
+/// Events arrive with absolute, symlink-resolved paths, and they are matched
+/// against the watched paths by equality. A relative `-c gateway.yaml` would
+/// never match one, so hot-reload would go quiet without ever failing.
+///
+/// Absolutizing first and canonicalizing second is what keeps a path that does
+/// not exist yet — an `env_file` the operator has still to write — out of the
+/// relative form: `canonicalize` fails on a missing file, so on its own it
+/// would hand that case straight back as the relative path that never matches.
+fn absolute_watch_path(path: PathBuf) -> PathBuf {
+    let absolute = std::path::absolute(&path).unwrap_or(path);
+    // Resolve symlinks in the parent chain only. The chain must be resolved
+    // because macOS reports events under the real directory (`/private/var`,
+    // not `/var`) and the watcher compares paths for equality. The final
+    // component must not be, or a symlink-managed deployment aims the watcher
+    // at the current target's directory and retargeting the symlink fires no
+    // event the watcher can see.
+    absolute
+        .parent()
+        .zip(absolute.file_name())
+        .and_then(|(parent, name)| std::fs::canonicalize(parent).ok().map(|dir| dir.join(name)))
+        .unwrap_or(absolute)
+}
+
+/// The directory to watch for changes to `path`.
+///
+/// Every absolute path a config-file event can legitimately arrive as.
+///
+/// A symlinked config has two, and watching either alone loses a real case:
+/// matching only the operator-named link misses an in-place write to the
+/// target (which is what editing the config through the link does), and
+/// matching only the target misses a retarget of the link itself.
+fn config_watch_paths(path: PathBuf) -> Vec<PathBuf> {
+    let named = absolute_watch_path(path);
+    let mut paths = vec![named.clone()];
+    if let Ok(target) = std::fs::canonicalize(&named)
+        && target != named
+    {
+        paths.push(target);
+    }
+    paths
+}
+
+/// `Path::parent` returns an empty path for a bare relative filename such as
+/// `gateway.yaml`, and an empty path cannot be watched. Both callers below
+/// hand this a user-supplied path, so both need the same answer.
+fn watch_dir_of(path: &std::path::Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
 
 #[cfg(test)]
 mod tests;
