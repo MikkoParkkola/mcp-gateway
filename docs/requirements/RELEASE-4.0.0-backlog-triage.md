@@ -68,6 +68,21 @@ filter. Five are P1 and every one of those is an authentication or
 authorisation hole. They belong in the same release as a protocol rewrite
 because they live in the same request path.
 
+**Decided 2026-08-29: all twenty go into 4.0.0.** The release does not merge
+until they land. Nothing exploitable ships, and the hardening set is not split
+across two releases where the reload-config family would be worked twice. They
+are sequenced by shared code path, not by priority, so each batch is one design
+and one review rather than twenty:
+
+| batch | issues | shared surface |
+|---|---|---|
+| 1 — config reload | MIK-7254, 7256, 7255, 7249 | the reload path's posture and env-file handling |
+| 2 — startup refusals | MIK-7258, 7244, 7243, 7245 | what the process refuses to start with, and file modes |
+| 3 — caller identity | MIK-7252, 7251, 7257, 7250 | who the request is for, and how that is proven |
+| 4 — callback registration | MIK-7263, 7262 | the `registers_external_callback` declaration |
+| 5 — secret redaction | MIK-7221, 7222 | the credential-disclosure class across transports |
+| 6 — loose ends | MIK-7268, 7246, 7291, 7265 | health readiness, the destructive gate, dead code, the build |
+
 ## C. 4.1 — real product work, weeks not hours
 
 Not deferrable by cleverness; each is a feature with its own design.
