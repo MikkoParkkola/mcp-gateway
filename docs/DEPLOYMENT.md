@@ -110,6 +110,22 @@ mcp-gateway setup export --target all --config gateway.yaml
 
 Applied exports print any backup file and a rollback command. Use that rollback command before deleting or hand-editing a generated client config.
 
+## Replica Count and `server.modern_protocol`
+
+**Run a single replica while `server.modern_protocol` is on.** The
+consumed-continuation ledger and the mint counter are process-local, so two
+replicas can each accept the same continuation and each issue the same counter
+value. Neither is detected at runtime — the second spend simply succeeds.
+
+This constraint binds only on the modern protocol path. `server.modern_protocol`
+is off by default, and with it off there is no such limit: scale horizontally as
+the rest of this document describes.
+
+If you need both horizontal scale and the 2026-07-28 revision, wait for the
+shared insert-if-absent store tracked as MIK-7312. Do not work around it with a
+sticky-session load balancer: continuations are presented by whichever client
+holds one, and session affinity does not constrain which replica that reaches.
+
 ## Kubernetes Enterprise Alpha
 
 The enterprise-alpha Kubernetes package lives in
