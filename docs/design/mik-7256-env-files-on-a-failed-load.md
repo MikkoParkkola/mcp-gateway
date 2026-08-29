@@ -337,10 +337,17 @@ reader:
   file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
   inserts each pair; later files overwrite earlier ones, matching
   `from_path_override`'s precedence. **The constructor never expands anything.** It receives absolute paths and
-  opens them. `~` is resolved ONCE, by the shared resolver, at startup, before
-  any file has been applied; the sequence it returns is what startup opens,
-  what the watcher binds (`src/config_reload/mod.rs:1011-1014`), and what every
-  later reload re-reads. Three consumers, one resolution, and nothing to
+  opens them. `~` is resolved ONCE, by startup, in the loop startup already
+  has: each path is expanded immediately before startup opens it, so a `HOME`
+  an earlier file set still governs a later `~/...` exactly as it does today
+  (`src/config/mod.rs:290-306` expands and applies inside one iteration).
+  What is new is only that the absolute path is RECORDED as it is opened. That
+  recorded sequence is what the watcher binds
+  (`src/config_reload/mod.rs:1011-1014`) and what every later reload re-reads.
+  Startup's behaviour does not move — resolving the whole list up front WOULD
+  move it, and an earlier draft of this paragraph said so, which would have
+  changed which file a `~/...` entry after a `HOME`-setting file reads.
+  Three consumers, one resolution, and nothing to
   disagree about — the earlier design had the reload re-expand, and the rule
   governing that re-expansion was wrong three times running, each time about a
   platform detail rather than about this change: `dirs` falls back to the
