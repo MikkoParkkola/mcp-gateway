@@ -362,8 +362,12 @@ this — which is the argument for the rule and the source scan over any list.
 **The reported set is derived, never a list of four.** An earlier draft named
 four eager authentication forms and reported a rotation only when the changed
 key was one of them. A fixed list is wrong the moment a consumer is added, and
-it was already wrong when written: `src/attestation/wiring.rs:117-118` reads
-the attestation mode and signing key with `std::env::var` at startup, and
+it was already wrong when written, and the corrected citation shows why a
+LIST cannot be the mechanism: `src/attestation/wiring.rs:117-119` reads
+the attestation mode, the signing key AND the key id with `std::env::var` at
+startup — three reads on consecutive lines, of which an earlier draft named two —
+`src/gateway/server/mod.rs:591-592` reads the key id a second time when it
+constructs the provenance signer, and
 `src/attestation/launcher.rs:86` reads the rollback flag the same way. None is
 an authentication form, all three are startup-only, and a rotated signing key
 that goes unreported is the exact failure this reporting exists to prevent.
