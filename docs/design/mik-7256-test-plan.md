@@ -141,7 +141,8 @@ overlay into the funnel and forgets the inline site passes a one-form case and
 fails on agent secrets in production.
 
 The third seam is the publish, and it is the one with no compiler help at all.
-`LiveEnv` is a process global, so a reload path that forgets to publish, or
+`LiveEnv` is a shared cell reached by handle — one per gateway, one per test
+fixture, never a static — so a reload path that forgets to publish, or
 publishes on the wrong branch, still compiles and still passes every case that
 only reads the resolved config. The cases that hold it are .2 (published on
 the ordinary success path), .10.1 (published on the empty-patch early return),
