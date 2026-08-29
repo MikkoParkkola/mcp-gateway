@@ -299,15 +299,29 @@ No signature churn at the 35 `Config::load` call sites: everything below is
 additive, and the existing entry point keeps today's behaviour exactly.
 
 **`EnvOverlay`** — a `HashMap<String, String>` and the set of keys the env
-files own, private to `src/config/mod.rs`, with two constructors and one
+files own, private to `src/config/mod.rs`, with three constructors and one
 reader:
 
 - `EnvOverlay::none()` — empty map, empty owned set. What a gateway with no
   env files configured runs on.
+- `EnvOverlay::from_paths_checked(&[PathBuf], previous: &EnvOverlay) ->
+  Result<Self, EnvFileError>` — what a RELOAD calls. Same resolution, same
+  precedence, same union; but a listed path that exists and fails to open or to
+  parse is an `Err`, and on `Err` the previous overlay stands unchanged and the
+  reload is rejected with a diagnostic naming the file and the line.
+  **The asymmetry with `from_paths` is the decision.** At startup a truncated
+  file yields the pairs before the bad line and a warning, which is byte-for-byte
+  what ships today and what a running operator has already booted on. On a
+  reload the same partial read is a silent revocation: a key the previous
+  overlay owns and the truncated file no longer supplies is indistinguishable
+  from a key the operator deliberately deleted, so one stray character in a
+  credential file unsets a live credential for every holder that resolves
+  through it. A refused reload changing nothing is the rule the rest of this
+  design already runs on; this is that rule reaching the file layer.
 - `EnvOverlay::from_paths(&[PathBuf], previous: &EnvOverlay) -> Self` — the
   map from the files, and an owned set of its own keys unioned with
-  `previous`'s. Startup passes `&EnvOverlay::none()`; a reload passes the
-  overlay it is about to replace. The previous overlay is a parameter rather
+  `previous`'s. Startup passes `&EnvOverlay::none()`; a reload does not call
+  this constructor at all, it calls `from_paths_checked`. The previous overlay is a parameter rather
   than a field the builder reaches for because the union is the whole of what
   makes a removal durable (below), and a caller that forgets it should not
   compile. **Infallible, and that is a decision, not an omission.** For each existing path in order it opens the
