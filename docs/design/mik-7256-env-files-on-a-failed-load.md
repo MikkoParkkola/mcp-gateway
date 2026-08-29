@@ -75,11 +75,22 @@ Today a change to a watched env file triggers a reload
 (`ReloadTrigger::EnvFile`, `src/config_reload/mod.rs:1227`) and the values flow
 into the live config through `Config::load`. Under C that reload would
 re-read the YAML and find nothing new: a trigger that cannot change anything.
-So the env-file watch goes with it — `resolve_env_file_paths`
-(`:1011`), the `ReloadTrigger::EnvFile` variant and its log line are removed
-rather than left in place lying about what they do. Adding a *path* to
-`env_files` already required a restart; now editing the file behind the path
-does too, and the two halves finally agree.
+So the env-file watch goes with it, rather than being left in place lying about
+what it does. Removed with it: `resolve_env_file_paths` (`:941`, called at
+`:1011`), `matching_env_file` (`:967`, called at `:1056` and nowhere else — it
+decides whether a filesystem event matches a watched env file, and there are no
+watched env files after this), the env-file parameter of
+`create_notify_watcher`, and the `ReloadTrigger::EnvFile` variant with its log
+line. Adding a *path* to `env_files` already required a restart; now editing the
+file behind the path does too, and the two halves finally agree.
+
+**Six tests are deleted with the functions they cover** — a design event, named
+here rather than left to surface as a review finding:
+`resolve_env_file_paths_*` (`src/config_reload/tests.rs:399,414`) and
+`matching_env_file_*` (`:485,502,518,533`). Each tests a helper that ceases to
+exist; none tests behaviour that survives the change. The behaviour that
+replaces them is ENVFILE.5 — a watcher test asserting an env-file edit
+publishes no reload, with a config-file edit in the same test as its control.
 
 **This is a narrowing of user-visible behaviour and was decided without an
 answer.** The choice was put to the operator and went unanswered; C is taken
@@ -87,6 +98,16 @@ because it is the only buildable fix and because it matches what the gateway
 already tells users about `env_files`. It is cheap to reverse: restoring
 today's behaviour means passing `Apply` on the reload path, at the price of
 reopening MIK-7256 with no mechanism available to close it.
+
+**It is also outside what this change declared as its scope, and that blocks the
+merge rather than the design.** The scope statement puts "whether the `env_files`
+list should be reloadable" out of bounds, and removing the watch decides a
+neighbouring question the same statement did not reserve. Cutting a mechanism is
+engineering; cutting an obligation an operator relies on is a scope change, and
+the repair protocol requires the requester's recorded agreement *before* it
+happens. So: the design proceeds, the implementation may be written, and the
+change does not land until that agreement is on MIK-7256. A reviewer's SHIP does
+not substitute for it — no reviewer is the party losing the behaviour.
 
 ## Shape
 
@@ -107,9 +128,37 @@ today. A new `Config::load_without_env_files(path)` delegates with `Skip`.
   process whose only job is to regenerate client entries from the config; it
   has no backends to leak into and no reload to refuse, and skipping there
   would drop env-file-derived values from what it exports.
-- `Skip`: `load_config_patch` (`src/config_reload/mod.rs:1239`) — the one
-  caller that evaluates a candidate inside the running gateway, and the one
-  call site this change edits.
+- `Skip`: every config read that happens **inside a running gateway**. That is
+  the invariant, and it is stated as a rule rather than a list because a list
+  goes stale the moment a reader is added. Two readers satisfy it today, both
+  found by reading every caller of `Config::load`, `load_config_or_default` and
+  `load_existing_or_default` under `src/gateway/`, `src/config_reload/` and
+  `src/a2a/`:
+  - `load_config_patch` (`src/config_reload/mod.rs:1239`) — evaluates a
+    candidate before a reload.
+  - `mutate_and_reload_outcome_within` (`:1405`) — the admin-UI read-modify-write
+    path. It reads through `config_persistence::load_config_or_default`, which
+    calls `Config::load` (`src/config_persistence.rs:16`), so it applies the
+    candidate's env files *before* the mutation closure has run, before the file
+    is written, and before the reload that may then be refused. A rejected
+    mutation returns `ConfigMutation::Rejected` having changed no file and
+    already changed the environment. Found by review; the first draft of this
+    design named only `load_config_patch` and would have shipped the finding
+    intact under a different caller.
+
+  `load_config_or_default` keeps its signature for the same reason `Config::load`
+  does — five of its seven callers are CLI commands (`src/commands/setup.rs`,
+  `src/commands/add_remove.rs`) where applying is correct. It gains one
+  `pub(crate)` sibling that delegates to `Config::load_without_env_files`.
+  `src/config_reload/mod.rs:1688` is NOT one of the two: its own comment says it
+  is the CLI acting on a config file no gateway is serving, so there is no
+  running process whose environment could be corrupted, and `${VAR}` in that
+  config still needs the files applied.
+
+`Config::load_without_env_files` is `pub(crate)`: `config_persistence` is a
+different module and must reach it, while nothing outside the crate should. Its
+documented invariant is that it does not mutate the process environment — the
+one property the whole change exists to provide.
 
 `load_env_files(&self)` (`src/config/mod.rs:276`) is a thin wrapper over
 `load_env_files_from_paths` reached only from `src/config/tests.rs`. It was
@@ -130,12 +179,24 @@ as an observation, not a ticket.
 - **MIK.ENVFILE.4** Given startup, Then env files are applied exactly as today
   — same variables, same override order, same final state.
 - **MIK.ENVFILE.5** Given an env file whose contents change under a running
-  gateway, Then no reload is triggered by that change alone, and the config
-  reports `env_files` as restart-required.
+  gateway, Then no reload is triggered by that change alone.
 - **MIK.ENVFILE.6** Given a reload whose candidate env file would change a
   `MCP_GATEWAY_*` variable and a variable referenced by `${VAR}` in the YAML,
   Then the reloaded config resolves both against the values the process has had
   since startup, not the candidate file's.
+- **MIK.ENVFILE.7** Given an admin-UI config edit against a running gateway,
+  When the mutation is rejected or the write fails, Then process environment
+  variables are identical to before the edit.
+
+The earlier form of .5 also required the gateway to report `env_files` as
+restart-required after a content-only edit. Cut, not weakened: it is
+unachievable and was never achievable. `pending_restart_fields` compares the
+`env_files` *path list* (`src/config_reload/mod.rs:552`), which a content edit
+does not change, and after this change nothing observes the file's contents at
+all. Retaining an observer solely to raise that flag would rebuild the watcher
+this design removes, to report on a mechanism that no longer exists. What an
+operator gets instead is the documentation fix in `docs/DEPLOYMENT.md:177`,
+which states the rule up front rather than signalling each violation of it.
 
 ## Docs corrected here
 
