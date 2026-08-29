@@ -165,7 +165,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 |---|---|---|---|
 | MIK-6704.IDENT.1 | Authorization MUST derive from the authenticated credential — OIDC subject or API-key digest. `io.modelcontextprotocol/clientInfo` is self-asserted and MUST NOT influence any authorization decision. | Spec says clients *SHOULD identify themselves* — identification, not authentication | T, I |
 | MIK-6704.IDENT.2 | `clientInfo` and `clientCapabilities` MUST be carried as diagnostic and negotiation context, labelled untrusted. | Same | I |
-| MIK-6704.IDENT.3 | The authenticated end-user identity MUST be propagatable to a backend that requires its own authorization, by token exchange (RFC 8693). | MIK-6704, MIK-6729; ADR-007 | T, D |
+| MIK-6704.IDENT.3 | The authenticated end-user identity MUST be propagatable to a backend that requires its own authorization, by token exchange (RFC 8693). **Already built** — `src/identity_propagation/token_exchange.rs` implements it and `src/gateway/server/mod.rs:1053-1061` wires it into production startup as the `TokenExchange` strategy (verified 2026-08-29). The release verifies rather than implements it. | MIK-6704, MIK-6729; ADR-007 | T, D |
 | MIK-7252.IDENT.4 | Playbook steps MUST execute under the caller's identity, subject to the same per-client backend scoping as a direct call. They currently run with none. | MIK-7252 | T |
 | MIK-6704.IDENT.5 | Where the gateway cannot establish an identity a backend requires, it MUST refuse rather than fall back to a shared credential. | Confused-deputy avoidance | T |
 
