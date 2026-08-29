@@ -518,6 +518,50 @@ mod era {
     }
 
     #[test]
+    fn ac_discover_4_a_document_listing_only_legacy_revisions_means_legacy() {
+        // Found by adversarial review, 2026-08-29, and confirmed at source: the
+        // specification says a client "should choose one of these for
+        // subsequent requests". A peer that implements `server/discover` and
+        // then lists only 2025 revisions is telling us it cannot take a modern
+        // request — so classifying it Modern on the presence of the field would
+        // send it exactly what it said it cannot parse.
+        //
+        // Presence of the field proves the peer implements the RPC. Its
+        // CONTENTS decide what we may send.
+        let legacy_only = ProbeOutcome::Result(json!({
+            "supportedVersions": ["2025-11-25", "2025-06-18"],
+            "capabilities": {},
+        }));
+        assert_eq!(classify(&legacy_only), Era::Legacy);
+
+        // And the mixed case: a dual-era peer listing both is modern, because
+        // there is a modern revision we can agree on.
+        let both = ProbeOutcome::Result(json!({
+            "supportedVersions": ["2026-07-28", "2025-11-25"],
+        }));
+        assert_eq!(classify(&both), Era::Modern);
+    }
+
+    #[test]
+    fn ac_discover_4_a_malformed_version_list_means_legacy() {
+        // The field is present and unusable. Guessing in the modern direction
+        // sends a request the peer may not understand; guessing legacy costs a
+        // handshake. The cheap error is the right one.
+        for shape in [
+            json!({ "supportedVersions": "2026-07-28" }),
+            json!({ "supportedVersions": [] }),
+            json!({ "supportedVersions": [42] }),
+            json!({ "supportedVersions": null }),
+        ] {
+            assert_eq!(
+                classify(&ProbeOutcome::Result(shape.clone())),
+                Era::Legacy,
+                "an unusable version list is not evidence of modernity: {shape}"
+            );
+        }
+    }
+
+    #[test]
     fn ac_discover_4_a_result_without_versions_is_not_a_discovery_document() {
         // Some other server's idea of what `server/discover` means. A result
         // alone is not evidence; the document has to say what it speaks.

@@ -60,11 +60,19 @@ pub enum ProbeOutcome {
 #[must_use]
 pub fn classify(outcome: &ProbeOutcome) -> Era {
     match outcome {
-        // A document that names the versions it speaks. `supportedVersions` is
-        // the specification's field name; it is what distinguishes a discovery
-        // result from some other server's idea of what `server/discover` might
-        // mean.
-        ProbeOutcome::Result(doc) if doc.get("supportedVersions").is_some() => Era::Modern,
+        // A document that names a modern revision it speaks.
+        //
+        // The presence of `supportedVersions` proves the peer implements this
+        // RPC. Its **contents** decide what we may send it: the specification
+        // says a client "should choose one of these for subsequent requests",
+        // so a peer answering with only 2025 revisions has told us it cannot
+        // take a modern request — and classifying it Modern on the presence of
+        // the field would send it exactly what it said it cannot parse.
+        //
+        // Found by adversarial review, 2026-08-29. The first version keyed on
+        // presence alone, which reads correctly and is wrong in the one case
+        // that matters: a dual-era peer mid-migration.
+        ProbeOutcome::Result(doc) if names_a_modern_version(doc) => Era::Modern,
 
         // A recognised modern error proves a modern peer just as well as a
         // document does: only a server that implements this revision knows
@@ -150,4 +158,21 @@ impl EraCache {
         *guard = Some(era);
         era
     }
+}
+
+/// Whether a discovery document names a revision we can speak statelessly.
+///
+/// Anything unusable — a string where an array belongs, an empty list, entries
+/// that are not strings — is treated as naming nothing. Guessing in the modern
+/// direction would send a request the peer may not understand; guessing legacy
+/// costs a handshake. The cheap error is the right one.
+fn names_a_modern_version(doc: &serde_json::Value) -> bool {
+    doc.get("supportedVersions")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|versions| {
+            versions
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|version| crate::protocol::meta::MODERN_VERSIONS.contains(&version))
+        })
 }

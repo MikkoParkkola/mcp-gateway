@@ -637,7 +637,6 @@ fn bench_semantic_search(_c: &mut Criterion) {}
 
 // ── criterion wiring ──────────────────────────────────────────────────────────
 
-
 /// NFR.PERF.1 / NFR.PERF.2 — what the 2026-07-28 path costs per request.
 ///
 /// The requirement is a budget (P50 within 5%, P99 within 10% of 3.5.0), and a
