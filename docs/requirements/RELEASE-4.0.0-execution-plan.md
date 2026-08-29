@@ -123,3 +123,23 @@ would leave the defect in place while the tests passed.
 **The malformed-line diagnostic is rebuilt, not forwarded.** `dotenvy::Error::LineParse`
 echoes the offending line in its `Display`. The diagnostic carries file, line number and
 category only, because the offending line is the secret.
+
+**Attestation keys stay on the process environment; an env file cannot supply them.**
+`ATTESTATION_SIGNING_KEY` and `ATTESTATION_KEY_ID` are read directly by
+`attestation/wiring.rs:118-119` and `gateway/server/mod.rs:591-592` under fixed variable
+names, rather than resolved from a `{env.NAME}` reference in configuration. They are
+operational secrets injected by the deployment, which is a different thing from the
+config-file references this change is about. Threading them would extend the diff into
+the attestation subsystem for no test coverage and no requested behaviour, so the
+limitation is deliberate and is stated in the shipped documentation.
+
+A sweep of every credential-shaped `std::env::var` in the tree returned 20 call sites, of
+which three are in scope: `SecretResolver::resolve` (`src/secrets.rs:51`),
+`fetch_credential` (`src/capability/executor/credentials.rs:22`) and
+`resolve_admin_token` (`src/config/features/key_server.rs:136`). The reader list in the
+design event above names `auth.bearer_token`, `api_keys[].key` and `hs256_secret`
+separately, but all three resolve through `SecretResolver::resolve`; threading that one
+function covers them. The remaining survivors are justified: the overlay's own baseline
+read, a separate binary outside the gateway startup path, two sites building a *child*
+process environment, two is-it-set diagnostics that never resolve a value, one enumerator
+and one feature flag.
