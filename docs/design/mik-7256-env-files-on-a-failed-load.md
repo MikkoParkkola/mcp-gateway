@@ -1030,9 +1030,9 @@ observation, not a ticket.
   token the parser would not substitute — either spelling inside a `#` comment,
   inside a single-quoted value, or escaped — does not refuse.
 - **MIK.ENVFILE.13** Given a key removed from an env file whose value was
-  applied to the process at startup, When the reload is accepted, Then the key
-  no longer resolves for any overlay-aware reader, and a reader that requires it
-  fails rather than serving the startup value.
+  applied to the process at startup, When the reload is accepted, Then the key resolves as the
+  resolution table says — to its baseline where one was captured, to unset where
+  none was — and never to the value the deleted line carried.
 - **MIK.ENVFILE.17** Given an env file whose second line cannot be parsed and
   whose third line is a valid assignment, When the overlay is built from it,
   Then the first line's pair is present and the third line's is not — the same
