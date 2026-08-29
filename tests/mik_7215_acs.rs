@@ -259,10 +259,34 @@ mod http {
         body: Value,
     ) -> (StatusCode, Option<String>, Value) {
         let router = create_router(state);
-        let request = Request::builder()
+        let mut builder = Request::builder()
             .method("POST")
             .uri("/mcp")
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+
+        // A conforming modern client mirrors its body into the standard
+        // headers. Derived from the body here rather than hard-coded, so these
+        // tests always send what they claim to send; increment 3 sends
+        // deliberately disagreeing headers of its own.
+        if let Some(version) = body
+            .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
+            .and_then(Value::as_str)
+        {
+            builder = builder.header("mcp-protocol-version", version);
+            if let Some(method) = body.get("method").and_then(Value::as_str) {
+                builder = builder.header("mcp-method", method);
+                if matches!(method, "tools/call" | "resources/read" | "prompts/get")
+                    && let Some(name) = body
+                        .pointer("/params/name")
+                        .or_else(|| body.pointer("/params/uri"))
+                        .and_then(Value::as_str)
+                {
+                    builder = builder.header("mcp-name", name);
+                }
+            }
+        }
+
+        let request = builder
             .body(Body::from(serde_json::to_vec(&body).expect("body")))
             .expect("request");
         let response = router.oneshot(request).await.expect("router must answer");

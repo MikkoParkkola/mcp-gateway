@@ -560,6 +560,33 @@ pub(super) async fn meta_mcp_handler(
             return build_response(rpc, &session_id, StatusCode::BAD_REQUEST);
         }
 
+        // Header against body, before anything acts on either. The
+        // specification's own rationale for this check is a load balancer
+        // routing on the header while the server executes on the body — which
+        // is this gateway with the check missing.
+        let body_name = params
+            .as_ref()
+            .and_then(|p| p.get("name").or_else(|| p.get("uri")))
+            .and_then(serde_json::Value::as_str);
+        let header_str = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+        let check = crate::protocol::headers::HeaderCheck {
+            header_protocol_version: header_str("mcp-protocol-version"),
+            body_protocol_version: Some(fields.protocol_version.as_str()),
+            header_method: header_str("mcp-method"),
+            body_method: method.as_str(),
+            header_name: header_str("mcp-name"),
+            body_name,
+        };
+        if let Err(mismatch) = check.validate() {
+            return build_error_response(
+                Some(id.clone()),
+                -32020,
+                mismatch.to_string(),
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+
         // A capability the client never declared. Checked before dispatch:
         // a handler that discovers this halfway through has already acted.
         if let Some(capability) = crate::protocol::meta::required_capability(&method)
