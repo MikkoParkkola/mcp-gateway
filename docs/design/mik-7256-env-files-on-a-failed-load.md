@@ -488,14 +488,13 @@ a precedence to be tuned; both are the same defect, that a second provider is
 reading a snapshot the reload deliberately refuses to update.
 
 So there is one provider, `EffectiveEnv`, computing the environment the process
-WOULD have if the accepted env files were loaded into it — process variables,
-minus the keys the overlay owns, plus the current overlay — and applying the
-transformation once over that map: strip the prefix case-insensitively, replace
-`__` with `.`, reject a key with an empty dot-segment, `nest` each pair, merge.
+WOULD have if the accepted env files were loaded into it. That map is
+`overlay.effective_vars()` — the same one every iterating reader gets, defined
+by the table and nowhere else — and the provider applies the transformation once
+over it: strip the prefix case-insensitively, replace `__` with `.`, reject a
+key with an empty dot-segment, `nest` each pair, merge.
 
-**Which keys those are is not a question `EffectiveEnv` answers.** It calls
-`overlay.owns(key)`, the same predicate `resolve` uses, and holds no key set of
-its own. An earlier draft had it strip the keys the STARTUP env files owned
+**Which keys those are is not a question `EffectiveEnv` answers.** It has no owned set, no subtraction and no fallback of its own. An earlier draft had it strip the keys the STARTUP env files owned
 while the overlay's owned set was the cumulative union carried forward from the
 overlay it replaced. The two agreed on the first reload and diverged on the
 next: add a key to a file, remove it again, reload twice, and a variable also
