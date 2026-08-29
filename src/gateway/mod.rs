@@ -19,6 +19,7 @@ mod server;
 pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
+pub mod subscription_registry;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
