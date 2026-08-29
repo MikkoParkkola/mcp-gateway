@@ -55,6 +55,24 @@ spec:
               value: {{ .Values.logging.format | quote }}
             - name: MCP_GATEWAY_LOG_LEVEL
               value: {{ .Values.logging.level | quote }}
+            {{- /* Same test as the ConfigMap's, inverted the same way: anything
+                   that is not mesh renders a credential, so anything that is
+                   not mesh must also get the Secret. Keying one on "is mesh"
+                   and the other on "is credential" let a typo render a token
+                   reference with nothing to resolve it. */}}
+            {{- if ne .Values.auth.mode "mesh" }}
+            {{- if not .Values.auth.existingSecret }}
+            {{- fail "auth.existingSecret is required in credential mode: the rendered config references env:MCP_GATEWAY_TOKEN, and a pod without it fails validation at startup." }}
+            {{- end }}
+            # The config references env:MCP_GATEWAY_TOKEN. A missing value fails
+            # validation at startup rather than serving without one, so an
+            # install that forgets the Secret stops instead of opening.
+            - name: MCP_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret | quote }}
+                  key: {{ .Values.auth.secretKey | quote }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/mcp-gateway

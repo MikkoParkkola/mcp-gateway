@@ -33,7 +33,7 @@
 //! logs, error messages, or MCP responses.
 
 mod backend;
-mod definition;
+pub mod definition;
 #[cfg(feature = "discovery")]
 pub mod discovery;
 mod execution_context;

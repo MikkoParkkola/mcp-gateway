@@ -59,6 +59,15 @@ pub async fn run_add_command(
     };
 
     // ── Load config ────────────────────────────────────────────────────────
+    //
+    // Noted before the write, because `add` is a plausible FIRST command — it
+    // is in the top-level help — and the config it creates from nothing carries
+    // `auth.enabled: false` and no credential. Since the anonymous identity
+    // stopped holding admin, that config has no admin path at all: no
+    // dashboard, no management tools, and nothing on screen saying why. The
+    // credential is not generated here on purpose; minting one as a side effect
+    // of adding a backend is a surprise. Saying so is not.
+    let creating_config = !config.exists();
     let mut gateway_config = backend_ops::load_config_or_default(config);
 
     // ── Insert backend ─────────────────────────────────────────────────────
@@ -87,6 +96,17 @@ pub async fn run_add_command(
         TransportConfig::A2a { .. } => "a2a",
     };
     println!("Added '{name}' ({transport_label}).");
+    if creating_config {
+        println!();
+        println!(
+            "Note: created a new {} with authentication off, so it has no",
+            config.display()
+        );
+        println!("admin path — no dashboard and no management tools. To get one:");
+        println!("  mcp-gateway init          # generates a credential and writes the config");
+        println!("or set auth.enabled with a bearer_token, and list /health and /mcp under");
+        println!("auth.public_paths so tool calls keep working.");
+    }
 
     if let Some(entry) = server_registry::lookup(name) {
         report_env_status(entry.required_env, &env);

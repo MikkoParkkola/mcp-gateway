@@ -650,7 +650,7 @@ impl HttpTransport {
     /// Negotiate protocol version from error message.
     ///
     /// Delegates to shared helpers in [`crate::protocol::negotiate`].
-    #[allow(clippy::unused_async)] // async for future network-based negotiation
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future network-based negotiation
     async fn negotiate_protocol_version(&self, error_msg: &str) -> Option<String> {
         let supported_versions = parse_supported_versions_from_error(error_msg)?;
 

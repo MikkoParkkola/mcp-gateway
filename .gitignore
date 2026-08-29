@@ -50,3 +50,7 @@ gateway.yaml
 target_quality_check/
 docs/distribution/
 .elite/
+
+# Mutation-testing output (cargo-mutants): a report, not a source artifact.
+mutants.out/
+mutants.out.old/
