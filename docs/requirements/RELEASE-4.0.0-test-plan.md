@@ -101,4 +101,8 @@ Two suites that no per-increment row set can express, because their subject is t
 Stated so a reviewer has something to disagree with:
 
 - If `server/discover` cannot be answered before a session exists on the HTTP path without restructuring request handling, increment 1 is not additive and its ordering is wrong.
-- If the 3.5.0 golden fixture cannot be captured — because the handshake response embeds a timestamp, a session id or any per-run value — DISCOVER.3 needs a normalising comparison, and the plan should say which fields are normalised rather than discovering it during implementation.
+- ~~If the 3.5.0 golden fixture cannot be captured — because the handshake response embeds a timestamp, a session id or any per-run value — DISCOVER.3 needs a normalising comparison.~~ **Checked 2026-08-29, and it is capturable.** `handle_initialize` (`src/gateway/meta_mcp/mod.rs:955-996`) returns `build_initialize_result(negotiated_version, &instructions)`; the instructions derive from the backend registry's tool counts, and nothing in the path reads a clock, a session id or a random source. Given a fixed registry the response is deterministic.
+
+  Two consequences, both simplifications. The golden does **not** need capturing from a built 3.5.0 binary: this branch carries no code change yet, so the current tree *is* 3.5.0 for this purpose, and the fixture is captured in-process from `handle_initialize` before the first line of discovery code is written.
+
+  **But it moves with Cargo features.** Under `spec-preview` the handshake advertises `capabilities.tools.filtering` and `.resolve` (`src/gateway/meta_mcp/spec_preview.rs`), so one golden is one feature set. The fixture MUST pin the feature set it was captured under, and the test MUST fail rather than pass when run under a different one — otherwise the regression row silently stops comparing, which is the failure mode this row exists to prevent.
