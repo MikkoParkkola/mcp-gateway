@@ -137,9 +137,17 @@ impl AnomalyDetector {
         // than unbounded growth, and is why the ceiling is generous.
         if self.last_tool.len() >= MAX_TRACKED_IDENTITIES
             && !self.last_tool.contains_key(session_id)
-            && let Some(victim) = self.last_tool.iter().next().map(|e| e.key().clone())
         {
-            self.last_tool.remove(&victim);
+            // The victim is chosen in its OWN statement so the iterator — and
+            // the shard lock it holds — is dropped before the removal asks for
+            // that same shard as a writer. Written as one `if let`, the guard
+            // outlives the `remove` inside it and the thread deadlocks against
+            // itself: the map is sharded, so this only bites once the ceiling
+            // is actually reached, which no ordinary test run does.
+            let victim = self.last_tool.iter().next().map(|e| e.key().clone());
+            if let Some(victim) = victim {
+                self.last_tool.remove(&victim);
+            }
         }
 
         match self.last_tool.entry(session_id.to_string()) {
