@@ -39,7 +39,13 @@ const VERSION: u8 = 1;
 const NONCE_LEN: usize = 12;
 
 /// What the envelope carries. None of it is visible to the client.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// `Debug` is implemented by hand rather than derived, and the omissions are the
+/// point: this struct is sealed on the wire and plaintext in memory, so a
+/// derived `Debug` undoes the sealing the moment anything formats one. The
+/// backend's own state may carry the authorization the backend was issued, and
+/// the caller bindings say who is entitled to redeem the exchange.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Payload {
     /// Which backend holds the exchange.
     pub backend_id: String,
@@ -61,6 +67,23 @@ pub struct Payload {
     pub jti: String,
 }
 
+impl std::fmt::Debug for Payload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Enough to trace an exchange through a log, and nothing that would let
+        // a reader of that log redeem it.
+        f.debug_struct("Payload")
+            .field("backend_id", &self.backend_id)
+            .field("backend_request_state", &"<redacted>")
+            .field("principal_fingerprint", &"<redacted>")
+            .field("original_request_digest", &"<redacted>")
+            .field("origin_replica", &self.origin_replica)
+            .field("issued_at", &self.issued_at)
+            .field("expires_at", &self.expires_at)
+            .field("jti", &self.jti)
+            .finish()
+    }
+}
+
 impl Payload {
     /// Whether this continuation belongs to this caller and this request.
     ///
@@ -71,9 +94,11 @@ impl Payload {
     /// skip it by reaching for the payload directly; keeping it a method the
     /// caller must invoke makes the omission visible at the call site.
     ///
-    /// Compared in constant time: both values are attacker-influenced, and a
-    /// length-or-prefix timing signal on a principal fingerprint is a way to
-    /// learn one.
+    /// Compared in constant time, and over fixed-width digests rather than the
+    /// values themselves: both are attacker-influenced, and a slice comparison
+    /// short-circuits when the lengths differ, so comparing the raw strings
+    /// would leak the stored length however careful the comparison after it.
+    /// Hashing first makes every comparison the same shape.
     ///
     /// # Errors
     ///
@@ -86,15 +111,15 @@ impl Payload {
     ) -> Result<(), ContinuationError> {
         use subtle::ConstantTimeEq as _;
 
-        let principal_ok: bool = self
-            .principal_fingerprint
-            .as_bytes()
-            .ct_eq(principal_fingerprint.as_bytes())
+        let digest = |value: &str| ring::digest::digest(&ring::digest::SHA256, value.as_bytes());
+
+        let principal_ok: bool = digest(&self.principal_fingerprint)
+            .as_ref()
+            .ct_eq(digest(principal_fingerprint).as_ref())
             .into();
-        let request_ok: bool = self
-            .original_request_digest
-            .as_bytes()
-            .ct_eq(original_request_digest.as_bytes())
+        let request_ok: bool = digest(&self.original_request_digest)
+            .as_ref()
+            .ct_eq(digest(original_request_digest).as_ref())
             .into();
         if principal_ok && request_ok {
             Ok(())
@@ -118,6 +143,23 @@ pub enum ContinuationError {
     NotAuthentic,
     /// Past its deadline.
     Expired,
+    /// This key has minted as many envelopes as it is permitted to.
+    MintBudgetExhausted,
+}
+
+impl ContinuationError {
+    /// What the client is told, as opposed to what the operator is told.
+    ///
+    /// The variants distinguish causes so an operator can act on them; a client
+    /// gets one sentence for all of them. Reporting *which* key id or wire
+    /// version was refused would let a caller map the live keyring and the
+    /// build one probe at a time — and the caller can do nothing differently
+    /// with the detail, since every one of these means the same thing to them:
+    /// this continuation cannot be redeemed, start again.
+    #[must_use]
+    pub fn client_message(&self) -> &'static str {
+        "continuation rejected"
+    }
 }
 
 impl std::fmt::Display for ContinuationError {
@@ -128,6 +170,9 @@ impl std::fmt::Display for ContinuationError {
             Self::UnknownKey(k) => write!(f, "unknown continuation key {k}"),
             Self::NotAuthentic => write!(f, "continuation failed authentication"),
             Self::Expired => write!(f, "continuation expired"),
+            Self::MintBudgetExhausted => {
+                write!(f, "continuation key has exhausted its mint budget")
+            }
         }
     }
 }
@@ -144,6 +189,8 @@ pub struct Keyring {
     minting_kid: u8,
     keys: Vec<(u8, LessSafeKey)>,
     rng: SystemRandom,
+    minted: std::sync::atomic::AtomicU64,
+    mint_budget: u64,
 }
 
 #[expect(
@@ -160,18 +207,35 @@ impl std::fmt::Debug for Keyring {
     }
 }
 
+/// The most envelopes one key may seal.
+///
+/// AES-GCM here uses a random 96-bit nonce, and random nonces collide by the
+/// birthday bound rather than never. NIST SP 800-38D §8.3 caps a key at 2^32
+/// invocations to hold the collision probability below 2^-32; a nonce reused
+/// under one key is a catastrophic loss of confidentiality, not a degradation.
+/// Rotation is what keeps a deployment under this, and this constant is what
+/// makes the requirement enforced rather than assumed.
+const MINT_BUDGET: u64 = 1 << 32;
+
 impl Keyring {
     /// Build a keyring from raw 32-byte keys, the first of which mints.
     ///
     /// # Errors
     ///
-    /// Returns `Malformed` if a key is not 32 bytes or the list is empty.
+    /// Returns `Malformed` if a key is not 32 bytes, the list is empty, or two
+    /// keys share an id. A duplicated id is refused rather than tolerated
+    /// because lookup takes the first match: the second key would silently
+    /// never verify, and the failure would surface only on envelopes minted
+    /// before the deploy that introduced it.
     pub fn new(keys: &[(u8, [u8; 32])]) -> Result<Self, ContinuationError> {
         let Some((minting_kid, _)) = keys.first() else {
             return Err(ContinuationError::Malformed);
         };
-        let mut unbound = Vec::with_capacity(keys.len());
+        let mut unbound: Vec<(u8, LessSafeKey)> = Vec::with_capacity(keys.len());
         for (kid, material) in keys {
+            if unbound.iter().any(|(seen, _)| seen == kid) {
+                return Err(ContinuationError::Malformed);
+            }
             let key = UnboundKey::new(&AES_256_GCM, material)
                 .map_err(|_| ContinuationError::Malformed)?;
             unbound.push((*kid, LessSafeKey::new(key)));
@@ -180,7 +244,33 @@ impl Keyring {
             minting_kid: *minting_kid,
             keys: unbound,
             rng: SystemRandom::new(),
+            minted: std::sync::atomic::AtomicU64::new(0),
+            mint_budget: MINT_BUDGET,
         })
+    }
+
+    /// Lower the mint budget below the default ceiling.
+    ///
+    /// A deployment that rotates faster than [`MINT_BUDGET`] can say so, and a
+    /// test can reach the boundary without sealing four billion envelopes — a
+    /// bound nothing can arrive at is a bound nobody has checked. Raising it
+    /// above the default is refused: the ceiling is a property of AES-GCM with
+    /// random nonces, not a preference.
+    #[must_use]
+    pub fn with_mint_budget(mut self, budget: u64) -> Self {
+        self.mint_budget = budget.min(MINT_BUDGET);
+        self
+    }
+
+    /// The number of envelopes this key may still seal.
+    ///
+    /// Exposed so the ceiling can be observed rather than trusted: a bound
+    /// nothing can read is a bound nobody can check, and an operator watching
+    /// this approach zero is the signal that rotation is overdue.
+    #[must_use]
+    pub fn mint_budget_remaining(&self) -> u64 {
+        self.mint_budget
+            .saturating_sub(self.minted.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// A keyring with one deterministic key, for tests only.
@@ -194,8 +284,22 @@ impl Keyring {
     /// # Errors
     ///
     /// Returns `Malformed` if the payload cannot be serialised or the system
-    /// random source fails.
+    /// random source fails, and `MintBudgetExhausted` once this key has sealed
+    /// its budget of envelopes (see [`MINT_BUDGET`]).
     pub fn mint(&self, payload: &Payload) -> Result<String, ContinuationError> {
+        // Counted before the nonce is drawn, so a refusal cannot consume one.
+        // Fetch-and-add rather than read-then-write: concurrent minters must not
+        // be able to step past the budget between the two halves.
+        let used = self
+            .minted
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if used >= self.mint_budget {
+            // Saturate rather than wrap: a counter that wraps re-opens the
+            // budget it exists to close.
+            self.minted
+                .store(self.mint_budget, std::sync::atomic::Ordering::Relaxed);
+            return Err(ContinuationError::MintBudgetExhausted);
+        }
         let key = self.key(self.minting_kid)?;
         let mut nonce_bytes = [0u8; NONCE_LEN];
         self.rng
@@ -312,28 +416,39 @@ impl ConsumedLedger {
     }
 
     /// Spend a continuation. `true` if this caller won, `false` if it was
-    /// already spent.
+    /// already spent or the ledger is full.
     ///
     /// One operation under one lock: the check and the write cannot be
     /// separated by a scheduler, which is the whole point.
-    pub async fn consume(&self, jti: &str, expires_at: u64) -> bool {
+    ///
+    /// At capacity it **refuses** rather than evicting. Both stay bounded, and
+    /// the difference is who pays: forgetting an entry whose envelope still
+    /// opens re-opens a replay window on a continuation already spent, which is
+    /// the single property this ledger exists to hold. Refusing costs a caller
+    /// one retry of an elicitation. An entry is only ever reclaimed once its
+    /// own deadline has passed, at which point its envelope no longer opens and
+    /// remembering it buys nothing.
+    ///
+    /// So capacity is a deployment decision about availability, never about
+    /// safety — which is the right way round.
+    ///
+    /// `now` is passed rather than read from a clock, as everywhere else in
+    /// this module: reclamation must agree with [`Self::evict_expired`] and
+    /// with the deadline [`Keyring::open`] enforced, and three components
+    /// reading three clocks is how they come to disagree.
+    pub async fn consume(&self, jti: &str, expires_at: u64, now: u64) -> bool {
         let mut spent = self.spent.lock().await;
         if spent.contains_key(jti) {
             return false;
         }
         if spent.len() >= self.capacity {
-            // At capacity, drop the entry closest to expiry. Dropping *some*
-            // entry is unavoidable — the alternative is unbounded growth under
-            // a rate the client sets — and the one expiring soonest is the one
-            // whose loss is briefest. A dropped entry is a replay window for
-            // its remaining life, which is why capacity is a deployment
-            // decision and not a constant.
-            if let Some(soonest) = spent
-                .iter()
-                .min_by_key(|(_, deadline)| **deadline)
-                .map(|(key, _)| key.clone())
-            {
-                spent.remove(&soonest);
+            // Reclaim only what is genuinely dead — an entry whose own deadline
+            // has passed, whose envelope therefore no longer opens. Refusing
+            // while holding entries nobody can replay would be a denial of
+            // service dressed as caution.
+            spent.retain(|_, deadline| now <= *deadline);
+            if spent.len() >= self.capacity {
+                return false;
             }
         }
         spent.insert(jti.to_string(), expires_at);
@@ -431,13 +546,16 @@ impl InFlight {
     }
 
     /// Where a retry for `key` belongs, given the replica that received it.
-    #[must_use]
-    pub fn route(&self, key: &str, receiving_replica: &str) -> Routing {
-        let Ok(held) = self.held.try_lock() else {
-            // Contended. Answering `Gone` here would turn a lock collision into
-            // a lost exchange, so say nothing and let the caller retry.
-            return Routing::Gone;
-        };
+    ///
+    /// Waits for the lock rather than answering under contention. `Gone` means
+    /// the exchange no longer exists and a caller acts on it by failing the
+    /// retry, so reporting it for a lock a concurrent reaper happens to hold
+    /// would turn ordinary contention into a lost elicitation — the outcome
+    /// this table exists to prevent. The wait is bounded by the map operations
+    /// the other holders are performing, all of which are O(1) or a retain over
+    /// a table with a capacity.
+    pub async fn route(&self, key: &str, receiving_replica: &str) -> Routing {
+        let held = self.held.lock().await;
         match held.get(key) {
             Some((holder, _)) if holder == receiving_replica => Routing::Here,
             Some((holder, _)) => Routing::Elsewhere {
@@ -445,6 +563,16 @@ impl InFlight {
             },
             None => Routing::Gone,
         }
+    }
+
+    /// Release an exchange that has finished, reporting whether it held a slot.
+    ///
+    /// Without this, capacity counts every exchange ever *started* until its
+    /// deadline passes, so a busy gateway refuses new elicitations on behalf of
+    /// ones that completed long ago. Reaping is the backstop for abandonment,
+    /// not the ordinary path — the ordinary path is that an exchange ends.
+    pub async fn complete(&self, key: &str) -> bool {
+        self.held.lock().await.remove(key).is_some()
     }
 
     /// Drop exchanges whose deadline has passed.
