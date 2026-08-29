@@ -13,7 +13,7 @@
 //! - Callback server for auth code reception
 
 mod callback;
-mod client;
+pub mod client;
 mod metadata;
 mod storage;
 

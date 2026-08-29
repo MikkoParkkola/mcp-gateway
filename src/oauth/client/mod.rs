@@ -40,6 +40,44 @@ enum ClientIdSource {
     Registered,
 }
 
+/// The Dynamic Client Registration body this gateway sends.
+///
+/// A free function so it can be asserted without a live authorization server:
+/// these fields are what every server the gateway registers with sees, and they
+/// were previously observable only by running one.
+///
+/// `application_type` is required by MCP 2026-07-28 and is not cosmetic.
+/// `OpenID` Connect defaults an unstated value to `web`, which constrains
+/// redirect URIs to https and forbids a literal loopback address — exactly what
+/// a locally-running gateway registers. Saying `native` makes the registration
+/// describe this client.
+#[must_use]
+pub fn registration_body(backend_name: &str, redirect_uri: &str) -> serde_json::Value {
+    serde_json::json!({
+        "client_name": format!("MCP Gateway - {backend_name}"),
+        "application_type": "native",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none"
+    })
+}
+
+/// The storage key for a credential, keyed by the issuer that granted it.
+///
+/// MCP 2026-07-28: a client **MUST** key persisted credentials by the issuer
+/// identifier, **MUST NOT** reuse them with a different authorization server,
+/// and **MUST** re-register when the authorization server changes.
+///
+/// Keyed by backend alone, moving a backend from one authorization server to
+/// another silently reuses a client id the new server never issued — and the
+/// failure surfaces as a confusing rejection later rather than as the
+/// re-registration it should have been.
+#[must_use]
+pub fn storage_key(backend_name: &str, issuer: &str) -> String {
+    format!("{backend_name}\u{0}{issuer}")
+}
+
 /// OAuth client for a specific backend
 pub struct OAuthClient {
     /// HTTP client for token requests
@@ -942,13 +980,11 @@ impl OAuthClient {
 
     /// Register a new client dynamically with the specified redirect URI
     async fn register_client(&self, endpoint: &str, redirect_uri: &str) -> Result<String> {
-        let body = serde_json::json!({
-            "client_name": format!("MCP Gateway - {}", self.backend_name),
-            "redirect_uris": [redirect_uri],
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none"
-        });
+        // Built by the free function above, not inline. Inline, the body a test
+        // asserts and the body the gateway sends are two objects that merely
+        // resemble each other — and this exact split shipped once already this
+        // release, in a discovery document every test passed against.
+        let body = registration_body(&self.backend_name, redirect_uri);
 
         let response = self
             .http_client
