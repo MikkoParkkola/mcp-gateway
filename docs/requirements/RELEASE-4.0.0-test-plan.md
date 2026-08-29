@@ -152,6 +152,49 @@ That is the failure this rule exists to prevent, and it has already happened onc
 
 ---
 
+## Increment 3 — Standard request headers
+
+The revision mirrors selected body fields into headers **so an intermediary can route without
+parsing the body**. This gateway is that intermediary, so the headers are the increment with the
+most upside — and the one with a security rule attached, because the spec's own rationale for
+validating them describes a load balancer and a server disagreeing about what a request is.
+
+Two halves, and only the first is about speed:
+
+- **Routing** may read a header without parsing the body.
+- **Authorizing or executing** may not. *"Servers that process the request body MUST reject requests where the values specified in the headers do not match."* This gateway processes the body.
+
+### Coverage rows
+
+| AC | Case | Level | Type | Can it fail? |
+|---|---|---|---|---|
+| HEADER.1 | `MCP-Protocol-Version` matching `_meta.protocolVersion` is accepted | I | positive | Yes — nothing reads the header today |
+| HEADER.1 | Header and body disagreeing → `-32020`, HTTP 400 | I | negative | Yes — and this is the vulnerability row: without it a permitted header routes an unauthorized body |
+| HEADER.1 | A modern POST with no `MCP-Protocol-Version` is refused | I | negative | Yes |
+| HEADER.2 | `Mcp-Method` disagreeing with `method` → `-32020` | I | negative | Yes |
+| HEADER.2 | `Mcp-Name` required for `tools/call`, `resources/read`, `prompts/get` | I | negative | Yes |
+| HEADER.2 | `Mcp-Name` **not** required for any other method | I | boundary | Yes — treating it as universal rejects valid requests, which is the likelier implementation |
+| HEADER.4 | A sentinel-encoded `Mcp-Name` is decoded before comparison | U | positive | Yes — comparing raw would reject every non-ASCII tool name |
+| HEADER.4 | Each row of the specification's encoding table round-trips | U | table | Yes — transcribed from the spec, so an encoder that agrees with our decoder but not the spec fails |
+| HEADER.4 | A plain-ASCII value matching the sentinel pattern is decoded, not taken literally | U | boundary | Yes — the ambiguity the spec calls out by name |
+| HEADER.4 | A malformed sentinel is a mismatch, not a panic and not a silent pass | U | negative | Yes — an attacker controls this string |
+| HEADER.6 | A request whose header and body disagree never reaches authorization or dispatch | C | security | Yes — needs an observable dispatch, so the assertion is that the handler was **not** entered |
+| HEADER.1-2 | A legacy request with no headers is unaffected | I | regression | Yes — a version-blind check breaks every 2025 client |
+
+### The comparison is the security boundary, so it is one function
+
+Every one of these rows compares a header against a body value. Doing that in three places is how
+two of them end up subtly different — and the difference is a bypass, not a bug. One function, and
+the rows above exercise it through the transport rather than around it.
+
+### Fixtures
+
+The encoding table is transcribed from the specification, not generated. A `base64` round-trip
+through our own encoder proves our encoder matches our decoder, which is the property that was
+already worth nothing once this release.
+
+---
+
 ## Later increments — planned, not yet detailed
 
 Listed so the shape of the whole is visible and so no increment is quietly dropped. Each gets its own
