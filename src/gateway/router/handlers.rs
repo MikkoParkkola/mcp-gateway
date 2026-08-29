@@ -564,17 +564,58 @@ pub(super) async fn meta_mcp_handler(
         // specification's own rationale for this check is a load balancer
         // routing on the header while the server executes on the body — which
         // is this gateway with the check missing.
-        let body_name = params
-            .as_ref()
-            .and_then(|p| p.get("name").or_else(|| p.get("uri")))
+        //
+        // The mirrored field is chosen by the method, never searched for: a
+        // `resources/read` executes on `uri`, and validating a `name` it happens
+        // to carry would authorise a decoy while reading something else.
+        let body_name = crate::protocol::headers::mcp_name_body_field(&method)
+            .and_then(|field| params.as_ref().and_then(|p| p.get(field)))
             .and_then(serde_json::Value::as_str);
-        let header_str = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+
+        // Exactly one occurrence, or none. Two lines of the same header let one
+        // intermediary route on the first and another act on the second, and
+        // the disagreement between them is the bypass — the same class of
+        // defect the body/header check closes, arriving through the header
+        // list instead of past it.
+        let single_header = |name: &'static str| -> Result<Option<&str>, &'static str> {
+            let mut values = headers.get_all(name).iter();
+            match (values.next(), values.next()) {
+                (Some(only), None) => Ok(only.to_str().ok()),
+                (None, _) => Ok(None),
+                (Some(_), Some(_)) => Err(name),
+            }
+        };
+        let duplicated = |name: &'static str| {
+            build_error_response(
+                Some(id.clone()),
+                -32020,
+                format!("{name} appears more than once"),
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            )
+        };
+        // Three explicit calls rather than a collected array: the conversion
+        // back out of a collection needs a fallback, and the only fallback
+        // available here blanks the headers, which passes the check it was
+        // meant to run.
+        let header_protocol_version = match single_header("mcp-protocol-version") {
+            Ok(value) => value,
+            Err(name) => return duplicated(name),
+        };
+        let header_method = match single_header("mcp-method") {
+            Ok(value) => value,
+            Err(name) => return duplicated(name),
+        };
+        let header_name = match single_header("mcp-name") {
+            Ok(value) => value,
+            Err(name) => return duplicated(name),
+        };
         let check = crate::protocol::headers::HeaderCheck {
-            header_protocol_version: header_str("mcp-protocol-version"),
+            header_protocol_version,
             body_protocol_version: Some(fields.protocol_version.as_str()),
-            header_method: header_str("mcp-method"),
+            header_method,
             body_method: method.as_str(),
-            header_name: header_str("mcp-name"),
+            header_name,
             body_name,
         };
         if let Err(mismatch) = check.validate() {

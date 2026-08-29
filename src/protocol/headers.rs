@@ -41,7 +41,27 @@ const SENTINEL_SUFFIX: &str = "?=";
 /// because "required for compliance" reads as "required on everything".
 #[must_use]
 pub fn mcp_name_required(method: &str) -> bool {
-    matches!(method, "tools/call" | "resources/read" | "prompts/get")
+    mcp_name_body_field(method).is_some()
+}
+
+/// Which body field `Mcp-Name` mirrors, for a method that carries a name.
+///
+/// Not always `name`: the specification mirrors *"the name of the tool or
+/// prompt, or the URI of the resource"*, so `resources/read` mirrors `uri`.
+///
+/// Reading `name` with a fallback to `uri` looks equivalent and is a policy
+/// bypass. A `resources/read` may carry a `name` field the method does not use;
+/// the fallback would then validate the header against that decoy while the
+/// gateway reads the `uri` beside it — which is exactly the split between
+/// routing truth and execution truth this whole check exists to close. The
+/// field is therefore chosen by the method and never searched for.
+#[must_use]
+pub fn mcp_name_body_field(method: &str) -> Option<&'static str> {
+    match method {
+        "tools/call" | "prompts/get" => Some("name"),
+        "resources/read" => Some("uri"),
+        _ => None,
+    }
 }
 
 /// Decode a header value that may be sentinel-encoded.
