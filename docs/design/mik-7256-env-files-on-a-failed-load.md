@@ -336,10 +336,17 @@ reader:
   compile. **Infallible, and that is a decision, not an omission.** For each existing path in order it opens the
   file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
   inserts each pair; later files overwrite earlier ones, matching
-  `from_path_override`'s precedence. A leading `~` is expanded against
-  `dirs::home_dir()` first, because startup already does exactly that
+  `from_path_override`'s precedence. A leading `~` is expanded against the
+  `HOME` the overlay holds SO FAR if the files have already defined one, and
+  against `dirs::home_dir()` otherwise. Startup already expands `~`
   (`src/config/mod.rs:290-298`) and a `~/...` env file is a supported spelling
-  today; an overlay that skipped it would silently stop rotating those files.
+  today, so an overlay that skipped expansion would silently stop rotating
+  those files. The so-far rule is what keeps the two paths identical: startup
+  applies each file to the process before it expands the NEXT path, so a `HOME`
+  set in an earlier file governs a later `~/...`; the reload path writes nothing
+  to the process, so without this rule every path on a reload would expand
+  against the pre-reload `HOME` and a gateway could read a different file than
+  its own restart would.
   Startup, the watcher and the overlay share one resolver rather than three
   copies of the same six lines. A missing path is skipped. A parse error
   ENDS that file at the offending line, keeping the pairs before it and taking
