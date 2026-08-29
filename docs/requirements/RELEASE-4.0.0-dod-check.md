@@ -1,125 +1,177 @@
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
-**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Commits**: 43
-**Requirements**: `docs/requirements/RELEASE-4.0.0-requirements.md`
-**Plan**: `docs/requirements/RELEASE-4.0.0-test-plan.md` · **Design**: `docs/design/RFC-0061-…md`
+**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `a2319c8c`
+**Requirements**: `RELEASE-4.0.0-requirements.md` · **Plan**: `RELEASE-4.0.0-test-plan.md`
 
 Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, because an N/A
-without one is a skipped gate wearing a label.
+without one is a skipped gate wearing a label. Where a gate was run against an *earlier* commit than
+the head, that is said in the same line rather than rounded up.
 
----
+## Verdict, first
 
-## §3 Static checks — PASS
+**The branch does not meet the Definition of Done for a 4.0.0 tag, and the gap is larger than the
+previous revision of this document claimed.** It is sound as an increment behind a switch that
+defaults off. It is not a shippable modern protocol implementation.
+
+Two things changed the picture since the last revision, both from review:
+
+1. Independent review of the transport wiring returned **ten findings — one CRITICAL and seven
+   HIGH, every one rated CERTAIN**. None is gated NOW *only* because `server.modern_protocol`
+   defaults off. Four are gated BEFORE-DEPLOY.
+2. Two surfaces this document previously recorded as **wired** are reachable and hollow. That is a
+   correction to this document's own record, not a new regression.
+
+Detail below.
+
+## §3 Static checks — PASS at `c850cdc4`, unverified at head
 
 | Gate | Command | Result |
 |---|---|---|
 | Linter | `cargo clippy --all-targets -- -D warnings` | 0 warnings |
 | Formatter | `cargo fmt --check` | clean |
-| Compiler | `cargo build` | clean |
 | Secret scan | private-key / API-key patterns over the branch diff | 0 |
 
-## §4 Testing — PASS
+The head commit `a2319c8c` adds an envelope size bound and removes a constructor. Its own test
+module passes (50/50). **The full suite and the linter have not been run against it**: the machine's
+build guard halted all `cargo` commands at 4.6 GB free disk, and clearing another session's build
+cache was not mine to decide. Stated rather than assumed away.
 
-- **4,430 tests passing across 44 binaries.** Zero failures.
-- **161 new acceptance-criterion tests**, one per criterion, each named for the criterion and asserted in its polarity.
+## §4 Testing — PASS at `c850cdc4`, partially verified at head
+
+- **4,456 tests passing across 45 binaries, 0 failing** — measured at `c850cdc4`, not quoted from a previous run.
 - **41 doc-tests pass.**
-- One test is `#[ignore]`d with its reason: `ac_discover_1_advertises_the_target_revision` asserts the gateway advertises 2026-07-28, which it deliberately does not until the switch is on. Scheduled, not suppressed.
+- **23 tests are `#[ignore]`d.** Twelve are doc-test examples and ten are pre-existing integration tests needing Docker or a live API. **One is this branch's**: `ac_discover_1_advertises_the_target_revision`, which asserts the gateway advertises 2026-07-28 — deliberately false while the switch is off. The previous revision of this document said "one test is ignored" and meant one of *mine*; as written it was a false claim about the suite, and this corrects it.
 
-### Falsification — every non-trivial control was made to fail
+### Falsification — every control was made to fail, and two could not be
 
-The rule this release ran on: a control you cannot make fail is not a control. Fourteen probes, each
-failing **only** the rows that observe it:
+The rule this release ran on: a control you cannot make fail is not a control. Thirty-one probes
+across the branch. The fourteen from earlier increments are unchanged; the thirteen run against this
+round's security repairs are below, each failing **only** the rows that observe it.
 
 | Control | Probe | Rows that failed |
 |---|---|---|
-| Era classifier, legacy side | default flipped to modern | 4 |
-| Era classifier, modern side | positive-evidence arms removed | 2 |
-| Era cache | probe moved outside the lock | 1 (the concurrent one) |
-| Warm-start schedule | `initial_gap` 2s → 5s | 1 — the existing tests, being relative, all stayed green |
-| Era discriminator | absence read as malformed | 2 |
-| Era discriminator | any `_meta` read as modern | 2 |
-| Header validation | check removed from the HTTP path | 3 |
-| `cacheScope` | filtered list declared public | 3 |
-| Continuation binding | check made to always succeed | 2 |
-| Consumed ledger | check-and-consume split in two | 1 — the racing one; a sequential pair passes either way |
-| In-flight routing | holder ignored | 1 |
-| In-flight table | capacity check dropped | 1 |
-| Anomaly detection | unobservable collapsed to a neutral score | 1 |
-| Lifecycle reaping | reap made to reclaim nothing | 2 |
-| Task settling | settled task allowed to reopen | 1 |
-| `application_type` | field dropped | 1 |
-| Trace context | shape validation removed | 1 — **after** the test was fixed; see below |
-| Registration body | — | the inline copy was found and removed before it could pass |
+| `Payload` redaction | `Debug` derived again | 1 |
+| Routing under contention | `route` back to `try_lock` → `Gone` | 1 |
+| Explicit completion | `complete` releases nothing | 2 |
+| Ledger capacity policy | evict the soonest live entry again | 1 |
+| Keyring construction | duplicate key ids allowed | 1 |
+| Client-facing error | internal cause leaked into the message | 1 |
+| Mint budget | budget never exhausts | 2 |
+| Mint budget | ceiling clamp removed | 1 |
+| Mint budget | counter never advances | 3 |
+| Envelope bound, opening | size check removed | 1 |
+| Envelope bound, minting | size check removed | 1 |
+| Envelope bound, value | bound lowered below real backend state | 13 — it is load-bearing on the ordinary path |
 
-**Two probes found holes in my own tests rather than in the code**, which is the point of running
+**Two probes exposed holes in the controls rather than in the code**, which is the point of running
 them:
 
-- The trace-context probe **passed** at first: every malformed case I had written was caught by the arity check, so the hex-and-length validation was untested. Adding six right-arity/wrong-content rows made the probe fail as it should.
-- The registration-body test asserted a helper while `register_client` still built its own body inline. The test would have stayed green while the wire never changed — the same defect class that shipped an invented discovery document earlier in this branch.
+- The **mint budget shipped with no control at all**. The first probe disabled it and nothing failed. The bound was 2^32 envelopes, which no test can reach, so it was untestable by construction. It now has a clamped builder and a remaining-budget reader, and three probes that fail.
+- The **constant-time comparison has no honest failing row, and this is recorded rather than papered over**. Reverting `redeemable_by` to the short-circuiting slice comparison passes all rows — verified by running it, not assumed. A unit test cannot observe timing. The behavioural row beside it was renamed to `a_wrong_binding_of_any_length_is_refused_identically`, which is what it actually proves; the timing property itself is assured by reading the code, and that is a weaker assurance, stated as one.
 
 ## §5 Change safety — PASS
 
 Every modern behaviour has a **legacy regression row** beside it: session header still sent, `ping`
-still served, `initialize` byte-identical against a captured golden, no `resultType` or `_meta` added
-to a 2025 result, headers not required of a client that never sent one, disconnect cleanup still
-firing. The legacy path is the thing most likely to break, so it is the thing most tested.
+still served, `initialize` byte-identical against a captured golden per revision, no `resultType` or
+`_meta` added to a 2025 result, headers not required of a client that never sent one. The legacy
+path is the thing most likely to break, so it is the thing most tested.
 
-## §7 Documentation — PASS
+## §8 Security — PASS on tooling, with open findings below
 
-CHANGELOG `[Unreleased]` written; README version claims corrected; requirements, plan and design
-updated as decisions were made rather than afterwards. Six fixes that shipped **unlisted in 3.5.0**
-were also written up.
+- `cargo audit`: **0 vulnerabilities**, 425 dependencies. One `yanked` warning, identical on `main`.
+- `#![deny(unsafe_code)]` holds; no dependency added.
+- Nine security findings from review were closed in this round; three remain open and are listed below.
 
-## §8 Security — PASS
+## §12 Review — one vendor, three rounds, findings recorded
 
-- `cargo audit`: **0 vulnerabilities**, 425 dependencies. One `yanked` warning, identical on `main` — pre-existing and not introduced here.
-- `#![deny(unsafe_code)]` holds; no dependency added (the continuation envelope uses `ring`, already vendored and previously unused).
-- NFR.SEC.4's fixtures exist: tamper, expiry, replay, wrong principal, wrong request, key rotation, unknown key, garbage input — each failing closed.
+The operator set single-vendor review (codex/gpt) for this session, so the dual-vendor gate is
+**deliberately not met** and this is a known, authorised deviation rather than a passed gate.
 
-## §11 Stop-the-line — none open
+Reviews are chunked per module. An earlier attempt sent the whole 2,893-line diff and died at zero
+bytes five times; the cause was payload size, diagnosed by a minimal smoke test returning in seconds.
 
-No failing test, no known user-visible defect, no security regression. **Not deployed**, and not
-claimed to be.
+| Round | Material | Findings | Verdict |
+|---|---|---|---|
+| 1 | `src/protocol/continuation.rs` | 7 — 3 CRITICAL, 2 HIGH, 1 MEDIUM, 1 LOW | SHIP-WITH-FIXES |
+| 2 | repairs to round 1 | 1 CRITICAL (BEFORE-PRODUCTION) | **SHIP** |
+| 3 | `src/gateway/router/handlers.rs` | 10 — 1 CRITICAL, 7 HIGH, 2 MEDIUM, all CERTAIN | SHIP (none gated NOW) |
 
----
+**A process failure worth recording**: round 1's findings were first read from a truncated tool
+output showing only the last three. Work proceeded on three findings while four — including two
+CRITICAL — sat unread in the authoritative run file. They were found only when that file was opened
+directly. The lesson is the one already written down: read the source, not a rendering of it.
 
-## Requirements coverage — 89 of 89 addressed
+### Round 1 and 2 — disposition of all eight
 
-| Area | Requirements | State |
-|---|---|---|
-| 3.1 Discovery | 7 | Implemented |
-| 3.2 Stateless | 10 | Implemented |
-| 3.3 Headers | 6 | Implemented |
-| 3.4 Results & errors | 4 | Implemented |
-| 3.5 Cacheability | 7 | Implemented |
-| 3.6 MRTR | 10 | Implemented |
-| 3.7 Controls | 8 | Implemented |
-| 3.8 Identity | 5 | 4 implemented, 1 verified as pre-existing (IDENT.3) |
-| 3.9 Subscriptions | 4 | Modelled; wiring noted below |
-| 3.10 Authorization server | 3 | Implemented |
-| 3.11 Exploitation | 5 | Implemented |
-| NFR | 20 | See below |
+Nine repairs, each with a probe above, re-checked by the vendor that raised them (**SHIP**):
+
+| Finding | Repair |
+|---|---|
+| CRITICAL — ledger evicts a live entry at capacity | refuses instead, reclaiming only entries past a deadline |
+| CRITICAL — `for_test()` ships a publicly known key in production builds | constructor deleted; tests build their own keyring |
+| CRITICAL — process-local ledger across replicas | **open**, gated BEFORE-PRODUCTION, documented in the module |
+| HIGH — `open` decodes an unbounded client token | 8 KiB bound checked before decoding, enforced at both ends |
+| HIGH — `Payload` derives `Debug` over sealed state | hand-written redacting `Debug` |
+| MEDIUM — `route` maps lock contention to `Gone` | awaits the lock; the old code contradicted its own comment |
+| LOW — binding comparison short-circuits on length | compares SHA-256 digests of both sides |
+| (round 2) CRITICAL — mint budget resets on restart | **open**, gated BEFORE-PRODUCTION; the doc comment that overclaimed a per-key guarantee was corrected to say it bounds one process |
+
+Four improvements were also taken: per-key mint budget, explicit completion release, duplicate-key-id
+rejection, and one generic client-facing refusal message.
 
 ## What is honestly NOT finished
 
 Stated plainly, because a DoD report that hides its gaps is worth less than no report.
 
-1. **Two protocol surfaces are modelled and unit-tested but not yet wired to the transport**: `subscriptions/listen` (the types, opt-in and tagging exist; the stream itself is not served) and the tasks extension (the task model exists; no `tasks/get` endpoint). Both sit behind `modern_protocol`, which is off, so neither is reachable by a client — but neither is complete either. **This is why the switch must stay off.**
+### 1. Two surfaces are reachable and hollow — a correction to this document
 
-2. **NFR.PERF.1 and NFR.PERF.2 are unmeasured.** Latency budgets need a benchmark this branch has not run, and header-first routing was deliberately *not* implemented for that reason: NFR.PERF.2 says a performance change without a number does not ship. Routing on headers remains a stated opportunity, not a claim.
+The previous revision recorded `subscriptions/listen` and `tasks/get` as **wired**. They are
+reachable, and they do not work. Verified at source, not inferred:
 
-3. **NFR.COMPAT.4 is partly met.** Every requirement is verified in the role the gateway plays for it, but the conformance matrix crossing *both* roles × transports × all five revisions does not exist. Increment 1's era-detection rows cover the client role for discovery; the rest is server-side.
+- `subscriptions/listen` (`handlers.rs:641`) parses the request, **discards it** (`Some(_)`), mints an id and returns an ordinary JSON-RPC success. There is no stream and no filter registration. The comment beside it describes a design that was not built.
+- `tasks/get` (`handlers.rs:670`) returns `{"status": "not_found"}` as a **success** for every handle. There is no task store, and `not_found` is not in the protocol's task model. `tasks/update` does not exist.
 
-4. **U6 is closed by the conformance matrix; U1 is open and blocks nothing here.** U1 asks which revisions our clients actually speak, and its own row says it blocks *only* narrowing the compatibility window — which §7 puts explicitly out of scope for this release. Listing it as a gap overstated it, and this corrects that. U7 and U8 were resolved during the work and are recorded.
+Moving these from unreachable to reachable-and-plausible is arguably worse than leaving them out: a
+client can now call them and receive an answer that looks like an answer.
 
-5. **Review carries one vendor, and did not run against the final code.** The operator set single-vendor review (codex/gpt) for this session. GPT reviewed the design (13 findings, 4 CRITICAL, all folded in) and the test plan (3 findings, all folded in). Four subsequent review runs died at zero bytes under concurrent load, so **increments 1–10 carry self-review and falsification only**. That is a gap in the process, not a passed gate.
+### 2. The modern request path has a classification bypass
 
-## Verdict
+`classify_request` reads the **body only** (`handlers.rs:513`). A request carrying modern routing
+headers with no body metadata classifies as legacy, bypassing the feature gate and all header/body
+mirror validation — so upstream policy can authorise one method while the gateway executes another.
+CRITICAL, CERTAIN, gated BEFORE-DEPLOY.
 
-**The scope of `RELEASE-4.0.0-requirements.md` is implemented and its gates pass**, with the five
-exceptions above named rather than absorbed. The release is **not** ready to tag: item 1 must be
-finished, item 5 must be discharged against the final diff, and items 2 and 3 are §9 acceptance
-criteria that have not been met.
+### 3. Retry fields are forwarded at the wrong level — the defect this ticket was filed for
 
-`server.modern_protocol` defaulting to **off** is what makes that an honest state to be in rather
-than a broken one.
+`handlers.rs:716` inserts `inputResponses` and `requestState` **into the `arguments` object**. The
+specification makes them siblings of `name` and `arguments`. So continuations fail, and a tool with
+legitimate arguments of those names has them overwritten. The code comment justifies the placement
+as avoiding a widened signature — a design decision taken during implementation and never named as
+one, which is precisely the failure mode `development-process.md` §P3 exists to catch.
+
+### 4. Five further HIGH findings, all CERTAIN, gated BEFORE-PRODUCTION
+
+`resultType` unconditionally overwritten with `complete`; modern destructive calls execute when
+confirmation is `Unsupported`; every sessionless modern request creates an unreachable multiplexer
+session and defeats sequence anomaly detection; enabling the switch does not add 2026-07-28 to
+`server/discover`; notifications return 202 before any modern validation runs.
+
+### 5. Two shared-state gaps block multi-replica production
+
+The consumed-continuation ledger and the mint counter are both process-local. Documented in the
+module, gated BEFORE-PRODUCTION, and not addressable inside this change.
+
+### 6. The dual-vendor review gate is not met
+
+Single-vendor by operator instruction for this session. An authorised deviation, not a pass.
+
+## What this means for the release
+
+`server.modern_protocol` defaulting to **off** is what makes the above an honest state rather than a
+broken one: no client can reach any of it. That is also the only thing holding eight CERTAIN defects
+away from users, which is a thinner margin than "the switch is off" sounds.
+
+**Not ready to tag.** The 2025 path is unchanged and fully tested and could ship today; the 2026 path
+needs items 1–4 closed and re-reviewed. The realistic options are to ship 4.0.0 as the legacy-safe
+groundwork with the modern path documented as preview, or to hold the tag until the transport
+findings are closed. That is a scope decision, and it is the operator's.
