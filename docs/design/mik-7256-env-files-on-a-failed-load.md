@@ -337,8 +337,19 @@ reader:
   file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
   inserts each pair; later files overwrite earlier ones, matching
   `from_path_override`'s precedence. A leading `~` is expanded against the
-  `HOME` the overlay holds SO FAR if the files have already defined one, and
-  against `dirs::home_dir()` otherwise. Startup already expands `~`
+  `HOME` the overlay holds SO FAR if the files have already defined one; where
+  they have not, against `HOME`'s BASELINE if one was captured, and only then
+  against `dirs::home_dir()`. The baseline seed is not a third case for
+  symmetry: startup calls `dirs::home_dir()` INSIDE its loop
+  (`src/config/mod.rs:289-309`) and applies each file in the same iteration, so
+  by the time a reload runs, the process `HOME` is whatever the env files last
+  set it to. Seeding a reload from `dirs::home_dir()` would therefore expand the
+  FIRST `~/...` path against a `HOME` startup itself had already moved, read a
+  different file than a restart reads, and leave the watcher bound to the path
+  nobody is reading. `HOME`'s baseline is by construction the value before any
+  env file supplied it, which is exactly what startup's first expansion saw; and
+  where no baseline exists, no env file has ever named `HOME`, so the process
+  value IS the pristine one and `dirs::home_dir()` is correct. Startup already expands `~`
   (`src/config/mod.rs:290-298`) and a `~/...` env file is a supported spelling
   today, so an overlay that skipped expansion would silently stop rotating
   those files. The so-far rule is what keeps the two paths identical: startup
@@ -347,6 +358,10 @@ reader:
   to the process, so without this rule every path on a reload would expand
   against the pre-reload `HOME` and a gateway could read a different file than
   its own restart would.
+  A resolved path set that differs from the one the watcher was started with is
+  a REBINDING the watcher cannot follow — it holds the startup paths
+  (`src/config_reload/mod.rs:1011-1014`) — so the reload reports it as
+  restart-required rather than silently rotating from a file nothing watches.
   Startup, the watcher and the overlay share one resolver rather than three
   copies of the same six lines. A missing path is skipped. A parse error
   ENDS that file at the offending line, keeping the pairs before it and taking
