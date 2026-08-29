@@ -43,7 +43,7 @@ the ticket's own stop-the-line, and row D3.b is what enforces it.
 | DISCOVER.4 | Backend answering `-32601 method not found` → classified legacy | C | positive | Yes |
 | DISCOVER.4 | Backend answering an arbitrary application error → classified legacy | C | negative | Yes |
 | DISCOVER.4 | Backend answering **nothing** until the probe deadline → classified legacy | C | timeout | Yes — needs a stalling fixture and a bounded deadline; an implementation that waits forever hangs the test rather than passing it |
-| DISCOVER.4 | A backend classified legacy is then probed with `initialize` and serves normally | I | positive | Yes |
+| DISCOVER.4 | A backend classified legacy is then probed with `initialize` and serves normally | I | positive | **Deferred to increment 2, deliberately** — see below |
 | DISCOVER.5 | Era is resolved once per backend and reused; a second call issues no second probe | C | positive | Yes — assert on a probe counter in the fixture transport, not on elapsed time |
 | DISCOVER.5 | When a cached era assumption produces a failure, the backend is re-probed | C | recovery | Yes — the naive cache never invalidates, so this fails against it |
 | DISCOVER.6 | Warm-start retries on its existing schedule when discovery finds nothing listening | C | regression | Yes — an implementation that replaces the retry loop with a single discovery probe fails it |
@@ -58,6 +58,25 @@ the ticket's own stop-the-line, and row D3.b is what enforces it.
 - **DISCOVER.3's golden fixture is captured, not written by hand.** A hand-written expectation of the handshake is a second implementation of it, and it agrees with whatever the author believed rather than with what shipped. Capture happens before the first line of discovery code, from the unchanged tree, and pins its Cargo feature set.
 - **The timeout row needs a stalling fixture with a bounded deadline.** A backend that never answers and a test that waits forever are indistinguishable from a passing test that hangs CI.
 - **DISCOVER.5 asserts a probe counter, never elapsed time.** Timing assertions are the classic flaky test, and a cache that is merely slow would pass one.
+
+### A design decision this increment made, named rather than absorbed
+
+**The era probe is built but not yet issued at backend startup.** The classifier and its cache ship
+here; the call site does not.
+
+Wiring it into `Backend::start()` now would add one `server/discover` request to every backend
+start. Against the 32 backends on the operator's own gateway that is 32 extra requests, every one of
+which a legacy backend answers with an error — cost, log noise and a new startup failure mode, in
+exchange for an answer **nothing currently consumes**. Nothing consumes it because the gateway
+cannot yet speak modern to a backend; that is increment 2.
+
+So the era is resolved **when a caller first needs it**, which is the increment that gives it a
+consumer. The requirement is unchanged — the gateway determines a peer's era by probing
+`server/discover` first, and only a recognised modern answer proves a modern peer. What is deferred
+is the moment of the call, not the rule.
+
+Stated here because a decision taken during implementation and left unwritten reaches no review.
+The integration row above moves with it.
 
 ### Fixtures — what they may not do
 
