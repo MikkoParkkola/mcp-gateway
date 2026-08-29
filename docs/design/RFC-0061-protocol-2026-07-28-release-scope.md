@@ -408,3 +408,109 @@ widened to every revision in the window.
 
 **What was rejected**: nothing. On a design this size that is itself a signal — it means round 2
 should be adversarial about the *fixes*, which are now the least-reviewed part of the document.
+
+---
+
+# The 4.0.0 release manifest
+
+Every open mcp-gateway ticket in Backlog, Ready, Blocked or DoR Triage was classified — 71 of them.
+This section is the answer, and the reasons. **Nothing is cut for being large; things are cut for
+not belonging.**
+
+Baseline: **3.5.0, released 2026-08-28.** Six of its fixes were unlisted in its own release notes
+and have since been written up. Several tickets below are closed by that release rather than by this
+one, which is the cheapest possible resolution and the easiest to miss.
+
+## A. Protocol core — the release itself (7)
+
+| Ticket | P | Slice | What it is |
+|---|---|---|---|
+| MIK-7272 | P2 | — | Parent. Correct its title: one revision behind, not two. |
+| MIK-7217 | P1 | 1 | `server/discover` — a **MUST**, and the keystone. Purely additive; if it needs to touch the old handshake path, the implementation is wrong. |
+| MIK-7214 | P2 | 1 | `Mcp-Method` / `Mcp-Name` header contract, per the spec's matrix. |
+| MIK-7213 | P1 | 1 | `ttlMs` / `cacheScope`, and the decision table for which endpoints may ever be `public`. |
+| MIK-7218 | P2 | 1 | Revision telemetry + shadow-logging the `cacheScope` that would have been emitted. Feeds 7213 and the compatibility window. |
+| MIK-7215 | P1 | 2 | Session inventory then removal. **Inventory resolved above: 32 files.** |
+| MIK-7212 | P1 | 2 | MRTR continuation contract. **A prerequisite of slice 2, not a peer** — the destructive-confirmation gate cannot be ported until it exists. |
+
+## B. Ride-along — the release edits this code anyway (6)
+
+Doing these separately means a second pass through a function this release has already rewritten.
+
+| Ticket | P | Slice | Why it rides |
+|---|---|---|---|
+| MIK-7116 | **P0** | 2 | Session-scoped cross-tenant guard and data minimisation. Slice 2 rebinds exactly this code from session-keyed to per-request `Principal`; fixing the guard against a target that is moving is strictly worse than fixing it while it moves. |
+| MIK-6704 | **P0** | 3 | End-user identity propagation to backends (OAuth on-behalf-of / token exchange). The first real consumer of the seam slice 3 builds. Shipping the seam with no consumer means reopening the same path immediately. |
+| MIK-7252 | P1 | 3 | Playbook steps run with no caller identity, bypassing per-client scoping. Same `MetaMcpInvoker::invoke` chain slice 3 rewires — one extra parameter now, a second audit later. |
+| MIK-7246 | P3 | 2 | Destructive-confirmation gate fails open. That gate is **being rebuilt regardless**: it depends on `Mcp-Session-Id` and on server-initiated elicitation, and this revision deletes both. Fixing fail-open during the rebuild is free; fixing it before is work thrown away. |
+| MIK-7084 | P2 | 1 | Tiered tool disclosure (L0/L1/L2). Slice 1 already rewrites the `tools/list` response shape for `resultType`, `ttlMs`, `cacheScope` and ordering. |
+| MIK-6865 | P2 | 1 | Nested tool-schema hardening. This revision loosens `inputSchema`/`outputSchema` to full JSON Schema 2020-12 and adds `$ref` resolution and composition bounds — the schema-emission code is open on the bench either way. |
+
+## C. Unblocked by the protocol, not by us (5)
+
+These waited on per-request caller identity. The protocol now carries it, so the blocker is gone.
+
+| Ticket | P | Verdict |
+|---|---|---|
+| MIK-6207 | P2 | **In scope.** Its plumbing *is* slice 3. Re-triage after landing: likely closed as superseded rather than implemented. |
+| MIK-6729 | **P0** | **In scope.** RFC 8693 token exchange, same family as 6704, and a P0 that has been sitting in Blocked with no recorded blocker. |
+| MIK-6744 / 6745 / 6746 | P2 | **Fast-follow, 4.1.0.** Identity-keyed token store, per-user consent binding, credential passthrough. Each is a *consumer* of the seam, not part of it, and each has its own consent and storage design. Bounded reason for deferring, not a shrug. |
+
+## D. Security — what would otherwise ship as a known hole (4)
+
+| Ticket | P | Why it cannot wait |
+|---|---|---|
+| MIK-7249 | P2 | Enabling authentication by config reload reports success and applies nothing. 3.5.0 documented this rather than fixing it. A false "protected now" is worse than the gap it claims to close. |
+| MIK-7256 | P2 | A **failed** reload has already applied the config's `env_files` to the process environment before validation ran. Also documented, not fixed, in 3.5.0 — and it silently defeats 7249's fix once that exists. |
+| MIK-7262 | P3 | An explicit `registers_external_callback` declaration is overruled in three code paths while a comment claims the declaration wins. Latent only because no shipped capability sets the flag — which is exactly how it stays undetected until one does. |
+| MIK-7222 | P2 | Credential-disclosure sweep. MIK-7221 fixed this class in one transport; a three-vendor review confirmed it in six more files. Independent of the protocol, and the release ships the same binary. |
+
+## E. Already fixed — close, do not work (6)
+
+**Verified against the 3.5.0 notes and, for the first, against the code.** These are open tickets
+describing a state the repository has left behind. Closing them is the highest-value hour in this
+document.
+
+| Ticket | Resolution |
+|---|---|
+| MIK-7258 | Empty/short HS256 secret is refused at config validation — `src/config/mod.rs:398,442-451`, with the reason spelled out in the error. Shipped in 3.5.0. |
+| MIK-7257 | Dashboard locality now comes from the connection's peer address, not the caller-controlled `Host`; a request carrying a forwarding header is refused. Shipped in 3.5.0. |
+| MIK-7243 | `mcp-gateway init` provisions an admin credential and writes `auth.public_paths`. Shipped in 3.5.0. |
+| MIK-7245 | Config files are written `0600` on every path that writes one; an existing wide file is reported with the `chmod` to fix it. Shipped in 3.5.0. |
+| MIK-7244 | The gateway refuses to bind when its tool surface is reachable without a credential, before the listener opens. Shipped in 3.5.0. |
+| MIK-7265 | Resolved by **deploying 3.5.0**. The running build was `3.4.0-f30539af` (2026-08-16), missing both `24f144c7` and `5d25f104`. No code required. |
+
+## F. Resolved by migration — re-scope, do not implement (3)
+
+Work aimed at code this release deletes. Implementing them is spending twice to end in the same place.
+
+| Ticket | Why |
+|---|---|
+| MIK-7251 | Sampling and elicitation broadcast to every session. There is no server-initiated channel in 2026-07-28 and no session to broadcast to; MRTR replaces the substrate. Re-scope onto `subscriptions/listen` after slice 2. |
+| MIK-7250 | Self-asserted session ids let a caller read another session's cost report. Slice 2 removes the header and the session. Close as resolved-by-migration once slice 2 ships — do not write checks against code being deleted. |
+| MIK-7042 | No alert on idle-stop close failures. Idle-stop is session machinery; re-scope after slice 2 rather than instrumenting a mechanism scheduled for removal. |
+
+## G. Deferred, with the reason stated
+
+- **K8s operator GA** (MIK-6672 + 6680–6684, 6692) — its own dependency chain, orthogonal to the protocol. **But**: MIK-6672 and MIK-6680 sit in Blocked with no stated technical blocker; 6672 reads as "large and unscheduled". Re-label rather than leave them looking gated.
+- **MIK-6209** — **unblocked now**: its blocker was that the work was dispatched to the wrong repository. Administrative, not architectural.
+- **MIK-6158** — genuinely blocked by MIK-6156, **but** its description names a different blocker than the relation Linear records. One of the two is stale; resolve before re-triaging.
+- **Framework-mapping tickets** (MIK-7236, 3031, 3293, 3444) — four tickets doing one shape of work against the same capability inventory. Run as a single pass, after the release, when the inventory has stopped moving.
+- **Everything else** — ops, tooling, research and unrelated features. Untouched by the protocol work and no cheaper to do now than later.
+
+## Release totals
+
+| Bucket | Count |
+|---|---|
+| Protocol core | 7 |
+| Ride-along | 6 |
+| Unblocked, in scope | 2 |
+| Security | 4 |
+| **Implemented in 4.0.0** | **19** |
+| Closed without work (fixed in 3.5.0, or by deploying it) | 6 |
+| Re-scoped after the migration | 3 |
+| Deferred with a reason | 43 |
+
+Nineteen tickets implemented, nine resolved without implementation. The nine are worth as much as
+several of the nineteen and cost an hour: a ticket that describes a fixed defect is a standing
+invitation to fix it twice.
