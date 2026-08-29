@@ -455,10 +455,17 @@ next: add a key to a file, remove it again, reload twice, and a variable also
 exported into the process is unset to `resolve` and present to `EffectiveEnv` —
 the config provider and every credential reader then disagree about the same
 name. All three reviewers found it independently, which is the argument for
-having one owner rather than two careful implementations. `from_path_override`
-semantics make the process value for an owned key the env file's own, so
-removing it removes exactly what the env files put there and leaves a genuinely
-shell-exported variable untouched. A key
+having one owner rather than two careful implementations. `from_path_override` overwrites, so
+the process value for an owned key is the env file's own — but it may have
+overwritten a shell-exported value, and that older value is what a restart
+would produce. So `EnvOverlay` carries `baseline` as well: the process values
+of the owned keys, snapshotted once at startup BEFORE any env file is loaded,
+carried forward across reloads with the owned set. Removing an owned key
+restores its baseline value where one exists and unsets it where none does.
+Without the snapshot, `FOO=shell` exported into the process, `FOO=file` in an
+env file, then the line deleted, leaves `FOO` absent in the running gateway and
+`shell` in the next one — the two disagree, and nothing surfaces the
+disagreement until something reboots. A key
 the operator exported and never wrote in a file keeps working; a key removed
 from a file goes away on the reload, as it would across a restart. With one
 provider there is no merge order left to get wrong.
