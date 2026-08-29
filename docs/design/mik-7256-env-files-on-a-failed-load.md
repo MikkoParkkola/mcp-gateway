@@ -147,3 +147,33 @@ folded in here.
   `from_path_iter` plus `load_override`. Confirmed at
   `~/.cargo/registry/src/index.crates.io-*/dotenvy-0.15.7/src/lib.rs:110,130`.
   Nothing changed as a result.
+
+## Option B is dead — two findings, both verified at source
+
+Design review (GPT-5.6, 2026-08-29) raised three; two survive inspection and
+together they retire option B.
+
+**The process environment has a second consumer, and it is not expansion.**
+`Config::load` builds its Figment twice — `src/config/mod.rs:196` to learn
+`env_files`, then `:199` again *after* applying them — and `Self::figment`
+merges `Env::prefixed("MCP_GATEWAY_")` (`:286`). An env file that sets
+`MCP_GATEWAY_PORT` therefore feeds the config through Figment's env layer
+today, not through `${VAR}` expansion at all. Figment's `Env` provider reads
+`std::env` directly. An overlay handed to expansion cannot reach it, for the
+same reason it cannot reach dotenvy's `apply_substitution`. Option B's central
+claim — that expansion "sees exactly what it sees today" — is false for a whole
+class of settings, silently: the value falls back to the YAML or to a default.
+
+**The mutation window does not close at validation.** `Config::load` returning
+`Ok` is not the reload being accepted. The posture refusal
+(`src/config_reload/mod.rs:1478`) and the shutdown abort both run afterwards,
+on a candidate that option B has by then applied. MIK.ENVFILE.1 says *any*
+failure leaves the environment identical; applying inside `Config::load` cannot
+deliver that, whatever order the inside of `Config::load` uses.
+
+The third finding — that parsing before applying changes cross-file
+substitution — is the behaviour change already recorded above. It stands.
+
+Both surviving findings say the same thing about level: the apply does not
+belong inside `Config::load` at all, because `Config::load` does not know
+whether its result will be accepted. That is where the next option has to start.
