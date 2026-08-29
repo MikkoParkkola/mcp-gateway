@@ -267,7 +267,8 @@ mod http {
         .iter()
         .enumerate()
         {
-            let (_, body) = post_modern(method, 100 + i as i64).await;
+            let id = 100 + i64::try_from(i).expect("a four-element index fits");
+            let (_, body) = post_modern(method, id).await;
             let scope = &body["result"]["cacheScope"];
             assert_ne!(
                 scope, "public",
