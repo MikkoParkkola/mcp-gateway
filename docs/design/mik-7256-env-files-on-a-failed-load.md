@@ -907,10 +907,14 @@ observation, not a ticket.
   running backends — the behaviour option B would have removed.
 
 - **MIK.ENVFILE.10a** Given a reload that adds an `env:` reference in ANY of
-  the five forms — `auth.bearer_token`, an api key, an agent secret, an admin
-  token, or a capability credential — whose value is defined only in an
-  already-listed env file, Then validation passes, because validation reads the
-  overlay. The criterion the first design would have failed.
+  the five CALL SITES that validate one — the four `auth.bearer_token`, api
+  key, agent secret and admin token references that funnel through
+  `validate_env_reference`, plus the inline agent-key resolution that stands
+  alone — whose value is defined only in an already-listed env file, Then
+  validation passes, because validation reads the overlay. A capability
+  credential is not among them: nothing validates it at config load, so
+  asserting that its validation passes asserts nothing. Its resolution is
+  .10b's subject. The criterion the first design would have failed.
 - **MIK.ENVFILE.10b** Given that reload, When the reference is a capability
   credential, Then the value is in use afterwards with no restart — the one
   reader that resolves per call.
