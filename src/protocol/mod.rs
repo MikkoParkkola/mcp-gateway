@@ -11,6 +11,7 @@ mod messages;
 pub mod meta;
 pub mod mrtr;
 mod negotiate;
+pub mod subscriptions;
 mod types;
 
 pub use messages::*;
