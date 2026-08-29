@@ -138,6 +138,20 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 /// routes merged at the call site. Taking them as a parameter removes the
 /// ordering discipline that failed both times.
 #[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
+impl AppState {
+    /// Announce that the set of available tools has changed.
+    ///
+    /// Two audiences, one event: sessions attached to the pre-2026 GET stream,
+    /// and listeners on `subscriptions/listen`. Kept in one function because
+    /// telling only one of them is the failure mode — the capability is
+    /// advertised as `listChanged: true` to both.
+    pub fn announce_tools_changed(&self) {
+        self.proxy_manager.broadcast_tools_list_changed();
+        self.subscriptions
+            .publish(crate::gateway::subscription_registry::tools_list_changed());
+    }
+}
+
 pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
     let auth_state = AuthState {
         auth_config: Arc::clone(&state.auth_config),

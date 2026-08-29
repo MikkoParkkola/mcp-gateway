@@ -371,21 +371,174 @@ mod http {
         post(true, body, &borrowed).await
     }
 
+    /// Open a `subscriptions/listen` stream and hold it.
+    ///
+    /// Reads the body FRAME BY FRAME. `to_bytes` waits for the end of the
+    /// body, and the whole point of this response is that there is no end —
+    /// a test written that way hangs rather than fails.
+    async fn open_listen(
+        state: &Arc<AppState>,
+        params: Value,
+    ) -> (StatusCode, Option<String>, axum::body::BodyDataStream) {
+        let response = create_router(Arc::clone(state))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
+                    .header("mcp-protocol-version", "2026-07-28")
+                    .header("mcp-method", "subscriptions/listen")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "subscriptions/listen",
+                            "params": params,
+                        }))
+                        .expect("body"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("router must answer");
+
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        (
+            status,
+            content_type,
+            response.into_body().into_data_stream(),
+        )
+    }
+
+    /// The next SSE payload, or `None` if none arrives in time.
+    ///
+    /// Bounded on purpose: a stream that stays open cannot be drained, so
+    /// "nothing arrived" has to be an answer the test can assert on.
+    async fn next_data(stream: &mut axum::body::BodyDataStream) -> Option<Value> {
+        use futures::StreamExt;
+
+        let deadline = std::time::Duration::from_secs(2);
+        loop {
+            let chunk = tokio::time::timeout(deadline, stream.next()).await.ok()??;
+            let text = String::from_utf8(chunk.expect("chunk").to_vec()).expect("utf-8");
+            // Keep-alive comments carry no data line; skip them rather than
+            // failing, since their timing is not what these tests are about.
+            if let Some(line) = text.lines().find_map(|l| l.strip_prefix("data: ")) {
+                return Some(serde_json::from_str(line).expect("each event is JSON"));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
-        let (status, body) = post_modern(
-            "subscriptions/listen",
+        let state = state(true);
+        let (status, content_type, mut stream) = open_listen(
+            &state,
             json!({ "notifications": { "toolsListChanged": true } }),
         )
         .await;
 
-        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            body["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"], body["id"],
+            content_type.as_deref(),
+            Some("text/event-stream"),
+            "the response to a listen request is the stream itself, not an \
+             acknowledgement that closes"
+        );
+
+        let ack = next_data(&mut stream)
+            .await
+            .expect("the ack opens the stream");
+        assert_eq!(
+            ack["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"], ack["id"],
             "the subscription id is the request's own id, so the client can \
              correlate every notification with the subscription that asked for \
-             it: {body}"
+             it: {ack}"
         );
+    }
+
+    #[tokio::test]
+    async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription() {
+        let state = state(true);
+        let (status, _, mut stream) = open_listen(
+            &state,
+            json!({ "notifications": { "toolsListChanged": true } }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let ack = next_data(&mut stream)
+            .await
+            .expect("the ack opens the stream");
+        let subscription = ack["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"].clone();
+
+        state.announce_tools_changed();
+
+        let event = next_data(&mut stream)
+            .await
+            .expect("a subscribed notification must reach the open stream");
+        assert_eq!(event["method"], "notifications/tools/list_changed");
+        assert_eq!(
+            event["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"], subscription,
+            "a notification is tagged with the subscription that asked for it, \
+             which is how a client with two subscriptions tells them apart: \
+             {event}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_sub_1_a_listener_is_not_sent_what_it_did_not_ask_for() {
+        let state = state(true);
+        // An empty filter is a valid request and opens a quiet stream.
+        let (status, _, mut stream) = open_listen(&state, json!({ "notifications": {} })).await;
+        assert_eq!(status, StatusCode::OK);
+        next_data(&mut stream)
+            .await
+            .expect("the ack opens the stream");
+
+        state.announce_tools_changed();
+
+        assert!(
+            next_data(&mut stream).await.is_none(),
+            "opting in is per notification type: a listener that asked for \
+             nothing receives nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_sub_1_the_open_stream_count_has_a_ceiling() {
+        // A client may open a stream and walk away, so the ceiling is what
+        // makes an abandoned stream cost something finite.
+        let state = state(true);
+        let mut held = Vec::new();
+        for _ in 0..64 {
+            held.push(
+                state
+                    .subscriptions
+                    .subscribe()
+                    .expect("the registry admits up to its capacity"),
+            );
+        }
+
+        let (status, _, stream) = open_listen(
+            &state,
+            json!({ "notifications": { "toolsListChanged": true } }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        // A refusal is an ordinary body that ends, so it is read to the end;
+        // only the accepted case returns a stream that does not.
+        let bytes = axum::body::to_bytes(Body::from_stream(stream), usize::MAX)
+            .await
+            .expect("a refusal body ends");
+        let body: Value = serde_json::from_slice(&bytes).expect("JSON");
+        assert_eq!(body["error"]["code"], -32003, "{body}");
     }
 
     #[tokio::test]
