@@ -54,14 +54,25 @@ scripts/dev/service-template-smoke.sh
 ```bash
 mcp-gateway init --profile local
 docker build -t mcp-gateway:latest .
+# Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
+install -m 600 gateway.yaml gateway.container.yaml
+sudo chown 1001:1001 gateway.container.yaml
 
 docker run -d --name mcp-gateway \
   -p 39400:39400 \
-  -v ./gateway.yaml:/config.yaml:ro \
+  -v ./gateway.container.yaml:/config.yaml:ro \
   -v ./capabilities:/capabilities:ro \
   -e TAVILY_API_KEY=tvly-xxx \
   mcp-gateway:latest
 ```
+
+On Linux, the image runs as UID/GID 1001. Bind-mount an owner-only deployment
+copy that this identity can read; do not change ownership on your working
+config or make a credential-bearing config world-readable. The same
+requirement applies to the Compose example below: create its `gateway.yaml`
+deployment copy with `install -m 600 <working-config> gateway.yaml && sudo chown
+1001:1001 gateway.yaml`. Docker Desktop handles bind-mount identity differently
+on macOS and Windows.
 
 ### Docker Compose
 

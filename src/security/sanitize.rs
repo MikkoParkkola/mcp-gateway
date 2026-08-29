@@ -568,3 +568,70 @@ mod tests {
         assert!(title.contains("{{system_override}}"));
     }
 }
+
+// ── Diagnostic URL redaction ──────────────────────────────────────────────────
+
+/// Reduce a URL to its origin, for any string a human or a log file will see.
+///
+/// Every part of a URL except the origin can carry a credential:
+///
+/// | part | example |
+/// |---|---|
+/// | userinfo | `https://user:tok@host/` |
+/// | query | `?token=…` |
+/// | fragment | `#access_token=…` |
+/// | **path** | a Slack or Discord webhook, where the secret IS the path |
+///
+/// The conventional "safe URL for logs" keeps the path. That is wrong here: this
+/// output is printed by `get`, serialised by `list --json` and written to the
+/// transport's logs, all of which end up in bug reports (MIK-7221).
+///
+/// **Cost, stated because it is real**: the URL is the sole identifier on several
+/// transport log lines, so two backends on one host now read alike there.
+///
+/// Unparseable input returns a fixed marker rather than being echoed — the error
+/// path is exactly where a redaction usually gets undone.
+///
+/// This lives here, once, because it had two copies. Three independent reviewers
+/// each said the same thing about that, and duplication of a security predicate is
+/// how one copy gets fixed and the other does not.
+#[must_use]
+pub fn redact_url_for_diagnostics(raw: &str) -> String {
+    let Ok(url) = url::Url::parse(raw) else {
+        return "<invalid-url>".to_string();
+    };
+    match url.host_str() {
+        Some(host) => match url.port() {
+            Some(port) => format!("{}://{host}:{port}", url.scheme()),
+            None => format!("{}://{host}", url.scheme()),
+        },
+        // Schemes without a host (file:, data:) have nowhere safe to truncate.
+        None => format!("{}://<no-host>", url.scheme()),
+    }
+}
+
+#[cfg(test)]
+mod redact_url_tests {
+    use super::redact_url_for_diagnostics as redact;
+
+    #[test]
+    fn strips_every_credential_bearing_part() {
+        assert_eq!(
+            redact("https://user:tok@api.example.com/services/SECRET?t=X#f=Y"),
+            "https://api.example.com"
+        );
+        assert_eq!(redact("http://localhost:8080/mcp"), "http://localhost:8080");
+    }
+
+    #[test]
+    fn never_echoes_input_it_cannot_parse() {
+        // The failure path must not become the leak.
+        assert_eq!(redact("not a url ?token=SECRET"), "<invalid-url>");
+        assert!(!redact("not a url ?token=SECRET").contains("SECRET"));
+    }
+
+    #[test]
+    fn hostless_schemes_get_a_marker_not_a_path() {
+        assert_eq!(redact("file:///etc/SECRET"), "file://<no-host>");
+    }
+}

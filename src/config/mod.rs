@@ -191,6 +191,28 @@ impl Config {
             None => Self::fallback_config_path(),
         };
 
+        if let Some(config_path) = resolved.as_deref()
+            && let Err(error) = std::fs::File::open(config_path)
+        {
+            let detail = match error.kind() {
+                #[cfg(unix)]
+                std::io::ErrorKind::PermissionDenied => {
+                    "The current process must own the file or have narrowly scoped read access, and every containing directory must permit traversal. The official container runs as UID/GID 1001; create an owner-only deployment copy before transferring it with `install -m 600 <source> <deployment-copy>` and `chown 1001:1001 <deployment-copy>`, or grant equivalent group/ACL access. Do not make a credential-bearing config world-readable."
+                }
+                #[cfg(not(unix))]
+                std::io::ErrorKind::PermissionDenied => {
+                    "The current process needs read access to the selected config; grant it narrowly through the platform ACL. Do not make a credential-bearing config readable by unrelated users."
+                }
+                _ => {
+                    "The selected config must be readable by the current process and must still exist after path selection."
+                }
+            };
+            return Err(Error::Config(format!(
+                "Cannot read config file {}: {error}. {detail}",
+                config_path.display()
+            )));
+        }
+
         let env_file_config: EnvFileConfig = Self::figment(resolved.as_deref())
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
@@ -598,7 +620,10 @@ impl Config {
                     }
                     url::Url::parse(http_url).map_err(|e| {
                         Error::ConfigValidation(format!(
-                            "Backend '{name}' has an invalid http_url '{http_url}': {e}"
+                            // The URL is not echoed: a malformed one still carries its
+                            // userinfo and query, and a validation error is printed on
+                            // startup and in support threads (MIK-7221).
+                            "Backend '{name}' has an invalid http_url: {e}"
                         ))
                     })?;
                 }
@@ -611,7 +636,9 @@ impl Config {
                     }
                     url::Url::parse(a2a_url).map_err(|e| {
                         Error::ConfigValidation(format!(
-                            "Backend '{name}' has an invalid a2a_url '{a2a_url}': {e}"
+                            // Twin of the http_url line above. Fixing one spelling of a
+                            // leak and not the other is how the first fix stops mattering.
+                            "Backend '{name}' has an invalid a2a_url: {e}"
                         ))
                     })?;
                 }

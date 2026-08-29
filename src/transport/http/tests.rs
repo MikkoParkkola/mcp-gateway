@@ -1017,28 +1017,59 @@ async fn request_does_not_reinitialize_without_a_session() {
     // surface as a plain error (nothing to re-initialize).
 
     let err = transport.request("tools/list", None).await.unwrap_err();
-    assert!(err.to_string().contains("Session not found"));
+    // The marker, not the backend's own wording: the body is redacted at the
+    // boundary now, so "Session not found" never reaches an error string.
+    assert!(err.to_string().contains("session expired"), "{err}");
+    assert!(
+        !err.to_string().contains("-32015"),
+        "the untrusted body must not survive into the error: {err}"
+    );
 
     server.abort();
 }
 
 #[test]
 fn session_expired_detection_matches_known_signatures() {
-    // rust-mcp-sdk shape (hebb-serve, observed live 2026-06-11)
-    assert!(is_session_expired_error(&Error::Transport(
-        "HTTP 400 Bad Request: {\"code\":-32015,\"data\":null,\"message\":\"Bad Request: Session not found\"}".to_string()
-    )));
-    // MCP spec: 404 = session terminated/expired
+    // The raw body no longer reaches the classifier: `safe_http_status_error`
+    // converts it at the HTTP boundary, because the body is backend-controlled
+    // and may echo our own credentials. So the contract under test is the PAIR
+    // — the conversion, then the match. Testing either half alone is how this
+    // broke: the redaction landed without the classifier change and session
+    // recovery stopped, silently, with every other test still green (MIK-7221).
+    let raw_rust_mcp_sdk =
+        "{\"code\":-32015,\"data\":null,\"message\":\"Bad Request: Session not found\"}";
+    let converted = safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, raw_rust_mcp_sdk);
+    assert!(
+        !converted.to_string().contains("-32015"),
+        "the untrusted body must not survive into the error: {converted}"
+    );
+    assert!(
+        is_session_expired_error(&converted),
+        "expiry must still be recognised after redaction: {converted}"
+    );
+
+    // The lowercase-only shape, which is the other half of the boundary check.
+    let converted_lower =
+        safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, "session not found, sorry");
+    assert!(is_session_expired_error(&converted_lower));
+
+    // MCP spec: 404 = session terminated/expired. Reaches the classifier directly.
     assert!(is_session_expired_error(&Error::Transport(
         "HTTP 404 Not Found: ".to_string()
     )));
+
+    // A non-expiry body converts to a bare status and must NOT match. Without
+    // this, a conversion that returned the marker unconditionally would pass.
+    let other = safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, "malformed json");
+    assert!(!is_session_expired_error(&other), "{other}");
+
     // Plain transport failure must not match
     assert!(!is_session_expired_error(&Error::Transport(
         "Request failed: connection refused".to_string()
     )));
     // Non-transport errors must not match
     assert!(!is_session_expired_error(&Error::Protocol(
-        "Session not found".to_string()
+        "session expired".to_string()
     )));
 }
 
@@ -1506,5 +1537,68 @@ fn bearer_header_value_rejects_invalid_bytes_without_panicking() {
             !format!("{err}").contains(bad),
             "error must not leak the raw token"
         );
+    }
+}
+
+/// One canary, every redaction helper. Each site was found by a reviewer AFTER a
+/// previous round claimed the class was closed — five in round one, three more in
+/// round two, including two session-ID logs and a config line that was the twin
+/// of one already fixed. A per-site fix does not generalise; a sweep does.
+#[test]
+fn no_diagnostic_helper_passes_a_canary_through() {
+    const CANARY: &str = "SENTINEL_TRANSPORT_9f3c";
+
+    // URL redaction: the secret in each position a URL can hide one.
+    for raw in [
+        format!("https://user:{CANARY}@svc.example.com/mcp"),
+        format!("https://svc.example.com/services/{CANARY}"),
+        format!("https://svc.example.com/mcp?token={CANARY}"),
+        format!("https://svc.example.com/mcp#{CANARY}"),
+    ] {
+        let out = sanitize_url_for_diagnostics(&raw);
+        assert!(!out.contains(CANARY), "URL redaction leaked: {out}");
+        assert!(
+            out.starts_with("https://svc.example.com"),
+            "origin lost: {out}"
+        );
+    }
+
+    // Unparseable input must not be echoed — the failure path is where a
+    // redaction usually gets undone.
+    let bad = sanitize_url_for_diagnostics(&format!(":://not a url {CANARY}"));
+    assert!(!bad.contains(CANARY), "invalid-URL path leaked: {bad}");
+
+    // A backend error body is untrusted and may quote our own credentials back.
+    for body in [
+        format!("{{\"error\":\"{CANARY}\"}}"),
+        format!("{{\"code\":-32015,\"message\":\"Session not found {CANARY}\"}}"),
+    ] {
+        let err = safe_http_status_error(reqwest::StatusCode::BAD_REQUEST, &body);
+        assert!(
+            !err.to_string().contains(CANARY),
+            "status error leaked: {err}"
+        );
+    }
+
+    // The expiry marker still survives that redaction, or session recovery breaks.
+    let expired = safe_http_status_error(
+        reqwest::StatusCode::BAD_REQUEST,
+        &format!("{{\"code\":-32015,\"message\":\"Session not found {CANARY}\"}}"),
+    );
+    assert!(
+        is_session_expired_error(&expired),
+        "expiry lost to redaction: {expired}"
+    );
+
+    // A cross-origin redirect rejection names both URLs; neither may carry one.
+    let base = Url::parse("https://svc.example.com/mcp").expect("base");
+    let target = Url::parse(&format!("https://evil.example.com/x?t={CANARY}")).expect("target");
+    if let RedirectDecision::Reject(reason) = evaluate_redirect(&base, &target, 0) {
+        assert!(
+            !reason.contains(CANARY),
+            "redirect rejection leaked: {reason}"
+        );
+    } else {
+        panic!("a cross-origin redirect must be rejected");
     }
 }
