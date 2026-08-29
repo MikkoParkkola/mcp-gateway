@@ -81,7 +81,14 @@ Your agent will install the binary, run the setup wizard, import your existing M
 | **Cargo** | `cargo install mcp-gateway` |
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
 | **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
-| **Docker** | `docker run -v $(pwd)/gateway.yaml:/config.yaml ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml` |
+| **Docker** | `docker run -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml` |
+
+On Linux, the image runs as UID/GID 1001. Make an owner-only deployment copy
+instead of changing ownership on your working config: `install -m 600
+gateway.yaml gateway.container.yaml && sudo chown 1001:1001
+gateway.container.yaml`. Do not make a credential-bearing config
+world-readable. Docker Desktop handles bind-mount identity differently on
+macOS and Windows.
 
 <details>
 <summary>Direct binary download</summary>

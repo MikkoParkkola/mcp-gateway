@@ -258,8 +258,11 @@ scripts/dev/first-run-smoke.sh  # repo checkout: clean init -> routed tool call
 scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + routed tool call
 
 # Container
+# Linux bind mounts: prepare a dedicated owner-only copy for container UID 1001.
+install -m 600 gateway.yaml gateway.container.yaml
+sudo chown 1001:1001 gateway.container.yaml
 docker run --rm -p 39400:39400 \
-  -v "$PWD/gateway.yaml:/config.yaml:ro" \
+  -v "$PWD/gateway.container.yaml:/config.yaml:ro" \
   -v "$PWD/capabilities:/capabilities:ro" \
   ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml
 scripts/dev/docker-smoke.sh  # repo checkout: container health + routed tool call
@@ -272,6 +275,12 @@ scripts/dev/service-template-smoke.sh  # repo checkout: systemd/launchd path + s
 mcp-gateway doctor --format json
 mcp-gateway tls init-ca --cn "MCP Gateway Root CA" --out ./tls
 ```
+
+On Linux, the image runs as UID/GID 1001, so its bind-mounted deployment copy
+must be readable by that identity. Keep the copy owner-only as shown; do not
+`chmod 644` a config that may contain credentials, and do not change ownership
+on your working config. Docker Desktop handles bind-mount identity differently
+on macOS and Windows.
 
 For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distribute only the generated client entry or managed config profile to users.
 
