@@ -505,7 +505,7 @@ command that changes behaviour, is a breaking change.
 modularity and testing, not as a supported embedding API, and they may change
 in any release. The crate ships a binary; at the time of writing crates.io
 reports zero reverse dependencies. If you embed the library, pin an exact
-version (`=3.5.0`) rather than a caret range.
+version (`=4.0.0`) rather than a caret range.
 
 This is stated explicitly because "removing a `pub` field" and "breaking a
 supported API" are only the same thing when the API is supported. Here it is
