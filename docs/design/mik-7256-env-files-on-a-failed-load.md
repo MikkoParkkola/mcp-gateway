@@ -392,8 +392,11 @@ constructs the provenance signer, and
 an authentication form, all three are startup-only, and a rotated signing key
 that goes unreported is the exact failure this reporting exists to prevent.
 So the reported set is the intersection of the changed keys with the
-startup-only consumers the scan finds — attestation included, and whatever the
-scan finds next included without editing this paragraph. The list of four is
+startup-only consumers the REGISTRY holds — attestation included, and whatever
+registers next included without editing this paragraph. The scan's job is to
+prove the registry has no gaps, not to be the registry: a set assembled by
+grepping at build time cannot be read by the running process that has to
+report on it. The list of four is
 gone rather than extended: extending it leaves the finding statable one
 consumer later.
 
@@ -637,9 +640,19 @@ contains:
   secret and is told nothing happened cannot distinguish a rotation that took
   from a watcher that fired on the wrong file.
 - The outcome reports `restart_required` when a changed key is referenced by a
-  restart-only holder. `EnvOverlay` knows which keys changed and the running
-  config knows which keys the startup-only consumers resolved at startup, so the
-  intersection is computable without resolving anything. Without this the worst
+  restart-only holder. `EnvOverlay` knows which keys changed; the keys a
+  startup-only consumer holds come from a REGISTRATION, not from an inference.
+  Each such consumer resolves through `startup_env::read(key, holder)` rather
+  than `std::env::var` — same value, plus a `(key, holder)` pair recorded in a
+  process-wide registry that is written during startup and read-only after it.
+  The report is the intersection of the changed keys with that registry. An
+  earlier draft said the running config "knows" which keys those consumers
+  resolved, and nothing in the process computed it: the config records the
+  references it was handed, not the environment reads a module makes on its own,
+  so attestation — three reads the config never names — would have been reported
+  as unchanged forever. The source scan does not produce this set, it VERIFIES
+  it: a `std::env::var` or `env::vars` call site outside the registry and the
+  named allowlist fails the scan. Without this the worst
   case is silent and security-shaped: an operator rotates a compromised
   `auth.bearer_token` through the env file alone, sees a successful reload, and
   the old token stays valid until a restart nobody knew to perform. The value is
