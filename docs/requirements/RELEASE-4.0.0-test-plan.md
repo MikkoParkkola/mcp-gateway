@@ -98,6 +98,60 @@ A fixture that reimplements the production path tests the fixture. Two rules for
 
 ---
 
+## Increment 2 — Stateless request handling
+
+Second because everything after it assumes a request can be understood on its own. The gateway
+becomes a **dual-era server**: `initialize` still selects legacy semantics; per-request `_meta`
+selects modern. Both on one endpoint, which the specification sanctions explicitly.
+
+The risk here is not the modern path — it is the legacy one. Every row that begins "given a 2025
+client" exists because this increment is where a working client silently stops working.
+
+### Coverage rows
+
+| AC | Case | Level | Type | Can it fail? |
+|---|---|---|---|---|
+| STATELESS.1 | A request carrying `_meta.protocolVersion` and `_meta.clientCapabilities`, with no prior `initialize`, is served | I | positive | Yes — nothing reads `_meta` today |
+| STATELESS.1 | Two requests on one connection declaring **different** versions are each served under their own | I | boundary | Yes — a per-connection implementation would serve the second under the first's version, which is the whole point of "per request" |
+| STATELESS.2 | Every modern result carries `_meta["io.modelcontextprotocol/serverInfo"]` with name and version | I | positive | Yes |
+| STATELESS.2 | A **legacy** result does not gain the field | C | regression | Yes — the tempting implementation adds it to the shared result builder and changes the 2025 wire format, which the increment-1 goldens then catch |
+| STATELESS.3 | A modern request's response carries no `Mcp-Session-Id` header | I | negative | Yes — the HTTP path mints and emits one on every response today (verified live 2026-08-28) |
+| STATELESS.3 | A legacy request's response still carries it | I | regression | Yes — a change that strips the header unconditionally breaks every 2025 client |
+| STATELESS.4 | A modern request naming an unsupported version gets `UnsupportedProtocolVersionError` and HTTP 400, listing supported versions | I | negative | Yes — `negotiate_version` currently falls back to the latest instead of refusing, so this fails against today's behaviour |
+| STATELESS.5 | An unimplemented method returns HTTP 404 with `-32601`, body distinguishable from a legacy transport's bare 404 | I | negative | Yes |
+| STATELESS.6 | `ping`, `logging/setLevel`, `notifications/roots/list_changed` are refused on the modern path | I | negative | Yes |
+| STATELESS.6 | The same three still work on the legacy path | I | regression | Yes — a version-blind removal fails this and is the likeliest implementation |
+| STATELESS.7 | No `notifications/message` for a request that carried no `_meta.logLevel` | C | negative | Yes — needs a notification sink to observe absence; a test that merely calls the handler proves nothing |
+| STATELESS.8 | `initialize` selects legacy for that connection; a `_meta`-bearing request selects modern — both against one endpoint | I | equivalence | Yes |
+| STATELESS.9 | A modern request missing `protocolVersion` is rejected `-32602` / HTTP 400 | I | negative | Yes |
+| STATELESS.9 | A modern request missing `clientCapabilities` is rejected the same way | I | negative | Yes — this is the one an implementer skips, because the field looks optional and nothing breaks without it |
+| STATELESS.9 | A request with **neither** is legacy, not malformed — it is a 2025 client | I | boundary | **The row that decides the design.** Absence of `_meta` cannot mean both "malformed modern" and "legacy"; the discriminator must be something else. See below. |
+| STATELESS.10 | A request needing a capability the client did not declare gets `-32021` with `data.requiredCapabilities` naming it | I | negative | Yes |
+
+### The discriminator, named before it is coded
+
+STATELESS.9's last row is a genuine contradiction if the era is inferred from "does `_meta` carry
+protocol fields". A 2025 client sends no `_meta` at all; so does a 2026 client that forgot a
+required field. One must be served, the other refused, and they look identical under that rule.
+
+The specification resolves it and the resolution is not symmetric with discovery's:
+
+- **`initialize` present** → legacy, for that connection. That method does not exist in 2026, so its presence *is* the signal.
+- On **HTTP**, the `MCP-Protocol-Version` header is required on every modern POST, so a request carrying the header but missing the `_meta` field is a broken modern request; one carrying neither is legacy.
+- On **stdio** there is no header. A request with no `_meta` and no prior `initialize` is treated as legacy, because refusing it would break every 2025 stdio client, and the cost of the other error is that a broken 2026 client is told "unknown method" instead of "malformed request".
+
+That asymmetry is a decision, not a derivation, and it is written here so the review sees it before
+the code does.
+
+### Fixtures
+
+Same rules as increment 1, plus one: **the modern request frames are transcribed from the
+specification's examples**, not built from the gateway's own types. Increment 1 shipped a
+nonconforming document that every test passed, because the tests asserted the same invented names.
+That is the failure this rule exists to prevent, and it has already happened once here.
+
+---
+
 ## Later increments — planned, not yet detailed
 
 Listed so the shape of the whole is visible and so no increment is quietly dropped. Each gets its own
