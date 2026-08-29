@@ -43,6 +43,39 @@ path.
 **Chosen: B.** After it, the finding cannot be stated: there is no window in
 which a failed load has mutated anything.
 
+### What option B costs, found at source
+
+Two things `from_path_override` does that iterating `from_path_iter` does not.
+Both were found by reading `dotenvy` rather than by assuming the two entry
+points were interchangeable, and the second is a real behaviour change.
+
+**The byte-order mark.** `load_override` calls `self.remove_bom()` before it
+iterates (`iter.rs:47`); `from_path_iter` hands back the raw `Iter` and
+`remove_bom` is private, so a caller cannot invoke it. A UTF-8 BOM at the start
+of an env file would therefore become part of the first key. Handled by
+trimming a leading `\u{feff}` from the first parsed key — the same correction,
+applied where we can apply it. Pinned by a criterion below so it cannot regress
+into a silent difference.
+
+**Substitution across files.** `dotenvy` resolves `${VAR}` inside an env file
+by consulting the process environment first and only then the keys parsed so far
+*from that same file* (`parse.rs:265`, `apply_substitution`). Today the files
+are applied one at a time, so file 2's `${FOO}` sees a `FOO` that file 1 has
+already written to the process. Under option B nothing is written until every
+file is parsed, and the parser's own table is per-file, so that reference
+resolves empty instead.
+
+This cannot be preserved: the substitution reads `std::env::var` directly and
+`dotenvy` exposes no overlay. Within a single file the behaviour is unchanged —
+same `Iter`, same table. Only a reference *across* two env files is affected,
+and only when the variable is not already in the process environment.
+
+Taken deliberately, and bounded: `env_files` is documented as loading `.env`
+files with `~` expansion (`docs/DEPLOYMENT.md:177`), `gateway.example.yaml`
+ships it empty, and nothing in the repository documents or tests a cross-file
+reference. A criterion below pins the new behaviour so it is a decision on
+record rather than a surprise.
+
 ## Shape
 
 `load_env_files_from_paths` splits into two functions with one side effect
@@ -69,12 +102,39 @@ the two paths drift apart.
 - **MIK.ENVFILE.3** Given a candidate env file that sets a variable the process
   already has, When the reload fails, Then a subsequently spawned backend
   inherits the original value.
+- **MIK.ENVFILE.4** Given an env file whose first byte is a UTF-8 byte-order
+  mark, When it loads, Then the first key is set under its own name, with no
+  mark attached.
+- **MIK.ENVFILE.5** Given two env files where the second references a variable
+  the first defines and the process does not, When they load, Then the reference
+  resolves empty — the recorded consequence of parsing before applying, pinned
+  so a later change cannot make it drift unnoticed.
+
+## Documentation this change makes untrue
+
+Three places state the defect as current behaviour and are corrected inside this
+change, per the documentation gate:
+
+- `CHANGELOG.md:333` and `docs/DEPLOYMENT.md:596` — both describe a config file
+  applying its `env_files` before validation.
+- `src/config_reload/mod.rs:1485` and `src/config_reload/tests.rs:1271,1295` —
+  comments explaining why the reload refusal message may not claim that nothing
+  was applied. The reasoning was correct when written and stops being true here.
 
 ## Out of scope
 
 Whether `env_files` should be reloadable at all. It is currently reported as
 restart-only by `pending_restart_fields` (`src/config_reload/mod.rs:552`), which
 is a separate question from whether a failed load may mutate the process.
+
+**Strengthening the reload refusal message.** Once nothing is applied on a
+failure path, the gateway *can* honestly say so, and the message at
+`src/config_reload/mod.rs:1478` was deliberately weakened over three review
+rounds precisely because it could not. Tempting and still out: it changes
+user-visible security messaging, it has its own review history, and the tests
+that guard it assert the ABSENCE of those phrases — so they keep passing either
+way and would not catch a careless rewrite. Disposal: filed as a follow-up, not
+folded in here.
 
 ## Unknowns
 
