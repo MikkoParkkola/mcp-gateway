@@ -98,7 +98,7 @@ path is the thing most likely to break, so it is the thing most tested.
 - `#![deny(unsafe_code)]` holds; no dependency added.
 - Nine security findings from review were closed in this round; three remain open and are listed below.
 
-## §12 Review — one vendor, seven rounds, findings recorded
+## §12 Review — one vendor, eight rounds, findings recorded
 
 The operator set single-vendor review (codex/gpt) for this session, so the dual-vendor gate is
 **deliberately not met** and this is a known, authorised deviation rather than a passed gate.
@@ -156,6 +156,39 @@ was worse than nothing:
 
 - **Multi-round-trip retry forwarding.** The fields were merged into the tool `arguments` object. The specification makes them siblings of `arguments`, so a backend read them nowhere — and a tool with an argument of either name had it silently overwritten. Worse, the `requestState` forwarded was the **client's own envelope**, which `continuation.rs` exists specifically to keep from being passed onward. Forwarding correctly means unsealing the gateway's envelope and sending the *backend's* state, which needs the keyring reachable from request state and a retry parameter threaded to the dispatcher. Neither exists, so a retry now fails visibly instead of corrupting a call.
 - **`tasks/get`.** It answered every handle with a `not_found` **success** — a status absent from the protocol's task model, reported as though a lookup had happened against a store that does not exist. It now returns method-not-found, which is true. The specification page for the tasks extension returns 404 at the path its own index links, so there is no shape to build against.
+
+## Round 8 — the repairs reviewed, and what that found
+
+The fixes above were themselves submitted for review, split in two so neither payload was large
+enough to die silently.
+
+| Material | Findings | Verdict |
+|---|---|---|
+| the protocol modules | 2, both BEFORE-PRODUCTION | **SHIP** |
+| the request path and security controls | 6, one gated NOW | SHIP-WITH-FIXES |
+
+**The NOW-gated finding was the pattern this branch keeps producing, turned back on its author.**
+`SessionLifecycle` — the registry meant to reclaim per-caller state — had its deadline map carefully
+repaired here, and **nothing in production ever calls it**. Verified: nothing constructs it outside
+its own module, and `track` and `reap` have no callers. It is pre-existing rather than introduced
+(added in `ba268ca9`, already dead on `main` at the base commit), so the wire-or-delete decision
+belongs to a human and is filed as **MIK-7291** rather than absorbed into this change.
+
+What *was* closed here is the leak it would have prevented: the anomaly detector's identity map now
+carries a ceiling. A stateless caller never disconnects, because it never connected, so there is no
+disconnect event to reclaim on even in principle.
+
+Three further repairs to the repairs:
+
+- **The stateless anomaly identity was still the display name.** It is operator-configured, two API keys may share one, and every anonymous caller presents the same one — so scoring on it lets one caller poison another's history. The handler now passes a validated credential key and passes nothing at all for an unauthenticated caller. A `session_owner()` helper one function away already carried this exact reasoning in its own comment.
+- **A rule could downgrade the fail-closed refusal.** Refusing an unscoreable call raised a High finding, which an ordinary Allow rule could soften. Refusal is now forced before rule resolution.
+- **Session suppression was too narrow**, recognising only an exactly-supported modern version, and a duplicated `MCP-Protocol-Version` header could hide a modern declaration behind a legacy one.
+
+**Two slips of my own, both caught immediately by the compiler**, and worth recording because they
+share one cause: a text substitution matched two functions where one was meant. The parameter added
+to `check_request` landed on `check_response` too, and a forced-block landed in the wrong function
+entirely. Verifying each batch rather than at the end is what turned both into build errors instead
+of shipped defects.
 
 ## What is honestly NOT finished
 
