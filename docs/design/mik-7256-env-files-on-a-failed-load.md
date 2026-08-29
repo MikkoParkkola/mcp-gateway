@@ -50,18 +50,23 @@ can reach dotenvy. And applying inside `Config::load` still mutates before the
 posture refusal and the shutdown abort, so it does not deliver the criterion it
 exists for. It also needed `set_var`.
 
-**C. The reload path stops applying env files.** `Config::load` gains an
-explicit parameter saying whether env files may be applied. Startup passes
-`Apply` and is byte-for-byte what it is today. The reload path and the
-config-export watcher pass `Skip`: they evaluate a candidate against the
-environment as it stands, which is the environment the running process has had
-since startup.
+**C. The reload path stops applying env files.** A second loader, used by the
+reload path alone, evaluates a candidate config without touching the process
+environment. Startup keeps the loader it has. The reload path evaluates against
+the environment as it stands, which is the environment the running process has
+had since startup.
 
 **Chosen: C.** After it the finding cannot be stated at all — the reload path
 has no code that writes the environment, so no failure mode of any kind can
 leave it mutated. It is also what the gateway already reports: `env_files` is
 listed restart-required by `pending_restart_fields`
 (`src/config_reload/mod.rs:552`) and documented as such at `:669`.
+
+Startup is untouched. Same `dotenvy::from_path_override` call, same order,
+same byte-order-mark handling, same cross-file `${VAR}` substitution, same
+Figment layering. None of the semantics that killed option B are in play,
+because nothing about how env files are applied changes — only *whether* the
+reload path applies them.
 
 ## What C costs
 
@@ -83,30 +88,34 @@ already tells users about `env_files`. It is cheap to reverse: restoring
 today's behaviour means passing `Apply` on the reload path, at the price of
 reopening MIK-7256 with no mechanism available to close it.
 
-Startup is untouched. Same `dotenvy::from_path_override` call, same order,
-same byte-order-mark handling, same cross-file `${VAR}` substitution, same
-Figment layering. None of the semantics that killed option B are in play,
-because nothing about how env files are applied changes — only *whether* the
-reload path applies them.
-
 ## Shape
 
-`Config::load(path)` becomes `Config::load(path, env_files: EnvFiles)` with
-`enum EnvFiles { Apply, Skip }` — an enum and not a boolean, so the call site
-says which it means without opening the signature. The body's only change is
-that `Self::load_env_files_from_paths` runs under `EnvFiles::Apply`.
+`Config::load(path)` keeps its signature. It has 35 call sites across 13 files
+and exactly one of them wants the new behaviour, so a signature parameter would
+edit 34 call sites to serve one — and each of those edits is a chance to pass
+the wrong value.
 
-- `Apply`: the five startup sites in `src/main.rs`, the setup wizard, and the
-  config-export watcher (`src/commands/config_export/watch.rs:81`). The
-  watcher is a short-lived CLI process whose only job is to regenerate client
-  entries from the config; it has no backends to leak into and no reload to
-  refuse, and skipping there would drop env-file-derived values from what it
-  exports. Its behaviour stays exactly as it is.
+Instead: a private `load_inner(path, EnvFiles)` holds the body, with
+`enum EnvFiles { Apply, Skip }` private to the module — an enum and not a
+boolean, so the call site says which it means without opening the signature.
+`Config::load(path)` delegates with `Apply` and behaves exactly as it does
+today. A new `Config::load_without_env_files(path)` delegates with `Skip`.
+
+- `Apply`: everything that calls `Config::load` today, unchanged — the startup
+  sites in `src/main.rs`, the setup wizard, the config-export watcher
+  (`src/commands/config_export/watch.rs:81`). The watcher is a short-lived CLI
+  process whose only job is to regenerate client entries from the config; it
+  has no backends to leak into and no reload to refuse, and skipping there
+  would drop env-file-derived values from what it exports.
 - `Skip`: `load_config_patch` (`src/config_reload/mod.rs:1239`) — the one
-  caller that evaluates a candidate inside the running gateway.
+  caller that evaluates a candidate inside the running gateway, and the one
+  call site this change edits.
 
-`load_env_files(&self)` (`src/config/mod.rs:276`) is unused outside tests and
-is deleted with the watch that motivated it.
+`load_env_files(&self)` (`src/config/mod.rs:276`) is a thin wrapper over
+`load_env_files_from_paths` reached only from `src/config/tests.rs`. It was
+already unwired before this change and is not made so by it, so it stays:
+removing it would delete four tests in a third file for no gain here. Recorded
+as an observation, not a ticket.
 
 ## Acceptance criteria
 
@@ -123,6 +132,10 @@ is deleted with the watch that motivated it.
 - **MIK.ENVFILE.5** Given an env file whose contents change under a running
   gateway, Then no reload is triggered by that change alone, and the config
   reports `env_files` as restart-required.
+- **MIK.ENVFILE.6** Given a reload whose candidate env file would change a
+  `MCP_GATEWAY_*` variable and a variable referenced by `${VAR}` in the YAML,
+  Then the reloaded config resolves both against the values the process has had
+  since startup, not the candidate file's.
 
 ## Docs corrected here
 
