@@ -1090,3 +1090,165 @@ fn an_agent_holding_both_key_types_fails_validation() {
         "the message must name the agent and the ambiguity: {msg}"
     );
 }
+
+// -------------------------------------------------------------------------
+// MIK-7256 — env files on a failed load (§P2 failing tests)
+//
+// Written against `docs/design/mik-7256-env-files-on-a-failed-load.md` and the
+// rows in `docs/design/mik-7256-test-plan.md`. The design's types do not exist
+// yet, so these are expected to fail to COMPILE until implementation lands.
+//
+// The design states that expansion must reach its home "through an injected
+// resolver rather than calling `dirs::home_dir()` inline" (design:314-315) but
+// does not name the seam. These tests name it `config::HomeResolver`, with
+// `fn home_dir(&self, so_far: &EnvOverlay) -> Option<PathBuf>`. The `so_far`
+// parameter is not decoration: startup applies each file before expanding the
+// next, so a resolver that cannot see the overlay under construction cannot
+// reproduce production's sequential semantics, which is the property
+// ENVFILE.19c exists to pin. Rename freely at implementation time.
+// -------------------------------------------------------------------------
+
+/// A [`HomeResolver`] that always answers with one directory, for the rows that
+/// only need `HOME` pointed somewhere writable.
+struct FixedHome(std::path::PathBuf);
+
+impl HomeResolver for FixedHome {
+    fn home_dir(&self, _so_far: &EnvOverlay) -> Option<std::path::PathBuf> {
+        Some(self.0.clone())
+    }
+}
+
+/// ENVFILE.19 — an `env_files` entry spelled `~/<file>` with `HOME` pointed at a
+/// temp dir: the overlay OPENS the path startup recorded and reads the same
+/// pairs.
+///
+/// Phrased as opening a recorded path rather than resolving one, because a row
+/// that says "resolves" can go green on an overlay that re-expands and happens
+/// to agree. Tilde expansion is a supported spelling today
+/// (`src/config/mod.rs:290-298`); an overlay that skipped it would silently stop
+/// rotating those files, and nothing else in the plan would go red.
+#[test]
+fn envfile_19_the_overlay_opens_the_tilde_path_startup_recorded() {
+    // GIVEN: a home directory holding one env file, named by a `~/...` entry
+    let home = tempfile::tempdir().unwrap();
+    let env_path = home.path().join("rotating.env");
+    let mut f = std::fs::File::create(&env_path).unwrap();
+    writeln!(f, "MCP_GW_TEST_ENVFILE19_KEY=startup-value-19").unwrap();
+    drop(f);
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg_path = cfg_dir.path().join("gateway.yaml");
+    std::fs::write(&cfg_path, "env_files:\n  - \"~/rotating.env\"\n").unwrap();
+
+    // WHEN: startup evaluates the config through an injected home
+    let startup =
+        Config::load_evaluated_with_home(Some(&cfg_path), &FixedHome(home.path().to_path_buf()))
+            .unwrap();
+
+    // THEN: the path startup RECORDED is the expanded one, not the `~` spelling
+    assert_eq!(
+        startup.env_paths.as_paths(),
+        &[env_path.clone()],
+        "startup must record the absolute path it opened"
+    );
+
+    // AND: the overlay carries the pairs read from that same file
+    assert_eq!(
+        startup
+            .overlay
+            .resolve("MCP_GW_TEST_ENVFILE19_KEY")
+            .as_deref(),
+        Some("startup-value-19"),
+        "the overlay must carry the pairs of the file startup opened"
+    );
+}
+
+/// ENVFILE.19d — `HOME` unset and `HOME` empty, each in its own CHILD PROCESS.
+///
+/// A child per variant because the case mutates a PROCESS-wide variable: an
+/// in-process version races every other test the runner schedules beside it,
+/// while the oracle it compares against is read in a different environment than
+/// the one under test. Absent and empty are the same input to `dirs`, which
+/// falls back rather than returning the empty value
+/// (`dirs-sys-0.5.0/src/lib.rs:33-37`) — testing only the unset spelling lets an
+/// implementation that special-cases one and not the other pass.
+#[test]
+fn envfile_19d_home_unset_and_home_empty_both_resolve_to_the_dirs_fallback() {
+    for variant in ["unset", "empty"] {
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "config::tests::envfile_19d_child_resolves_against_dirs_home_dir",
+            "--ignored",
+            "--nocapture",
+        ]);
+        cmd.env("MCP_GW_TEST_ENVFILE19D_VARIANT", variant);
+        if variant == "unset" {
+            cmd.env_remove("HOME");
+        } else {
+            cmd.env("HOME", "");
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "child for HOME={variant} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Printed only after both child assertions pass, so a child that
+        // silently ran zero tests cannot be read as a pass.
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("ENVFILE.19d child ok"),
+            "child for HOME={variant} did not run the case"
+        );
+    }
+}
+
+/// The child half of ENVFILE.19d. Computes its OWN `dirs::home_dir()` as the
+/// expected value rather than a passwd entry, which keeps the case honest on
+/// Windows, where the function reads a known folder and does not consult `HOME`
+/// at all.
+#[test]
+#[ignore = "driven by envfile_19d_home_unset_and_home_empty_both_resolve_to_the_dirs_fallback"]
+fn envfile_19d_child_resolves_against_dirs_home_dir() {
+    assert!(
+        env::var_os("MCP_GW_TEST_ENVFILE19D_VARIANT").is_some(),
+        "child must be launched by its parent, not run directly"
+    );
+
+    // GIVEN: a `~/...` entry, and this process's own idea of home
+    let expected_home = dirs::home_dir().expect("dirs must fall back when HOME is unset or empty");
+    let expected = expected_home.join("mcp-gw-test-envfile19d.env");
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg_path = cfg_dir.path().join("gateway.yaml");
+    std::fs::write(
+        &cfg_path,
+        "env_files:\n  - \"~/mcp-gw-test-envfile19d.env\"\n",
+    )
+    .unwrap();
+
+    // WHEN: startup evaluates it. The file is deliberately NOT created — a
+    // missing path is skipped, and the RESOLUTION is what this row is about;
+    // writing into the real home directory is not the test's business.
+    let startup = Config::load_evaluated(Some(&cfg_path)).unwrap();
+
+    // THEN: it resolved against this process's own `dirs::home_dir()`
+    assert_eq!(
+        startup.env_paths.as_paths(),
+        &[expected.clone()],
+        "startup must resolve `~` against dirs::home_dir()"
+    );
+
+    // AND: a reload opens the same path, taking it from what startup recorded
+    let reloaded =
+        Config::load_with_overlay(Some(&cfg_path), &startup.env_paths, &EnvOverlay::none())
+            .unwrap();
+    assert_eq!(
+        reloaded.env_paths.as_paths(),
+        &[expected],
+        "a reload must open the path startup recorded, not resolve it again"
+    );
+
+    println!("ENVFILE.19d child ok");
+}

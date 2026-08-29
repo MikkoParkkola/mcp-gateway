@@ -84,6 +84,16 @@ The finder-unavailable clock under the repair protocol started at the round-18 l
    the key, and say so in the release notes. Tasks conformance is owned by MIK-7311 and the
    two multi-replica gaps by MIK-7312, both filed. Put the single-replica constraint into
    shipped text.
-4. Re-run §3, §4 and §5 on Spark at the final head.
-5. Second-vendor review pass when quota returns; then the DoD comment on each ticket.
-6. Open the PR, land it, then §P5 housekeeping.
+4. Bump the version to 4.0.0 everywhere it is written down. `Cargo.toml` still reads
+   `3.5.0`, as do `deploy/helm/mcp-gateway/Chart.yaml` `appVersion`,
+   `deploy/helm/mcp-gateway-crds/Chart.yaml` `appVersion` and the image tag in
+   `deploy/helm/mcp-gateway/values.yaml`. The chart's own `version` tracks packaging and
+   moves on its own. Nothing in this plan bumped them, and a 4.0.0 tag built from a tree
+   that calls itself 3.5.0 ships a lie in the binary's `--version`.
+5. Re-run §3, §4 and §5 on Spark at the final head.
+6. Second-vendor review pass **against the final head's full diff**, not resumed from the
+   round 18 material: that verdict was given before the tasks disposition, the
+   single-replica text and MIK-7256 existed. A ratification stamp is bound to a diff hash,
+   so a stamp minted against the older diff does not cover what is being pushed. Then the
+   DoD comment on each ticket.
+7. Open the PR, land it, then §P5 housekeeping.

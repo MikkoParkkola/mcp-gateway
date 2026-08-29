@@ -48,7 +48,14 @@ pub struct ExtensionSet {
 }
 
 impl ExtensionSet {
-    /// What this gateway declares.
+    /// What this gateway would declare once the tasks extension is implemented.
+    ///
+    /// Nothing calls this in 4.0.0, so `io.modelcontextprotocol/tasks` is never
+    /// advertised and no client can negotiate it. That is deliberate: the task model
+    /// in `super::tasks` is short of the extension specification by two statuses, two
+    /// required fields and the shape of the failure payload, and advertising the
+    /// identifier before that is fixed would break a client that trusted it. Wire this
+    /// up as part of MIK-7311, not before.
     #[must_use]
     pub fn gateway_declares() -> Self {
         Self {

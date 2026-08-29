@@ -8,6 +8,11 @@
 # nameOverride: ""
 # fullnameOverride: ""
 
+# Two replicas are correct for the default configuration. If you enable the
+# gateway's `server.modern_protocol` switch, set this to 1 until MIK-7312 lands: the
+# consumed-continuation ledger and the mint counter are process-local, so a second
+# replica can spend one continuation twice. See docs/DEPLOYMENT.md, "Replica Count
+# and `server.modern_protocol`".
 replicaCount: 2
 
 image:

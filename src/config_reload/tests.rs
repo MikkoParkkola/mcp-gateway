@@ -1891,3 +1891,627 @@ fn a_retargeted_symlink_is_matched_at_its_new_target() {
     );
     assert!(super::is_config_event_for(&event, &link));
 }
+
+// -------------------------------------------------------------------------
+// MIK-7256 — env files on a failed load (§P2 failing tests)
+//
+// Rows from `docs/design/mik-7256-test-plan.md`, against the design in
+// `docs/design/mik-7256-env-files-on-a-failed-load.md`. The design's types do
+// not exist yet, so these fail to COMPILE until implementation lands.
+//
+// Seam naming: the design requires that expansion reach its home "through an
+// injected resolver rather than calling `dirs::home_dir()` inline"
+// (design:314-315) without naming it. These tests name it
+// `config::HomeResolver`, `fn home_dir(&self, so_far: &EnvOverlay) ->
+// Option<PathBuf>`. `so_far` is load-bearing: startup applies each file before
+// expanding the next, so a resolver blind to the overlay under construction
+// cannot reproduce production's sequential semantics — the property 19c pins.
+// -------------------------------------------------------------------------
+
+use crate::config::{EnvOverlay, Evaluated, HomeResolver, LiveEnv};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// A home resolver that answers exactly as production does — the overlay under
+/// construction first, `dirs::home_dir()` otherwise — while recording what it
+/// returned on each call and REFUSING to answer once startup has completed.
+///
+/// The refusal is the mechanism. An outcome assertion cannot tell a
+/// single-resolution implementation from one that resolves a second time and
+/// agrees with itself; a resolver that cannot be called at all can.
+struct RecordingHome {
+    calls: Mutex<Vec<std::path::PathBuf>>,
+    startup_done: AtomicBool,
+}
+
+impl RecordingHome {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            startup_done: AtomicBool::new(false),
+        }
+    }
+
+    /// After this, any further call is a design violation and panics.
+    fn finish_startup(&self) {
+        self.startup_done.store(true, Ordering::SeqCst);
+    }
+
+    /// The homes handed out, in the order they were handed out.
+    fn recorded(&self) -> Vec<std::path::PathBuf> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl HomeResolver for RecordingHome {
+    fn home_dir(&self, so_far: &EnvOverlay) -> Option<std::path::PathBuf> {
+        assert!(
+            !self.startup_done.load(Ordering::SeqCst),
+            "the home resolver was called after startup completed: the design \
+             resolves `~` exactly once, at startup"
+        );
+        // Same computation production performs, at the same point in the
+        // sequence: the overlay built so far, then the platform's own answer.
+        let home = so_far
+            .resolve("HOME")
+            .filter(|h| !h.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(dirs::home_dir);
+        if let Some(ref h) = home {
+            self.calls.lock().unwrap().push(h.clone());
+        }
+        home
+    }
+}
+
+/// Writes `contents` to `dir/name` and returns the path.
+fn env_file(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, contents).unwrap();
+    path
+}
+
+/// A config file naming `entries` as its `env_files`, verbatim.
+fn config_naming_env_files(dir: &std::path::Path, entries: &[&str]) -> std::path::PathBuf {
+    let mut yaml = String::from("env_files:\n");
+    for e in entries {
+        yaml.push_str(&format!("  - \"{e}\"\n"));
+    }
+    let path = dir.join("gateway.yaml");
+    std::fs::write(&path, yaml).unwrap();
+    path
+}
+
+/// Startup as the gateway performs it, through an injected home.
+fn startup_through(cfg: &std::path::Path, home: &dyn HomeResolver) -> Evaluated {
+    Config::load_evaluated_with_home(Some(cfg), home).unwrap()
+}
+
+/// A reload context carrying the environment startup published — the shape the
+/// design requires, so that a reload takes the recorded `ResolvedEnvFiles`
+/// instead of resolving `config.env_files` itself.
+fn reload_context_with_env(cfg: &std::path::Path, startup: &Evaluated) -> ReloadContext {
+    test_reload_context(cfg).with_env(Arc::new(LiveEnv::new(
+        startup.overlay.clone(),
+        startup.env_paths.clone(),
+    )))
+}
+
+/// ENVFILE.19c — two `~/...` entries where the FIRST sets `HOME` to a second
+/// temp dir.
+///
+/// The ORDERING of the assertions is the test. Agreement between consumers is
+/// not enough on its own: an implementation that resolves the whole list up
+/// front before applying anything makes all three consumers agree — on the
+/// wrong second path — and passes an agreement-only check while silently
+/// changing which file a restart reads. Asserting each path's home FIRST pins
+/// startup's sequential semantics; asserting reuse SECOND pins the single
+/// resolution.
+#[tokio::test]
+async fn envfile_19c_startup_resolves_each_entry_under_the_home_in_force_then_the_reload_reuses_them()
+ {
+    // GIVEN: two homes; the file in the first ASSIGNS `HOME` to the second
+    let home_a = tempfile::tempdir().unwrap();
+    let home_b = tempfile::tempdir().unwrap();
+    env_file(
+        home_a.path(),
+        "one.env",
+        &format!(
+            "HOME={}\nMCP_GW_TEST_ENVFILE19C_ONE=from-one\n",
+            home_b.path().display()
+        ),
+    );
+    let two = env_file(
+        home_b.path(),
+        "two.env",
+        "MCP_GW_TEST_ENVFILE19C_TWO=from-two\n",
+    );
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg = config_naming_env_files(cfg_dir.path(), &["~/one.env", "~/two.env"]);
+
+    // WHEN: startup runs, resolving through a recording home
+    let home = RecordingHome::new();
+    let startup = startup_through(&cfg, &home);
+    let recorded = home.recorded();
+
+    // THEN, FIRST: each entry was resolved under the home reported at the moment
+    // that entry was applied — the expected values computed the same way
+    // production does, at the same point in the sequence.
+    assert_eq!(
+        recorded.len(),
+        2,
+        "one home resolution per `~` entry, in sequence"
+    );
+    let expected = vec![recorded[0].join("one.env"), recorded[1].join("two.env")];
+    assert_eq!(
+        startup.env_paths.as_paths(),
+        expected.as_slice(),
+        "each entry must be resolved under the home in force when it was applied"
+    );
+
+    // The discriminating half. Named limitation, not a hidden one: the oracle is
+    // "the home in force when that entry was applied", because `dirs::home_dir()`
+    // consults `HOME` only where the platform says so. On Windows it reads a
+    // known folder and ignores `HOME` entirely, so file one cannot move entry two
+    // and the two expected paths coincide — there the row keeps the reuse and
+    // watcher assertions and loses its power to separate sequential from
+    // up-front resolution, because there the two ARE the same computation.
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            recorded[0],
+            home_a.path(),
+            "entry one resolves under the home in force before any file applied"
+        );
+        assert_eq!(
+            recorded[1],
+            home_b.path(),
+            "entry two resolves under the home file one assigned — an \
+             implementation that resolves the whole list up front lands here on \
+             home_a and reads a file nothing watches"
+        );
+        assert_eq!(expected[1], two, "entry two is the file under the new home");
+    }
+
+    // THEN, SECOND: the reload opens those same two paths, and cannot resolve
+    // again — the resolver refuses every call from here on.
+    home.finish_startup();
+    let ctx = reload_context_with_env(&cfg, &startup);
+    ctx.reload_outcome().await.unwrap();
+    assert_eq!(
+        ctx.env_paths().as_paths(),
+        expected.as_slice(),
+        "a reload must open the paths startup recorded"
+    );
+
+    // AND: the watcher is bound to those same paths.
+    //
+    // Limitation stated rather than approximated: nothing exposes the registered
+    // watch list, so this asserts through the same matcher the watcher uses.
+    for path in &expected {
+        let event = notify::Event {
+            kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            paths: vec![path.clone()],
+            attrs: EventAttributes::default(),
+        };
+        assert_eq!(
+            super::matching_env_file(&event, ctx.env_paths().as_paths()),
+            Some(path.clone()),
+            "the watcher must be bound to the recorded path {}",
+            path.display()
+        );
+    }
+}
+
+/// ENVFILE.19e — a `~/...` entry, and a reload whose env files set `HOME` to a
+/// different directory.
+///
+/// The only case that separates REPORTING the self-relocation from
+/// RE-RESOLVING it. It can fail two ways: an implementation that reports
+/// nothing leaves a running gateway silently disagreeing with its own restart,
+/// and one that reports by resolving the entry a second time reintroduces
+/// exactly the rule this design deleted. The injected resolver makes the second
+/// failure mode UNREACHABLE rather than merely unobserved — asserting the
+/// recorded path is still opened leaves an implementation free to resolve a
+/// second time for the sole purpose of deciding the warning, agree with itself,
+/// and pass.
+#[tokio::test]
+async fn envfile_19e_a_reload_assigning_home_reports_restart_required_without_resolving_again() {
+    // GIVEN: a home with a `~/...` env file, running
+    let home_a = tempfile::tempdir().unwrap();
+    let home_b = tempfile::tempdir().unwrap();
+    let recorded_path = env_file(
+        home_a.path(),
+        "rot.env",
+        "MCP_GW_TEST_ENVFILE19E_KEY=startup-value\n",
+    );
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg = config_naming_env_files(cfg_dir.path(), &["~/rot.env"]);
+
+    let home = RecordingHome::new();
+    let startup = startup_through(&cfg, &home);
+    assert_eq!(startup.env_paths.as_paths(), &[recorded_path.clone()]);
+
+    // WHEN: the env file is rewritten to assign `HOME` elsewhere, and reloaded
+    home.finish_startup();
+    std::fs::write(
+        &recorded_path,
+        format!(
+            "HOME={}\nMCP_GW_TEST_ENVFILE19E_KEY=rotated-value\n",
+            home_b.path().display()
+        ),
+    )
+    .unwrap();
+
+    let ctx = reload_context_with_env(&cfg, &startup);
+    let outcome = ctx.reload_outcome().await.unwrap();
+
+    // THEN: the outcome is restart-required and NAMES `HOME`
+    assert!(
+        outcome.restart_required,
+        "a `HOME` assignment against a `~` entry moves where a restart would \
+         read: outcome was {outcome:?}"
+    );
+    assert!(
+        outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+        "the report must name HOME; got {:?}",
+        outcome.pending_restart_fields
+    );
+
+    // AND: the overlay still reads the path startup recorded. The resolver
+    // refuses every call from `finish_startup` on, so a second resolution is
+    // impossible rather than merely unobserved — this assertion holds because
+    // the fixture enforces the design's one-resolution rule, not because an
+    // outcome happened to agree with itself.
+    assert_eq!(
+        ctx.env_paths().as_paths(),
+        &[recorded_path],
+        "the running gateway keeps the path it recorded at startup"
+    );
+    assert_eq!(
+        ctx.live_env()
+            .get()
+            .resolve("MCP_GW_TEST_ENVFILE19E_KEY")
+            .as_deref(),
+        Some("rotated-value"),
+        "the rotation still applies to the file the gateway actually reads"
+    );
+}
+
+/// ENVFILE.19f — the two halves of the conjunction, held apart.
+///
+/// 19e is satisfied by an implementation that treats ANY `HOME` assignment as
+/// restart-required, which would tell operators to restart for a change that
+/// moves nothing they read. The rule is the CONJUNCTION — a `HOME` ASSIGNMENT
+/// and an entry whose spelling depends on it — and only a negative can hold the
+/// two halves apart.
+///
+/// The second case is stated as NO assignment rather than an assignment of the
+/// same value on purpose: the design triggers the notice on assignment, not on
+/// value, because the value a restart would resolve against is not knowable
+/// from the reload. A row phrased "HOME does not change" would read as licence
+/// to suppress the notice for a same-value assignment, which is the one place
+/// that rule must not bend.
+#[tokio::test]
+async fn envfile_19f_neither_half_of_the_conjunction_alone_is_restart_required_on_home() {
+    // CASE 1: a `HOME` assignment, and NO `~/...` entry anywhere in `env_files`
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let path = env_file(dir.path(), "plain.env", "MCP_GW_TEST_ENVFILE19F_A=one\n");
+        let cfg = config_naming_env_files(dir.path(), &[&path.to_string_lossy()]);
+
+        let home = RecordingHome::new();
+        let startup = startup_through(&cfg, &home);
+        home.finish_startup();
+
+        std::fs::write(
+            &path,
+            format!(
+                "HOME={}\nMCP_GW_TEST_ENVFILE19F_A=two\n",
+                elsewhere.path().display()
+            ),
+        )
+        .unwrap();
+
+        let outcome = reload_context_with_env(&cfg, &startup)
+            .reload_outcome()
+            .await
+            .unwrap();
+
+        // Asserted on the field list rather than on `restart_required`: another
+        // tracked section may legitimately set the boolean, and a test that
+        // failed on it would be failing for the wrong reason.
+        assert!(
+            !outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+            "no `~` entry depends on HOME, so its assignment moves nothing; got {:?}",
+            outcome.pending_restart_fields
+        );
+    }
+
+    // CASE 2: a `~/...` entry, and NO `HOME` assignment at all
+    {
+        let home_dir = tempfile::tempdir().unwrap();
+        let recorded_path = env_file(home_dir.path(), "rot.env", "MCP_GW_TEST_ENVFILE19F_B=one\n");
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let cfg = config_naming_env_files(cfg_dir.path(), &["~/rot.env"]);
+
+        let home = RecordingHome::new();
+        let startup = startup_through(&cfg, &home);
+        home.finish_startup();
+
+        std::fs::write(&recorded_path, "MCP_GW_TEST_ENVFILE19F_B=two\n").unwrap();
+
+        let outcome = reload_context_with_env(&cfg, &startup)
+            .reload_outcome()
+            .await
+            .unwrap();
+
+        assert!(
+            !outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+            "nothing assigned HOME, so nothing moved; got {:?}",
+            outcome.pending_restart_fields
+        );
+    }
+}
+
+/// ENVFILE.6b — a key that genuinely cannot be applied to a running process.
+///
+/// Retargeted: `MCP_GATEWAY_PORT` is applied live by `EffectiveEnv`, so the warn
+/// this row once asserted described a lag the design removed. What survives the
+/// removal is the half that still binds — #439's no-values rule must not be
+/// reintroduced by this change's own reporting.
+#[tokio::test]
+async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value() {
+    const KEY: &str = "MCP_GW_TEST_ENVFILE6B_TOKEN";
+    const OLD: &str = "s3cr3t-6b-old-4a91f2";
+    const NEW: &str = "s3cr3t-6b-new-7c30bd";
+
+    // GIVEN: a bearer token supplied by an env file. `ResolvedAuthConfig` is
+    // built once at startup and nothing rebuilds it, so this key cannot be
+    // applied to the running process.
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = env_file(dir.path(), "auth.env", &format!("{KEY}={OLD}\n"));
+    let cfg = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "env_files:\n  - \"{}\"\nauth:\n  enabled: true\n  bearer_token: \"env:{KEY}\"\n",
+            env_path.display()
+        ),
+    )
+    .unwrap();
+
+    let home = RecordingHome::new();
+    let startup = startup_through(&cfg, &home);
+    home.finish_startup();
+
+    // WHEN: the env file rotates the value and the reload is accepted
+    std::fs::write(&env_path, format!("{KEY}={NEW}\n")).unwrap();
+    let outcome = reload_context_with_env(&cfg, &startup)
+        .reload_outcome()
+        .await
+        .unwrap();
+
+    // THEN: the report names the key
+    assert!(
+        outcome.restart_required,
+        "a startup-only holder cannot take the new value: {outcome:?}"
+    );
+    let report = format!("{} {:?}", outcome.changes, outcome.pending_restart_fields);
+    assert!(
+        report.contains(KEY),
+        "the report must name the key that needs a restart; got {report}"
+    );
+
+    // AND: neither the old nor the new value appears anywhere in it
+    assert!(
+        !report.contains(OLD),
+        "the report leaked the OLD value; got {report}"
+    );
+    assert!(
+        !report.contains(NEW),
+        "the report leaked the NEW value; got {report}"
+    );
+    let serialized = serde_json::to_string(&outcome).unwrap();
+    assert!(
+        !serialized.contains(OLD) && !serialized.contains(NEW),
+        "the serialized outcome leaked a value; got {serialized}"
+    );
+}
+
+/// The malformed line every 6c case uses. Carries a value so the no-secrets half
+/// of the assertion has something to catch: a malformed line in a credential
+/// file is a credential.
+const ENVFILE_6C_BAD_VALUE: &str = "s3cr3t-6c-leaked-91bf0e";
+
+fn envfile_6c_file(dir: &std::path::Path) -> std::path::PathBuf {
+    env_file(
+        dir,
+        "broken.env",
+        &format!("MCP_GW_TEST_ENVFILE6C_OK=fine\nthis is not a pair {ENVFILE_6C_BAD_VALUE}\n"),
+    )
+}
+
+/// Asserts the shared shape of a 6c diagnostic: names the file, the line number
+/// and the category, and echoes neither the offending line nor its value.
+fn assert_6c_diagnostic(diagnostic: &str, path: &std::path::Path) {
+    assert!(
+        diagnostic.contains(&*path.to_string_lossy()),
+        "the diagnostic must name the file; got {diagnostic}"
+    );
+    assert!(
+        diagnostic.contains('2'),
+        "the diagnostic must name the line number; got {diagnostic}"
+    );
+    assert!(
+        diagnostic.to_lowercase().contains("parse"),
+        "the diagnostic must name the category; got {diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains(ENVFILE_6C_BAD_VALUE),
+        "the diagnostic leaked a value from the offending line; got {diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains("this is not a pair"),
+        "the diagnostic echoed the offending line; got {diagnostic}"
+    );
+}
+
+/// ENVFILE.6c, startup half — the no-secrets rule had no case at either entry
+/// point, so a diagnostic that echoed the line to be helpful would have shipped.
+#[test]
+fn envfile_6c_a_malformed_line_at_startup_names_file_line_and_category_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = envfile_6c_file(dir.path());
+    let cfg = config_naming_env_files(dir.path(), &[&env_path.to_string_lossy()]);
+
+    let err = Config::load_evaluated(Some(&cfg))
+        .expect_err("a malformed env file must not load silently");
+    assert_6c_diagnostic(&err.to_string(), &env_path);
+}
+
+/// ENVFILE.6c, reload half — same rule at the other entry point. A reload that
+/// cannot parse its env files is rejected and the previous overlay stands.
+#[tokio::test]
+async fn envfile_6c_a_malformed_line_on_a_reload_names_file_line_and_category_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = env_file(dir.path(), "broken.env", "MCP_GW_TEST_ENVFILE6C_OK=fine\n");
+    let cfg = config_naming_env_files(dir.path(), &[&env_path.to_string_lossy()]);
+
+    let home = RecordingHome::new();
+    let startup = startup_through(&cfg, &home);
+    home.finish_startup();
+
+    // WHEN: the file becomes unparseable and a reload runs
+    envfile_6c_file(dir.path());
+    let ctx = reload_context_with_env(&cfg, &startup);
+    let err = ctx
+        .reload_outcome()
+        .await
+        .expect_err("a reload whose env files do not parse must be rejected");
+    assert_6c_diagnostic(&err, &env_path);
+
+    // AND: the previous overlay stands
+    assert_eq!(
+        ctx.live_env()
+            .get()
+            .resolve("MCP_GW_TEST_ENVFILE6C_OK")
+            .as_deref(),
+        Some("fine"),
+        "a rejected reload leaves the overlay in force untouched"
+    );
+}
+
+/// ENVFILE.10c — the four auth forms of .10a on an accepted reload, over a
+/// config patch that is BYTE-IDENTICAL to the running config, so the only change
+/// is the env file's value.
+///
+/// Asserts the NARROWING rather than the capability. A single criterion
+/// previously asserted .10b's outcome for all five, which the source check
+/// disproved: `ResolvedAuthConfig::try_from_config` runs once at startup and
+/// nothing rebuilds it. The byte-identical patch is what makes the case able to
+/// fail: with any auth FIELD edited, the tracked-section reporting that already
+/// exists reports a restart on its own, so the criterion went green while the
+/// env-file-only rotation it exists to catch went unreported.
+#[tokio::test]
+async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_only_key() {
+    // The four forms funnelled through `validate_env_reference`
+    // (`src/config/mod.rs:627,630,637,645`).
+    let forms: [(&str, &str); 4] = [
+        (
+            "MCP_GW_TEST_ENVFILE10C_BEARER",
+            "auth:\n  enabled: true\n  bearer_token: \"env:MCP_GW_TEST_ENVFILE10C_BEARER\"\n",
+        ),
+        (
+            "MCP_GW_TEST_ENVFILE10C_APIKEY",
+            "auth:\n  enabled: true\n  api_keys:\n    - name: k\n      key: \"env:MCP_GW_TEST_ENVFILE10C_APIKEY\"\n",
+        ),
+        (
+            "MCP_GW_TEST_ENVFILE10C_HS256",
+            "agent_auth:\n  enabled: true\n  agents:\n    - id: a\n      hs256_secret: \"env:MCP_GW_TEST_ENVFILE10C_HS256\"\n",
+        ),
+        (
+            "MCP_GW_TEST_ENVFILE10C_ADMIN",
+            "key_server:\n  enabled: true\n  admin_token: \"env:MCP_GW_TEST_ENVFILE10C_ADMIN\"\n",
+        ),
+    ];
+
+    for (key, section) in forms {
+        let old = format!("s3cr3t-10c-{key}-old");
+        let new = format!("s3cr3t-10c-{key}-new");
+
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = env_file(dir.path(), "secrets.env", &format!("{key}={old}\n"));
+        let cfg = dir.path().join("gateway.yaml");
+        let yaml = format!("env_files:\n  - \"{}\"\n{section}", env_path.display());
+        std::fs::write(&cfg, &yaml).unwrap();
+
+        let home = RecordingHome::new();
+        let startup = startup_through(&cfg, &home);
+        home.finish_startup();
+
+        // The holder, built once at startup, exactly as the gateway builds it.
+        let holder =
+            crate::gateway::auth::ResolvedAuthConfig::try_from_config(&startup.config.auth)
+                .unwrap();
+
+        // WHEN: only the env file's value changes. The config file is rewritten
+        // BYTE-IDENTICALLY, so the tracked-section reporting that already exists
+        // has nothing of its own to report — the rotation is the whole change.
+        std::fs::write(&cfg, &yaml).unwrap();
+        std::fs::write(&env_path, format!("{key}={new}\n")).unwrap();
+
+        let ctx = reload_context_with_env(&cfg, &startup);
+        let outcome = ctx.reload_outcome().await.unwrap();
+
+        // THEN: the outcome reports `restart_required` and names the changed key
+        assert!(
+            outcome.restart_required,
+            "{key}: a startup-only holder cannot take the rotation: {outcome:?}"
+        );
+        let report = format!("{} {:?}", outcome.changes, outcome.pending_restart_fields);
+        assert!(
+            report.contains(key),
+            "{key}: the report must name the changed key; got {report}"
+        );
+        assert!(
+            !report.contains(&old) && !report.contains(&new),
+            "{key}: the report leaked a value; got {report}"
+        );
+
+        // AND: the resolved holder still carries the STARTUP value.
+        //
+        // Asserted through `ResolvedAuthConfig` for the two forms it owns. The
+        // `agent_auth` and `key_server` forms have no separately reachable
+        // resolved holder in this crate's test surface; for those two this case
+        // asserts the outcome half only, and the holder half rides on the same
+        // mechanism (nothing rebuilds a startup-resolved holder). Stated rather
+        // than approximated.
+        if key.ends_with("BEARER") {
+            assert_eq!(
+                holder.bearer_token.as_deref(),
+                Some(old.as_str()),
+                "{key}: the running holder must keep the startup value"
+            );
+        } else if key.ends_with("APIKEY") {
+            assert_eq!(
+                holder.api_keys.first().map(|k| k.key.as_str()),
+                Some(old.as_str()),
+                "{key}: the running holder must keep the startup value"
+            );
+        }
+
+        // AND: the rotation itself did reach the overlay — the report is about a
+        // holder that cannot take it, not about a publish that never happened.
+        assert_eq!(
+            ctx.live_env().get().resolve(key).as_deref(),
+            Some(new.as_str()),
+            "{key}: the accepted reload must publish the rotated value"
+        );
+    }
+}
