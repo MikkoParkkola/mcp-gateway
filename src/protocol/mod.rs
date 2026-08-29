@@ -13,6 +13,7 @@ pub mod meta;
 pub mod mrtr;
 mod negotiate;
 pub mod subscriptions;
+pub mod tasks;
 pub mod trace;
 mod types;
 
