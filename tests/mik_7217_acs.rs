@@ -523,3 +523,122 @@ mod era {
         assert_eq!(classify(&ProbeOutcome::Result(json!({}))), Era::Legacy);
     }
 }
+
+// ===========================================================================
+// MIK-7217.DISCOVER.5 — era determination MUST be cached per backend for the
+// lifetime of the process, and MUST be re-probed when a cached assumption
+// fails.
+//
+// Tests written before the implementation. The probe counter is the assertion,
+// never elapsed time: a cache that is merely slow would pass a timing test, and
+// timing tests are the classic flake.
+// ===========================================================================
+
+mod era_cache {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use mcp_gateway::protocol::era::{Era, EraCache, ProbeOutcome};
+    use serde_json::json;
+
+    fn modern_doc() -> ProbeOutcome {
+        ProbeOutcome::Result(json!({
+            "protocolVersions": ["2026-07-28"],
+            "capabilities": {},
+            "serverInfo": { "name": "peer", "version": "1.0.0" }
+        }))
+    }
+
+    #[tokio::test]
+    async fn ac_discover_5_era_is_probed_once_and_reused() {
+        // GIVEN: a peer whose era has never been determined
+        let cache = EraCache::new();
+        let probes = Arc::new(AtomicUsize::new(0));
+
+        // WHEN: the era is resolved twice
+        for _ in 0..2 {
+            let probes = Arc::clone(&probes);
+            let era = cache
+                .resolve_with(|| async move {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    modern_doc()
+                })
+                .await;
+            assert_eq!(era, Era::Modern);
+        }
+
+        // THEN: the peer was probed once
+        //
+        // Counting probes, not measuring time. The specification says a client
+        // SHOULD cache for the lifetime of the server process; a cache that
+        // re-probes on every call satisfies nothing and would still look fast.
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            1,
+            "the era must be determined once and reused"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_discover_5_a_failed_assumption_forces_a_re_probe() {
+        // GIVEN: a peer cached as modern
+        let cache = EraCache::new();
+        let probes = Arc::new(AtomicUsize::new(0));
+        let counted = || {
+            let c = Arc::clone(&probes);
+            || async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                modern_doc()
+            }
+        };
+        assert_eq!(cache.resolve_with(counted()).await, Era::Modern);
+
+        // WHEN: acting on that assumption fails, and the caller says so
+        cache.invalidate().await;
+
+        // THEN: the next resolution probes again rather than trusting a belief
+        // that has already been contradicted
+        assert_eq!(cache.resolve_with(counted()).await, Era::Modern);
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            2,
+            "an invalidated era must be re-probed, not re-asserted"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_discover_5_concurrent_resolution_probes_once() {
+        // GIVEN: two callers racing on a peer whose era is unknown — the shape
+        // warm-start produces, since several tasks touch a backend at once
+        let cache = Arc::new(EraCache::new());
+        let probes = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let cache = Arc::clone(&cache);
+            let probes = Arc::clone(&probes);
+            handles.push(tokio::spawn(async move {
+                cache
+                    .resolve_with(|| async move {
+                        probes.fetch_add(1, Ordering::SeqCst);
+                        // Yield so the race is real rather than serialised by
+                        // the scheduler happening to finish each probe first.
+                        tokio::task::yield_now().await;
+                        modern_doc()
+                    })
+                    .await
+            }));
+        }
+        for h in handles {
+            assert_eq!(h.await.expect("task must not panic"), Era::Modern);
+        }
+
+        // THEN: the peer was probed once, not eight times. A cache that only
+        // checks after probing turns one cold backend into a thundering herd.
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            1,
+            "concurrent resolution must collapse onto one probe"
+        );
+    }
+}

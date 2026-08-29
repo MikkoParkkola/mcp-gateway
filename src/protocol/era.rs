@@ -85,3 +85,68 @@ pub fn classify(outcome: &ProbeOutcome) -> Era {
         _ => Era::Legacy,
     }
 }
+
+/// One peer's era, determined once and reused.
+///
+/// The specification says a client **SHOULD** cache the era for the lifetime of
+/// the server process, and re-probe if the cached assumption later fails. Two
+/// properties matter beyond "remember the answer":
+///
+/// * **Concurrent resolution collapses onto one probe.** Warm-start touches a
+///   backend from several tasks at once, and a cache that only writes *after*
+///   probing turns one cold backend into a thundering herd against a peer that
+///   is, by hypothesis, already struggling.
+/// * **Invalidation is explicit.** The era is a belief about another process;
+///   when acting on it fails, the belief is discarded rather than re-asserted.
+#[derive(Debug, Default)]
+pub struct EraCache {
+    /// `None` until determined. Held across an await, so a `tokio` lock rather
+    /// than a `std` one — the probe happens under it, which is what makes eight
+    /// racing callers issue one probe instead of eight.
+    era: tokio::sync::Mutex<Option<Era>>,
+}
+
+impl EraCache {
+    /// A cache holding no determination yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The era, if one has been determined and not since invalidated.
+    pub async fn cached(&self) -> Option<Era> {
+        *self.era.lock().await
+    }
+
+    /// Discard the determination, so the next resolution probes again.
+    ///
+    /// Called when acting on the cached era fails — a modern peer that starts
+    /// rejecting modern requests has been restarted or downgraded, and the
+    /// belief is stale rather than merely unlucky.
+    ///
+    /// Async, and it waits for the lock. A `try_lock` version was written first
+    /// and is the wrong shape: under contention it would silently do nothing,
+    /// leaving the caller believing it had discarded a belief it had not. A
+    /// control that fails silently is worse than one that blocks briefly.
+    pub async fn invalidate(&self) {
+        *self.era.lock().await = None;
+    }
+
+    /// Return the cached era, or determine it by probing.
+    ///
+    /// The probe runs while the lock is held. That is deliberate: it serialises
+    /// concurrent resolution onto a single probe, which is the point.
+    pub async fn resolve_with<F, Fut>(&self, probe: F) -> Era
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ProbeOutcome>,
+    {
+        let mut guard = self.era.lock().await;
+        if let Some(era) = *guard {
+            return era;
+        }
+        let era = classify(&probe().await);
+        *guard = Some(era);
+        era
+    }
+}
