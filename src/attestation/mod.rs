@@ -50,5 +50,5 @@ pub use validator::{
 };
 pub use wiring::{
     ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV, ATTESTATION_SIGNING_KEY_ENV,
-    attestation_wiring_from_env, resolve_attestation_wiring,
+    attestation_wiring_from_overlay, resolve_attestation_wiring,
 };

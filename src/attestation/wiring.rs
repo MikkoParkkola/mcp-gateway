@@ -107,16 +107,22 @@ pub fn resolve_attestation_wiring(
     Some((validator, mode))
 }
 
-/// Read the attestation wiring from the process environment.
+/// Resolve the attestation wiring from an env overlay.
 ///
 /// Thin wrapper over [`resolve_attestation_wiring`] reading
 /// [`ATTESTATION_MODE_ENV`], [`ATTESTATION_SIGNING_KEY_ENV`], and
-/// [`ATTESTATION_KEY_ID_ENV`]. With no env set the default is observe.
+/// [`ATTESTATION_KEY_ID_ENV`]. With nothing set the default is observe.
+///
+/// Reads the overlay, not `std::env`: env files load into an in-memory overlay
+/// rather than into the process environment, so a process-environment read
+/// cannot see a mode or a signing key an env file assigns.
 #[must_use]
-pub fn attestation_wiring_from_env() -> Option<(Arc<AttestationValidator>, AttestationMode)> {
-    let mode = std::env::var(ATTESTATION_MODE_ENV).ok();
-    let key = std::env::var(ATTESTATION_SIGNING_KEY_ENV).ok();
-    let key_id = std::env::var(ATTESTATION_KEY_ID_ENV).ok();
+pub fn attestation_wiring_from_overlay(
+    env: &crate::config::EnvOverlay,
+) -> Option<(Arc<AttestationValidator>, AttestationMode)> {
+    let mode = env.resolve(ATTESTATION_MODE_ENV);
+    let key = env.resolve(ATTESTATION_SIGNING_KEY_ENV);
+    let key_id = env.resolve(ATTESTATION_KEY_ID_ENV);
     resolve_attestation_wiring(
         mode.as_deref(),
         key.as_deref().map(str::as_bytes),
@@ -127,6 +133,25 @@ pub fn attestation_wiring_from_env() -> Option<(Arc<AttestationValidator>, Attes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_from_an_env_file_reaches_the_wiring() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        std::fs::write(&env_file, "GATEWAY_ATTESTATION_MODE=off\n").unwrap();
+        let overlay =
+            crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+
+        assert!(
+            attestation_wiring_from_overlay(&overlay).is_none(),
+            "`off` in an env file must attach no validator"
+        );
+        assert!(
+            attestation_wiring_from_overlay(&crate::config::EnvOverlay::none()).is_some(),
+            "with nothing set the default posture still attaches one"
+        );
+        assert!(std::env::var(ATTESTATION_MODE_ENV).is_err());
+    }
 
     #[test]
     fn default_unset_is_observe_with_validator() {
