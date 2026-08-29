@@ -352,10 +352,16 @@ reader:
   three is a rule this change has no reason to own. Resolving once is right
   about all three by construction, because there is no second resolution to be
   right about.
-  The residual is the same boundary the list already has: a `~/...` path whose
-  resolution WOULD move — because an env file now sets a different `HOME` —
-  does not move until a restart, exactly as a path ADDED to `env_files` does
-  not take effect until a restart. Both are reported, neither is silent. A missing path is skipped. A parse error
+  The residual, stated rather than hidden: a `~/...` path whose resolution
+  WOULD move — because an env file now sets a different `HOME` — keeps
+  resolving where startup put it, and unlike an ADDED path (MIK.ENVFILE.11)
+  nothing reports it, because reporting it means computing the second
+  resolution this rule exists to avoid. A restart picks it up. Accepted: the
+  case needs an operator to relocate `HOME` from inside a file the gateway
+  reads through `HOME`, and paying for it with a rule that was wrong three
+  times is the worse trade.
+
+  A missing path is skipped. A parse error
   ENDS that file at the offending line, keeping the pairs before it and taking
   none after it, then moves to the next file with a warning — byte-for-byte the
   behaviour of `load_env_files_from_paths` today, which calls
