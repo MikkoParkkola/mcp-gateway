@@ -154,8 +154,18 @@ impl EraCache {
         if let Some(era) = *guard {
             return era;
         }
-        let era = classify(&probe().await);
-        *guard = Some(era);
+        let outcome = probe().await;
+        let era = classify(&outcome);
+
+        // Silence is not a finding. `classify` answers Legacy for a probe that
+        // never came back, which is the right way to *treat* the next request
+        // and the wrong thing to *remember*: a backend briefly unreachable
+        // would be pinned to the legacy path for the life of the process, and
+        // a dual-era peer that recovered would never be spoken to properly
+        // again. Cache only what the peer actually told us.
+        if !matches!(outcome, ProbeOutcome::NoAnswer) {
+            *guard = Some(era);
+        }
         era
     }
 }
@@ -167,6 +177,16 @@ impl EraCache {
 /// direction would send a request the peer may not understand; guessing legacy
 /// costs a handshake. The cheap error is the right one.
 fn names_a_modern_version(doc: &serde_json::Value) -> bool {
+    // A discovery document, not merely an object with a familiar key. An
+    // unrelated result that happens to carry `supportedVersions` is not a peer
+    // announcing this revision, and reading one as such would send a modern
+    // request to something that never claimed to be a modern server.
+    if !doc
+        .get("capabilities")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        return false;
+    }
     doc.get("supportedVersions")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|versions| {

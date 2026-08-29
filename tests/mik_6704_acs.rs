@@ -29,7 +29,8 @@ fn request_claiming_to_be(name: &str) -> serde_json::Value {
 #[test]
 fn ac_ident_1_client_info_is_carried_but_is_not_an_identity() {
     // It parses. It is available. It is a string the caller chose.
-    let RequestShape::Modern(fields) = classify_request(Some(&request_claiming_to_be("admin")), None)
+    let RequestShape::Modern(fields) =
+        classify_request(Some(&request_claiming_to_be("admin")), None)
     else {
         panic!("a request carrying the protocol fields is modern");
     };

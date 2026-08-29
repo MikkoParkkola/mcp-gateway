@@ -41,6 +41,14 @@ pub struct RetryFields {
     /// assume anything about it. For this gateway it is its own sealed
     /// envelope, which is why nothing here tries to read it.
     pub request_state: Option<String>,
+    /// Fields that were present and unusable, named so a caller can refuse.
+    ///
+    /// Without this the two fields failed differently for the same mistake: a
+    /// malformed `inputResponses` was carried through as a retry, while a
+    /// malformed `requestState` vanished and the call became a fresh one. A
+    /// retry that silently becomes a fresh call is how one side effect becomes
+    /// two.
+    pub malformed: Vec<&'static str>,
 }
 
 impl RetryFields {
@@ -50,8 +58,27 @@ impl RetryFields {
         let Some(params) = params else {
             return Self::default();
         };
+        let mut malformed = Vec::new();
+
+        // An object keyed by the identifiers the server asked with. Anything
+        // else is a client that did not answer the question it was asked.
+        let input_responses = match params.get("inputResponses") {
+            None => None,
+            Some(value) if value.is_object() => Some(value.clone()),
+            Some(_) => {
+                malformed.push("inputResponses");
+                None
+            }
+        };
+        if params
+            .get("requestState")
+            .is_some_and(|value| !value.is_string())
+        {
+            malformed.push("requestState");
+        }
+
         Self {
-            input_responses: params.get("inputResponses").cloned(),
+            input_responses,
             // Only a string. A client sending an object has not echoed the
             // state it was given, and coercing it would put a shape the gateway
             // invented where the backend's own opaque value belongs.
@@ -59,7 +86,17 @@ impl RetryFields {
                 .get("requestState")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            malformed,
         }
+    }
+
+    /// Whether the call carried a retry field it could not use.
+    ///
+    /// Distinct from `is_retry`: a malformed retry is not a fresh call, and
+    /// treating it as one repeats whatever the first attempt already did.
+    #[must_use]
+    pub fn is_malformed(&self) -> bool {
+        !self.malformed.is_empty()
     }
 
     /// Whether this call continues an earlier one.

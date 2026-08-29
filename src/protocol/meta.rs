@@ -56,7 +56,17 @@ pub struct RequestFields {
     pub protocol_version: String,
     /// What the client declared it can receive. A server **MUST NOT** rely on a
     /// capability absent from here.
-    pub client_capabilities: Value,
+    ///
+    /// Names rather than the subtree they came from. Every consumer asks the
+    /// same question — was this capability declared — and keeping the whole
+    /// `clientCapabilities` value to answer it copied an attacker-sized,
+    /// arbitrarily deep object out of every request, on a path that runs before
+    /// anything has decided the request is even wanted.
+    ///
+    /// A null value is not a declaration: the specification's rule is that a
+    /// server may not rely on what was not declared, and explicitly-absent is
+    /// still absent.
+    pub declared_capabilities: Vec<String>,
     /// The client's self-reported name, for logs and displays.
     ///
     /// **Never an authorization input.** The specification says clients *SHOULD
@@ -158,7 +168,7 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
     // Present but unusable is not satisfied. The required-field check above
     // asks only whether the key exists; a null, a number or an array would
     // reach dispatch as a capability declaration nothing can read.
-    let Some(capabilities) = capabilities.filter(|c| c.is_object()) else {
+    let Some(capabilities) = capabilities.and_then(Value::as_object) else {
         return RequestShape::Malformed {
             missing: vec![KEY_CLIENT_CAPABILITIES],
         };
@@ -166,7 +176,11 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
 
     RequestShape::Modern(Box::new(RequestFields {
         protocol_version: protocol_version.to_string(),
-        client_capabilities: capabilities.clone(),
+        declared_capabilities: capabilities
+            .iter()
+            .filter(|(_, value)| !value.is_null())
+            .map(|(name, _)| name.clone())
+            .collect(),
         client_info_name: meta
             .get(KEY_CLIENT_INFO)
             .and_then(|i| i.get("name"))
@@ -205,6 +219,14 @@ pub const REMOVED_IN_2026_07_28: &[&str] = &[
 /// The mirror of the list above, and needed for the same reason: serving a
 /// 2026 method to a 2025 client tells it the gateway speaks a revision that
 /// client cannot hold up its end of.
+///
+/// `tasks/get` and `tasks/update` are listed because the revision adds them, not
+/// because this gateway serves them: neither is implemented. `tasks/get`
+/// previously answered every handle with a `not_found` **success**, which is
+/// not in the protocol's task model and told a client its handle had been
+/// looked up and missed. Both now reach the ordinary method-not-found answer,
+/// which is true. The specification page for the tasks extension returns 404 at
+/// the path its own index links, so there is no shape to implement against yet.
 pub const ADDED_IN_2026_07_28: &[&str] = &["subscriptions/listen", "tasks/get", "tasks/update"];
 
 /// The client capability a method needs, if it needs one.
@@ -230,8 +252,6 @@ impl RequestFields {
     /// capability the client did not mention was not declared.
     #[must_use]
     pub fn declares_capability(&self, name: &str) -> bool {
-        self.client_capabilities
-            .get(name)
-            .is_some_and(|v| !v.is_null())
+        self.declared_capabilities.iter().any(|n| n == name)
     }
 }

@@ -965,7 +965,7 @@ impl MetaMcp {
     /// separately would let the two answers drift, and a peer would get one
     /// story from the handshake and another from discovery.
     #[must_use]
-    pub fn discover_document(&self) -> serde_json::Value {
+    pub fn discover_document(&self, modern_enabled: bool) -> serde_json::Value {
         let handshake = crate::gateway::meta_mcp_helpers::build_initialize_result(
             crate::protocol::PROTOCOL_VERSION,
             "",
@@ -978,9 +978,28 @@ impl MetaMcp {
         // obvious names, and every test passed — because the tests asserted the
         // same invented names. A wire format that agrees with itself is not a
         // wire format anyone else can read.
+        // Discovery advertises what this gateway can actually serve, which is
+        // the legacy negotiation list plus the modern revisions when the switch
+        // that serves them is on. Leaving the modern revision out made enabling
+        // it unreachable: a conforming peer asks discovery which revisions
+        // exist, and the one the switch had just turned on was not among them.
+        //
+        // Added HERE and not to `SUPPORTED_VERSIONS`, which is what a legacy
+        // `initialize` negotiates over. A stateless revision cannot be reached
+        // through a handshake it deleted, so advertising it there would offer a
+        // 2025 client a version the handshake can never settle on.
+        let mut versions: Vec<&str> = crate::protocol::SUPPORTED_VERSIONS.to_vec();
+        if modern_enabled {
+            for version in crate::protocol::meta::MODERN_VERSIONS {
+                if !versions.contains(version) {
+                    versions.push(version);
+                }
+            }
+        }
+
         serde_json::json!({
             "resultType": "complete",
-            "supportedVersions": crate::protocol::SUPPORTED_VERSIONS,
+            "supportedVersions": versions,
             "capabilities": handshake.capabilities,
             "_meta": {
                 "io.modelcontextprotocol/serverInfo": handshake.server_info,

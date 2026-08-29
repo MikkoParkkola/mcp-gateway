@@ -32,7 +32,7 @@ pub struct SessionLifecycle {
     ///
     /// So the trigger becomes a deadline. The handlers are unchanged; what
     /// changes is that something still fires them.
-    tracked: RwLock<Vec<(String, u64)>>,
+    tracked: RwLock<std::collections::HashMap<String, u64>>,
 }
 
 impl SessionLifecycle {
@@ -60,6 +60,9 @@ impl SessionLifecycle {
     /// Called by the notification multiplexer when a session is reaped
     /// or by the DELETE /mcp handler.
     pub fn on_disconnect(&self, session_id: &str) {
+        // Whatever brought us here, this key is done: drop its deadline so a
+        // later reap cannot fire the handlers for it a second time.
+        self.untrack(session_id);
         let cbs = self.callbacks.read();
         if cbs.is_empty() {
             return;
@@ -80,8 +83,20 @@ impl SessionLifecycle {
     /// The key is whatever the caller is identified by — a principal after the
     /// migration, a session before it. The handlers do not care which; they
     /// care that something eventually names the key again.
+    /// One deadline per key, replaced rather than accumulated. Appending a
+    /// second deadline for a key already tracked kept the older one, so a
+    /// refreshed caller was reclaimed on its previous deadline while still
+    /// live — and the handlers, which free things, ran twice for one key.
     pub fn track(&self, key: impl Into<String>, expires_at: u64) {
-        self.tracked.write().push((key.into(), expires_at));
+        self.tracked.write().insert(key.into(), expires_at);
+    }
+
+    /// Stop tracking a key that has already been reclaimed.
+    ///
+    /// Without this a disconnect leaves the deadline behind, and the next reap
+    /// fires the handlers again for a key that is already gone.
+    pub fn untrack(&self, key: &str) {
+        self.tracked.write().remove(key);
     }
 
     /// Reclaim every tracked key whose deadline has passed.
@@ -92,11 +107,15 @@ impl SessionLifecycle {
     pub fn reap(&self, now: u64) {
         let expired: Vec<String> = {
             let mut tracked = self.tracked.write();
-            let (expired, live): (Vec<_>, Vec<_>) = tracked
-                .drain(..)
-                .partition(|(_, expires_at)| now > *expires_at);
-            *tracked = live;
-            expired.into_iter().map(|(key, _)| key).collect()
+            let expired: Vec<String> = tracked
+                .iter()
+                .filter(|(_, expires_at)| now > **expires_at)
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in &expired {
+                tracked.remove(key);
+            }
+            expired
         };
         for key in expired {
             self.on_disconnect(&key);
@@ -118,6 +137,63 @@ impl SessionLifecycle {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_refreshed_key_keeps_only_its_latest_deadline() {
+        // Tracking the same key twice used to keep both deadlines. The older
+        // one then reclaimed a caller that was still live, and the handlers —
+        // which free things — ran twice for one key.
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        lifecycle.register("test", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track("caller-a", 100);
+        lifecycle.track("caller-a", 200);
+        assert_eq!(
+            lifecycle.tracked_count(),
+            1,
+            "one key must hold one deadline, not one per refresh"
+        );
+
+        lifecycle.reap(150);
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            0,
+            "a refreshed caller must not be reclaimed on its previous deadline"
+        );
+        assert_eq!(lifecycle.tracked_count(), 1, "and must still be tracked");
+
+        lifecycle.reap(250);
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "past its real deadline it is reclaimed exactly once"
+        );
+    }
+
+    #[test]
+    fn a_disconnect_drops_the_deadline_so_reaping_cannot_repeat_it() {
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        lifecycle.register("test", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track("caller-b", 100);
+        lifecycle.on_disconnect("caller-b");
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+
+        lifecycle.reap(200);
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "a key already reclaimed must not be reclaimed again by a later reap"
+        );
+    }
 
     #[test]
     fn test_callback_fires_on_disconnect() {

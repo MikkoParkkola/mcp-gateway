@@ -102,7 +102,10 @@ fn ac_sub_1_a_request_without_a_filter_is_invalid_but_an_empty_filter_is_not() {
 
     let empty = ListenRequest::from_params(Some(&json!({ "notifications": {} })))
         .expect("an empty filter is a valid request");
-    assert!(empty.is_empty(), "it asked for nothing, and that is allowed");
+    assert!(
+        empty.is_empty(),
+        "it asked for nothing, and that is allowed"
+    );
 }
 
 #[test]
@@ -419,15 +422,19 @@ mod http {
     }
 
     #[tokio::test]
-    async fn ac_task_1_the_gateway_serves_tasks_get() {
-        // An unknown handle is a clean "no such task", not a 500 and not a
-        // fabricated working state.
+    async fn ac_task_1_tasks_get_reports_that_it_is_not_implemented() {
+        // It answered every handle with a `not_found` **success**. That status
+        // is not in the protocol's task model, and as a success it told a client
+        // its handle had been looked up and missed — a lookup that never
+        // happened, against a store that does not exist.
+        //
+        // The specification page for the tasks extension returns 404 at the path
+        // its own index links, so there is no shape to build against. Answering
+        // method-not-found is the true statement, and a client discovers that on
+        // its first call rather than after polling a fiction.
         let (status, body) = post_modern("tasks/get", json!({ "taskId": "task-unknown" })).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(
-            body["result"]["status"], "not_found",
-            "a handle nobody minted must say so: {body}"
-        );
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"]["code"], -32601, "{body}");
     }
 
     #[tokio::test]

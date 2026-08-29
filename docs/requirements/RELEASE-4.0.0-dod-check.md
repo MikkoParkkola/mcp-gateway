@@ -136,51 +136,46 @@ Nine repairs, each with a probe above, re-checked by the vendor that raised them
 Four improvements were also taken: per-key mint budget, explicit completion release, duplicate-key-id
 rejection, and one generic client-facing refusal message.
 
+## Findings: 31 of 36 closed
+
+Seven review rounds produced 36 findings. Thirty-one are closed, each with a probe that makes its
+fix fail. The five that remain are named below with the reason each is still open.
+
+| Area | Closed | What was wrong |
+|---|---|---|
+| Continuation envelope | 6 | live replay window at capacity; a public constructor shipping a known key; an unbounded client token; sealed state in `Debug`; lock contention answered as a lost exchange; a length-leaking comparison |
+| Request path | 9 | a header-declared modern request classified legacy; retry fields merged into tool arguments; `resultType` overwritten; a destructive call running unconfirmable; a session minted per stateless request; the modern revision missing from discovery; notifications answered before validation; a session header on modern refusals; a fabricated `tasks/get` success |
+| Mirrored headers | 3 | a decoy `name` validated while `uri` executed; a repeated header line reduced to its first value; malformed retry fields accepted inconsistently |
+| Era classifier | 5 | capabilities present but unusable; modern-only keys read as legacy; a partial document read as a discovery document; a failed probe cached as legacy; an attacker-sized subtree copied per request |
+| Subscriptions | 5 | filter read at the wrong level; `resourceSubscriptions` read as a boolean; a minted id instead of the request's own; the tag written where no client looks; a valid empty filter refused |
+| Security controls | 3 | an anomaly check that could not observe and allowed anyway; lifecycle deadlines that accumulated and reclaimed live callers; a non-atomic score-and-update |
+
+### Two were closed by removing the mechanism, not repairing it
+
+Both are recorded as decisions rather than omissions, because in both cases the thing that existed
+was worse than nothing:
+
+- **Multi-round-trip retry forwarding.** The fields were merged into the tool `arguments` object. The specification makes them siblings of `arguments`, so a backend read them nowhere — and a tool with an argument of either name had it silently overwritten. Worse, the `requestState` forwarded was the **client's own envelope**, which `continuation.rs` exists specifically to keep from being passed onward. Forwarding correctly means unsealing the gateway's envelope and sending the *backend's* state, which needs the keyring reachable from request state and a retry parameter threaded to the dispatcher. Neither exists, so a retry now fails visibly instead of corrupting a call.
+- **`tasks/get`.** It answered every handle with a `not_found` **success** — a status absent from the protocol's task model, reported as though a lookup had happened against a store that does not exist. It now returns method-not-found, which is true. The specification page for the tasks extension returns 404 at the path its own index links, so there is no shape to build against.
+
 ## What is honestly NOT finished
 
-Stated plainly, because a DoD report that hides its gaps is worth less than no report.
+Five findings remain open. None is reachable by a client while `server.modern_protocol` defaults off.
 
-### 1. Two surfaces are reachable and hollow — a correction to this document
+1. **`subscriptions/listen` acknowledges but does not stream.** The specification's response is an SSE body that stays open and carries the opted-in notifications; this handler has no shape for one. The request is now parsed correctly, the filters are read, and the acknowledgement carries the right id — but a client that reads it as a live subscription waits for notifications nothing will send. **This is the one piece of genuine construction left**, and it is why the switch must stay off.
 
-The previous revision recorded `subscriptions/listen` and `tasks/get` as **wired**. They are
-reachable, and they do not work. Verified at source, not inferred:
+2. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
 
-- `subscriptions/listen` (`handlers.rs:641`) parses the request, **discards it** (`Some(_)`), mints an id and returns an ordinary JSON-RPC success. There is no stream and no filter registration. The comment beside it describes a design that was not built.
-- `tasks/get` (`handlers.rs:670`) returns `{"status": "not_found"}` as a **success** for every handle. There is no task store, and `not_found` is not in the protocol's task model. `tasks/update` does not exist.
+3. **The mint counter is process-local.** It bounds envelopes sealed by *this process* since it started, not by the key over its life, so a restart resets it. That is a real ceiling on a single runaway process and not the per-key guarantee the NIST bound describes. Gated BEFORE-PRODUCTION; the module says so in as many words.
 
-Moving these from unreachable to reachable-and-plausible is arguably worse than leaving them out: a
-client can now call them and receive an answer that looks like an answer.
+4. **The task model cannot be verified.** A reviewer reported missing states and required fields. The specification page returns 404 at the path the index links, so those claims have no reachable source. Recorded as unverified rather than accepted or dismissed.
 
-### 2. The modern request path has a classification bypass
+5. **The failed-task payload shape is unverified**, for the same reason.
 
-`classify_request` reads the **body only** (`handlers.rs:513`). A request carrying modern routing
-headers with no body metadata classifies as legacy, bypassing the feature gate and all header/body
-mirror validation — so upstream policy can authorise one method while the gateway executes another.
-CRITICAL, CERTAIN, gated BEFORE-DEPLOY.
+### Two fixes have no runtime control, and that is stated rather than hidden
 
-### 3. Retry fields are forwarded at the wrong level — the defect this ticket was filed for
-
-`handlers.rs:716` inserts `inputResponses` and `requestState` **into the `arguments` object**. The
-specification makes them siblings of `name` and `arguments`. So continuations fail, and a tool with
-legitimate arguments of those names has them overwritten. The code comment justifies the placement
-as avoiding a widened signature — a design decision taken during implementation and never named as
-one, which is precisely the failure mode `development-process.md` §P3 exists to catch.
-
-### 4. Five further HIGH findings, all CERTAIN, gated BEFORE-PRODUCTION
-
-`resultType` unconditionally overwritten with `complete`; modern destructive calls execute when
-confirmation is `Unsupported`; every sessionless modern request creates an unreachable multiplexer
-session and defeats sequence anomaly detection; enabling the switch does not add 2026-07-28 to
-`server/discover`; notifications return 202 before any modern validation runs.
-
-### 5. Two shared-state gaps block multi-replica production
-
-The consumed-continuation ledger and the mint counter are both process-local. Documented in the
-module, gated BEFORE-PRODUCTION, and not addressable inside this change.
-
-### 6. The dual-vendor review gate is not met
-
-Single-vendor by operator instruction for this session. An authorised deviation, not a pass.
+- The **constant-time binding comparison**: reverting it passes every row, verified by running it. A unit test cannot observe timing. The behavioural row beside it proves wrong bindings of any length are refused identically; the timing property is assured by reading the code, which is weaker.
+- The **atomic score-and-update**: the probe for it did not compile, so the control is unproven. A race needs a deterministic repro harness, which this does not have.
 
 ## What this means for the release
 

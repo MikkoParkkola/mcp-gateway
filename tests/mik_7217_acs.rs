@@ -59,7 +59,7 @@ fn ac_discover_1_meta_layer_answers_server_discover() {
     let m = meta();
 
     // WHEN: it is asked to produce a discovery document
-    let doc = m.discover_document();
+    let doc = m.discover_document(true);
 
     // THEN: it names supported versions, capabilities and server identity
     assert!(
@@ -81,16 +81,12 @@ fn ac_discover_1_meta_layer_answers_server_discover() {
 }
 
 #[test]
-#[ignore = "awaits the stateless request path: advertising 2026-07-28 before the \
-            gateway can serve it would tell a client yes and then serve 2025 \
-            semantics. Scheduled, not suppressed — this criterion is unmet until \
-            increment 2 lands."]
 fn ac_discover_1_advertises_the_target_revision() {
     // GIVEN: a gateway that claims 2026-07-28 support
     let m = meta();
 
     // WHEN: the discovery document is read
-    let doc = m.discover_document();
+    let doc = m.discover_document(true);
     let versions: Vec<&str> = doc["supportedVersions"]
         .as_array()
         .expect("protocolVersions must be an array")
@@ -138,7 +134,7 @@ fn ac_discover_7_discovery_document_repeats_no_invented_version() {
     let m = meta();
 
     // WHEN: the discovery document is read
-    let doc = m.discover_document();
+    let doc = m.discover_document(true);
     let versions: Vec<&str> = doc["supportedVersions"]
         .as_array()
         .expect("protocolVersions must be an array")
@@ -167,7 +163,7 @@ fn ac_discover_2_answers_without_a_prior_initialize() {
     let m = meta();
 
     // WHEN: discovery is requested first
-    let doc = m.discover_document();
+    let doc = m.discover_document(true);
 
     // THEN: it answers, rather than requiring a handshake it no longer has
     assert!(
@@ -182,7 +178,7 @@ fn ac_discover_2_answers_without_a_session() {
     let m = meta();
 
     // WHEN: discovery is produced with no session identifier anywhere in play
-    let doc = m.discover_document();
+    let doc = m.discover_document(true);
 
     // THEN: a document is produced, and it does not depend on a session — which
     // is the mechanism 2026-07-28 removes, so a discovery document carrying one
@@ -419,7 +415,12 @@ mod http {
         }))
         .await;
 
-        let direct = state().meta_mcp.discover_document();
+        // The flag comes from the same state the HTTP dispatcher reads, so the
+        // two cannot drift apart when the harness config changes.
+        let app = state();
+        let direct = app
+            .meta_mcp
+            .discover_document(app.live_config.running().server.modern_protocol);
         assert_eq!(
             body["result"], direct,
             "the HTTP dispatcher must return the meta layer's document verbatim"
@@ -536,8 +537,12 @@ mod era {
 
         // And the mixed case: a dual-era peer listing both is modern, because
         // there is a modern revision we can agree on.
+        // `capabilities` included because a discovery document has one: an
+        // object carrying only a familiar key is not a peer announcing this
+        // revision, and is classified legacy rather than read as modern.
         let both = ProbeOutcome::Result(json!({
             "supportedVersions": ["2026-07-28", "2025-11-25"],
+            "capabilities": {},
         }));
         assert_eq!(classify(&both), Era::Modern);
     }
@@ -706,7 +711,7 @@ mod era_cache {
 
 #[test]
 fn ac_discover_1_document_matches_the_specified_shape() {
-    let doc = meta().discover_document();
+    let doc = meta().discover_document(true);
 
     // Field names, transcribed from the specification's example.
     for field in ["resultType", "supportedVersions", "capabilities", "_meta"] {

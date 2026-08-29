@@ -110,32 +110,38 @@ impl AnomalyDetector {
     pub fn score_transition(&self, session_id: &str, server: &str, tool: &str) -> f64 {
         let current = format!("{server}:{tool}");
 
-        let score = match self.last_tool.get(session_id) {
-            None => {
-                // First tool in this session — no prior context.
+        // The read of the predecessor and the write of the successor are one
+        // operation, held under a single entry guard. As a separate `get` and
+        // `insert` they could interleave: two concurrent calls for one identity
+        // both observed the same predecessor and both overwrote it, so a
+        // sequence could be walked in parallel with every step scored as though
+        // it were the first — which is precisely the sequence a detector exists
+        // to notice.
+        match self.last_tool.entry(session_id.to_string()) {
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                // First tool for this identity — no prior context.
+                slot.insert(current);
                 0.5
             }
-            Some(prev) => {
+            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
+                let previous = slot.get().clone();
                 // Ask the tracker for the likely successors of the previous tool.
                 // min_confidence=0.0 and min_count=0 → return all successors.
-                let predictions = self.tracker.predict_next(prev.as_str(), 0.0, 0);
+                let predictions = self.tracker.predict_next(previous.as_str(), 0.0, 0);
 
-                if predictions.is_empty() {
+                let score = if predictions.is_empty() {
                     // Cold start for this predecessor: no data → neutral.
                     0.5
                 } else {
                     match predictions.iter().find(|p| p.tool == current) {
                         Some(p) => 1.0 - p.confidence,
-                        None => 0.95, // Never seen after prev_tool.
+                        None => 0.95, // Never seen after the previous tool.
                     }
-                }
+                };
+                slot.insert(current);
+                score
             }
-        };
-
-        // Update last_tool for this session.
-        self.last_tool.insert(session_id.to_string(), current);
-
-        score
+        }
     }
 
     /// The configured anomaly threshold.

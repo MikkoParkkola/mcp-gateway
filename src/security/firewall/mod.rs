@@ -340,25 +340,50 @@ impl Firewall {
         // first request every time and answers with its neutral score forever:
         // it keeps running and stops protecting. `observe` says so instead, and
         // this is the call site that has to do something about it.
+        // The identity the detector keys on. After MCP 2026-07-28 there is no
+        // session to be the caller, so the authenticated principal stands in.
+        // An empty session id is not an identity and must never be used as one:
+        // every stateless caller would share a single bucket, and one caller's
+        // ordinary sequence would make another's unusual one look ordinary.
+        let anomaly_identity = if session_id.is_empty() {
+            (!caller.is_empty() && caller != "anonymous").then_some(caller)
+        } else {
+            Some(session_id)
+        };
+
+        let mut anomaly_blind = false;
         let anomaly_score = self.anomaly.as_ref().and_then(|a| {
-            match a.observe(Some(session_id), server, tool) {
+            match a.observe(anomaly_identity, server, tool) {
                 crate::security::firewall::anomaly::Observation::Scored(score) => Some(score),
                 crate::security::firewall::anomaly::Observation::Unobservable => {
-                    // Not a finding, and not nothing. The operator's traffic is
-                    // unaffected — refusing every unidentified call would deny
-                    // anonymous access they may have chosen to allow — but the
-                    // fact that a control is blind is on the record rather than
-                    // hidden inside a passing score.
+                    // A detector with nothing to key on cannot protect. Allowing
+                    // the call anyway is the shape of failure that reads as
+                    // success: the control still runs, still logs, and stops
+                    // deciding anything. The firewall is opt-in, so refusing is
+                    // the answer an operator who switched it on asked for.
                     tracing::warn!(
                         server = server,
                         tool = tool,
                         "OWASP ASI10: anomaly detection has no caller identity to key on; \
-                         this call was not scored"
+                         refusing rather than passing the call unscored"
                     );
+                    anomaly_blind = true;
                     None
                 }
             }
         });
+
+        if anomaly_blind {
+            findings.push(Finding {
+                scan_type: ScanType::SequenceAnomaly,
+                severity: Severity::High,
+                description:
+                    "Anomaly detection has no caller identity to key on; call refused unscored"
+                        .to_string(),
+                matched: format!("{server}:{tool}"),
+                location: FindingLocation::SequenceAnomaly,
+            });
+        }
 
         if let Some(score) = anomaly_score {
             let above_block = self
@@ -899,6 +924,55 @@ mod tests {
     /// Prime the session so `tool_a` is recorded as the last tool.
     fn prime_session(fw: &Firewall, session: &str) {
         fw.check_request(session, "srv", "tool_a", &json!({}), "caller");
+    }
+
+    #[test]
+    fn an_anomaly_detector_with_no_identity_refuses_rather_than_passes() {
+        // The failure shape that reads as success: the control still runs, still
+        // logs, and stops deciding anything. A stateless caller has no session,
+        // so if it is also unauthenticated there is nothing to key a sequence
+        // on — and a sequence detector that cannot tell callers apart is not
+        // detecting sequences.
+        let fw = anomaly_firewall(0.7, Some(0.9));
+        let args = json!({ "q": "ok" });
+
+        let verdict = fw.check_request("", "srv", "tool", &args, "anonymous");
+
+        assert!(
+            !verdict.allowed,
+            "an unscoreable call must be refused, not allowed unscored"
+        );
+    }
+
+    #[test]
+    fn a_stateless_caller_is_keyed_on_its_principal() {
+        // With no session, the authenticated principal is the identity. It is a
+        // real one: two principals must not share a bucket, or one caller's
+        // ordinary sequence makes another's unusual one look ordinary.
+        let fw = anomaly_firewall(0.7, Some(0.9));
+        let args = json!({ "q": "ok" });
+
+        let verdict = fw.check_request("", "srv", "tool", &args, "alice");
+
+        assert!(
+            verdict.allowed,
+            "an identified stateless caller must still be scored and served"
+        );
+        assert!(
+            verdict.anomaly_score.is_some(),
+            "the call must actually be scored, not merely permitted"
+        );
+    }
+
+    #[test]
+    fn a_session_caller_is_still_keyed_on_its_session() {
+        let fw = anomaly_firewall(0.7, Some(0.9));
+        let args = json!({ "q": "ok" });
+
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "anonymous");
+
+        assert!(verdict.allowed);
+        assert!(verdict.anomaly_score.is_some());
     }
 
     #[test]

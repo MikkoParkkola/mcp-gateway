@@ -382,7 +382,11 @@ mod http {
         )
         .await;
 
-        assert_eq!(status, StatusCode::BAD_REQUEST, "the request must be refused");
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "the request must be refused"
+        );
         assert!(
             !headers.contains_key("mcp-session-id"),
             "a modern refusal must not carry a session header: {headers:?}"

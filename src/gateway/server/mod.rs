@@ -1638,7 +1638,15 @@ impl Gateway {
             // handshake, because on stdio this is also the backward-compatibility
             // probe: a legacy server answers it with an error, not a document.
             "server/discover" => {
-                JsonRpcResponse::success_serialized(id, meta_mcp.discover_document())
+                JsonRpcResponse::success_serialized(
+                    id, // Always the legacy list on stdio. This dispatcher has no
+                    // access to the running config, and the stateless revision is
+                    // specified over streamable HTTP; advertising it on a transport
+                    // whose modern path is not wired would be a claim the gateway
+                    // cannot honour. Recorded as a limitation, not a decision that
+                    // stdio is excluded.
+                    meta_mcp.discover_document(false),
+                )
             }
             "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
             "tools/list" => {

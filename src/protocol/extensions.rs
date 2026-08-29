@@ -62,10 +62,20 @@ impl ExtensionSet {
     /// would let a peer's declaration decide what this gateway claims to do.
     #[must_use]
     pub fn from_capabilities(capabilities: &Value) -> Self {
+        // The key names the extension; the value carries its settings and the
+        // specification requires an object. Accepting a key whose value is a
+        // null, a number or a string let a malformed declaration switch on
+        // behaviour the peer never validly negotiated — presence is not
+        // agreement.
         let supported = capabilities
             .get("extensions")
             .and_then(Value::as_object)
-            .map(|map| map.keys().filter_map(|id| Extension::from_id(id)).collect())
+            .map(|map| {
+                map.iter()
+                    .filter(|(_, settings)| settings.is_object())
+                    .filter_map(|(id, _)| Extension::from_id(id))
+                    .collect()
+            })
             .unwrap_or_default();
         Self { supported }
     }

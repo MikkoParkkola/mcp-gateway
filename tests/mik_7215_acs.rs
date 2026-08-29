@@ -138,7 +138,10 @@ fn ac_stateless_9_a_request_with_no_protocol_meta_is_legacy_not_malformed() {
     // extension field and its mere presence declares nothing about the era.
     let empty_meta = json!({ "name": "get_weather", "_meta": {} });
     assert!(
-        matches!(classify_request(Some(&empty_meta), None), RequestShape::Legacy),
+        matches!(
+            classify_request(Some(&empty_meta), None),
+            RequestShape::Legacy
+        ),
         "`_meta` carries more than protocol fields; an empty one declares no era"
     );
 

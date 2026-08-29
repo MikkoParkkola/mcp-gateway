@@ -763,25 +763,13 @@ pub(super) async fn meta_mcp_handler(
                 }
             }
         }
-        "tasks/get" => {
-            let task_id = params
-                .as_ref()
-                .and_then(|p| p.get("taskId"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            // No task store yet, so every handle is unknown — and saying so is
-            // the honest answer. Fabricating a working state would have a client
-            // poll forever for something nobody started.
-            crate::protocol::JsonRpcResponse::success(
-                id,
-                serde_json::json!({ "taskId": task_id, "status": "not_found" }),
-            )
-        }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.
         "server/discover" => crate::protocol::JsonRpcResponse::success_serialized(
             id,
-            state.meta_mcp.discover_document(),
+            state
+                .meta_mcp
+                .discover_document(state.live_config.running().server.modern_protocol),
         ),
         "initialize" => state.meta_mcp.handle_initialize(
             id,
@@ -822,6 +810,18 @@ pub(super) async fn meta_mcp_handler(
             // Neither exists. Until they do, a retry is not forwarded at all,
             // which fails visibly rather than corrupting a call.
             let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+            if retry.is_malformed() {
+                // Neither a usable retry nor a fresh call. Running it as a fresh
+                // call would repeat whatever the first attempt already did, and
+                // for a destructive tool that is the whole risk.
+                return build_error_response(
+                    Some(id),
+                    -32602,
+                    format!("malformed retry fields: {}", retry.malformed.join(", ")),
+                    &session_id,
+                    StatusCode::BAD_REQUEST,
+                );
+            }
             if retry.is_retry() {
                 debug!(
                     tool = %tool_name,
@@ -959,7 +959,42 @@ pub(super) async fn meta_mcp_handler(
                         StatusCode::OK,
                     );
                 }
-                // Confirmed or Unsupported → fall through to execute
+                // Nobody could be asked. What that means depends on the era, and
+                // `ConfirmationPolicy` already says so — it was written for this
+                // decision and then never consulted, so every modern destructive
+                // call took the legacy answer.
+                //
+                // It matters most precisely here: this revision deletes sessions,
+                // so a modern call can never have one to elicit over, and
+                // "proceed with a warning" would be the outcome every single
+                // time. A gate that is open for everyone is not a gate.
+                if outcome == ConfirmationOutcome::Unsupported {
+                    let policy = if is_modern {
+                        crate::gateway::destructive_confirmation::ConfirmationPolicy::for_modern()
+                    } else {
+                        crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
+                    };
+                    if policy.on_unconfirmable()
+                        == crate::gateway::destructive_confirmation::ConfirmationPolicy::REFUSE
+                    {
+                        warn!(
+                            tool = %tool_name,
+                            "refusing a destructive call that cannot be confirmed"
+                        );
+                        return build_response(
+                            JsonRpcResponse::error(
+                                Some(id),
+                                -32001,
+                                format!(
+                                    "Destructive action requires confirmation and none could be \
+                                     obtained: {action_desc}"
+                                ),
+                            ),
+                            &session_id,
+                            StatusCode::OK,
+                        );
+                    }
+                }
             }
 
             // The same policy the pre-check above applied, handed to the
@@ -1201,13 +1236,18 @@ fn build_modern_response(
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {
-        // Required on every result in this revision. `complete` here because
-        // an interim result is built by the multi-round-trip path, which owns
-        // its own value.
-        object.insert(
-            "resultType".to_string(),
-            serde_json::Value::String("complete".to_string()),
-        );
+        // Required on every result in this revision, and supplied here only
+        // when the result does not already carry one.
+        //
+        // Inserting unconditionally overwrote the discriminator that the
+        // multi-round-trip path had just set: an `input_required` result was
+        // relabelled `complete` on its way out, so a client saw a finished call
+        // where the server was waiting for an answer and could no longer supply
+        // one. The comment said this value was safe because interim results own
+        // their own; the code then overwrote exactly those.
+        object
+            .entry("resultType")
+            .or_insert_with(|| serde_json::Value::String("complete".to_string()));
 
         if CACHEABLE_METHODS.contains(&method) {
             object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
