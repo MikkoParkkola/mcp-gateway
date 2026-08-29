@@ -64,8 +64,13 @@ expands `{env.NAME}` in any resolved string on every call
 resolves an operator-declared reference — `${VAR}`, `env:VAR`, `{env.VAR}`, a
 bare credential name — takes the overlay and consults it before the process.
 Readers of process infrastructure do not.** `PATH`, `HOME`, `TMPDIR`,
-`NO_COLOR` and the `MCP_GATEWAY_*` knobs are not declared by a config author
-and are not env-file territory; they keep reading `std::env` directly. The
+and `NO_COLOR` are not declared by a config author and are not env-file
+territory; they keep reading `std::env` directly. The `MCP_GATEWAY_*` knobs are
+NOT in that set, and an earlier form of this sentence put them there: they are
+config-bound, reach the config through `EffectiveEnv`, and where one is read
+directly — `MCP_GATEWAY_FIREWALL_SKIP_KEYS` is — the read goes through
+`LiveEnv` like any other. A knob an operator sets in an env file and expects a
+reload to honour is env-file territory by authorship, whatever its prefix. The
 line between the two sets is authorship, not mechanism, and it is what a new
 reader has to be placed on. The mechanical half is a test, not a convention:
 see the source-scan row in the test plan.
