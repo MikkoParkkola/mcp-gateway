@@ -74,3 +74,113 @@ impl RetryFields {
         self.input_responses.is_some() || self.request_state.is_some()
     }
 }
+
+/// A backend's interim result: it needs something before it can finish.
+#[derive(Debug, Clone)]
+pub struct InputRequired {
+    /// What the server asked for, keyed by the identifiers it assigned.
+    ///
+    /// Its keys, not ours. The server will look for exactly these again on the
+    /// retry, so an answer returned under a different key is lost as surely as
+    /// one that was never collected.
+    pub requests: Vec<(String, Value)>,
+    /// The server's opaque state, to be echoed back untouched.
+    pub request_state: Option<String>,
+}
+
+impl InputRequired {
+    /// Read an interim result, or `None` if the result is a completed one.
+    ///
+    /// `resultType` is the discriminator. A result omitting it is complete by
+    /// the client rule, which is what every pre-2026 backend sends — so an
+    /// ordinary legacy answer must never be mistaken for a question.
+    #[must_use]
+    pub fn from_result(result: &Value) -> Option<Self> {
+        if result.get("resultType").and_then(Value::as_str)? != "input_required" {
+            return None;
+        }
+        let requests = result
+            .get("inputRequests")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            requests,
+            request_state: result
+                .get("requestState")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
+    }
+}
+
+/// One question, translated for a client that expects to be asked directly.
+#[derive(Debug, Clone)]
+pub struct OutboundRequest {
+    /// The server's identifier for this question, carried so the answer can be
+    /// returned under it.
+    pub key: String,
+    /// The legacy server-initiated method, e.g. `elicitation/create`.
+    pub method: String,
+    /// Its params, verbatim.
+    pub params: Value,
+}
+
+/// Translating between the two generations of asking a question.
+///
+/// A **modern** server returns an interim result and waits to be retried. A
+/// **legacy** client expects the server to ask it something mid-call. Neither
+/// can be changed, so the gateway sits between them: it holds the backend's
+/// continuation, asks the client the way that client understands, and retries
+/// the backend with what comes back. The client never learns a retry happened.
+///
+/// This is the likelier direction in practice — backends adopt a revision
+/// before every client does — which is why it gets a contract of its own rather
+/// than being called mechanical.
+pub struct Bridge;
+
+impl Bridge {
+    /// The questions to put to a legacy client, in the shape it expects.
+    #[must_use]
+    pub fn to_legacy_client(interim: &InputRequired) -> Vec<OutboundRequest> {
+        interim
+            .requests
+            .iter()
+            .map(|(key, request)| OutboundRequest {
+                key: key.clone(),
+                method: request
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                params: request.get("params").cloned().unwrap_or(Value::Null),
+            })
+            .collect()
+    }
+
+    /// The params for retrying the backend, once the client has answered.
+    ///
+    /// The state is echoed verbatim and the answers go back under the server's
+    /// own keys. When nothing was asked, nothing is sent: an empty
+    /// `inputResponses` would tell the server it received answers to questions
+    /// it never posed.
+    #[must_use]
+    pub fn retry_params(interim: &InputRequired, answers: Vec<(String, Value)>) -> Value {
+        let mut params = serde_json::Map::new();
+        if let Some(ref state) = interim.request_state {
+            params.insert("requestState".to_string(), Value::String(state.clone()));
+        }
+        if !answers.is_empty() {
+            let mut responses = serde_json::Map::new();
+            for (key, answer) in answers {
+                responses.insert(key, answer);
+            }
+            params.insert("inputResponses".to_string(), Value::Object(responses));
+        }
+        Value::Object(params)
+    }
+}
