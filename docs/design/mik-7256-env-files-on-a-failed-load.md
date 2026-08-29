@@ -359,14 +359,21 @@ reader:
   three is a rule this change has no reason to own. Resolving once is right
   about all three by construction, because there is no second resolution to be
   right about.
-  The residual, stated rather than hidden: a `~/...` path whose resolution
-  WOULD move — because an env file now sets a different `HOME` — keeps
-  resolving where startup put it, and unlike an ADDED path (MIK.ENVFILE.11)
-  nothing reports it, because reporting it means computing the second
-  resolution this rule exists to avoid. A restart picks it up. Accepted: the
-  case needs an operator to relocate `HOME` from inside a file the gateway
-  reads through `HOME`, and paying for it with a rule that was wrong three
-  times is the worse trade.
+  The one case this leaves — an env file that now sets a different `HOME`, so
+  a restart would resolve a `~/...` entry somewhere else while the running
+  gateway keeps its recorded path — is REPORTED rather than accepted, and
+  reporting it costs no second resolution. Two facts the reload already holds
+  decide it: the raw `env_files` list still carries the `~` spellings even
+  though `ResolvedEnvFiles` does not, and the new overlay's `HOME` is
+  comparable with the running one. Any `~` entry plus a changed `HOME` is
+  restart-required, alongside the added-path case
+  (`pending_restart_fields`, `src/config_reload/mod.rs:552`). Deliberately
+  unconditional on platform: on Windows `dirs::home_dir()` ignores `HOME` and
+  the report is unnecessary, and it is still the right trade — an
+  unnecessary restart notice is a nuisance, a silent divergence between a
+  running gateway and its own restart is the defect this change exists to
+  remove, and conditioning the rule would put back the platform knowledge
+  whose absence is the point.
 
   A missing path is skipped. A parse error
   ENDS that file at the offending line, keeping the pairs before it and taking
@@ -1099,6 +1106,12 @@ observation, not a ticket.
   the reload succeeds, Then no variable defined only in that new file is
   resolvable in the reloaded config, nor readable from the process — an
   unvalidated file cannot activate a credential by being named.
+
+- **MIK.ENVFILE.11a** Given a running gateway whose `env_files` contains an
+  entry spelled `~/...`, When an accepted reload's env files set `HOME` to a
+  different value than the running overlay holds, Then the outcome reports
+  restart-required and names `HOME`, and the gateway keeps reading the paths
+  it recorded at startup.
 
 An earlier form required the gateway to report `env_files` as restart-required
 after a content-only edit. Cut, not weakened: `pending_restart_fields` compares
