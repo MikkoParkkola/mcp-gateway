@@ -486,8 +486,19 @@ startup entry points — `run` (`src/gateway/server/mod.rs:813`) and `run_stdio`
 first rotation, which is the failure this change exists to prevent. So the
 shared cell is `LiveEnv`, the same shape as `LiveConfig` and for the same
 reason: `RwLock<Arc<EnvOverlay>>`, `get()` cheap on the request path, `set()`
-called once by an accepted reload. Startup builds one `Arc<LiveEnv>` from the
-configured paths and hands it to both the reload context and the executor.
+called once by an accepted reload.
+
+**Startup publishes the overlay its own load returned, never a second read of
+the same paths.** `Config::load` is `load_with_overlay` with
+`EnvOverlay::none()`, so the bytes it applied and validated are already in an
+`Evaluated`; `LiveEnv` is constructed from that value and handed to both the
+reload context and the executor. Re-parsing the configured paths to build the
+overlay would open the same window at boot that *One snapshot, read once*
+closes at reload: a file edited between the two reads gives a process holding
+one set of values and an overlay serving another, with the second parse's
+validation the only one anything sees. It would also duplicate the ordering,
+BOM and malformed-line rules, and a duplicated rule is one that gets fixed in
+one copy.
 
 **The overlay owns a key domain, or removal cannot work.** Startup applies the
 env files to the process, so a key deleted from a file at reload time is still
