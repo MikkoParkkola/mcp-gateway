@@ -76,6 +76,7 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 | MIK-7217.DISCOVER.4 | As a client, the gateway MUST determine each backend's era by probing `server/discover` first, and MUST treat **any** non-modern outcome — arbitrary error, silence, timeout — as legacy, falling back to `initialize`. Only a recognised modern error proves a modern peer. | Spec compatibility matrix: *"the probe returns a non-modern error or times out"* | T, D |
 | MIK-7217.DISCOVER.5 | Era determination MUST be cached per backend for the lifetime of the process, and MUST be re-probed when a cached assumption fails. | Spec: *"Clients SHOULD cache the result for the lifetime of the server process"* | T |
 | MIK-7217.DISCOVER.6 | Backend warm-start MUST continue to retry on its existing schedule. Discovery makes each probe cheaper; it does not make an unbound port answer. | `src/backend/lifecycle.rs`; RFC-0060 U3 | T |
+| MIK-7217.DISCOVER.7 | The advertised version list MUST contain only revisions the specification defines. `2024-10-07` MUST be removed from `SUPPORTED_VERSIONS`, its tests and `docs/ARCHITECTURE.md`. | Verified 2026-08-29: introduced by `e12431a0` (2026-01-26), whose own message claims *"Support 2024-11-05 (latest) and 2024-10-07 versions"*. The specification has never defined `2024-10-07`. | T, I |
 
 ### 3.2 Stateless request handling
 
@@ -255,6 +256,23 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | CON.3 | Capability definitions remain SHA-256 pinned. |
 | CON.4 | Mixed per-file licensing (MIT core, PolyForm Noncommercial for enterprise paths) is unchanged. |
 | CON.5 | The specification's twelve-month deprecation window means no legacy removal is forced by this release, and none is taken. |
+
+### 3.1.1 A version we invented and have been advertising
+
+`src/protocol/mod.rs:23` lists `2024-10-07` among supported protocol versions. The specification
+defines five revisions — `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, `2026-07-28` — and
+that is not one of them. It has been advertised to every client since 2026-01-26 and is repeated in
+`src/protocol/negotiate.rs`, `src/transport/http/tests.rs` and `docs/ARCHITECTURE.md`.
+
+**Removing it cannot break a conforming client**, because no conforming client can request a revision
+that does not exist. It matters now for one reason: `server/discover` publishes this list as the
+gateway's own statement of what it speaks, so a fabricated entry stops being an unused constant and
+becomes a claim made in a protocol response.
+
+Two things this is not. It is not a compatibility decision — there is nothing on the other side to be
+compatible with. And it is not evidence that negotiation is broken: `negotiate_version` returns the
+requested version only on an exact match, so the entry has been inert for everything except the list
+the gateway shows the world.
 
 ## 6. Assumptions
 
