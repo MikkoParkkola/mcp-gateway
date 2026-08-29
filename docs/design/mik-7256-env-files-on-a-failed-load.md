@@ -26,12 +26,15 @@ Each verified at source.
 which applies a whole file and reports nothing about what it changed. Nothing
 can be restored, and nothing can be applied by halves.
 
-**One config consumer reads the real process environment and takes no
-substitute.** `Self::figment` merges `Env::prefixed("MCP_GATEWAY_")`
-(`src/config/mod.rs:286`) and `Config::load` extracts it a second time at
-`:199`, deliberately after the apply — so an env file setting
-`MCP_GATEWAY_PORT` reaches the config through Figment, not through `${VAR}`.
-Figment reads the process environment itself and accepts no overlay.
+**One config consumer reads the real process environment, and the library
+offers no way to redirect it.** `Self::figment` merges
+`Env::prefixed("MCP_GATEWAY_")` (`src/config/mod.rs:286`) and `Config::load`
+extracts it a second time at `:199`, deliberately after the apply — so an env
+file setting `MCP_GATEWAY_PORT` reaches the config through Figment, not
+through `${VAR}`. `Env` reads `std::env::vars_os()` and takes no substitute.
+This is the one constraint that cannot be met by passing an overlay to an
+existing function, and it is why `OverlayEnv` below is a provider of our own
+rather than a modified `Env`.
 
 **`${VAR}` expansion, by contrast, is entirely ours.** `expand_env_vars`
 (`src/config/mod.rs:313-338`) walks backend headers, backend env and
@@ -161,29 +164,37 @@ it means published.
 
 ## What D costs
 
-**`MCP_GATEWAY_*` set from an env file takes effect at the next restart, not
-at this reload or any later one.** Those reach the config through Figment's
-env layer (`src/config/mod.rs:286`), which reads the process environment
-directly and accepts no overlay. Because nothing writes the process
-environment after startup, a `MCP_GATEWAY_*` value that appears in an env file
-while the gateway is running is not visible to Figment at this reload or at
-any later one: it takes effect at the next RESTART. An earlier draft said "the
-next reload", which was true only of the `set_var` commit the review killed.
+**Nothing about an env file is restart-only that is not restart-only from the
+YAML file too.** `${VAR}` expansion, every `env:` reference, capability
+credentials and `MCP_GATEWAY_*` keys all reach the config on a reload:
+the first three through the overlay their readers now take, the last through
+`OverlayEnv`. What remains is the ordinary restart-required set, and it is a
+property of the FIELD rather than of where the value came from.
+`MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND` reaches
+`server.allow_unauthenticated_network_bind`, read once inside `run` at bind
+time (`src/gateway/server/mod.rs:1266`); a listener is already bound, so no
+mechanism short of a restart can move it. Those fields are in
+`tracked_sections`, so the reload path already reports them as pending
+restart, and it reports an env-file-sourced value on exactly the same terms as
+a YAML-sourced one. Two earlier drafts of this section were wrong in opposite
+directions — one said "the next reload", true only of the `set_var` commit the
+review killed, the other said "the next restart", true only while the Figment
+gap was being deferred.
 
-That is a real cost of refusing to mutate a running process, and it is stated
-rather than argued away. It is bounded by what those variables are — server
-host, port, and the other startup-shaped settings, most of which are in
-`tracked_sections` and therefore restart-only already. Closing it means making
-Figment's env layer overlay-aware, which is recorded under *Out of scope*.
-Everything else — `${VAR}` expansion, every `env:` reference, capability
-credentials — reloads in full.
-Nothing the operator relies on is removed, so it is a notification rather than
-a scope change. It is pinned by a test and logged at warn level when an
-env file sets a `MCP_GATEWAY_*` key, so the lag is diagnosable rather than
-silent. **The log names the key and never the value** — open PR #439 is
-removing configured values from diagnostic output across the CLI and the
-transport logs, and a new log that reintroduces one would land on top of that
-work.
+**What D does cost: a reader outside this crate's config path still sees the
+startup process environment.** The overlay reaches every reader enumerated
+above because each one is ours to change. A dependency that calls
+`std::env::var` for itself is not, and would keep a startup value until the
+next restart. No such reader is known today — the enumeration is a walk of the
+crate, and the source-scan case in the test plan is what keeps it a walk
+rather than a memory — but a future dependency could introduce one silently,
+which is the residual and is recorded as one.
+
+**No diagnostic names a value.** Where the reload path reports a key — a
+restart-required field, a refused reference, an unread candidate file — it
+names the key and the file and never the value. Open PR #439 is removing
+configured values from diagnostic output across the CLI and the transport
+logs, and a new log reintroducing one would land on top of that work.
 
 **A path ADDED to `env_files` still needs a restart.** The overlay and the
 apply both use the running gateway's list, so a newly named file is neither
@@ -215,17 +226,31 @@ noticed, but a rotated secret that silently keeps its old value for the life
 of the process. Across files it is the common shape; within one file it
 appears as soon as the referenced key was applied at startup.
 
-**So a reload REFUSES a config whose env files use `${K}` for a key those
-same env files define.** One scan of the raw text of each listed file for
-`${K}` where `K` appears as a key in any of them, self included; a match ends
-the reload with the file and the key named, and neither value. The scan reads
-only tokens `dotenvy` would itself substitute: a `${K}` inside a `#` comment,
-inside a single-quoted value, or escaped `\${K}` is inert to the parser and so
-inert here. Matching those would refuse a reload over bytes that change no
+**So a reload REFUSES a config whose env files substitute a key those same env
+files define.** One scan of the raw text of each listed file for a substitution
+naming a `K` that appears as a key in any of them, self included; a match ends
+the reload with the file and the key named, and neither value. **Both spellings
+count.** `dotenvy` substitutes the unbraced `$K` as well as `${K}`: the `{`
+merely selects `SubstitutionMode::EscapedBlock` over `Block`, and the unbraced
+branch substitutes as soon as a non-name character terminates it
+(`dotenvy-0.15.7/src/parse.rs:171-213`). A scan matching only the braced form
+would refuse `B=${A}` and accept `B=$A`, which resolves identically and carries
+exactly the defect this refusal exists to prevent. The scan reads only tokens
+`dotenvy` would itself substitute: either spelling inside a `#` comment, inside
+a single-quoted value, or escaped is inert to the parser and so inert here. Matching those would refuse a reload over bytes that change no
 value — a refusal keyed on text the parser ignores is a false positive by
 construction, and the case is cheap to hold with three fixture lines. Nothing is
 published, which is the invariant this change already holds on every other
 refusing path.
+
+Classifying which tokens `dotenvy` would substitute is a small piece of that
+parser restated in our code, which is the drift this design refuses elsewhere —
+so it is not left to a reading. Every fixture in the refusal cases is asserted
+against `dotenvy`'s own parse of the same bytes: a fixture the scan refuses must
+be one where `dotenvy` substitutes, and a fixture it accepts must be one where
+`dotenvy` does not. The library is the oracle for its own lexical rules, and a
+rule we get wrong fails a test rather than shipping as a false positive or a
+silent miss.
 
 Refusal, not a warn, and not our own expander. A warn leaves a wrong value in
 service and asks an operator to read logs to find out; re-implementing
@@ -275,7 +300,12 @@ reader:
   compile. **Infallible, and that is a decision, not an omission.** For each existing path in order it opens the
   file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
   inserts each pair; later files overwrite earlier ones, matching
-  `from_path_override`'s precedence. A missing path is skipped. A parse error
+  `from_path_override`'s precedence. A leading `~` is expanded against
+  `dirs::home_dir()` first, because startup already does exactly that
+  (`src/config/mod.rs:290-298`) and a `~/...` env file is a supported spelling
+  today; an overlay that skipped it would silently stop rotating those files.
+  Startup, the watcher and the overlay share one resolver rather than three
+  copies of the same six lines. A missing path is skipped. A parse error
   ENDS that file at the offending line, keeping the pairs before it and taking
   none after it, then moves to the next file with a warning — byte-for-byte the
   behaviour of `load_env_files_from_paths` today, which calls
@@ -310,6 +340,27 @@ it already receives and resolves through it; a key the operator removed is
 then absent from the child rather than present with a stale value. This is the
 third reader the enumeration missed — first `SecretResolver::resolve`, now
 this — which is the argument for the rule and the source scan over any list.
+
+**`OverlayEnv` — the overlay as a Figment provider.** Figment merges
+`Env::prefixed("MCP_GATEWAY_").split("__")` over the YAML file
+(`src/config/mod.rs:286`), and that provider reads `std::env::vars_os()` with
+no way to supply a different source: `Env`'s whole key transformation lives in
+a private closure applied inside `iter()`, which is hard-wired to the process
+(`figment-0.10.19/src/providers/env.rs:504-520`). So the overlay gets its own
+provider rather than a modified `Env`. It is small, because the two pieces that
+matter are public: `figment::util::nest` (`src/util.rs:271`) and `Dict::merge`,
+which are the entirety of `Env::data()` (`env.rs:521-535`). `OverlayEnv`
+applies the same transformation over the overlay map — strip the prefix
+case-insensitively, replace `__` with `.`, reject a key with an empty
+dot-segment, `nest` each pair and merge — and is merged immediately BEFORE the
+real `Env`, so a value exported into the process still wins over one from an
+env file, which is the precedence startup gives today.
+
+Reimplementing a transformation is how two implementations drift, so this one
+is pinned by an oracle rather than by care: for a given key set, `OverlayEnv`'s
+`data()` must equal the real `Env` provider's `data()` when those same keys are
+in the process environment. The oracle is the library itself, so the test
+cannot pass by agreeing with the thing it is checking.
 
 **Validation reads the overlay too.** `validate_env_reference`
 (`src/config/mod.rs:651`) and the inline agent-key resolution (`:433`) are the
@@ -429,6 +480,29 @@ Both accepting exits run it: the `no_changes` return and the published one. The
 empty patch stops being an early exit from the function and becomes what it
 already is, a property of the patch.
 
+**And once it runs there, `no_changes` is the wrong thing to say.** The patch
+is empty, so nothing about the CONFIG changed; the overlay is not the config,
+and a rotation that replaced a live credential is not a no-op. Two corrections,
+both on the accepted-with-empty-patch exit:
+
+- The outcome names the rotation. An accepted reload whose overlay differs from
+  the one it replaces reports the keys that changed — added, changed, removed,
+  by name, never by value — instead of `no_changes`. An operator who rotates a
+  secret and is told nothing happened cannot distinguish a rotation that took
+  from a watcher that fired on the wrong file.
+- The outcome reports `restart_required` when a changed key is referenced by a
+  restart-only holder. `EnvOverlay` knows which keys changed and the running
+  config knows which keys the four eager auth forms resolved at startup, so the
+  intersection is computable without resolving anything. Without this the worst
+  case is silent and security-shaped: an operator rotates a compromised
+  `auth.bearer_token` through the env file alone, sees a successful reload, and
+  the old token stays valid until a restart nobody knew to perform. The value is
+  not logged; the key and the holder are.
+
+Both are the same defect seen twice — the reload reporting on the patch when it
+should report on what it applied — and one of them decides whether a revoked
+credential is believed to be revoked.
+
 **One snapshot, read once.** Evaluation and commit MUST NOT each read the files
 from disk. `EnvOverlay::from_paths` produces the map; that same map is what the
 commit publishes, through a single `LiveEnv::set` rather than a second
@@ -497,12 +571,13 @@ told by the refusal.
 The same asymmetry answers the admin-UI write path, which revalidates through
 `write_config` (`src/config_persistence.rs:42`) against the running
 environment: an edit referencing a variable only a candidate-added env file
-supplies is rejected in the `env:` form and warned in the `${VAR}` form. That
-is the restart-only rule reaching the UI, not a defect. An overlay-aware
-write-validation path — resolving a candidate against files the running
-process has never read — would let the UI accept exactly the configuration a
-restart would need, and it is OUT of scope for the same reason making
-Figment's env layer overlay-aware is. This is also why `Config::load` keeps
+supplies is rejected in the `env:` form and warned in the `${VAR}` form. That is
+the unreloadable `env_files` LIST reaching the UI, not a defect: the file
+supplying the name has never been read, so no overlay contains it. A
+write-validation path that resolved a candidate against files the running
+process has never opened would let the UI accept exactly the configuration a
+restart would need, and it is OUT of scope for the same reason the list itself
+is. This is also why `Config::load` keeps
 reading the list out of the file: at startup the config on disk *is* the
 running config, and there is no earlier list to prefer.
 
@@ -551,8 +626,11 @@ revalidates before writing, and validation is now overlay-aware, so leaving it
 on the process alone would reject an admin edit naming a key that an
 already-listed env file supplies and a reload has since rotated — a rejection
 this change would have caused. It gains an `&EnvOverlay` parameter, supplied
-from the `LiveEnv` cell by the in-process admin path; the CLI path, which has
-no running gateway, passes what its own `Config::load` produced.
+from the `LiveEnv` cell by the in-process admin path. The CLI path passes
+`EnvOverlay::none()`: `Config::load` deliberately returns only a `Config`, so
+there is no overlay to hand it, and a CLI invocation has no running gateway
+whose rotations it could be missing. An earlier draft said the CLI passed what
+`Config::load` produced, which could not have been wired as written.
 
 **Who calls it: every config read that happens inside a running gateway.** A
 rule, not a list, because a list goes stale the moment a reader is added. Two
@@ -630,10 +708,10 @@ observation, not a ticket.
   for the evaluation — before that overlay is published, and without the
   process environment being touched at any point.
 - **MIK.ENVFILE.6** Given an env-file edit that changes a `MCP_GATEWAY_*`
-  variable, Then the reloaded config keeps the value the process has had since
-  startup, at this reload and at every later one, until the gateway restarts —
-  the stated narrowing, pinned so it cannot regress silently in either
-  direction.
+  variable, Then the reloaded config carries the new value, and a value
+  exported into the process still outranks one from an env file — startup's
+  precedence, unchanged by the overlay. Pinned so it cannot regress in either
+  direction: the earlier design asserted the opposite of the first half.
 - **MIK.ENVFILE.7** Given an admin-UI config edit against a running gateway,
   When the mutation is rejected or the write fails, Then process environment
   variables and the published overlay are both identical to before the edit,
@@ -663,6 +741,12 @@ observation, not a ticket.
   afterwards. The patch is empty and the reload returns early, so this is the
   exit a publish placed on the change-applying branch would miss — and it is
   the change's own headline case, rotation without a config edit.
+- **MIK.ENVFILE.10.4** Given an env-file-only edit that rotates a key which the
+  running config references from one of the four eager auth forms, When the
+  reload is accepted with an empty patch, Then the outcome names the changed key
+  and reports `restart_required` rather than `no_changes`, and the value appears
+  in neither. The case where believing the outcome means believing a revoked
+  credential was revoked.
 - **MIK.ENVFILE.10.2** Given an accepted reload whose changes are not fully
   applied — the registry shutdown abort — Then nothing is published, because
   the reload did not commit.
@@ -671,11 +755,12 @@ observation, not a ticket.
   that was in force at startup, not the one the earlier reload accepted. The
   list must come from the running config; taken from the candidate side it
   activates a file whose addition still reports `restart_required`.
-- **MIK.ENVFILE.12** Given env files in which any `${K}` names a key those same
-  files define, When a reload is attempted, Then it is refused with the file and
-  the key named and no value logged, and nothing is published. Startup accepts
-  the same files unchanged. A `${K}` the parser would not substitute — inside a
-  `#` comment, inside a single-quoted value, or escaped — does not refuse.
+- **MIK.ENVFILE.12** Given env files in which a substitution — `${K}` or the
+  unbraced `$K` — names a key those same files define, When a reload is
+  attempted, Then it is refused with the file and the key named and no value
+  logged, and nothing is published. Startup accepts the same files unchanged. A
+  token the parser would not substitute — either spelling inside a `#` comment,
+  inside a single-quoted value, or escaped — does not refuse.
 - **MIK.ENVFILE.13** Given a key removed from an env file whose value was
   applied to the process at startup, When the reload is accepted, Then the key
   no longer resolves for any overlay-aware reader, and a reader that requires it
@@ -716,9 +801,11 @@ the values that matter.
   published to the runtime overlay only once the reload is committed.
 - `docs/DEPLOYMENT.md:177` — describes `env_files` without saying what a reload
   can and cannot pick up from one. It now needs three statements: `${VAR}` and
-  `env:` values reload; a `MCP_GATEWAY_*` value added while running waits for a
-  restart; a `${K}` naming a key the env files themselves define is refused on
-  reload and accepted at startup.
+  `env:`
+  values reload, and so do `MCP_GATEWAY_*` keys; a field the running process
+  reads only at startup is reported as pending restart whichever source
+  supplies it; a substitution, in either spelling, naming a key the env
+  files themselves define is refused on reload and accepted at startup.
 - `src/config_reload/mod.rs:1485` and `src/config_reload/tests.rs:1271,1295` —
   comments explaining why the reload refusal message may not claim that nothing
   was applied. Under D a *refused* reload really does apply nothing, so the
@@ -731,18 +818,18 @@ the values that matter.
 requires a restart. This change is about what a failing reload may do to the
 process, and about the contents of paths already listed.
 
-**Making Figment's env layer overlay-aware.** It is the only way to close the
-`MCP_GATEWAY_*` gap, which the no-mutation commit turned from a one-reload lag
-into a wait for the next restart. It remains out: it changes how every
-configuration key is resolved, not how env files are handled, and the affected
-keys are startup-shaped ones that are largely restart-only already:
-`MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND` reaches
-`server.allow_unauthenticated_network_bind`, which is read once inside `run`
-at bind time (`src/gateway/server/mod.rs:1266`), so a value that arrives a
-restart late arrives no later than the field it feeds. That is the claim the
-deferral rests on, and it is why the test plan carries no row for this gap.
-Disposal: recorded as an observation, not filed — nobody has asked for it, and
-the operator has already chosen this axis as the one to give up.
+**Making Figment's env layer overlay-aware was here, and is now IN scope** as
+`OverlayEnv`. It moved when the asked question came back: restart-only was not
+acceptable for values that arrive through an env file. The deferral had rested
+on the affected keys being startup-shaped anyway, which is true of some of them
+and was never true of all of them.
+
+**Putting every process-environment read behind a wrapper, with a lint
+forbidding the direct call.** It would close the residual named above — a
+dependency, or a later helper, reading `std::env` outside the enumerated set.
+It is crate-wide, it is not about env files, and the source scan covers the
+omission this change could plausibly cause. Disposal: recorded as an
+observation, not filed.
 
 **Strengthening the reload refusal message.** Once a refused reload applies
 nothing the gateway can honestly say so, and the message at
@@ -800,7 +887,18 @@ rather than default is an operator's call, not a repair.
   added while running waits for a restart rather than for the next config load.
   The answer still holds a fortiori — it is the same axis the operator chose to
   give up, and hot-add is still preserved, which is what B could not do — but
-  the operator selected a smaller loss than the one now on offer, so this is
-  flagged for confirmation rather than assumed. Nothing downstream depends on
-  the confirmation: a yes leaves the design unchanged, and a no reopens the
-  Figment out-of-scope item, not the commit mechanism.
+  the operator selected a smaller loss than the one now on offer, so it was put
+  back to them rather than assumed. The bullet below is that second question,
+  and its answer removed the deepening entirely.
+- *Is restart-only acceptable for `MCP_GATEWAY_*` values that arrive through an
+  env file?* — asked, answered: no. A live change is wanted wherever it can be
+  made safely, and where it cannot, the operator is to be told which setting
+  needs a restart rather than left to discover it. Changed the design: the
+  Figment item is no longer out of scope and appears below as `OverlayEnv`, and
+  the narrowing this bullet was about no longer exists — an `MCP_GATEWAY_*`
+  value in an env file is evaluated on a reload exactly as one in the YAML file
+  is. What genuinely cannot be applied to a running process — a listener
+  already bound to a port — is reported by the restart-required path the reload
+  already has, on the same terms as any other config source. That is the point
+  of the answer rather than a caveat on it: an env file stops being a special
+  case.
