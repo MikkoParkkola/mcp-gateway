@@ -96,10 +96,14 @@ reload path applies them.
 says which it means without opening the signature. The body's only change is
 that `Self::load_env_files_from_paths` runs under `EnvFiles::Apply`.
 
-- `Apply`: the five startup sites in `src/main.rs` and the setup wizard.
-- `Skip`: `load_config_patch` (`src/config_reload/mod.rs:1239`) and the
-  config-export watcher (`src/commands/config_export/watch.rs:81`), both of
-  which evaluate a candidate inside a process that is already running.
+- `Apply`: the five startup sites in `src/main.rs`, the setup wizard, and the
+  config-export watcher (`src/commands/config_export/watch.rs:81`). The
+  watcher is a short-lived CLI process whose only job is to regenerate client
+  entries from the config; it has no backends to leak into and no reload to
+  refuse, and skipping there would drop env-file-derived values from what it
+  exports. Its behaviour stays exactly as it is.
+- `Skip`: `load_config_patch` (`src/config_reload/mod.rs:1239`) — the one
+  caller that evaluates a candidate inside the running gateway.
 
 `load_env_files(&self)` (`src/config/mod.rs:276`) is unused outside tests and
 is deleted with the watch that motivated it.
