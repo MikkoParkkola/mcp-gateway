@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secret is now rejected the same way a missing one is, whatever made it empty.
 
 - **The provenance signing key reads the env-file overlay.** Runtime provenance
-  stamping took `BNAUT_ATTESTATION_SIGNING_KEY` from the process environment, so
+  stamping took `GATEWAY_ATTESTATION_SIGNING_KEY` from the process environment, so
   a key supplied by an env file no longer reached it and the signer stayed
   uninstalled. The key and its id now resolve through the overlay.
 
