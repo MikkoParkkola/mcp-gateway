@@ -176,9 +176,18 @@ fn ac_discover_2_answers_without_a_session() {
     // WHEN: discovery is produced with no session identifier anywhere in play
     let doc = m.discover_document();
 
-    // THEN: the document does not depend on one — the session is the mechanism
-    // 2026-07-28 removes, so a discovery document that carries one has been
-    // built on the thing being deleted.
+    // THEN: a document is produced, and it does not depend on a session — which
+    // is the mechanism 2026-07-28 removes, so a discovery document carrying one
+    // has been built on the thing being deleted.
+    //
+    // The emptiness check is load-bearing. Without it this test passes against
+    // an empty object, which contains no session id for the trivial reason that
+    // it contains nothing: the staging would remove the very condition the
+    // assertion observes.
+    assert!(
+        doc.get("protocolVersions").is_some(),
+        "a document that advertises nothing cannot demonstrate it needs no session"
+    );
     let rendered = serde_json::to_string(&doc).expect("document must serialise");
     assert!(
         !rendered.contains("sessionId") && !rendered.contains("session_id"),
@@ -198,52 +207,72 @@ fn ac_discover_2_answers_without_a_session() {
 
 #[test]
 fn ac_discover_3_initialize_result_is_unchanged() {
-    // GIVEN: a 2025 client
-    let m = meta();
+    // GIVEN: a 2025 client — named explicitly, because `params: None` exercises
+    // the no-version default (which negotiates 2024-11-05) rather than the case
+    // this criterion describes. A golden captured from the wrong staging pins
+    // the wrong behaviour and never notices.
+    for client_version in ["2025-11-25", "2025-06-18"] {
+        let m = meta();
+        let params = serde_json::json!({
+            "protocolVersion": client_version,
+            "capabilities": {},
+            "clientInfo": { "name": "ac-discover-3", "version": "1.0.0" }
+        });
 
-    // WHEN: it sends `initialize` exactly as it did against 3.5.0
-    let response = m.handle_initialize(RequestId::Number(1), None, None, None);
-    let result = response
-        .result
-        .expect("initialize must return a result, as it did in 3.5.0");
+        // WHEN: it sends `initialize` exactly as it did against 3.5.0
+        let response = m.handle_initialize(RequestId::Number(1), Some(&params), None, None);
+        let result = response
+            .result
+            .expect("initialize must return a result, as it did in 3.5.0");
 
-    // THEN: the result is byte-identical to the captured golden
-    let golden_path = &format!(
-        "{}/tests/fixtures/mik_7217/initialize_3_5_0_{}.json",
-        env!("CARGO_MANIFEST_DIR"),
-        GOLDEN_FEATURE_SET
-    );
-    // The golden is CAPTURED, never hand-written: a hand-written expectation of
-    // the handshake is a second implementation of it, and it agrees with what
-    // the author believed rather than with what shipped. Capture once, with
-    // UPDATE_GOLDEN=1, from a tree that has no discovery code in it.
-    if std::env::var("UPDATE_GOLDEN").is_ok() {
-        std::fs::create_dir_all(
-            std::path::Path::new(golden_path)
-                .parent()
-                .expect("fixture path has a parent"),
-        )
-        .expect("fixture directory must be creatable");
-        std::fs::write(
-            golden_path,
-            serde_json::to_string_pretty(&result).expect("result must serialise"),
-        )
-        .expect("golden must be writable");
+        // THEN: the result is byte-identical to the captured golden
+        let golden_path = &format!(
+            "{}/tests/fixtures/mik_7217/initialize_3_5_0_{}_{}.json",
+            env!("CARGO_MANIFEST_DIR"),
+            client_version.replace('-', "_"),
+            GOLDEN_FEATURE_SET
+        );
+
+        // The golden is CAPTURED, never hand-written: a hand-written expectation
+        // of the handshake is a second implementation of it, and it agrees with
+        // what the author believed rather than with what shipped. Capture once,
+        // with UPDATE_GOLDEN=1, from a tree that has no discovery code in it.
+        if std::env::var("UPDATE_GOLDEN").is_ok() {
+            std::fs::create_dir_all(
+                std::path::Path::new(golden_path)
+                    .parent()
+                    .expect("fixture path has a parent"),
+            )
+            .expect("fixture directory must be creatable");
+            std::fs::write(
+                golden_path,
+                serde_json::to_string_pretty(&result).expect("result must serialise"),
+            )
+            .expect("golden must be writable");
+        }
+
+        let golden_raw = std::fs::read_to_string(golden_path).unwrap_or_else(|e| {
+            panic!(
+                "golden fixture missing at {golden_path}: {e}. Capture it with \
+                 UPDATE_GOLDEN=1 from a tree that has NO discovery code yet; a \
+                 golden captured afterwards agrees with the change instead of \
+                 catching it."
+            )
+        });
+        let golden: Value = serde_json::from_str(&golden_raw).expect("golden must be valid JSON");
+
+        assert_eq!(
+            result, golden,
+            "the initialize result changed for a {client_version} client. Discovery \
+             must be additive: this row is what enforces that, per the ticket's own \
+             stop-the-line."
+        );
+
+        // The golden must actually pin the negotiated version, or a regression
+        // that renegotiates every client onto one revision would still match.
+        assert_eq!(
+            golden["protocolVersion"], client_version,
+            "golden for {client_version} must record that version as negotiated"
+        );
     }
-
-    let golden_raw = std::fs::read_to_string(golden_path).unwrap_or_else(|e| {
-        panic!(
-            "golden fixture missing at {golden_path}: {e}. Capture it with \
-             UPDATE_GOLDEN=1 from a tree that has NO discovery code yet; a \
-             golden captured afterwards agrees with the change instead of \
-             catching it."
-        )
-    });
-    let golden: Value = serde_json::from_str(&golden_raw).expect("golden must be valid JSON");
-
-    assert_eq!(
-        result, golden,
-        "the initialize result changed. Discovery must be additive: this row is \
-         what enforces that, per the ticket's own stop-the-line."
-    );
 }
