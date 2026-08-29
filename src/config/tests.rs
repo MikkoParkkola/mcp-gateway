@@ -81,30 +81,30 @@ fn test_load_env_files_sets_env_vars() {
     writeln!(f, "MCP_GW_TEST_KEY_B=42").unwrap();
     drop(f);
 
-    let config = Config {
-        env_files: vec![env_path.to_string_lossy().to_string()],
-        ..Default::default()
-    };
-    config.load_env_files();
+    let overlay = EnvOverlay::from_paths(&[env_path], &EnvOverlay::none());
 
     assert_eq!(
-        env::var("MCP_GW_TEST_KEY_A").unwrap(),
-        "hello_from_env_file"
+        overlay.resolve("MCP_GW_TEST_KEY_A").as_deref(),
+        Some("hello_from_env_file")
     );
-    assert_eq!(env::var("MCP_GW_TEST_KEY_B").unwrap(), "42");
-
-    // Note: env::remove_var is unsafe in edition 2024 and lib forbids unsafe.
-    // Test keys use unique MCP_GW_TEST_ prefix so won't conflict.
+    assert_eq!(overlay.resolve("MCP_GW_TEST_KEY_B").as_deref(), Some("42"));
+    assert!(
+        env::var("MCP_GW_TEST_KEY_A").is_err(),
+        "an env file must not reach the process environment"
+    );
 }
 
 #[test]
 fn test_load_env_files_skips_missing() {
-    let config = Config {
-        env_files: vec!["/nonexistent/path/.env".to_string()],
-        ..Default::default()
-    };
-    // Should not panic
-    config.load_env_files();
+    let overlay = EnvOverlay::from_paths(
+        &[std::path::PathBuf::from("/nonexistent/path/.env")],
+        &EnvOverlay::none(),
+    );
+
+    assert!(
+        overlay.owned_keys().is_empty(),
+        "a missing env file contributes nothing and must not panic"
+    );
 }
 
 #[test]
@@ -122,24 +122,18 @@ fn test_load_env_files_later_file_overrides_earlier_file() {
     writeln!(second, "{key}=from_second").unwrap();
     drop(second);
 
-    let config = Config {
-        env_files: vec![
-            first_path.to_string_lossy().to_string(),
-            second_path.to_string_lossy().to_string(),
-        ],
-        ..Default::default()
-    };
+    let overlay = EnvOverlay::from_paths(&[first_path, second_path], &EnvOverlay::none());
 
-    config.load_env_files();
-
-    assert_eq!(env::var(key).unwrap(), "from_second");
+    assert_eq!(overlay.resolve(key).as_deref(), Some("from_second"));
 }
 
 #[test]
 fn test_load_env_files_empty() {
     let config = Config::default();
     assert!(config.env_files.is_empty());
-    config.load_env_files(); // No-op, should not panic
+
+    let overlay = EnvOverlay::from_paths(&[], &EnvOverlay::none());
+    assert!(overlay.owned_keys().is_empty());
 }
 
 #[test]
@@ -1213,7 +1207,7 @@ fn envfile_19_the_overlay_opens_the_tilde_path_startup_recorded() {
     // THEN: the path startup RECORDED is the expanded one, not the `~` spelling
     assert_eq!(
         startup.env_paths.as_paths(),
-        &[env_path.clone()],
+        std::slice::from_ref(&env_path),
         "startup must record the absolute path it opened"
     );
 
@@ -1301,7 +1295,7 @@ fn envfile_19d_child_resolves_against_dirs_home_dir() {
     // THEN: it resolved against this process's own `dirs::home_dir()`
     assert_eq!(
         startup.env_paths.as_paths(),
-        &[expected.clone()],
+        std::slice::from_ref(&expected),
         "startup must resolve `~` against dirs::home_dir()"
     );
 

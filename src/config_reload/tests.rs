@@ -364,61 +364,6 @@ fn diff_handles_mixed_add_remove_modify() {
 }
 
 // -------------------------------------------------------------------------
-// expand_tilde
-// -------------------------------------------------------------------------
-
-#[test]
-fn expand_tilde_leaves_absolute_path_unchanged() {
-    // GIVEN: a path that does not start with ~
-    let path = super::expand_tilde("/etc/secrets.env");
-    // THEN: returned as-is
-    assert_eq!(path, std::path::PathBuf::from("/etc/secrets.env"));
-}
-
-#[test]
-fn expand_tilde_expands_home_prefix() {
-    // GIVEN: a tilde-prefixed path
-    let path = super::expand_tilde("~/.claude/secrets.env");
-    // THEN: ~ is replaced — we just verify it no longer starts with ~
-    let path_str = path.to_string_lossy();
-    assert!(
-        !path_str.starts_with('~'),
-        "expected ~ to be expanded, got: {path_str}"
-    );
-    assert!(
-        path_str.ends_with(".claude/secrets.env"),
-        "expected suffix preserved, got: {path_str}"
-    );
-}
-
-// -------------------------------------------------------------------------
-// resolve_env_file_paths
-// -------------------------------------------------------------------------
-
-#[test]
-fn resolve_env_file_paths_expands_tilde_entries() {
-    // GIVEN: a mix of absolute and tilde paths
-    let raw = vec![
-        "/tmp/a.env".to_string(),
-        "~/.claude/secrets.env".to_string(),
-    ];
-    // WHEN
-    let resolved = super::resolve_env_file_paths(&raw);
-    // THEN: two entries, first unchanged, second has ~ expanded
-    assert_eq!(resolved.len(), 2);
-    assert_eq!(resolved[0], std::path::PathBuf::from("/tmp/a.env"));
-    assert!(!resolved[1].to_string_lossy().starts_with('~'));
-}
-
-#[test]
-fn resolve_env_file_paths_empty_input_returns_empty() {
-    // GIVEN: empty slice
-    let resolved = super::resolve_env_file_paths(&[]);
-    // THEN: empty vec
-    assert!(resolved.is_empty());
-}
-
-// -------------------------------------------------------------------------
 // is_config_event
 // -------------------------------------------------------------------------
 
@@ -562,7 +507,11 @@ backends:
     .unwrap();
 
     let live_config = std::sync::Arc::new(LiveConfig::new(Config::default()));
-    let result = load_config_patch(&config_path, &live_config);
+    let env = LiveEnv::new(
+        std::sync::Arc::new(EnvOverlay::none()),
+        crate::config::ResolvedEnvFiles::default(),
+    );
+    let result = load_config_patch(&config_path, &live_config, &env);
 
     assert!(matches!(result, Err(msg) if msg.contains("Configuration validation error")));
 }
@@ -1922,6 +1871,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 struct RecordingHome {
     calls: Mutex<Vec<std::path::PathBuf>>,
     startup_done: AtomicBool,
+    /// The home in force before any env file has been applied.
+    ///
+    /// A test that needs the FIRST `~` entry to land somewhere it controls has
+    /// no other way to say so: assigning `HOME` in the process environment is
+    /// unsafe in edition 2024 and the library forbids unsafe, and seeding the
+    /// overlay would presuppose the very sequencing under test.
+    base: Option<std::path::PathBuf>,
 }
 
 impl RecordingHome {
@@ -1929,6 +1885,15 @@ impl RecordingHome {
         Self {
             calls: Mutex::new(Vec::new()),
             startup_done: AtomicBool::new(false),
+            base: None,
+        }
+    }
+
+    /// A recorder whose pre-file home is `base`.
+    fn based_at(base: &std::path::Path) -> Self {
+        Self {
+            base: Some(base.to_path_buf()),
+            ..Self::new()
         }
     }
 
@@ -1952,10 +1917,16 @@ impl HomeResolver for RecordingHome {
         );
         // Same computation production performs, at the same point in the
         // sequence: the overlay built so far, then the platform's own answer.
+        // `assigns` rather than `resolve`: the overlay falls back to the
+        // process environment, which would hand back the real home and hide
+        // the base this recorder was given.
         let home = so_far
-            .resolve("HOME")
+            .assigns("HOME")
+            .then(|| so_far.resolve("HOME"))
+            .flatten()
             .filter(|h| !h.is_empty())
             .map(std::path::PathBuf::from)
+            .or_else(|| self.base.clone())
             .or_else(dirs::home_dir);
         if let Some(ref h) = home {
             self.calls.lock().unwrap().push(h.clone());
@@ -1975,7 +1946,8 @@ fn env_file(dir: &std::path::Path, name: &str, contents: &str) -> std::path::Pat
 fn config_naming_env_files(dir: &std::path::Path, entries: &[&str]) -> std::path::PathBuf {
     let mut yaml = String::from("env_files:\n");
     for e in entries {
-        yaml.push_str(&format!("  - \"{e}\"\n"));
+        use std::fmt::Write as _;
+        writeln!(yaml, "  - \"{e}\"").unwrap();
     }
     let path = dir.join("gateway.yaml");
     std::fs::write(&path, yaml).unwrap();
@@ -2030,8 +2002,9 @@ async fn envfile_19c_startup_resolves_each_entry_under_the_home_in_force_then_th
     let cfg_dir = tempfile::tempdir().unwrap();
     let cfg = config_naming_env_files(cfg_dir.path(), &["~/one.env", "~/two.env"]);
 
-    // WHEN: startup runs, resolving through a recording home
-    let home = RecordingHome::new();
+    // WHEN: startup runs, resolving through a recording home based at the
+    // first temp home, so that `~/one.env` names the file written above.
+    let home = RecordingHome::based_at(home_a.path());
     let startup = startup_through(&cfg, &home);
     let recorded = home.recorded();
 
@@ -2132,9 +2105,12 @@ async fn envfile_19e_a_reload_assigning_home_reports_restart_required_without_re
     let cfg_dir = tempfile::tempdir().unwrap();
     let cfg = config_naming_env_files(cfg_dir.path(), &["~/rot.env"]);
 
-    let home = RecordingHome::new();
+    let home = RecordingHome::based_at(home_a.path());
     let startup = startup_through(&cfg, &home);
-    assert_eq!(startup.env_paths.as_paths(), &[recorded_path.clone()]);
+    assert_eq!(
+        startup.env_paths.as_paths(),
+        std::slice::from_ref(&recorded_path)
+    );
 
     // WHEN: the env file is rewritten to assign `HOME` elsewhere, and reloaded
     home.finish_startup();
@@ -2433,7 +2409,7 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_HS256",
-            "agent_auth:\n  enabled: true\n  agents:\n    - id: a\n      hs256_secret: \"env:MCP_GW_TEST_ENVFILE10C_HS256\"\n",
+            "agent_auth:\n  enabled: true\n  agents:\n    - client_id: a\n      name: a\n      hs256_secret: \"env:MCP_GW_TEST_ENVFILE10C_HS256\"\n",
         ),
         (
             "MCP_GW_TEST_ENVFILE10C_ADMIN",

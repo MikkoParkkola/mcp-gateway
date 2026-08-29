@@ -63,6 +63,13 @@ pub struct CapabilityExecutor {
     /// counts as a live backend. Surfaced via the capability backend in
     /// `/health` (MIK-5080).
     pub(super) health: crate::failsafe::HealthTracker,
+    /// The environment a credential name resolves against.
+    ///
+    /// Capability credentials resolve lazily, per call, so this is the reader
+    /// that a rotated env file has to reach. Defaults to the process
+    /// environment; the gateway replaces it with the overlay startup published
+    /// (`with_env`), which a reload republishes.
+    pub(super) env: Arc<crate::config::LiveEnv>,
 }
 
 /// Maximum number of send attempts (1 initial + 2 retries) for transient
@@ -188,7 +195,16 @@ impl CapabilityExecutor {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
+            env: Arc::new(crate::config::LiveEnv::default()),
         }
+    }
+
+    /// Resolve credential names against `env` instead of the process
+    /// environment.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.env = env;
+        self
     }
 
     /// Whether outbound transport is currently considered healthy.
@@ -217,6 +233,7 @@ impl CapabilityExecutor {
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
+            env: Arc::new(crate::config::LiveEnv::default()),
         }
     }
 

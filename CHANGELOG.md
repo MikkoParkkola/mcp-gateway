@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reload reuses the paths startup recorded rather than resolving them again.
   Assigning `HOME` in a reloaded env file reports `restart required` instead.
 
+  Capability credentials resolve through that overlay. An `env:` key on a
+  capability used to read the process environment directly, so a value an env
+  file supplied reached a `${VAR}` expansion in the config but not the
+  credential a capability sent upstream. Both now read the same value, and the
+  process environment is still the last place looked.
+
   Env files do not supply `ATTESTATION_SIGNING_KEY` or `ATTESTATION_KEY_ID`.
   Those are read from the process environment under fixed names and are
   expected to come from the deployment, not from a config file.

@@ -2,9 +2,10 @@
 
 ## Problem
 
-`Config::load` applies every path in `env_files` to the process environment
-before it validates anything (`src/config/mod.rs:198`, then `:303`
-`dotenvy::from_path_override`). Every reload runs through it via
+Stated as it stood before this change; the line references are to that tree,
+not to the shipped one. `Config::load` applied every path in `env_files` to the
+process environment before it validated anything (`src/config/mod.rs:198`, then
+`:303` `dotenvy::from_path_override`). Every reload ran through it via
 `load_config_patch` (`src/config_reload/mod.rs:1239`). A reload that fails —
 parse error, validation error, shutdown abort, or the posture refusal — has
 already overwritten process variables from the candidate file. The reload
@@ -1311,3 +1312,52 @@ So it is a decision rather than a deferral, its TRIGGER is named: the first
 defect the scan admits it cannot catch — an aliased environment read that
 reaches production, or a second value-with-binding mismatch — promotes the
 service from an improvement to the fix, and it gets its own design.
+
+## Design events during implementation
+
+The implementation brief said no test files would be edited. Six were. Each is
+recorded here because a decision the design did not make is a design event, and
+an unrecorded one reaches no reviewer.
+
+1. **Four unit tests were deleted rather than repaired**
+   (`src/config_reload/tests.rs`): `expand_tilde_leaves_absolute_path_unchanged`,
+   `expand_tilde_expands_home_prefix`, `resolve_env_file_paths_expands_tilde_entries`,
+   `resolve_env_file_paths_empty_input_returns_empty`. They tested helpers this
+   change removes — `~` now resolves exactly once, at startup, through
+   `HomeResolver`. A test for a function that no longer exists cannot be
+   repaired, only rewritten against something else, and the something else is
+   already covered by the `envfile_19*` rows.
+
+2. **`test_load_env_files_*` were rewritten against the overlay**
+   (`src/config/tests.rs`). They asserted `std::env::var` saw the values, which
+   is the behaviour this change removes. The assertions now read the overlay.
+   This is the acceptance criterion changing, not a test being made to agree
+   with the code: the criterion "an env file sets a process variable" was
+   replaced by "an env file supplies a value every reader resolves".
+
+3. **`RecordingHome::based_at` was added** (`src/config_reload/tests.rs`), so a
+   test can stage a home directory the resolver reports without touching the
+   real one.
+
+4. **The `MIK-7215.STATELESS.7` source scan was replaced by a behavioural gate**
+   (`tests/mik_7215_acs.rs`). The scan searched `src/` for the string
+   `"notifications/message"` and could not tell an emission from an assertion
+   that there is no emission — it went red on a unit test making exactly that
+   assertion. The replacement asserts the delivery decision directly: a maximal
+   subscription filter never delivers a log notification. The original test's
+   own comment prescribed this replacement.
+
+5. **The `initialize` golden no longer pins the crate version**
+   (`tests/mik_7217_acs.rs`). The fixture was captured at 3.5.0 and the crate is
+   4.0.0, so every release bump reddened a golden that exists to catch discovery
+   leaking into the handshake. The version is now asserted against
+   `CARGO_PKG_VERSION` and excluded from the golden comparison. Regenerating the
+   fixture was rejected: it was captured from a tree with no discovery code, and
+   a golden recaptured now agrees with the change instead of catching it.
+
+6. **The module doctest was updated for the new `ConfigWatcher::start` arity**
+   (`src/config_reload/mod.rs`), which takes the live environment overlay.
+
+Items 4 and 5 are outside what this change is for. They are repaired here rather
+than filed because each repair is smaller than the ticket describing it, and
+both blocked the suite.

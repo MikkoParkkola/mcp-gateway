@@ -564,52 +564,39 @@ mod http {
 // MIK-7215.STATELESS.7 — the gateway MUST NOT emit `notifications/message` for
 // a request that carried no `io.modelcontextprotocol/logLevel`.
 //
-// Satisfied by absence: the gateway emits no log notifications at all today
-// (searched 2026-08-29 — the only occurrence of the method name in `src/` is a
-// doc comment). An absence is a fine way to satisfy a MUST NOT, and a terrible
-// way to keep satisfying it, because the day someone adds emission nothing
-// says the rule exists.
-//
-// So the absence is pinned rather than assumed. When log notifications are
-// implemented, this test fails — and the fix is not to delete it but to replace
-// it with one that asserts the gate at the emission site.
+// Asserted at the delivery decision rather than by searching the source. A
+// search cannot tell an emission from an assertion that there is no emission,
+// and it fired on a unit test making exactly that assertion. What it was
+// standing in for is the gate below: `delivers` is the one place a
+// notification meets a subscriber, and a log message never passes it however
+// much the client asked for.
 // ===========================================================================
 
 #[test]
-fn ac_stateless_7_the_gateway_emits_no_log_notifications() {
-    use std::path::Path;
+fn ac_stateless_7_a_log_notification_is_never_delivered_to_a_subscriber() {
+    use mcp_gateway::gateway::subscription_registry::delivers;
+    use mcp_gateway::protocol::subscriptions::ListenRequest;
 
-    fn scan(dir: &Path, hits: &mut Vec<String>) {
-        let entries = std::fs::read_dir(dir).expect("source tree must be readable");
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                scan(&path, hits);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&path).unwrap_or_default();
-                for (n, line) in text.lines().enumerate() {
-                    // The emission shape, not the mention: a doc comment naming
-                    // the method is not an emission, and this test is about
-                    // what the gateway sends.
-                    if line.contains("\"notifications/message\"") {
-                        hits.push(format!("{}:{}", path.display(), n + 1));
-                    }
-                }
-            }
+    let params = json!({
+        "notifications": {
+            "toolsListChanged": true,
+            "promptsListChanged": true,
+            "resourcesListChanged": true,
+            "resourceSubscriptions": ["file:///a"]
         }
-    }
+    });
+    let wants_everything = ListenRequest::from_params(Some(&params)).expect("filter must parse");
 
-    let mut hits = Vec::new();
-    scan(
-        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
-        &mut hits,
-    );
+    let log = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/message",
+        "params": { "level": "info", "data": "anything" }
+    });
 
     assert!(
-        hits.is_empty(),
-        "the gateway now emits log notifications at {hits:?} — MIK-7215.STATELESS.7 \
-         requires that none is sent for a request carrying no \
-         `io.modelcontextprotocol/logLevel`. Enforce it at that site and replace \
-         this test with one that asserts the gate."
+        !delivers(&wants_everything, &log),
+        "a log notification reached a subscriber that never asked for one — \
+         MIK-7215.STATELESS.7 requires that none is sent for a request carrying \
+         no `io.modelcontextprotocol/logLevel`"
     );
 }

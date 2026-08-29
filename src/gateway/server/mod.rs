@@ -298,6 +298,12 @@ pub struct Gateway {
     backends: Arc<BackendRegistry>,
     /// Shutdown flag
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+    /// The environment the config was evaluated against.
+    ///
+    /// Every lazy reader — capability credentials, the reload transaction, the
+    /// file watcher — resolves through this rather than the process
+    /// environment, which no env file is written to.
+    env: Arc<crate::config::LiveEnv>,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -414,7 +420,19 @@ impl Gateway {
             config_path,
             backends,
             shutdown_tx: None,
+            env: Arc::new(crate::config::LiveEnv::default()),
         })
+    }
+
+    /// Resolve env-file-supplied values through `env`.
+    ///
+    /// Set from the startup evaluation. Without it the gateway falls back to
+    /// the process environment, which is what a caller building a `Config` in
+    /// memory wants and what an env file no longer reaches.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.env = env;
+        self
     }
 
     /// Build [`MetaMcp`] and all supporting components shared between HTTP and
@@ -810,7 +828,7 @@ impl Gateway {
         // when webhook route construction does not depend on them, populate the
         // backend in the background so health/MCP endpoints bind promptly.
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new());
+            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
@@ -936,13 +954,16 @@ impl Gateway {
         // bind-origin snapshot reads `live_config` while it still equals the
         // config the listener binds — no startup reload race (MIK-6750 r4).
         if let Some(ref path) = self.config_path {
-            let reload_ctx = Arc::new(ReloadContext::new(
-                path.clone(),
-                Arc::clone(&live_config),
-                Arc::clone(&self.backends),
-                self.config.failsafe.clone(),
-                self.config.meta_mcp.cache_ttl,
-            ));
+            let reload_ctx = Arc::new(
+                ReloadContext::new(
+                    path.clone(),
+                    Arc::clone(&live_config),
+                    Arc::clone(&self.backends),
+                    self.config.failsafe.clone(),
+                    self.config.meta_mcp.cache_ttl,
+                )
+                .with_env(Arc::clone(&self.env)),
+            );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
 
@@ -1208,6 +1229,7 @@ impl Gateway {
                 Arc::clone(&live_config),
                 Arc::clone(&self.backends),
                 &self.config,
+                Arc::clone(&self.env),
                 shutdown_tx.subscribe(),
             ) {
                 Ok(w) => {
@@ -1465,7 +1487,7 @@ impl Gateway {
         } = self.build_meta_mcp().await?;
 
         if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new());
+            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,

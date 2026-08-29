@@ -265,6 +265,21 @@ fn ac_discover_3_initialize_result_is_unchanged() {
         });
         let golden: Value = serde_json::from_str(&golden_raw).expect("golden must be valid JSON");
 
+        // The crate version is the one field that legitimately moves without the
+        // handshake changing, so it is asserted rather than frozen: a release
+        // bump must not red a golden that exists to catch discovery leaking into
+        // the result.
+        assert_eq!(
+            result["serverInfo"]["version"],
+            Value::from(env!("CARGO_PKG_VERSION")),
+            "initialize must report the crate's own version"
+        );
+        let mut result = result;
+        let mut golden = golden;
+        for doc in [&mut result, &mut golden] {
+            doc["serverInfo"]["version"] = Value::Null;
+        }
+
         assert_eq!(
             result, golden,
             "the initialize result changed for a {client_version} client. Discovery \

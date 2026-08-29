@@ -550,13 +550,23 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     }
 
     let config_path = serve_config_path(&cli);
-    let config = match Config::load(config_path.as_deref()) {
-        Ok(mut config) => {
+    // `load_evaluated`, not `load`: an env file is read into an overlay the
+    // gateway carries, never into the process environment, so the environment
+    // has to travel with the config it was evaluated against.
+    let (config, env) = match Config::load_evaluated(config_path.as_deref()) {
+        Ok(evaluated) => {
+            let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
                 eprintln!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
-            config
+            (
+                config,
+                std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
+                    evaluated.overlay,
+                    evaluated.env_paths,
+                )),
+            )
         }
         Err(e) => {
             eprintln!("Failed to load configuration: {e}");
@@ -565,7 +575,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     };
 
     let gateway = match Gateway::new_with_path(config, config_path).await {
-        Ok(g) => g,
+        Ok(g) => g.with_env(env),
         Err(e) => {
             eprintln!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;
@@ -596,13 +606,20 @@ async fn run_server(cli: Cli) -> ExitCode {
     // meta_mcp.enabled=true would be a network-facing fail-open). Only the
     // stdio path (a local pipe, no network auth surface) degrades — see
     // serve_config_path / run_stdio_server.
-    let config = match Config::load(cli.config.as_deref()) {
-        Ok(mut config) => {
+    let (config, env) = match Config::load_evaluated(cli.config.as_deref()) {
+        Ok(evaluated) => {
+            let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
                 error!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
-            config
+            (
+                config,
+                std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
+                    evaluated.overlay,
+                    evaluated.env_paths,
+                )),
+            )
         }
         Err(e) => {
             error!("Failed to load configuration: {e}");
@@ -620,7 +637,7 @@ async fn run_server(cli: Cli) -> ExitCode {
 
     let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
     let gateway = match Gateway::new_with_path(config, config_path).await {
-        Ok(g) => g,
+        Ok(g) => g.with_env(env),
         Err(e) => {
             error!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;

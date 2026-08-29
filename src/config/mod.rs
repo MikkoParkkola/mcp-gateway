@@ -6,18 +6,19 @@
 //! Feature-specific types live in the [`features`] sub-module and are
 //! re-exported here so callers use `crate::config::KeyServerConfig`, etc.
 
+mod env_overlay;
 mod features;
 
 use std::{
-    collections::HashMap,
-    env,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use figment::{
-    Figment,
-    providers::{Env, Format, Yaml},
+    Figment, Metadata, Profile, Provider,
+    providers::{Format, Yaml},
+    value::{Dict, Map, Tag, Value},
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,8 @@ use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
 use crate::security::verify_remote_server_provenance;
 use crate::{Error, Result};
+
+pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
@@ -115,6 +118,84 @@ struct EnvFileConfig {
     env_files: Vec<String>,
 }
 
+/// How a malformed env file is treated during evaluation.
+///
+/// An enum rather than a bool so the call site says which behaviour it wants
+/// without the reader opening the signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tolerance {
+    /// Warn and carry on — what [`Config::load`] has always done.
+    Warn,
+    /// Refuse the load, for callers that can decline to start.
+    Fail,
+}
+
+/// Figment provider reading `MCP_GATEWAY_*` from the overlay, then the process
+/// environment.
+///
+/// Replaces `Env::prefixed(..)`, which reads the process environment only and
+/// would therefore ignore every assignment made by an env file that is no
+/// longer exported into the process.
+struct OverlayEnv<'a> {
+    overlay: &'a EnvOverlay,
+}
+
+impl<'a> OverlayEnv<'a> {
+    const PREFIX: &'static str = "MCP_GATEWAY_";
+
+    fn new(overlay: &'a EnvOverlay) -> Self {
+        Self { overlay }
+    }
+
+    /// Places `value` at the path `parts` names, creating dictionaries on the
+    /// way down — the nesting `__` in a key stands for.
+    fn insert_nested(dict: &mut Dict, parts: &[String], value: String) {
+        match parts {
+            [] => {}
+            [leaf] => {
+                dict.insert(leaf.clone(), Value::from(value));
+            }
+            [head, tail @ ..] => {
+                let entry = dict
+                    .entry(head.clone())
+                    .or_insert_with(|| Value::Dict(Tag::Default, Dict::new()));
+                let mut inner = match entry {
+                    Value::Dict(_, existing) => std::mem::take(existing),
+                    _ => Dict::new(),
+                };
+                Self::insert_nested(&mut inner, tail, value);
+                *entry = Value::Dict(Tag::Default, inner);
+            }
+        }
+    }
+}
+
+impl Provider for OverlayEnv<'_> {
+    fn metadata(&self) -> Metadata {
+        Metadata::named("environment variable(s)")
+    }
+
+    fn data(&self) -> figment::Result<Map<Profile, Dict>> {
+        // Process environment first so an env-file assignment wins, which is
+        // the precedence `EnvOverlay::resolve` states.
+        let mut merged: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        merged.extend(self.overlay.effective_vars());
+
+        let mut dict = Dict::new();
+        for (key, value) in merged {
+            let Some(rest) = key.strip_prefix(Self::PREFIX) else {
+                continue;
+            };
+            let parts: Vec<String> = rest.split("__").map(str::to_lowercase).collect();
+            if parts.iter().any(String::is_empty) {
+                continue;
+            }
+            Self::insert_nested(&mut dict, &parts, value);
+        }
+        Ok(Profile::Default.collect(dict))
+    }
+}
+
 impl Config {
     /// Candidate config file locations searched when `--config` is not specified.
     ///
@@ -175,7 +256,11 @@ impl Config {
     ///
     /// Returns an error if an explicit `path` is supplied but does not exist,
     /// or if the config file cannot be parsed.
-    pub fn load(path: Option<&Path>) -> Result<Self> {
+    /// Select the config file and prove it is readable before any load.
+    ///
+    /// Shared by every entry point so that "no such file" and "cannot read it"
+    /// stay one diagnostic rather than one per loader.
+    fn prepare(path: Option<&Path>) -> Result<Option<PathBuf>> {
         // Resolve the config file: explicit path takes priority; otherwise
         // search well-known fallback locations.
         let resolved: Option<PathBuf> = match path {
@@ -213,20 +298,113 @@ impl Config {
             )));
         }
 
-        let env_file_config: EnvFileConfig = Self::figment(resolved.as_deref())
+        Ok(resolved)
+    }
+
+    /// Load the config, warning on (rather than refusing) a malformed env file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`] when the file is missing, unreadable or does
+    /// not parse, and [`Error::ConfigValidation`] when it parses but is invalid.
+    pub fn load(path: Option<&Path>) -> Result<Self> {
+        let resolved = Self::prepare(path)?;
+        Ok(Self::evaluate(resolved.as_deref(), &SystemHome, Tolerance::Warn)?.config)
+    }
+
+    /// Load a config together with the environment it was evaluated against.
+    ///
+    /// The fallible sibling of [`Config::load`]: a malformed env file is an
+    /// error here, where the caller can refuse to start, rather than a warning
+    /// that leaves the gateway running against half an env file.
+    pub fn load_evaluated(path: Option<&Path>) -> Result<Evaluated> {
+        Self::load_evaluated_with_home(path, &SystemHome)
+    }
+
+    /// As [`Config::load_evaluated`], with `~` resolved through `home`.
+    pub fn load_evaluated_with_home(
+        path: Option<&Path>,
+        home: &dyn HomeResolver,
+    ) -> Result<Evaluated> {
+        let resolved = Self::prepare(path)?;
+        Self::evaluate(resolved.as_deref(), home, Tolerance::Fail)
+    }
+
+    /// Re-evaluate against env files the running process already recorded.
+    ///
+    /// Takes `env_paths` rather than the config's raw `env_files` spellings on
+    /// purpose: `~` resolved once, at startup, and a reload that resolved again
+    /// could silently open a different file. `previous` is the overlay in force
+    /// — `EnvOverlay::none()` at startup, `live_env.get()` on reload.
+    pub(crate) fn load_with_overlay(
+        path: Option<&Path>,
+        env_paths: &ResolvedEnvFiles,
+        previous: &EnvOverlay,
+    ) -> Result<Evaluated> {
+        let resolved = Self::prepare(path)?;
+        let overlay = EnvOverlay::from_paths_checked(env_paths.as_paths(), previous)?;
+        Self::finish(resolved.as_deref(), overlay, env_paths.clone())
+    }
+
+    /// Resolve `~` and apply env files in sequence, then build the config.
+    ///
+    /// Sequential by construction: each entry is applied to the overlay before
+    /// the next entry's `~` is expanded, so a `HOME` assignment in one file
+    /// moves where the next file is looked for. Resolving the whole list up
+    /// front would agree with itself and read a file nothing watches.
+    fn evaluate(
+        path: Option<&Path>,
+        home: &dyn HomeResolver,
+        tolerance: Tolerance,
+    ) -> Result<Evaluated> {
+        let spec: EnvFileConfig = Self::figment(path, &EnvOverlay::none())
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
 
-        Self::load_env_files_from_paths(&env_file_config.env_files);
+        let mut overlay = EnvOverlay::inheriting(&EnvOverlay::none());
+        let mut paths = Vec::with_capacity(spec.env_files.len());
+        let tilde = spec.env_files.iter().any(|e| e.starts_with('~'));
+        for entry in &spec.env_files {
+            let resolved = Self::expand_home(entry, &overlay, home);
+            match tolerance {
+                Tolerance::Fail => overlay.apply_file(&resolved)?,
+                Tolerance::Warn => overlay.apply_file_tolerant(&resolved),
+            }
+            paths.push(resolved);
+        }
+        Self::finish(path, overlay, ResolvedEnvFiles::new(paths, tilde))
+    }
 
-        let mut config: Self = Self::figment(resolved.as_deref())
+    /// Substitutes a leading `~` with the home in force at this point in the
+    /// sequence. A home that cannot be determined leaves the entry verbatim,
+    /// which then simply does not exist and is skipped.
+    fn expand_home(entry: &str, so_far: &EnvOverlay, home: &dyn HomeResolver) -> PathBuf {
+        let Some(rest) = entry.strip_prefix('~') else {
+            return PathBuf::from(entry);
+        };
+        match home.home_dir(so_far) {
+            Some(dir) => PathBuf::from(format!("{}{rest}", dir.display())),
+            None => PathBuf::from(entry),
+        }
+    }
+
+    fn finish(
+        path: Option<&Path>,
+        overlay: EnvOverlay,
+        env_paths: ResolvedEnvFiles,
+    ) -> Result<Evaluated> {
+        let mut config: Self = Self::figment(path, &overlay)
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
-        config.expand_env_vars();
-        config.validate()?;
-        Self::warn_on_retired_keys(resolved.as_deref());
-
-        Ok(config)
+        let secret_refs = config.expand_env_vars(&overlay);
+        config.validate_with_env(&overlay)?;
+        Self::warn_on_retired_keys(path);
+        Ok(Evaluated {
+            config,
+            overlay: std::sync::Arc::new(overlay),
+            env_paths,
+            secret_refs,
+        })
     }
 
     /// Configuration keys that were removed. Left loadable on purpose: parsing
@@ -291,70 +469,82 @@ impl Config {
         }
     }
 
-    /// Load environment files into the process environment.
-    /// Supports `~` expansion. Files are processed in order, and later files
-    /// override earlier values. Files that don't exist are silently skipped.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn load_env_files(&self) {
-        Self::load_env_files_from_paths(&self.env_files);
-    }
-
-    fn figment(path: Option<&Path>) -> Figment {
+    fn figment(path: Option<&Path>, overlay: &EnvOverlay) -> Figment {
         let mut figment = Figment::new();
         if let Some(path) = path {
             figment = figment.merge(Yaml::file(path));
         }
 
-        figment.merge(Env::prefixed("MCP_GATEWAY_").split("__"))
-    }
-
-    fn load_env_files_from_paths(env_files: &[String]) {
-        for path_str in env_files {
-            let expanded = if path_str.starts_with('~') {
-                if let Some(home) = dirs::home_dir() {
-                    path_str.replacen('~', &home.display().to_string(), 1)
-                } else {
-                    path_str.clone()
-                }
-            } else {
-                path_str.clone()
-            };
-
-            let path = Path::new(&expanded);
-            if path.exists() {
-                match dotenvy::from_path_override(path) {
-                    Ok(()) => tracing::info!("Loaded env file: {expanded}"),
-                    Err(e) => tracing::warn!("Failed to load env file {expanded}: {e}"),
-                }
-            } else {
-                tracing::debug!("Env file not found (skipped): {expanded}");
-            }
-        }
+        figment.merge(OverlayEnv::new(overlay))
     }
 
     /// Expand `${VAR}` and `${VAR:-default}` patterns in config values.
-    fn expand_env_vars(&mut self) {
+    fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> BTreeSet<String> {
         let re = Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").unwrap();
 
         for backend in self.backends.values_mut() {
             for value in backend.headers.values_mut() {
-                *value = Self::expand_string(&re, value);
+                *value = Self::expand_string(&re, value, overlay);
             }
             for value in backend.env.values_mut() {
-                *value = Self::expand_string(&re, value);
+                *value = Self::expand_string(&re, value, overlay);
             }
         }
 
         for dir in &mut self.capabilities.directories {
-            *dir = Self::expand_string(&re, dir);
+            *dir = Self::expand_string(&re, dir, overlay);
         }
+
+        self.resolve_secret_refs(overlay)
     }
 
-    fn expand_string(re: &Regex, value: &str) -> String {
+    /// Substitute `env:NAME` secret references with the value the overlay holds.
+    ///
+    /// Done here, once, rather than at each holder's construction: an env file
+    /// no longer reaches the process environment, so a holder built from a bare
+    /// `AuthConfig` has nothing to look the name up in. Resolving at evaluation
+    /// time also makes the startup-only nature of these secrets explicit — the
+    /// value a holder captured is the value the file held when the process
+    /// started, and a reload cannot revise it.
+    ///
+    /// A name the overlay cannot resolve is left verbatim. `validate_with_env`
+    /// reports it as a missing reference, which is a better diagnostic than a
+    /// silently empty secret.
+    fn resolve_secret_refs(&mut self, overlay: &EnvOverlay) -> BTreeSet<String> {
+        let mut seen = BTreeSet::new();
+        let mut subst = |slot: &mut String| {
+            if let Some(name) = slot.strip_prefix("env:") {
+                seen.insert(name.to_string());
+                if let Some(value) = overlay.resolve(name) {
+                    *slot = value;
+                }
+            }
+        };
+
+        if let Some(token) = self.auth.bearer_token.as_mut() {
+            subst(token);
+        }
+        for key in &mut self.auth.api_keys {
+            subst(&mut key.key);
+        }
+        for agent in &mut self.agent_auth.agents {
+            if let Some(secret) = agent.hs256_secret.as_mut() {
+                subst(secret);
+            }
+        }
+        if let Some(token) = self.key_server.admin_token.as_mut() {
+            subst(token);
+        }
+        seen
+    }
+
+    fn expand_string(re: &Regex, value: &str, overlay: &EnvOverlay) -> String {
         re.replace_all(value, |caps: &regex::Captures| {
             let var_name = &caps[1];
             let default = caps.get(2).map_or("", |m| m.as_str());
-            env::var(var_name).unwrap_or_else(|_| default.to_string())
+            overlay
+                .resolve(var_name)
+                .unwrap_or_else(|| default.to_string())
         })
         .into_owned()
     }
@@ -377,6 +567,19 @@ impl Config {
     ///
     /// Returns [`Error::ConfigValidation`] describing the first violation found.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_env(&EnvOverlay::none())
+    }
+
+    /// As [`Config::validate`], resolving `env:` references through `overlay`.
+    ///
+    /// A separate entry point rather than a field on `Config`: validation runs
+    /// against the environment the load produced, and that environment is not
+    /// part of the config it validates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigValidation`] describing the first violation found.
+    pub fn validate_with_env(&self, overlay: &EnvOverlay) -> Result<()> {
         // Port 0 is technically valid (OS assigns an ephemeral port).
         // No upper bound needed — u16 already caps at 65535.
         if self.server.port == 0 {
@@ -385,13 +588,13 @@ impl Config {
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
-        self.validate_required_env_references()?;
+        self.validate_required_env_references(overlay)?;
         self.runtime.validate()?;
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
-        self.validate_agent_key_material()?;
+        self.validate_agent_key_material(overlay)?;
         self.key_server.validate()?;
         Ok(())
     }
@@ -413,7 +616,7 @@ impl Config {
     /// Every enabled agent, not merely one of them: a caller forges the WEAKEST
     /// agent's token and gets that agent's scopes, so one sound definition
     /// beside a forgeable one protects nothing.
-    fn validate_agent_key_material(&self) -> Result<()> {
+    fn validate_agent_key_material(&self, overlay: &EnvOverlay) -> Result<()> {
         /// Shortest HS256 secret accepted, in bytes. A shorter shared secret is
         /// brute-forceable rather than merely inadvisable, and this is the
         /// length this project's own guidance already asks for.
@@ -452,7 +655,7 @@ impl Config {
                 )));
             };
             let resolved = match raw.strip_prefix("env:") {
-                Some(var) => std::env::var(var).map_err(|_| {
+                Some(var) => overlay.resolve(var).ok_or_else(|| {
                     Error::ConfigValidation(format!(
                         "agent_auth.agents['{}'].hs256_secret references missing \
                          environment variable '{var}'",
@@ -648,20 +851,24 @@ impl Config {
         Ok(())
     }
 
-    fn validate_required_env_references(&self) -> Result<()> {
+    fn validate_required_env_references(&self, overlay: &EnvOverlay) -> Result<()> {
         if self.auth.enabled {
             if let Some(token) = self.auth.bearer_token.as_deref() {
-                Self::validate_env_reference("auth.bearer_token", token)?;
+                Self::validate_env_reference("auth.bearer_token", token, overlay)?;
             }
             for key in &self.auth.api_keys {
-                Self::validate_env_reference("auth.api_keys[].key", &key.key)?;
+                Self::validate_env_reference("auth.api_keys[].key", &key.key, overlay)?;
             }
         }
 
         if self.agent_auth.enabled {
             for agent in &self.agent_auth.agents {
                 if let Some(secret) = agent.hs256_secret.as_deref() {
-                    Self::validate_env_reference("agent_auth.agents[].hs256_secret", secret)?;
+                    Self::validate_env_reference(
+                        "agent_auth.agents[].hs256_secret",
+                        secret,
+                        overlay,
+                    )?;
                 }
             }
         }
@@ -669,13 +876,13 @@ impl Config {
         if self.key_server.enabled
             && let Some(token) = self.key_server.admin_token.as_deref()
         {
-            Self::validate_env_reference("key_server.admin_token", token)?;
+            Self::validate_env_reference("key_server.admin_token", token, overlay)?;
         }
 
         Ok(())
     }
 
-    fn validate_env_reference(field: &str, value: &str) -> Result<()> {
+    fn validate_env_reference(field: &str, value: &str, overlay: &EnvOverlay) -> Result<()> {
         let Some(var_name) = value.strip_prefix("env:") else {
             return Ok(());
         };
@@ -686,15 +893,9 @@ impl Config {
             )));
         }
 
-        let Some(value) = env::var_os(var_name) else {
+        if overlay.resolve(var_name).is_none() {
             return Err(Error::ConfigValidation(format!(
                 "{field} references missing environment variable '{var_name}'"
-            )));
-        };
-
-        if value.to_str().is_none() {
-            return Err(Error::ConfigValidation(format!(
-                "{field} references environment variable '{var_name}' with non-UTF-8 contents"
             )));
         }
 
