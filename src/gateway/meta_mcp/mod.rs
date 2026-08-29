@@ -69,6 +69,7 @@ mod support;
 mod surfaced;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
+pub use support::prune_constant_signals;
 
 // ============================================================================
 // Constants

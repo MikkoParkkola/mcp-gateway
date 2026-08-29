@@ -131,17 +131,55 @@ pub(super) fn ranked_results_to_code_mode_json(
                         map.insert("score".to_string(), json!(r.score));
                         map.insert(
                             "ranking".to_string(),
-                            json!({
+                            prune_constant_signals(&json!({
                                 "included": r.explanation.included,
                                 "reasons": r.explanation.reasons,
                                 "signals": r.signals
-                            }),
+                            })),
                         );
                     }
                     value
                 })
         })
         .collect()
+}
+
+/// Signals that are the same for every tool in every response.
+///
+/// Measured 2026-07-31 on a live `gateway_search` call: 13 of 16 signals were
+/// the constant `1.0`. A signal that never varies distinguishes nothing — it is
+/// scoring-engine diagnostics shipped to a consumer that cannot act on it, on
+/// the repository whose stated value proposition is token savings.
+const CONSTANT_SIGNALS: &[&str] = &[
+    "cost_efficiency",
+    "freshness",
+    "grant",
+    "latency",
+    "organization_preference",
+    "permission_fit",
+    "policy_fit",
+    "risk",
+    "runtime_health",
+    "safety",
+    "success_rate",
+    "trust",
+    "user_preference",
+];
+
+/// Drop the signals that carry no information.
+///
+/// Named rather than a value test, deliberately. Dropping every field that
+/// happens to equal `1.0` would drop a real score sitting at its maximum —
+/// `relevance` does that legitimately — and the caller would lose the one
+/// number that told it something. The list is what was measured, not what a
+/// heuristic guessed.
+#[must_use]
+pub fn prune_constant_signals(ranking: &Value) -> Value {
+    let mut pruned = ranking.clone();
+    if let Some(signals) = pruned.get_mut("signals").and_then(Value::as_object_mut) {
+        signals.retain(|name, _| !CONSTANT_SIGNALS.contains(&name.as_str()));
+    }
+    pruned
 }
 
 // ============================================================================
