@@ -207,6 +207,18 @@ Nested values: `MCP_GATEWAY_SERVER__PORT=8080` sets `server.port`.
 
 Config values support `${VAR}` and `${VAR:-default}` expansion. Use `env_files:` in config to load `.env` files (supports `~` expansion; missing files silently skipped).
 
+A **malformed** line in an env file is not skipped: it fails startup, naming the file,
+the line number and the category of fault. The offending line is never echoed, because
+the offending line is the secret. A `~` in an `env_files` path resolves once, at startup,
+against the home directory in force at that moment; each file is applied before the next
+is expanded, so a file that sets `HOME` moves where a later `~` points.
+
+Env files supply values to configuration references. They do **not** supply the
+attestation signing key: `ATTESTATION_SIGNING_KEY` and `ATTESTATION_KEY_ID` are read
+directly from the process environment under those fixed names, and are expected to be
+injected by the deployment — a systemd unit, a Kubernetes secret — rather than named in a
+config file. Putting them in an env file has no effect.
+
 ## TLS / mTLS
 
 The gateway includes a built-in certificate manager:
@@ -624,11 +636,12 @@ public_url host your-tunnel.example.com: ...
 
 The refusal names two things it did not do — no backend was started or stopped,
 and no configuration was published — and claims nothing beyond them. Reading a
-config file applies any `env_files` it names to the process environment before
-the file is validated, so a refused reload is not a complete no-op. If a
-capability resolves its credential from an environment variable, check that one
-after a refused reload. This is true of every failed reload rather than only
-this one.
+config file no longer leaks its `env_files` into the process environment. A
+refused reload leaves the environment exactly as the last accepted configuration
+left it, so a capability that resolves its credential from an environment
+variable still resolves the value it had before the refused edit. Earlier
+releases applied env files before validating the file, which made a refused
+reload a partial no-op; that is fixed.
 
 Enabling `auth.enabled` in the same edit does not get it through, and that is
 deliberate rather than an oversight: authentication is applied at startup, so

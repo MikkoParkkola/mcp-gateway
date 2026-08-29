@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-08-29
 
+### Fixed
+
+- **A failed config load no longer leaks its env files into the process.**
+  Reading a config file used to apply every `env_files` entry it named to the
+  process environment before validating the file, so a refused reload changed
+  the environment a capability resolved its credentials from and a refused
+  reload was only a partial no-op. Env files now resolve into an overlay that a
+  failed load discards, so the environment is left exactly as the last accepted
+  configuration left it.
+
+  A **malformed** line now fails startup rather than being skipped, naming the
+  file, the line number and the category of fault. The offending line is never
+  echoed, because the offending line is the secret. A `~` in an `env_files`
+  path resolves exactly once, at startup; each file is applied before the next
+  is expanded, so a file that sets `HOME` moves where a later `~` points, and a
+  reload reuses the paths startup recorded rather than resolving them again.
+  Assigning `HOME` in a reloaded env file reports `restart required` instead.
+
+  Env files do not supply `ATTESTATION_SIGNING_KEY` or `ATTESTATION_KEY_ID`.
+  Those are read from the process environment under fixed names and are
+  expected to come from the deployment, not from a config file.
+
 ### Added
 
 - **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The
