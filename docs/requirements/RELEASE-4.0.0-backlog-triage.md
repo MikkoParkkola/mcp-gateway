@@ -67,11 +67,12 @@ authorisation hole. They belong in the same release as a protocol rewrite
 because they live in the same request path.
 
 **Decided 2026-08-29: eighteen go into 4.0.0.** The release does not merge
-until they land. Two were proposed for the cut and one was put back:
+until they land. Two were proposed for the cut, MIK-7268 and MIK-7291, and neither ticket
+was cut in the end — one was put back whole and one was narrowed:
 MIK-7268 stays, because a `/health` endpoint reporting ready before the
 capability backend has loaded is what a deployment's own rollout gate reads —
 a wrong answer there routes traffic at a gateway that cannot serve it, which
-is an availability defect rather than polish. MIK-7291 rides along as a
+is an availability defect rather than polish. MIK-7291 is the narrowed one: it rides along as a
 deletion only; wiring `SessionLifecycle` on a path that removes sessions would
 be new work. Nothing exploitable ships, and the hardening set is not split
 across two releases where the reload-config family would be worked twice. They
