@@ -338,6 +338,123 @@ mod http {
         )
     }
 
+    /// POST against a caller-supplied state, so several requests share one
+    /// gateway and its accumulated state can be observed.
+    async fn post_against(
+        app_state: &Arc<AppState>,
+        body: Value,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, axum::http::HeaderMap) {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = builder
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request");
+        let response = create_router(Arc::clone(app_state))
+            .oneshot(request)
+            .await
+            .expect("router must answer");
+        (response.status(), response.headers().clone())
+    }
+
+    #[tokio::test]
+    async fn a_modern_error_response_carries_no_session_header() {
+        // The success path never emitted one. The *error* paths did: they use
+        // the builders written for 2025, which attach the session header on
+        // their way out. So a modern client that got anything wrong was handed
+        // state the revision deleted, and an intermediary a value to route on.
+        //
+        // Driven through a mirrored-header mismatch because that is an early
+        // refusal — the exact shape of response that carried it.
+        let app_state = state();
+        let (status, headers) = post_against(
+            &app_state,
+            modern_body("tools/list"),
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "server/discover"),
+            ],
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "the request must be refused");
+        assert!(
+            !headers.contains_key("mcp-session-id"),
+            "a modern refusal must not carry a session header: {headers:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_legacy_error_response_still_carries_its_session_header() {
+        // The regression that matters: 2025 clients track the session across a
+        // refusal too.
+        let app_state = state();
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "no/such/method"});
+        let (_, headers) = post_against(&app_state, body, &[]).await;
+
+        assert!(
+            headers.contains_key("mcp-session-id"),
+            "a legacy refusal must still carry its session header"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_legacy_response_still_carries_its_session_header() {
+        // The regression that matters: 2025 clients depend on it.
+        let app_state = state();
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+        let (_, headers) = post_against(&app_state, body, &[]).await;
+
+        assert!(
+            headers.contains_key("mcp-session-id"),
+            "a legacy response must still carry its session header"
+        );
+    }
+
+    #[tokio::test]
+    async fn modern_requests_do_not_accumulate_sessions() {
+        // A stateless client sends no session id, so every request minted a new
+        // multiplexer session nothing could ever reach: unbounded growth, and a
+        // per-request identity that makes sequence anomaly detection see a first
+        // call every time — a control that keeps running and stops protecting.
+        let app_state = state();
+        for _ in 0..5 {
+            let (_, _) = post_against(
+                &app_state,
+                modern_body("tools/list"),
+                &[
+                    ("mcp-protocol-version", "2026-07-28"),
+                    ("mcp-method", "tools/list"),
+                ],
+            )
+            .await;
+        }
+
+        assert_eq!(
+            app_state.multiplexer.session_count(),
+            0,
+            "a stateless request must not leave a session behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_requests_still_get_a_session() {
+        let app_state = state();
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+        let (_, _) = post_against(&app_state, body, &[]).await;
+
+        assert_eq!(
+            app_state.multiplexer.session_count(),
+            1,
+            "a legacy request must still get its session"
+        );
+    }
+
     fn modern_body(method: &str) -> Value {
         json!({
             "jsonrpc": "2.0",

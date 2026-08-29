@@ -441,19 +441,42 @@ pub(super) async fn meta_mcp_handler(
             .into_response();
     }
 
+    // 2026-07-28 removed protocol-level sessions, so a request written against
+    // it gets none — and answering it with a session header would hand a
+    // stateless client state the revision deleted, and an intermediary a value
+    // to route on.
+    //
+    // Decided from the header, before the body is parsed, because the session
+    // is created before the body is parsed. That is sound rather than a
+    // shortcut: the mirrored-header check refuses a modern request that omits
+    // `MCP-Protocol-Version`, so every modern request that survives carries it.
+    let declares_modern_by_header = headers
+        .get("mcp-protocol-version")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| crate::protocol::meta::MODERN_VERSIONS.contains(&v));
+
     // Get or create session for this client
     let existing_session_id = headers
         .get("mcp-session-id")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, session_rx) = state.multiplexer.get_or_create_session_for(
-        existing_session_id.as_deref(),
-        // The identity that owns the session. Every caller is "anonymous"
-        // when authentication is off, so a single-user gateway behaves
-        // exactly as before.
-        &session_owner(client.as_ref()),
-    );
+    let (session_id, session_rx) = if declares_modern_by_header {
+        // No session, and none minted. Minting one per request grew a table of
+        // sessions nothing could reach, and handed the sequence-anomaly
+        // detector a fresh identity every call — a detector that sees a first
+        // request every time keeps running and stops protecting.
+        (String::new(), None)
+    } else {
+        let (id, rx) = state.multiplexer.get_or_create_session_for(
+            existing_session_id.as_deref(),
+            // The identity that owns the session. Every caller is "anonymous"
+            // when authentication is off, so a single-user gateway behaves
+            // exactly as before.
+            &session_owner(client.as_ref()),
+        );
+        (id, Some(rx))
+    };
     // This handler is not a stream reader. Holding the subscription would make
     // a server-to-client prompt look deliverable to a caller with no live SSE
     // stream: the send succeeds into a receiver nobody polls, and the caller
@@ -754,29 +777,37 @@ pub(super) async fn meta_mcp_handler(
             code_mode_url_active,
         ),
         "tools/call" => {
-            let (tool_name, mut arguments) = extract_tools_call_params(params.as_ref());
+            let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 
             // A multi-round-trip retry carries `inputResponses` and
-            // `requestState` as siblings of `name` and `arguments`, and this
-            // extraction returned only the pair — so both were dropped in
-            // silence. A modern client's elicitation never completed, and the
-            // confirmation gate on a destructive tool ran without the answer it
-            // exists to collect (MIK-7212).
+            // `requestState` as siblings of `name` and `arguments`, and the
+            // extraction that returned only the pair dropped both in silence
+            // (MIK-7212). They are extracted here so the drop is visible.
             //
-            // Carried on the arguments object rather than through a widened
-            // signature: four call sites take that pair, and a fifth return
-            // value is a thing three of them would ignore by default. The
-            // backend sees the fields where the specification puts them.
+            // They are NOT forwarded yet, and that is a decision rather than an
+            // omission. The first attempt merged them into the `arguments`
+            // object, which is wrong twice over:
+            //
+            //  * the specification makes them siblings of `arguments`, not
+            //    members of it, so a backend reads them nowhere — and a tool
+            //    with an argument of either name has it silently overwritten;
+            //  * `requestState` there is the CLIENT's envelope. This gateway
+            //    mints its own and seals the backend's state inside it exactly
+            //    so a client's copy is never handed onward. Forwarding it
+            //    verbatim defeats the module written to prevent it.
+            //
+            // Forwarding correctly means opening the envelope, checking its
+            // caller binding and single-use, and sending the *backend's* state
+            // as the sibling — which needs the keyring reachable from request
+            // state and a retry parameter threaded to `dispatch_to_backend`.
+            // Neither exists. Until they do, a retry is not forwarded at all,
+            // which fails visibly rather than corrupting a call.
             let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
-            if retry.is_retry()
-                && let Some(object) = arguments.as_object_mut()
-            {
-                if let Some(responses) = retry.input_responses {
-                    object.insert("inputResponses".to_string(), responses);
-                }
-                if let Some(state) = retry.request_state {
-                    object.insert("requestState".to_string(), serde_json::Value::String(state));
-                }
+            if retry.is_retry() {
+                debug!(
+                    tool = %tool_name,
+                    "MRTR retry received; forwarding is not wired (continuation unsealing absent)"
+                );
             }
 
             if is_admin_meta_tool(tool_name)

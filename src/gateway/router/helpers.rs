@@ -30,6 +30,13 @@ where
 }
 
 pub(super) fn attach_session_header(headers: &mut axum::http::HeaderMap, session_id: &str) {
+    // An empty id means the caller has no session, which after MCP 2026-07-28
+    // is the ordinary case rather than an error. Emitting the header with an
+    // empty value would be worse than omitting it: a client and an intermediary
+    // would both read a session that does not exist.
+    if session_id.is_empty() {
+        return;
+    }
     match HeaderValue::from_str(session_id) {
         Ok(value) => {
             headers.insert(
