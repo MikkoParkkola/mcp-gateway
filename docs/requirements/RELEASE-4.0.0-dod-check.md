@@ -219,9 +219,28 @@ Four findings remain open. None is reachable by a client while `server.modern_pr
 
 2. **The mint counter is process-local.** It bounds envelopes sealed by *this process* since it started, not by the key over its life, so a restart resets it. That is a real ceiling on a single runaway process and not the per-key guarantee the NIST bound describes. Gated BEFORE-PRODUCTION; the module says so in as many words.
 
-3. **The task model cannot be verified.** A reviewer reported missing states and required fields. The specification page returns 404 at the path the index links, so those claims have no reachable source. Recorded as unverified rather than accepted or dismissed.
+3. **The task model is short of the specification, now that the specification has been
+   read.** The 404 was a wrong path, not a missing document: tasks moved out of the core
+   revision into an extension, and the page lives at
+   `https://modelcontextprotocol.io/extensions/tasks/overview` (fetched 2026-08-29). The
+   core schema for 2026-07-28 carries no `Task` type at all — only the capability key
+   `io.modelcontextprotocol/tasks` under `capabilities.extensions`. Against that source,
+   `src/protocol/tasks.rs:21-28` defines three statuses where the specification defines
+   five: `input_required` and `cancelled` are absent, and with them the whole mid-flight
+   input exchange (`tasks/update`, `inputRequests`) and cooperative cancellation. The
+   `Task` struct at `:32-38` carries neither `ttlMs` nor `pollIntervalMs`, both of which
+   the specification requires a `CreateTaskResult` to return. Nothing verifies that the
+   client declared the extension in its per-request capabilities before a task is
+   returned, which the specification states as a MUST.
 
-4. **The failed-task payload shape is unverified**, for the same reason.
+   The reviewer's claim about required `createdAt` and `lastUpdatedAt` fields is NOT
+   supported by that page; it names `taskId`, status, `ttlMs` and `pollIntervalMs`. The
+   claim is dismissed on source rather than carried as unverified.
+
+4. **The failed-task payload is a string where the specification says a JSON-RPC error.**
+   `src/protocol/tasks.rs:37` holds `error: Option<String>`; the specification's terminal
+   states put the final `result` on `completed` and the JSON-RPC `error` object on
+   `failed`. A client parsing the error would get a message where an object is required.
 
 ### Closed since: `subscriptions/listen` now streams
 
