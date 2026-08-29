@@ -116,11 +116,11 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 ## Current Status
 
-- **v2.10.0** · Rust 1.88+ · Edition 2024 · ~101K LOC · MIT
-- Published on crates.io + Homebrew + Glama + VS Code + Cursor one-click install
+- **v3.5.0** · Rust 1.88+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
+- Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
 - **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
-- **Security**: unsafe forbidden; dependency-status badge; OWASP Agentic AI 10/10 docs at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
+- **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; OWASP Agentic AI 10/10 docs at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
 - **Benchmarks**: machine-readable claims in `benchmarks/public_claims.json` with CI drift check
 - **Independent reviews**: Ruach Tov Collective's five-tool comparison + mcp-gateway deep dive (linked in README)
 
@@ -151,7 +151,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 - **Bloating the Meta-MCP surface** — every new meta-tool eats the context-savings story. Default to dynamic discovery; add a meta-tool only if the user-visible workflow demands it.
 - **Treating the gateway like an OpenAI proxy** — it is not. Model calls go to the connected client via `sampling/createMessage`. The prompt-cache helpers are a compatibility shim, not a product surface.
 - **Skipping SHA-256 integrity pinning on a new capability** — the capability system depends on hash verification end-to-end.
-- **Adding `unsafe` without an ADR** — the `forbid(unsafe_code)` gate is deliberate; any exception needs `docs/architecture/` justification.
+- **Adding `unsafe` without an ADR** — the `deny(unsafe_code)` gate is deliberate; any exception needs `docs/architecture/` justification.
 - **Duplicating MIK-2985 annotation policy work across mcp-gateway and mcp-gateway-private** — resolve the pass-through vs override decision once in an ADR and apply to both.
 - **Ignoring `benchmarks/public_claims.json` drift** — the CI check is there because README numerical claims have drifted before.
 

@@ -5,7 +5,7 @@
 [![Downloads](https://img.shields.io/crates/d/mcp-gateway.svg)](https://crates.io/crates/mcp-gateway)
 [![Rust](https://img.shields.io/badge/rust-1.95+-blue.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-PolyForm--NC%20%2B%20MIT%20core-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
-[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
+[![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
@@ -81,7 +81,14 @@ Your agent will install the binary, run the setup wizard, import your existing M
 | **Cargo** | `cargo install mcp-gateway` |
 | **cargo-binstall** | `cargo binstall mcp-gateway` |
 | **Direct binary download (Windows x64)** | Download `mcp-gateway-windows-x86_64.exe` from the [latest release](https://github.com/MikkoParkkola/mcp-gateway/releases/latest) |
-| **Docker** | `docker run -v $(pwd)/gateway.yaml:/config.yaml ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml` |
+| **Docker** | `docker run -v $(pwd)/gateway.container.yaml:/config.yaml:ro ghcr.io/mikkoparkkola/mcp-gateway:latest --config /config.yaml` |
+
+On Linux, the image runs as UID/GID 1001. Make an owner-only deployment copy
+instead of changing ownership on your working config: `install -m 600
+gateway.yaml gateway.container.yaml && sudo chown 1001:1001
+gateway.container.yaml`. Do not make a credential-bearing config
+world-readable. Docker Desktop handles bind-mount identity differently on
+macOS and Windows.
 
 <details>
 <summary>Direct binary download</summary>
@@ -129,7 +136,7 @@ mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
 
 #### Option C: hand-write `gateway.yaml`
 
-For the full schema reference, see [docs/QUICKSTART.md#configuration](docs/QUICKSTART.md#configuration). Minimal example:
+For the full schema, see the annotated [examples/gateway-full.yaml](examples/gateway-full.yaml), which covers `env_files`, `server`, `auth`, `meta_mcp`, `streaming`, `failsafe`, `cache`, `capabilities`, and `backends`. The remaining top-level sections (`playbooks`, `security`, `webhooks`, `routing_profiles`, `code_mode`, `mtls`, `key_server`, `agent_auth`, `runtime`, `marketplace`, `control_plane`, `cost_governance`) have no prose reference yet; the `Config` struct in [src/config/mod.rs](src/config/mod.rs) is the authoritative list. Minimal example:
 
 ```yaml
 server:
@@ -158,7 +165,12 @@ mcp-gateway doctor                 # diagnose config, port, env vars, backend he
 mcp-gateway doctor --fix           # auto-fix issues where possible
 ```
 
-The web dashboard is at <http://localhost:39400/ui> once `serve` is running.
+The web dashboard is at <http://localhost:39400/ui> once `serve` is running. The
+operator dashboard at `/dashboard` needs the admin credential, and a browser
+cannot send one on a navigation — so `serve` prints a single-use link to open it
+with, on a loopback bind. A network-bound gateway prints none and is managed
+through `/ui` with the token instead. See
+[Opening the dashboard](docs/DEPLOYMENT.md#opening-the-dashboard).
 
 ### Connect AI clients (if you skipped Option A)
 
@@ -208,7 +220,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
-- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, SHA-256 pinning with rug-pull detection protects each capability, and the OWASP Agentic AI Top 10 is covered 10 out of 10. The whole binary is `#![forbid(unsafe_code)]`, with optional mTLS, message signing, and agent identity.
+- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, SHA-256 pinning with rug-pull detection protects each capability, and the OWASP Agentic AI Top 10 is covered 10 out of 10. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
 - **Dual protocol.** MCP plus an A2A (agent-to-agent) transport adapter, so the same gateway routes tool calls and cross-provider agent messages.
@@ -249,6 +261,15 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
 The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
+
+### Code Mode: two tools instead of the meta-tool set
+
+Setting `code_mode.enabled: true` makes `tools/list` return exactly two tools, `gateway_search` and `gateway_execute`, instead of the meta-tool set. Everything else is reached through those two. Tools named in `meta_mcp.surfaced_tools` are not appended in this mode, so the count stays at two however many backends are connected. Code Mode is off by default.
+
+```yaml
+code_mode:
+  enabled: true
+```
 
 
 ## Security
@@ -295,13 +316,14 @@ Single-binary gateway. An AI client talks to the compact meta-surface, and the g
 
 ### Web dashboard
 
-Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
+Embedded web UI at `/ui`: live status, searchable tools, server health, a read-only control-plane view, and a config viewer. Operator dashboard at `/dashboard`, which needs the admin credential — on a loopback bind `serve` prints a single-use link to open it with, since a browser cannot attach an `Authorization` header to a navigation. Cost tracking at `/ui#costs`. All served from the same binary and port, with no frontend build step.
 
 ### Security and governance
 
 | Feature | Description | Docs |
 |---------|-------------|------|
-| **Authentication** | Bearer tokens, API keys, explicit admin keys, per-client rate limits, and opt-in per-client circuit breakers | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
+| **Authentication** | Bearer tokens, API keys, explicit admin keys, per-client rate limits, and opt-in per-client circuit breakers. With auth disabled every caller over HTTP is anonymous and holds no admin; a stdio caller is admin, because the client spawned the process | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
+| **Cross-site protection** | `Origin`, `Host` and `Sec-Fetch-Site` validation refuses web pages reaching the local port. A client that sends no `Origin` is not refused for that, but the `Host` check applies to every request, so a client reaching the gateway by a name it does not answer to is refused whether or not it is a browser | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#browser-access-to-the-gateway-port) |
 | **End-user identity propagation** | Three configured strategies (`identity_propagation` config): gateway-signed assertion, client-token passthrough, and RFC 8693 token exchange. Fails closed when a backend requires identity. Per-user cache isolation. Enforced on dispatch, Code Mode, and direct routes. | [docs/adr/ADR-007-identity-propagation.md](docs/adr/ADR-007-identity-propagation.md) |
 | **Per-user OAuth isolation** | Fail-closed default (v3.0): a backend that requires a per-user OAuth identity refuses a call that lacks one instead of serving a shared stored token. Opt into the previous shared-credential behavior with `auth.single_user: true` (personal gateway) or `oauth.shared_account: true` (a specific backend). Upgrading from 2.x backs up `gateway.yaml` and prints a one-time posture notice; no config changes automatically. | [docs/adr/ADR-008-multi-user-oauth-isolation.md](docs/adr/ADR-008-multi-user-oauth-isolation.md), [docs/UPGRADING-3.0.md](docs/UPGRADING-3.0.md) |
 | **Per-client tool scopes** | Allowlist or denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
@@ -329,8 +351,8 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 - **MCP version**: 2025-11-25 (latest spec)
 - **Transports**: stdio, Streamable HTTP, SSE, WebSocket
-- **Hot reload**: capability YAMLs plus reloadable gateway config sections are watched and reloaded live
-- **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` return `restart_required` for listener changes (for example `server.host` or `server.port`); `env_files` list edits remain startup-only
+- **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
+- **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
 - **Config discovery**: auto-finds `gateway.yaml` in cwd, `~/.config/mcp-gateway/`, and `/etc/mcp-gateway/`
 - **"Did you mean?"**: Levenshtein-based typo correction on tool names
 - **Tool annotations**: MCP 2025-11-25 `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`; gateway meta-tools are fully annotated, while backend tools use the hybrid pass-through/fill policy in [ADR-003](docs/adr/ADR-003-mcp-tool-annotation-policy.md)
@@ -394,7 +416,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 | `/mcp/{backend}` | POST | Direct backend access |
 | `/ui` | GET | Web dashboard |
 | `/ui/api/control-plane` | GET | Read-only local control-plane projection for inventory, runtime health, decisions, RBAC, and license boundaries |
-| `/dashboard` | GET | Operator dashboard |
+| `/dashboard` | GET | Operator dashboard. Admin only; opened with the single-use link `serve` prints on a loopback bind |
 | `/metrics` | GET | Prometheus metrics (with `--features metrics`) |
 
 ## Performance
@@ -452,7 +474,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | Document | Contents |
 |----------|----------|
 | [Quick Start](docs/QUICKSTART.md) | Zero to running in 2 minutes |
-| [Configuration Reference](docs/QUICKSTART.md#configuration) | All config options |
+| [Annotated config example](examples/gateway-full.yaml) | Commented `gateway.yaml` covering the most-used config sections |
 | [OAuth Configuration](docs/OAUTH_CONFIG.md) | OAuth 2.0 setup with Slack and Figma examples |
 | [Upgrading to 3.0](docs/UPGRADING-3.0.md) | Per-user OAuth isolation and identity-propagation upgrade path |
 | [Deployment Guide](docs/DEPLOYMENT.md) | Docker, systemd, TLS/mTLS, scaling |
@@ -483,7 +505,7 @@ command that changes behaviour, is a breaking change.
 modularity and testing, not as a supported embedding API, and they may change
 in any release. The crate ships a binary; at the time of writing crates.io
 reports zero reverse dependencies. If you embed the library, pin an exact
-version (`=3.4.0`) rather than a caret range.
+version (`=3.5.0`) rather than a caret range.
 
 This is stated explicitly because "removing a `pub` field" and "breaking a
 supported API" are only the same thing when the API is supported. Here it is

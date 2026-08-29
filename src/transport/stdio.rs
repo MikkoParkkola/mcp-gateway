@@ -158,9 +158,17 @@ impl StdioTransport {
             cmd.current_dir(cwd);
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| Error::Transport(format!("Failed to spawn: {e}")))?;
+        let mut child = cmd.spawn().map_err(|e| match e.kind() {
+            // A command path that does not exist, or a file that is not
+            // executable. No amount of waiting fixes either, and warm-start
+            // retries transport failures indefinitely -- so before this, a
+            // typo in a backend command was respawned once a minute for the
+            // life of the process with no indication the config was wrong.
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+                Error::TransportPermanent(format!("Failed to spawn: {e}"))
+            }
+            _ => Error::Transport(format!("Failed to spawn: {e}")),
+        })?;
 
         let stdin = child
             .stdin
@@ -882,6 +890,38 @@ done
             .status();
         panic!(
             "child survived dropping every handle to its transport: pid {pid} still alive after 2s"
+        );
+    }
+}
+
+#[cfg(test)]
+mod spawn_classification_tests {
+    use super::StdioTransport;
+    use crate::Error;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_missing_command_is_reported_as_permanent() {
+        // END TO END, not a synthetic classifier input: this really tries to
+        // spawn, so it pins the actual io::ErrorKind the OS returns rather than
+        // the one this code assumes it returns.
+        let transport = StdioTransport::new(
+            "/nonexistent/definitely-not-a-real-binary",
+            HashMap::new(),
+            None,
+            Duration::from_secs(1),
+            None,
+        );
+
+        let err = transport
+            .start()
+            .await
+            .expect_err("spawning a missing binary must fail");
+
+        assert!(
+            matches!(err, Error::TransportPermanent(_)),
+            "a missing command must be permanent, got {err:?}"
         );
     }
 }

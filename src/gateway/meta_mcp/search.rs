@@ -475,15 +475,7 @@ impl MetaMcp {
         // Code Mode carries the caller's identity + attribution through to
         // dispatch, so an identity-required backend gets the per-user credential
         // just like the direct gateway_invoke path (MIK-6734).
-        self.invoke_tool(
-            &invoke_args,
-            session_id,
-            caller.api_key_name,
-            caller.agent_id,
-            caller.grant_subject.clone(),
-            caller.verified_identity,
-        )
-        .await
+        self.invoke_tool(&invoke_args, session_id, caller).await
     }
 
     /// Execute a sequential chain of `{tool, arguments}` steps.
@@ -526,22 +518,27 @@ impl MetaMcp {
                 "arguments": arguments,
             });
 
-            match self
-                .invoke_tool(
-                    &invoke_args,
-                    session_id,
-                    caller.api_key_name,
-                    caller.agent_id,
-                    caller.grant_subject.clone(),
-                    caller.verified_identity,
-                )
-                .await
-            {
+            match self.invoke_tool(&invoke_args, session_id, caller).await {
                 Ok(result) => results.push(json!({
                     "step": idx,
                     "tool": tool_ref,
                     "result": result,
                 })),
+                // A refusal stays a refusal. Flattening it into -32603 told
+                // the caller their chain hit an internal error when in fact
+                // they were not allowed to run that step — and it hid the
+                // denial from anything downstream that classifies errors.
+                Err(Error::Forbidden {
+                    code,
+                    status,
+                    message,
+                }) => {
+                    return Err(Error::Forbidden {
+                        code,
+                        status,
+                        message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+                    });
+                }
                 Err(e) => {
                     return Err(Error::json_rpc(
                         -32603,

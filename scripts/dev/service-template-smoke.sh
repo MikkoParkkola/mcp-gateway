@@ -36,6 +36,9 @@ launchd_template="$repo_root/deploy/single-node/com.mikkoparkkola.mcp-gateway.pl
 grep -Fq '${PWD}/gateway.yaml:/config.yaml:ro' "$docker_template"
 grep -Fq '${PWD}/capabilities:/capabilities:ro' "$docker_template"
 grep -Fq '["--config", "/config.yaml", "--host", "0.0.0.0", "--port", "39400"]' "$docker_template"
+# That wide bind is only legal because the template declares why. Asserted here
+# so removing the declaration fails the smoke rather than the container.
+grep -Fq 'MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND' "$docker_template"
 grep -Fq "http://localhost:39400/health" "$docker_template"
 if docker compose version >/dev/null 2>&1; then
   (cd "$source_layout" && docker compose -f "$docker_template" config >/dev/null)

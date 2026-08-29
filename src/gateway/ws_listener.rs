@@ -9,6 +9,14 @@
 //!
 //! Intentionally kept separate from the main Axum HTTP server so the two can
 //! run on different ports without coupling.
+//!
+//! It therefore sits OUTSIDE the Origin/Host gate in `router::origin_guard`,
+//! which is safe only because it serves nothing: no MCP, no backends, no
+//! credentials. If this transport ever carries the MCP protocol it must run the
+//! same origin policy first, and more strictly than the HTTP surface does — a
+//! WebSocket handshake is not subject to the same-origin policy, so any page
+//! can open one to any host. Browsers do send `Origin` on the handshake, which
+//! is what makes the check possible.
 
 use tracing::{debug, info, warn};
 

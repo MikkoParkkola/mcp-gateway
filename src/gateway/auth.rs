@@ -35,6 +35,10 @@ type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 ///
 /// Returns the first 12 hex chars of the SHA-256 digest — enough to correlate
 /// which credential is active across logs, useless as a credential itself.
+pub(crate) fn principal_of(token: &str) -> String {
+    bearer_token_fingerprint(token)
+}
+
 fn bearer_token_fingerprint(token: &str) -> String {
     crate::hashing::sha256_hex(token.as_bytes())[..12].to_string()
 }
@@ -202,11 +206,13 @@ impl ResolvedAuthConfig {
         {
             return Some(AuthenticatedClient {
                 name: "bearer".to_string(),
+                principal: principal_of(token),
                 rate_limit: 0,
                 backends: vec!["*".to_string()],
                 allowed_tools: None,
                 denied_tools: None,
                 admin: true,
+                authenticated: true,
             });
         }
 
@@ -215,11 +221,13 @@ impl ResolvedAuthConfig {
             if token.as_bytes().ct_eq(key.key.as_bytes()).into() {
                 return Some(AuthenticatedClient {
                     name: key.name.clone(),
+                    principal: principal_of(&key.key),
                     rate_limit: key.rate_limit,
                     backends: key.backends.clone(),
                     allowed_tools: key.allowed_tools.clone(),
                     denied_tools: key.denied_tools.clone(),
                     admin: key.admin,
+                    authenticated: true,
                 });
             }
         }
@@ -335,6 +343,21 @@ pub struct AuthenticatedClient {
     pub denied_tools: Option<Vec<String>>,
     /// Admin-level UI and management tool access.
     pub admin: bool,
+    /// Stable identifier for the principal behind this identity.
+    ///
+    /// A digest of the validated secret, not the display name: `name` is
+    /// operator-chosen and two API keys may share one, which would let them
+    /// attach to each other's sessions. Empty for an identity that presented
+    /// no credential.
+    pub principal: String,
+    /// Whether a credential was actually presented and validated.
+    ///
+    /// False for the anonymous identity used when authentication is disabled,
+    /// and for the identity given to a public path. Authorization must test
+    /// this rather than compare `name` against `"public"` or `"anonymous"`: a
+    /// name is data, and a rule written against one silently admits any client
+    /// configured with a different name.
+    pub authenticated: bool,
 }
 
 impl AuthenticatedClient {
@@ -393,6 +416,396 @@ impl AuthenticatedClient {
     }
 }
 
+/// A one-time value that exchanges for a dashboard session.
+///
+/// Printed by `serve` as part of a link. It is NOT the admin credential: the
+/// link's query string reaches this gateway's own request log, so putting the
+/// real token there would leak it into a file that outlives the browser tab.
+/// This value is single-use and dies with the process.
+#[derive(Debug)]
+pub struct DashboardBootstrap {
+    value: std::sync::Mutex<Option<String>>,
+    /// Opaque handles issued to browsers, valid for this process only.
+    sessions: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+impl DashboardBootstrap {
+    /// Mint an opaque session for a browser that presented the bootstrap value.
+    ///
+    /// The cookie carries THIS, never the admin credential. A bearer token in a
+    /// cookie is long-lived and, without TLS, recoverable from the wire; an
+    /// opaque handle is meaningless anywhere but this process and expires with
+    /// it. Kept in memory: a dashboard session is not worth persisting, and
+    /// nothing on disk means nothing to steal from disk.
+    pub fn issue_session(&self) -> String {
+        use rand::RngExt;
+        let bytes: [u8; 32] = rand::rng().random();
+        let handle =
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.insert(handle.clone());
+        }
+        handle
+    }
+
+    /// `true` when this handle was issued by this process and is still valid.
+    #[must_use]
+    pub fn session_is_valid(&self, handle: &str) -> bool {
+        self.sessions
+            .lock()
+            .is_ok_and(|sessions| sessions.contains(handle))
+    }
+
+    /// Mint a fresh single-use value.
+    #[must_use]
+    pub fn new() -> Self {
+        use rand::RngExt;
+        let bytes: [u8; 32] = rand::rng().random();
+        let value =
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
+        Self {
+            value: std::sync::Mutex::new(Some(value)),
+            sessions: std::sync::Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    /// The value to print, while it remains unused.
+    #[must_use]
+    pub fn peek(&self) -> Option<String> {
+        self.value.lock().ok().and_then(|v| v.clone())
+    }
+
+    /// Consume the value if it matches. Single use: a second attempt fails even
+    /// with the right value, so a link left in a shell history is spent.
+    #[must_use]
+    pub fn consume(&self, candidate: &str) -> bool {
+        let Ok(mut guard) = self.value.lock() else {
+            return false;
+        };
+        match guard.as_deref() {
+            Some(expected) if expected == candidate => {
+                *guard = None;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Default for DashboardBootstrap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod dashboard_session_tests {
+    use super::DashboardBootstrap;
+
+    /// The link is redeemed only by somebody actually at this machine
+    /// (MIK-7257).
+    ///
+    /// The check used to read the `Host` header, which the caller writes and a
+    /// proxy rewrites — nginx's default for a bare `proxy_pass` is the upstream
+    /// address, so a forwarded request arrived carrying a loopback `Host` and
+    /// was accepted from anywhere. These cases drive the same predicate the
+    /// middleware uses, over the two facts it now reads.
+    #[test]
+    fn a_link_is_redeemed_only_from_this_machine() {
+        // (peer, forwarding header present, may redeem)
+        let cases: [(&str, bool, bool); 6] = [
+            // A browser on this machine: the case the link exists for.
+            ("127.0.0.1:52344", false, true),
+            ("[::1]:52344", false, true),
+            // Straight off the network. Never printed on such a bind, and
+            // refused even if the value leaked.
+            ("10.0.0.7:41000", false, false),
+            ("[2001:db8::1]:41000", false, false),
+            // A same-host reverse proxy forwarding someone else's request: the
+            // peer IS loopback, which is why the peer alone is not the answer.
+            // Refused on the forwarding header a conventional proxy sets.
+            ("127.0.0.1:52344", true, false),
+            // A remote proxy is refused twice over.
+            ("10.0.0.7:41000", true, false),
+        ];
+        for (peer, forwarded, may_redeem) in cases {
+            let addr: std::net::SocketAddr = peer.parse().expect("test peer parses");
+            let peer_is_local = addr.ip().is_loopback();
+            let allowed = peer_is_local && !forwarded;
+            assert_eq!(
+                allowed, may_redeem,
+                "peer {peer} with forwarding={forwarded} was judged wrongly: \
+                 refusing a local browser breaks the only way into the \
+                 dashboard, and admitting a forwarded request hands an admin \
+                 session to whoever holds the link"
+            );
+        }
+    }
+
+    #[test]
+    fn a_handle_is_only_valid_if_this_process_issued_it() {
+        let b = DashboardBootstrap::new();
+        let handle = b.issue_session();
+        assert!(b.session_is_valid(&handle));
+        assert!(!b.session_is_valid("guessed"));
+
+        // A handle from another process is meaningless here, which is the
+        // point of an opaque session over a bearer token in a cookie.
+        let other = DashboardBootstrap::new();
+        assert!(!other.session_is_valid(&handle));
+    }
+
+    #[test]
+    fn handles_are_not_guessable_and_not_reused() {
+        let b = DashboardBootstrap::new();
+        let a = b.issue_session();
+        let c = b.issue_session();
+        assert_ne!(a, c);
+        assert!(a.len() >= 42, "32 random bytes, base64url: {a}");
+    }
+
+    /// The session handle is never the admin credential.
+    ///
+    /// This is the central claim of the opaque-session design — the cookie used
+    /// to carry the bearer token, which is long-lived and, without TLS,
+    /// recoverable from the wire — and nothing asserted it. A change that put
+    /// the credential back in the cookie would have passed every test here.
+    #[test]
+    fn a_session_handle_is_never_the_admin_credential() {
+        let bearer = "mcpgw_a-realistic-looking-admin-credential";
+        let b = DashboardBootstrap::new();
+
+        for _ in 0..8 {
+            let handle = b.issue_session();
+            assert_ne!(
+                handle, bearer,
+                "the cookie must carry an opaque handle, never the credential"
+            );
+            assert!(
+                !handle.contains(bearer) && !bearer.contains(&handle),
+                "and must not embed or be embedded in it: {handle}"
+            );
+            assert!(
+                !handle.starts_with("mcpgw_"),
+                "nor look like one, which would invite pasting it as a token: {handle}"
+            );
+        }
+    }
+
+    /// A bootstrap value is spent exactly once, and a wrong one spends nothing.
+    #[test]
+    fn a_bootstrap_value_is_single_use_and_a_wrong_one_costs_nothing() {
+        let b = DashboardBootstrap::new();
+        let printed = b.peek().expect("a value is issued at startup");
+
+        assert!(!b.consume("not-the-value"), "a wrong value is rejected");
+        assert!(
+            b.consume(&printed),
+            "and rejecting it must not have spent the real one — otherwise a \
+             stray click on a stale link disarms the operator's own"
+        );
+        assert!(!b.consume(&printed), "the real value is spent only once");
+    }
+}
+
+/// Name of the browser session cookie the dashboard bootstrap sets.
+///
+/// A browser cannot attach an `Authorization` header to a navigation, so a
+/// bearer token alone leaves the dashboard unusable however correct the
+/// credential is. The gateway prints a one-time link; opening it exchanges the
+/// credential for this cookie and redirects, so the token never lingers in the
+/// address bar, the history, or a `Referer`.
+pub const SESSION_COOKIE: &str = "mcp_gateway_session";
+
+/// Exchange a dashboard bootstrap link for a session, if this is one.
+///
+/// Split out of the middleware so the credential path stays readable; a
+/// browser navigation is the one place a value arrives in the URL, and that is
+/// worth being able to see in one screen.
+fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option<Response> {
+    if request.uri().path() != "/dashboard" {
+        return None;
+    }
+    let candidate = request.uri().query().and_then(bootstrap_param)?;
+    {
+        // Redeemable only from this machine, whatever the origin gate admits.
+        //
+        // The value is printed to the operator's own terminal on the assumption
+        // that seeing it means being at the machine. That assumption breaks the
+        // moment a `public_url` is declared: the origin gate then admits that
+        // hostname by design, so anyone who obtains the printed value — shipped
+        // logs, shared scrollback, a screenshot — can exchange it for an admin
+        // session from anywhere. Printing is already gated on a loopback bind;
+        // the exchange was not, which left the weaker half deciding.
+        //
+        // Read from the CONNECTION, not from the request. `Host` is written by
+        // the caller and rewritten by proxies — nginx's default for a bare
+        // `proxy_pass` is the upstream address — so a forwarded request could
+        // present a loopback `Host` and redeem a leaked link from anywhere
+        // (MIK-7257). The peer address is the socket the kernel accepted and
+        // nobody upstream can dictate it.
+        //
+        // Absent connect info is treated as NOT local. Both serve paths install
+        // it (`server::mod`, `support::serve_tls`); a request without it came
+        // from somewhere unaccounted for, and the safe reading of "unaccounted
+        // for" is "not at this machine".
+        let peer_is_local = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .is_some_and(|info| info.0.ip().is_loopback());
+
+        // A loopback peer is not conclusive on its own: a reverse proxy running
+        // on THIS machine also connects from loopback. Such a proxy announces
+        // itself — every convention-following one sets a forwarding header, and
+        // this project's own nginx example sets `X-Forwarded-For`. Refusing
+        // when one is present closes the same-host case for any proxy that
+        // follows the convention.
+        //
+        // Stated honestly: a proxy that strips these headers defeats it. That
+        // is a narrower residual than trusting `Host`, not an empty one.
+        let looks_forwarded = ["x-forwarded-for", "forwarded", "x-forwarded-host"]
+            .iter()
+            .any(|h| request.headers().contains_key(*h));
+
+        if !peer_is_local || looks_forwarded {
+            warn!(
+                peer_is_local,
+                looks_forwarded, "Dashboard bootstrap refused: redeemable only from this machine"
+            );
+            return Some(bearer_unauthorized_response(
+                "The dashboard link works only from the machine running the gateway.",
+            ));
+        }
+
+        // Checked BEFORE the value is spent. The bootstrap is one-time, so
+        // consuming it and then discovering there is no credential to exchange
+        // it for leaves the operator holding a dead link with no way to retry
+        // short of restarting the gateway — and nothing tells them that. An
+        // install configured with API keys but no bearer hits exactly this.
+        //
+        // An admin API key counts. The exchange hands back an opaque session
+        // handle and never touches the credential itself, so a bearer is not
+        // mechanically required — demanding one refused every API-key-only
+        // operator over a token the exchange would not have used. A RESTRICTED
+        // key does not count: the session it opens carries admin.
+        let has_admin_credential = state.auth_config.bearer_token.is_some()
+            || state.auth_config.api_keys.iter().any(|k| k.admin);
+        if !has_admin_credential {
+            warn!("Dashboard bootstrap unusable: no admin credential is configured");
+            return Some(bearer_unauthorized_response(
+                "No admin credential is configured. Set auth.bearer_token or an admin \
+                 API key, or run `mcp-gateway init` to generate one, then restart for \
+                 a fresh link.",
+            ));
+        }
+        if !state.dashboard_bootstrap.consume(&candidate) {
+            warn!("Dashboard bootstrap rejected: wrong or already-used value");
+            return Some(bearer_unauthorized_response(
+                "Bootstrap link is invalid or already used. Restart the gateway \
+                 for a fresh link.",
+            ));
+        }
+        // Hand the browser an opaque session in an HttpOnly cookie and redirect.
+        // Done here rather than in the handler so the token never leaves this
+        // module, and so the address bar keeps nothing after the redirect.
+        let handle = state.dashboard_bootstrap.issue_session();
+        // `Secure` whenever this listener speaks TLS. Without it a downgrade
+        // puts the cookie on the wire; with a plain-HTTP loopback listener the
+        // attribute would stop the cookie being sent at all, so it is
+        // conditional rather than unconditional.
+        let secure = if state.tls_enabled { " Secure;" } else { "" };
+        Some(axum::response::IntoResponse::into_response((
+            axum::http::StatusCode::SEE_OTHER,
+            [
+                (axum::http::header::LOCATION, "/dashboard".to_string()),
+                (
+                    axum::http::header::SET_COOKIE,
+                    format!(
+                        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; \
+                         Path=/; Max-Age=86400"
+                    ),
+                ),
+            ],
+        )))
+    }
+}
+
+/// The identity a validated dashboard session carries.
+fn dashboard_client() -> AuthenticatedClient {
+    AuthenticatedClient {
+        name: "dashboard".to_string(),
+        principal: "dashboard-session".to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: true,
+        authenticated: true,
+    }
+}
+
+/// The credential a request presents, from the session cookie or a bearer header.
+fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
+    // The session cookie is NOT a credential: it is an opaque handle checked
+    // against this process's store, above.
+    {
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| {
+                v.strip_prefix("Bearer ")
+                    .or_else(|| v.strip_prefix("bearer "))
+            })
+            .map(ToString::to_string)
+    }
+}
+
+/// The `bootstrap` query parameter, if present.
+fn bootstrap_param(query: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .find(|(k, _)| *k == "bootstrap")
+        .map(|(_, v)| v.to_string())
+}
+
+/// Read the session cookie from a request's headers, if present.
+#[must_use]
+pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())?
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .find(|(name, _)| *name == SESSION_COOKIE)
+        .map(|(_, value)| value.to_string())
+}
+
+/// The identity every caller holds when authentication is disabled.
+///
+/// Reaches ordinary tools, so a local MCP client works out of the box, and
+/// holds no admin. Admin is an explicit grant that requires a credential
+/// (`auth.enabled = true` with a bearer token): an auth-disabled gateway
+/// cannot tell its operator apart from a web page that rebound a hostname to
+/// loopback, or from any other process running as the same user.
+///
+/// `backends` stays `["*"]` deliberately. [`AuthenticatedClient::can_access_backend`]
+/// treats an EMPTY list as "all", so clearing the vector would grant everything
+/// while reading like a restriction.
+#[must_use]
+pub fn anonymous_client() -> AuthenticatedClient {
+    AuthenticatedClient {
+        name: "anonymous".to_string(),
+        principal: String::new(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        authenticated: false,
+    }
+}
+
 /// Combined auth state: static config + optional key server.
 #[derive(Clone)]
 pub struct AuthState {
@@ -400,6 +813,10 @@ pub struct AuthState {
     pub auth_config: Arc<ResolvedAuthConfig>,
     /// Key server for OIDC-issued temporary tokens (optional).
     pub key_server: Option<Arc<KeyServer>>,
+    /// Single-use value that opens the dashboard from a printed link.
+    pub dashboard_bootstrap: Arc<DashboardBootstrap>,
+    /// Whether this listener speaks TLS, so the session cookie can be `Secure`.
+    pub tls_enabled: bool,
 }
 
 /// Authentication middleware
@@ -417,49 +834,68 @@ pub async fn auth_middleware(
 
     // If auth is disabled, pass through with anonymous client
     if !auth_config.enabled {
-        request.extensions_mut().insert(AuthenticatedClient {
-            name: "anonymous".to_string(),
-            rate_limit: 0,
-            backends: vec!["*".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: true,
-        });
+        request.extensions_mut().insert(anonymous_client());
         return next.run(request).await;
     }
 
     let path = request.uri().path();
+
+    // A public path skips the credential REQUIREMENT, not the credential. An
+    // operator who presents their admin token to `/mcp` — a public path on the
+    // starter config, so ordinary tools stay open — was handed the public
+    // identity and lost the management tools their token pays for.
+    // An opaque dashboard session, validated against this process's store
+    // rather than treated as a credential.
+    if let Some(handle) = session_cookie_value(request.headers())
+        && state.dashboard_bootstrap.session_is_valid(&handle)
+    {
+        request.extensions_mut().insert(dashboard_client());
+        return next.run(request).await;
+    }
+
+    if auth_config.is_public_path(path)
+        && let Some(presented) = presented_credential(request.headers())
+        && let Some(client) = auth_config.validate_token(&presented)
+    {
+        request.extensions_mut().insert(client);
+        return next.run(request).await;
+    }
 
     // Check if path is public
     if auth_config.is_public_path(path) {
         debug!(path = %path, "Public path, skipping auth");
         request.extensions_mut().insert(AuthenticatedClient {
             name: "public".to_string(),
+            principal: String::new(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: false,
         });
         return next.run(request).await;
     }
 
-    // Extract token from Authorization header
-    let token = request
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.strip_prefix("Bearer ")
-                .or_else(|| v.strip_prefix("bearer "))
-        });
+    // A browser navigation carries no Authorization header, so the dashboard
+    // session cookie is accepted as an equivalent credential. It is HttpOnly and
+    // SameSite=Strict, so script cannot read it and it is not sent cross-site.
+    // The dashboard bootstrap link. A browser navigation carries no header and
+    // no cookie yet, so this is the one path where a credential arrives in the
+    // URL — which is why the value is single-use and is not the admin token.
+    if let Some(response) = try_dashboard_bootstrap(&state, &request) {
+        return response;
+    }
+
+    let token = presented_credential(request.headers());
 
     let Some(token) = token else {
-        warn!(path = %path, "Missing Authorization header");
+        warn!(path = %path, "Missing credential");
         return bearer_unauthorized_response(
             "Missing Authorization header. Use: Authorization: Bearer <token>",
         );
     };
+    let token = token.as_str();
 
     // 1. Try static auth (existing behavior)
     if let Some(client) = auth_config.validate_token(token) {
@@ -556,6 +992,42 @@ fn looks_like_jwt(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Anonymous identity (CWE-346) ──────────────────────────────────────────
+    //
+    // With auth off every caller is anonymous. Anonymous must reach ordinary
+    // tools so a local MCP client keeps working, and must NOT hold admin, so a
+    // local process or a browser that gets past the Origin gate cannot kill
+    // servers, reload config or read the admin dashboard.
+
+    #[test]
+    fn anonymous_is_not_admin() {
+        assert!(!anonymous_client().admin, "admin must require a credential");
+    }
+
+    #[test]
+    fn anonymous_retains_backend_access() {
+        // Asserts reachability, not the field: `can_access_backend` returns
+        // true for an EMPTY list, so a fix that clears the vector grants
+        // everything while looking like a restriction.
+        let anon = anonymous_client();
+        assert!(anon.can_access_backend("any-backend"));
+    }
+
+    #[test]
+    fn bearer_client_remains_admin() {
+        let config = ResolvedAuthConfig {
+            enabled: true,
+            bearer_token: Some("bearer-ADMIN".to_string()),
+            api_keys: vec![],
+            public_paths: vec![],
+            rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
+        };
+        let bearer = config.validate_token("bearer-ADMIN").expect("bearer valid");
+        assert!(bearer.admin, "an explicit credential still grants admin");
+    }
 
     #[test]
     fn looks_like_jwt_accepts_three_base64url_segments() {
@@ -787,30 +1259,36 @@ mod tests {
     #[test]
     fn test_backend_access_control() {
         let client_restricted = AuthenticatedClient {
+            principal: String::new(),
             name: "restricted".to_string(),
             rate_limit: 0,
             backends: vec!["tavily".to_string(), "brave".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         let client_unrestricted = AuthenticatedClient {
+            principal: String::new(),
             name: "unrestricted".to_string(),
             rate_limit: 0,
             backends: vec![], // empty = all access
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         let client_wildcard = AuthenticatedClient {
+            principal: String::new(),
             name: "wildcard".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Restricted client
@@ -830,12 +1308,14 @@ mod tests {
     #[test]
     fn test_tool_scope_no_restrictions() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "unrestricted".to_string(),
             rate_limit: 0,
             backends: vec![],
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // No restrictions = all tools allowed (fallback to global policy)
@@ -846,12 +1326,14 @@ mod tests {
     #[test]
     fn test_tool_scope_allowlist_exact_match() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "restricted".to_string(),
             rate_limit: 0,
             backends: vec![],
             allowed_tools: Some(vec!["search_web".to_string(), "read_file".to_string()]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Tools in allowlist
@@ -866,12 +1348,14 @@ mod tests {
     #[test]
     fn test_tool_scope_allowlist_glob_pattern() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "search_only".to_string(),
             rate_limit: 0,
             backends: vec![],
             allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Tools matching glob patterns
@@ -892,12 +1376,14 @@ mod tests {
     #[test]
     fn test_tool_scope_denylist_exact_match() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "no_writes".to_string(),
             rate_limit: 0,
             backends: vec![],
             allowed_tools: None,
             denied_tools: Some(vec!["write_file".to_string(), "delete_file".to_string()]),
             admin: false,
+            authenticated: true,
         };
 
         // Tools in denylist
@@ -912,12 +1398,14 @@ mod tests {
     #[test]
     fn test_tool_scope_denylist_glob_pattern() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "no_filesystem".to_string(),
             rate_limit: 0,
             backends: vec![],
             allowed_tools: None,
             denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
             admin: false,
+            authenticated: true,
         };
 
         // Tools matching deny glob patterns
@@ -942,6 +1430,7 @@ mod tests {
     #[test]
     fn test_tool_scope_qualified_name_match() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "specific_server".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -951,6 +1440,7 @@ mod tests {
             ]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         // Qualified match: only filesystem:read_file allowed, not other servers
@@ -964,6 +1454,7 @@ mod tests {
     #[test]
     fn test_tool_scope_both_allow_and_deny() {
         let client = AuthenticatedClient {
+            principal: String::new(),
             name: "complex".to_string(),
             rate_limit: 0,
             backends: vec![],
@@ -973,6 +1464,7 @@ mod tests {
                 "filesystem_delete".to_string(),
             ]),
             admin: false,
+            authenticated: true,
         };
 
         // In allowlist and NOT in denylist
@@ -1002,12 +1494,14 @@ mod tests {
     #[test]
     fn test_tool_scope_error_messages() {
         let client_allow = AuthenticatedClient {
+            principal: String::new(),
             name: "frontend".to_string(),
             rate_limit: 0,
             backends: vec![],
             allowed_tools: Some(vec!["search_*".to_string()]),
             denied_tools: None,
             admin: false,
+            authenticated: true,
         };
 
         let err = client_allow
@@ -1019,12 +1513,14 @@ mod tests {
         assert!(err.contains("frontend"));
 
         let client_deny = AuthenticatedClient {
+            principal: String::new(),
             name: "restricted_bot".to_string(),
             rate_limit: 0,
             backends: vec![],
             allowed_tools: None,
             denied_tools: Some(vec!["exec_*".to_string()]),
             admin: false,
+            authenticated: true,
         };
 
         let err = client_deny
@@ -1034,5 +1530,85 @@ mod tests {
         assert!(err.contains("server"));
         assert!(err.contains("blocked"));
         assert!(err.contains("restricted_bot"));
+    }
+
+    /// A dashboard bootstrap link for an install whose only admin credential is
+    /// an API key.
+    ///
+    /// The value is exchanged for an opaque session handle, never for the
+    /// credential itself, so demanding a bearer specifically refuses every
+    /// API-key-only operator for a token the exchange would not have used.
+    fn bootstrap_state(bearer: Option<&str>, keys: Vec<ResolvedApiKey>) -> (AuthState, String) {
+        let config = ResolvedAuthConfig {
+            enabled: true,
+            bearer_token: bearer.map(ToString::to_string),
+            api_keys: keys,
+            public_paths: vec![],
+            rate_limiters: DashMap::new(),
+            client_circuit_breaker: None,
+            client_circuit_breakers: DashMap::new(),
+        };
+        let bootstrap = Arc::new(DashboardBootstrap::new());
+        let printed = bootstrap.peek().expect("a value is issued at startup");
+        (
+            AuthState {
+                auth_config: Arc::new(config),
+                key_server: None,
+                dashboard_bootstrap: bootstrap,
+                tls_enabled: false,
+            },
+            printed,
+        )
+    }
+
+    fn admin_key(admin: bool) -> ResolvedApiKey {
+        ResolvedApiKey {
+            key: "key-value".to_string(),
+            name: "ops".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin,
+        }
+    }
+
+    fn redeem(state: &AuthState, printed: &str) -> axum::http::StatusCode {
+        let request = Request::builder()
+            .uri(format!("/dashboard?bootstrap={printed}"))
+            .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                12345,
+            ))))
+            .body(Body::empty())
+            .expect("request builds");
+        try_dashboard_bootstrap(state, &request)
+            .expect("a bootstrap link is always answered here")
+            .status()
+    }
+
+    #[test]
+    fn an_admin_api_key_is_an_admin_credential_for_the_bootstrap_link() {
+        let (state, printed) = bootstrap_state(None, vec![admin_key(true)]);
+        assert_eq!(
+            redeem(&state, &printed),
+            axum::http::StatusCode::SEE_OTHER,
+            "an install administered by API key must be able to open its own dashboard"
+        );
+    }
+
+    /// The other half: a key that is not admin is not an admin credential.
+    ///
+    /// Without this, a repair that only checks the list is non-empty hands a
+    /// full-admin dashboard session to an install that deliberately issued
+    /// nothing but restricted keys.
+    #[test]
+    fn a_restricted_api_key_does_not_open_the_dashboard() {
+        let (state, printed) = bootstrap_state(None, vec![admin_key(false)]);
+        assert_eq!(
+            redeem(&state, &printed),
+            axum::http::StatusCode::UNAUTHORIZED,
+            "a restricted key is not an admin credential"
+        );
     }
 }

@@ -234,15 +234,20 @@ impl TokenStorage {
         let content = serde_json::to_string_pretty(token)
             .map_err(|e| Error::OAuth(format!("Failed to serialize token: {e}")))?;
 
-        fs::write(&path, content)
-            .map_err(|e| Error::OAuth(format!("Failed to write token file: {e}")))?;
-
-        // Set restrictive permissions (owner read/write only)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&path, perms);
+        // Through a scratch file, not `fs::write` followed by
+        // `set_permissions`. Writing in place puts the access token into a file
+        // created at the umask, or into whatever file already holds that path,
+        // and tightens it only afterwards; the secret is readable for the whole
+        // write. The scratch file carries 0600 from creation and `rename` hands
+        // the destination that mode, so no moment exists at which the token is
+        // world-readable. A refresh has to overwrite, so this replaces rather
+        // than linking first-writer-wins the way `save_client_id` does.
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("token");
+        let tmp = self.create_secret_tmp(file_name)?;
+        let tmp = Self::write_secret_tmp(tmp, &content)?;
+        if let Err(e) = fs::rename(&tmp, &path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(Error::OAuth(format!("Failed to write token file: {e}")));
         }
 
         info!(backend = %backend_name, "Saved OAuth token");
@@ -331,7 +336,7 @@ impl TokenStorage {
     /// Returns an error when the id cannot be serialized, when a unique temp
     /// file cannot be created, when the temp file cannot be written (in which
     /// case the temp file is removed before the error is returned -- see
-    /// [`write_client_tmp`](Self::write_client_tmp)), when the existing final
+    /// [`write_secret_tmp`](Self::write_secret_tmp)), when the existing final
     /// file is unreadable and cannot be self-healed, or when the atomic link
     /// fails for a reason other than the final path already existing.
     pub fn save_client_id(
@@ -354,8 +359,8 @@ impl TokenStorage {
         // `AlreadyExists` rather than opening (and emptying) an existing path.
         // On unix the 0600 mode is applied atomically at creation, closing the
         // world-readable window that a post-write chmod would otherwise leave.
-        let tmp = self.create_client_tmp(file_name)?;
-        let tmp = Self::write_client_tmp(tmp, &content)?;
+        let tmp = self.create_secret_tmp(file_name)?;
+        let tmp = Self::write_secret_tmp(tmp, &content)?;
 
         // First-writer-wins: `hard_link` fails with `AlreadyExists` when the
         // final path already exists, so a concurrent instance adopts the
@@ -457,7 +462,7 @@ impl TokenStorage {
     /// (MIK-6750 r8, minor -- the previous code returned early via `?`
     /// without cleanup, orphaning the temp on every such error).
     #[cfg(unix)]
-    fn write_client_tmp(tmp: (fs::File, PathBuf), content: &str) -> Result<PathBuf> {
+    fn write_secret_tmp(tmp: (fs::File, PathBuf), content: &str) -> Result<PathBuf> {
         use std::io::Write as _;
         let (mut file, tmp_path) = tmp;
         match file
@@ -467,26 +472,22 @@ impl TokenStorage {
             Ok(()) => Ok(tmp_path),
             Err(e) => {
                 let _ = fs::remove_file(&tmp_path);
-                Err(Error::OAuth(format!(
-                    "Failed to write client_id temp file: {e}"
-                )))
+                Err(Error::OAuth(format!("Failed to write temp file: {e}")))
             }
         }
     }
 
-    /// Non-unix counterpart of [`write_client_tmp`](Self::write_client_tmp)
+    /// Non-unix counterpart of [`write_secret_tmp`](Self::write_secret_tmp)
     /// (see its docs for the cleanup-on-failure contract). `fs::write` opens,
     /// writes, and closes the file in one call, so there is no separate
     /// [`File`] handle to thread through.
     #[cfg(not(unix))]
-    fn write_client_tmp(tmp: PathBuf, content: &str) -> Result<PathBuf> {
+    fn write_secret_tmp(tmp: PathBuf, content: &str) -> Result<PathBuf> {
         match fs::write(&tmp, content) {
             Ok(()) => Ok(tmp),
             Err(e) => {
                 let _ = fs::remove_file(&tmp);
-                Err(Error::OAuth(format!(
-                    "Failed to write client_id temp file: {e}"
-                )))
+                Err(Error::OAuth(format!("Failed to write temp file: {e}")))
             }
         }
     }
@@ -498,7 +499,7 @@ impl TokenStorage {
     /// writes through the same fd the mode was set on), and just the path on
     /// other platforms.
     #[cfg(unix)]
-    fn create_client_tmp(&self, file_name: &str) -> Result<(fs::File, PathBuf)> {
+    fn create_secret_tmp(&self, file_name: &str) -> Result<(fs::File, PathBuf)> {
         use std::os::unix::fs::OpenOptionsExt as _;
 
         static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
@@ -517,21 +518,23 @@ impl TokenStorage {
                 // Stale temp collided; try the next nonce.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => {
-                    return Err(Error::OAuth(format!(
-                        "Failed to create client_id temp file: {e}"
-                    )));
+                    return Err(Error::OAuth(format!("Failed to create temp file: {e}")));
                 }
             }
         }
         Err(Error::OAuth(
-            "Failed to create a unique client_id temp file after 8 attempts".to_string(),
+            "Failed to create a unique temp file after 8 attempts".to_string(),
         ))
     }
 
     /// Non-unix fallback: pick a fresh temp path via `create_new`, closing the
     /// handle immediately so the caller can `fs::write` it (no unix mode bits).
     #[cfg(not(unix))]
-    fn create_client_tmp(&self, file_name: &str) -> Result<PathBuf> {
+    fn create_secret_tmp(&self, file_name: &str) -> Result<PathBuf> {
+        // Same gap as the config writer, so the same warning: without a mode to
+        // set at creation, the file inherits the directory's permissions and an
+        // OAuth token is as readable as wherever the storage directory lives.
+        crate::config_persistence::warn_once_about_inherited_acls("OAuth token", &self.base_dir);
         static TMP_NONCE: AtomicU64 = AtomicU64::new(0);
         for _ in 0..8 {
             let nonce = TMP_NONCE.fetch_add(1, Ordering::Relaxed);
@@ -547,14 +550,12 @@ impl TokenStorage {
                 // Stale temp collided; try the next nonce.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => {
-                    return Err(Error::OAuth(format!(
-                        "Failed to create client_id temp file: {e}"
-                    )));
+                    return Err(Error::OAuth(format!("Failed to create temp file: {e}")));
                 }
             }
         }
         Err(Error::OAuth(
-            "Failed to create a unique client_id temp file after 8 attempts".to_string(),
+            "Failed to create a unique temp file after 8 attempts".to_string(),
         ))
     }
 
@@ -822,7 +823,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn write_client_tmp_removes_leaked_temp_on_write_failure() {
+    fn write_secret_tmp_removes_leaked_temp_on_write_failure() {
         // GIVEN: a temp file opened read-only, so writing through it fails
         // with EBADF -- simulating a real write/fsync failure (ENOSPC, EIO)
         // deterministically, without exhausting real disk space (MIK-6750
@@ -832,7 +833,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tmp_path = dir.path().join("client.tmp.leak-check");
         // Create the file first (needs write access to create), then close
-        // and reopen it read-only so the fd we hand to `write_client_tmp`
+        // and reopen it read-only so the fd we hand to `write_secret_tmp`
         // has no write access at all.
         fs::File::create(&tmp_path).unwrap();
         let file = fs::OpenOptions::new().read(true).open(&tmp_path).unwrap();
@@ -842,7 +843,7 @@ mod tests {
         );
 
         // WHEN: the write fails (the fd has no write permission).
-        let result = TokenStorage::write_client_tmp((file, tmp_path.clone()), "some-content");
+        let result = TokenStorage::write_secret_tmp((file, tmp_path.clone()), "some-content");
 
         // THEN: the error propagates AND the temp file is gone -- nothing is
         // left behind on disk for an operator to notice weeks later.
@@ -1217,5 +1218,44 @@ mod tests {
         let token = TokenInfo::from_response("tok".to_string(), None, None, None, None);
         storage.save("b", "http://localhost", &token).unwrap();
         assert!(storage.load("b", "http://localhost").is_some());
+    }
+
+    /// The token file is REPLACED, never written into whatever already sits at
+    /// that path (Decision D, `docs/design/unauthenticated-network-posture.md`).
+    ///
+    /// `fs::write` followed by `set_permissions` puts the access token inside a
+    /// file created at the process umask, or inside an existing file whose mode
+    /// somebody else chose, and only then tightens it. The secret is readable
+    /// for the whole write. A fresh inode is the observable proof that the
+    /// bytes never entered the old file: `rename` gives the destination the
+    /// scratch file's identity, an in-place write keeps the old one.
+    #[cfg(unix)]
+    #[test]
+    fn saving_a_token_replaces_the_file_rather_than_writing_into_it() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+        let path = storage.token_path("b", "http://localhost");
+
+        // A world-readable file already at the destination: a token left by an
+        // older build, or a path an operator created.
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let before = fs::metadata(&path).unwrap().ino();
+
+        let token = TokenInfo::from_response("secret-token".to_string(), None, None, None, None);
+        storage.save("b", "http://localhost", &token).unwrap();
+
+        let after = fs::metadata(&path).unwrap();
+        assert_ne!(
+            before,
+            after.ino(),
+            "the token was written into the pre-existing world-readable file"
+        );
+        assert_eq!(
+            after.permissions().mode() & 0o777,
+            0o600,
+            "the token file must be owner-only"
+        );
     }
 }

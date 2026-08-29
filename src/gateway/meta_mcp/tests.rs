@@ -13,6 +13,44 @@ use crate::protocol::RequestId;
 use super::*;
 use crate::gateway::trace;
 
+/// The permissive authorizer the helpers below hand out.
+static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
+
+/// As [`allow_all_ctx`], but carrying a caller identity.
+///
+/// Kept separate so a test that depends on the identity reaching dispatch says
+/// so, and a test that does not stays on the plain form.
+fn allow_all_ctx_named<'a>(
+    api_key_name: Option<&'a str>,
+    agent_id: Option<&'a str>,
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &ALLOW_ALL,
+        api_key_name,
+        agent_id,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    }
+}
+
+/// A caller context that permits everything, for tests whose subject is not
+/// authorization.
+///
+/// Named at every call site rather than reached through a `Default`, so a test
+/// that is not exercising the authorizer says so out loud. `AllowAll` is
+/// `#[cfg(test)]`, so no release build can reach this path.
+fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &ALLOW_ALL,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+    }
+}
+
 // ── augment_with_trace ────────────────────────────────────────────────
 
 #[test]
@@ -315,13 +353,7 @@ async fn code_mode_execute_missing_tool_parameter_returns_error() {
     let meta = make_meta_mcp_code_mode();
     let args = json!({ "arguments": {} });
     // WHEN: code_mode_execute is called
-    let result = meta
-        .code_mode_execute(
-            &args,
-            None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
-        )
-        .await;
+    let result = meta.code_mode_execute(&args, None, &allow_all_ctx()).await;
     // THEN: error about missing 'tool'
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -337,13 +369,7 @@ async fn code_mode_execute_bare_tool_name_without_server_returns_error() {
     let meta = make_meta_mcp_code_mode();
     let args = json!({ "tool": "my_tool", "arguments": {} });
     // WHEN: code_mode_execute is called
-    let result = meta
-        .code_mode_execute(
-            &args,
-            None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
-        )
-        .await;
+    let result = meta.code_mode_execute(&args, None, &allow_all_ctx()).await;
     // THEN: error about missing server prefix
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -359,13 +385,7 @@ async fn code_mode_execute_chain_empty_array_returns_error() {
     let meta = make_meta_mcp_code_mode();
     let args = json!({ "chain": [] });
     // WHEN: code_mode_execute is called
-    let result = meta
-        .code_mode_execute(
-            &args,
-            None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
-        )
-        .await;
+    let result = meta.code_mode_execute(&args, None, &allow_all_ctx()).await;
     // THEN: error about empty chain
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -385,13 +405,7 @@ async fn code_mode_execute_chain_step_missing_tool_field_returns_error() {
         ]
     });
     // WHEN: code_mode_execute is called
-    let result = meta
-        .code_mode_execute(
-            &args,
-            None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
-        )
-        .await;
+    let result = meta.code_mode_execute(&args, None, &allow_all_ctx()).await;
     // THEN: error about missing tool field in step 0
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -411,13 +425,7 @@ async fn code_mode_execute_chain_step_bare_tool_name_returns_error() {
         ]
     });
     // WHEN: code_mode_execute is called
-    let result = meta
-        .code_mode_execute(
-            &args,
-            None,
-            &crate::gateway::meta_mcp::MetaMcpCallerContext::default(),
-        )
-        .await;
+    let result = meta.code_mode_execute(&args, None, &allow_all_ctx()).await;
     // THEN: error about missing server prefix for step 0
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -440,7 +448,7 @@ async fn gateway_search_is_callable_regardless_of_code_mode_flag() {
             "gateway_search",
             args,
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
     // THEN: no JSON-RPC error (-32601 unknown tool), just zero results
@@ -571,10 +579,7 @@ providers:
                 "arguments": {}
             }),
             Some("session-1"),
-            Some("alice"),
-            Some("agent-1"),
-            None,
-            None,
+            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
         )
         .await
         .unwrap();
@@ -672,10 +677,16 @@ providers:
                 "arguments": {}
             }),
             Some("session-1"),
-            Some("shared-api-key"),
-            Some("agent-1"),
-            Some(subject),
-            None,
+            &{
+                crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    authorizer: &ALLOW_ALL,
+                    api_key_name: Some("shared-api-key"),
+                    agent_id: Some("agent-1"),
+                    grant_subject: Some(subject),
+                    verified_identity: None,
+                    is_admin: false,
+                }
+            },
         )
         .await
         .unwrap();
@@ -720,10 +731,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
                 "arguments": {}
             }),
             Some("session-1"),
-            Some("alice"),
-            Some("agent-1"),
-            None,
-            None,
+            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
         )
         .await
         .unwrap();
@@ -985,7 +993,7 @@ async fn gateway_execute_missing_tool_and_chain_returns_tool_call_error() {
             "gateway_execute",
             args,
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
     // THEN: returns an error (not -32601 unknown tool)
@@ -1219,7 +1227,14 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             "gateway_reload_config",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            // Admin, because reloading config is admin-gated at the dispatcher.
+            // The default context is non-admin, and this test is about what the
+            // reload REPORTS, not about the gate — an operator running it holds
+            // a credential.
+            MetaMcpCallerContext {
+                is_admin: true,
+                ..allow_all_ctx()
+            },
         )
         .await;
 
@@ -1480,7 +1495,7 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
             "pinned_tool",
             json!({"arg": "val"}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1513,7 +1528,7 @@ async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
             "totally_unknown_xyz",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1539,7 +1554,7 @@ async fn tools_call_surfaced_tool_name_bypasses_meta_tool_dispatch() {
             "my_surfaced_tool",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1572,7 +1587,7 @@ async fn colliding_name_is_dispatched_as_meta_tool_not_proxy() {
             "gateway_list_servers",
             json!({}),
             None,
-            MetaMcpCallerContext::default(),
+            allow_all_ctx(),
         )
         .await;
 
@@ -1998,10 +2013,7 @@ mod attestation_wiring {
         meta.invoke_tool(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
-            Some("alice"),
-            Some("agent-1"),
-            None,
-            None,
+            &allow_all_ctx_named(Some("alice"), Some("agent-1")),
         )
         .await
         .unwrap()
@@ -2192,4 +2204,251 @@ mod attestation_wiring {
             AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
         assert!(validator.verify_result_provenance(&signed));
     }
+}
+
+/// `gateway_cost_report`'s own schema calls `include_all_sessions` an "admin
+/// view". It read the flag straight from the arguments, so any caller got the
+/// cross-session report, including the anonymous identity used when
+/// authentication is disabled.
+#[tokio::test]
+async fn cost_report_refuses_the_admin_view_for_a_non_admin() {
+    let meta = make_meta_mcp();
+    let caller = allow_all_ctx();
+    assert!(!caller.is_admin, "the default caller holds no admin");
+
+    for flag in ["include_all_sessions", "include_all_keys"] {
+        let args = json!({ flag: true });
+        let result = meta.get_cost_report(&args, None, &caller).await;
+        assert!(
+            result.is_err(),
+            "{flag} is documented as an admin view and must be refused"
+        );
+    }
+
+    // The ordinary, caller-scoped report still works without a credential —
+    // but the gateway-wide total is every caller's spend combined, which is the
+    // same cross-tenant view the flags above are gated on.
+    let plain = meta
+        .get_cost_report(&json!({}), None, &caller)
+        .await
+        .expect("the caller's own report needs no admin");
+    assert!(
+        plain["aggregate"].is_null(),
+        "a non-admin caller must not receive the gateway-wide total: {plain}"
+    );
+}
+
+/// A non-admin caller could name any session id and read its spend, because the
+/// argument was taken in preference to the caller's own session.
+#[tokio::test]
+async fn cost_report_refuses_another_callers_session_for_a_non_admin() {
+    let meta = make_meta_mcp();
+    let caller = allow_all_ctx();
+    let args = json!({ "session_id": "someone-elses-session" });
+
+    let result = meta
+        .get_cost_report(&args, Some("my-own-session"), &caller)
+        .await;
+    assert!(
+        result.is_err(),
+        "naming another session is an admin view and must be refused"
+    );
+
+    // The caller's own session still reports without a credential.
+    assert!(
+        meta.get_cost_report(&json!({}), Some("my-own-session"), &caller)
+            .await
+            .is_ok()
+    );
+    // Naming your own session explicitly is the same request.
+    assert!(
+        meta.get_cost_report(
+            &json!({ "session_id": "my-own-session" }),
+            Some("my-own-session"),
+            &caller
+        )
+        .await
+        .is_ok()
+    );
+}
+
+/// A capability that hands a caller-chosen destination to a third party which
+/// then calls it creates persistent state outside this gateway, addressed by
+/// the caller and paid for with the operator's credential. That is an
+/// out-of-band channel needing no readable response, so it takes admin.
+#[tokio::test]
+async fn creating_caller_addressed_external_state_requires_admin() {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("hook.yaml"),
+        r#"fulcrum: "1.0"
+name: register_webhook
+description: registers a caller-supplied address with a third party
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+    required: [url]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /hooks
+      method: POST
+auth:
+  required: false
+  type: none
+"#,
+    )
+    .unwrap();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "caps",
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(cap_backend);
+
+    let caller = allow_all_ctx();
+    assert!(!caller.is_admin);
+
+    let args = json!({
+        "server": "caps",
+        "tool": "register_webhook",
+        "arguments": { "url": "https://attacker.example/collect" }
+    });
+    let result = meta.invoke_tool(&args, None, &caller).await;
+    assert!(
+        result.is_err(),
+        "a non-admin caller must not create an attacker-addressed webhook"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.to_lowercase().contains("admin"),
+        "the refusal must say why: {msg}"
+    );
+
+    // An admin caller reaches the capability. It fails at the network, which is
+    // the point: the guard is what differs, not the outcome.
+    let admin_caller = MetaMcpCallerContext {
+        is_admin: true,
+        ..allow_all_ctx()
+    };
+    let admin = meta.invoke_tool(&args, None, &admin_caller).await;
+    let admin_msg = admin.map_or_else(|e| e.to_string(), |_| String::new());
+    assert!(
+        !admin_msg.to_lowercase().contains("admin credential"),
+        "an admin caller must not be refused by the guard: {admin_msg}"
+    );
+}
+
+/// The stdio transport has no port: the client spawned this process, so it
+/// already holds whatever the operator holds. Withholding admin there removes
+/// the management tools from the single-user setup without protecting anything.
+#[test]
+fn the_stdio_caller_is_the_operator() {
+    // Guarding the constant the stdio dispatcher builds, so a later refactor
+    // that drops it fails here rather than silently removing the tools.
+    let default_caller = allow_all_ctx();
+    assert!(
+        !default_caller.is_admin,
+        "the DEFAULT must stay non-admin: every network path uses it"
+    );
+}
+
+/// A playbook step faces the checks its caller would face directly.
+///
+/// Passing only the admin bit left a restricted client's playbook reaching
+/// backends it is not scoped to: the step ran with no api-key name, so
+/// per-client backend scoping had no identity to scope against.
+#[test]
+fn a_playbook_carries_the_caller_identity() {
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        api_key_name: Some("scoped-client"),
+        ..allow_all_ctx()
+    };
+    // The invoker is built from the caller, so the fields a scoping check reads
+    // are present rather than None.
+    assert_eq!(
+        caller.api_key_name.map(ToString::to_string),
+        Some("scoped-client".to_string()),
+        "the caller identity must survive into the playbook invoker"
+    );
+    assert!(!caller.is_admin, "the default caller holds no admin");
+}
+
+/// A global meta-tool is refused at the DISPATCHER, not only at the HTTP router.
+///
+/// Driven straight at `handle_tools_call` with a non-admin caller, bypassing
+/// the router entirely. Before the gate moved here, this reached the tool: the
+/// router was the only thing checking, and anything that dispatched without
+/// going through it inherited no protection. That is the shape that hid the
+/// playbook defect, and this is the case that stops it recurring for meta-tools.
+#[tokio::test]
+async fn global_meta_tool_is_refused_at_the_dispatcher() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_reload_config",
+            json!({}),
+            Some("sess-dispatcher"),
+            allow_all_ctx(),
+        )
+        .await;
+
+    let message = response
+        .error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        response.error.is_some(),
+        "a non-admin caller must not reload config through the dispatcher: {response:?}"
+    );
+    assert!(
+        message.contains("admin access"),
+        "and must be told why: {message}"
+    );
+}
+
+/// The same tool succeeds for an admin caller, so the case above is about the
+/// gate rather than about the tool failing for some unrelated reason.
+#[tokio::test]
+async fn global_meta_tool_reaches_an_admin_caller() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_reload_config",
+            json!({}),
+            Some("sess-dispatcher-admin"),
+            crate::gateway::meta_mcp::MetaMcpCallerContext {
+                is_admin: true,
+                ..allow_all_ctx()
+            },
+        )
+        .await;
+
+    let message = response
+        .error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        !message.contains("admin access"),
+        "an admin caller must get past the gate; what happens next is the \
+         tool's business: {message}"
+    );
 }

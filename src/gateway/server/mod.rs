@@ -4,6 +4,12 @@
 
 mod persistence;
 mod support;
+// Two questions leave this module, both to `config_reload`, and each is
+// exported under the question it answers. A reload asks about the config that
+// would be IN FORCE, so it goes through the overlay. A restart-only edit asks
+// what the NEXT START does with the file, which is the startup check itself —
+// the same function the bind path calls, named here for the caller.
+pub(crate) use support::{network_bind_refusal as next_start_refusal, reload_posture_refusal};
 mod warmstart;
 
 use std::net::SocketAddr;
@@ -12,13 +18,13 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::auth::ResolvedAuthConfig;
 use super::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
 use super::proxy::ProxyManager;
-use super::router::{AppState, create_router};
+use super::router::{AppState, create_router_with};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
@@ -374,7 +380,7 @@ impl Gateway {
     /// # Errors
     ///
     /// Returns an error if backend registration fails.
-    #[allow(clippy::unused_async)] // async for future initialization needs
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
     pub async fn new_with_path(
         config: Config,
         config_path: Option<std::path::PathBuf>,
@@ -1156,10 +1162,34 @@ impl Gateway {
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
+            dashboard_bootstrap: std::sync::Arc::new(
+                crate::gateway::auth::DashboardBootstrap::new(),
+            ),
         });
 
+        // Webhook routes are built BEFORE the router and handed to it, so the
+        // origin gate covers them. Merging them onto the finished router would
+        // put them outside the layer that refuses cross-site requests.
+        let webhook_routes = if self.config.webhooks.enabled {
+            info!(
+                enabled = true,
+                base_path = %self.config.webhooks.base_path,
+                "Webhook receiver enabled"
+            );
+            Some(WebhookRegistry::create_dynamic_routes(
+                Arc::clone(&webhook_registry),
+                Arc::clone(&multiplexer),
+            ))
+        } else {
+            None
+        };
+
+        // Captured before the router takes ownership: the startup banner prints
+        // the dashboard link and runs after the bind.
+        let dashboard_bootstrap = Arc::clone(&state.dashboard_bootstrap);
+
         // Create router
-        let mut app = create_router(state);
+        let app = create_router_with(state, webhook_routes);
 
         // Start the config file watcher now that the router has snapshotted its
         // startup bind-origin from `live_config` (still equal to the config the
@@ -1188,18 +1218,17 @@ impl Gateway {
             None
         };
 
-        // Add webhook routes if enabled
-        if self.config.webhooks.enabled {
-            let webhook_routes = WebhookRegistry::create_dynamic_routes(
-                Arc::clone(&webhook_registry),
-                Arc::clone(&multiplexer),
-            );
-            app = app.merge(webhook_routes);
-            info!(
-                enabled = true,
-                base_path = %self.config.webhooks.base_path,
-                "Webhook receiver enabled"
-            );
+        // Refuse BEFORE opening ANY listener, so a configuration that must not
+        // serve never opens a port at all. Only this path reaches it; stdio mode
+        // has no listener and is untouched.
+        //
+        // Ahead of the WebSocket spawn as well as the HTTP bind. It used to sit
+        // between them, which spawned a listener on the same host for a config
+        // the next line refused — a port opened by a start that then failed,
+        // contradicting the guarantee this comment makes.
+        if let Some(reason) = support::network_bind_refusal(&self.config) {
+            error!("{reason}");
+            return Err(Error::Config(reason));
         }
 
         // Optionally spawn a WebSocket listener alongside the HTTP server.
@@ -1224,10 +1253,37 @@ impl Gateway {
             );
         }
 
-        // Bind listener
+        // Warned on EVERY start while the escape hatch is set, and not only when
+        // authentication is off. The narrower condition missed the shape the
+        // hatch is most often reached from: authentication enabled with `/mcp`
+        // public, which is exactly the exposure it is suppressing. An operator
+        // reading their logs then saw no sign that the control was disarmed.
+        if self.config.server.allow_unauthenticated_network_bind {
+            warn!(
+                host = %self.config.server.host,
+                "server.allow_unauthenticated_network_bind is set: this gateway serves \
+                 callers on the network that it has not authenticated. Authentication \
+                 is expected to terminate in front of it."
+            );
+        }
+
+        // Bound ONCE, here, and handed to whichever path serves it.
+        //
+        // Two failure modes meet at this line and both have been live. Binding
+        // here AND inside `serve_tls` made every mTLS gateway die on "address
+        // already in use". Binding only inside the serving branch fixed that
+        // and introduced the opposite fault: the startup banner said Listening
+        // and the warm-start ran before anything discovered the port was taken.
+        //
+        // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
 
-        log_startup_banner(&self.config, &self.backends);
+        log_startup_banner(
+            &self.config,
+            &self.backends,
+            Some(dashboard_bootstrap.as_ref()),
+            self.config_path.as_deref(),
+        );
 
         // Warm-start backends: connect + prefetch tools into cache
         // If warm_start list is empty, warm ALL backends (makes list/search fast)
@@ -1245,44 +1301,15 @@ impl Gateway {
             )
         };
 
-        // Start health check task
-        let backends_clone = Arc::clone(&self.backends);
-        let health_config = self.config.failsafe.health_check.clone();
-        let mut shutdown_rx = shutdown_tx.subscribe();
-
-        tokio::spawn(async move {
-            if !health_config.enabled {
-                return;
-            }
-
-            let mut interval = tokio::time::interval(health_config.interval);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        for backend in backends_clone.all() {
-                            // Probe running backends (liveness) AND backends whose
-                            // breaker is tripped (recovery). The old guard only
-                            // probed running backends — but a backend that died
-                            // and tripped its breaker reports `is_running()==false`,
-                            // so it was skipped exactly when it needed recovery.
-                            // Cleanly-idle backends (closed breaker, not running)
-                            // are left alone so the idle reaper can shut them down.
-                            if backend.is_running() || backend.is_circuit_tripped() {
-                                // `health_probe` bypasses the breaker, resets it on
-                                // success, and rebuilds the transport on failure —
-                                // the automatic equivalent of gateway_revive_server.
-                                if let Err(e) = backend.health_probe(health_config.timeout).await {
-                                    warn!(backend = %backend.name, error = %e, "Health check failed");
-                                }
-                            }
-                        }
-                    }
-                    _ = shutdown_rx.recv() => {
-                        break;
-                    }
-                }
-            }
-        });
+        // Start health check task. Shared with `run_stdio` for the same reason
+        // the idle reaper is: a setting that works in one serve mode and
+        // silently does nothing in the other is a defect wearing a feature's
+        // clothes.
+        spawn_health_loop(
+            Arc::clone(&self.backends),
+            &self.config.failsafe.health_check,
+            Some(shutdown_tx.subscribe()),
+        );
 
         // Idle reaper. Shared with `run_stdio`: a setting that works in one serve
         // mode and silently does nothing in the other is the same class of defect
@@ -1320,12 +1347,26 @@ impl Gateway {
 
         // Run server — plain HTTP or mTLS depending on config
         if self.config.mtls.enabled {
-            serve_tls(app, addr, &self.config.mtls, shutdown_signal(shutdown_tx)).await?;
+            // `axum_server` needs a std listener; the socket is the same one.
+            let std_listener = listener
+                .into_std()
+                .map_err(|e| Error::Tls(format!("could not hand the listener to TLS: {e}")))?;
+            serve_tls(
+                app,
+                std_listener,
+                addr,
+                &self.config.mtls,
+                shutdown_signal(shutdown_tx),
+            )
+            .await?;
         } else {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal(shutdown_tx))
-                .await
-                .map_err(|e| Error::Tls(e.to_string()))?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal(shutdown_tx))
+            .await
+            .map_err(|e| Error::Tls(e.to_string()))?;
         }
 
         // Save search ranker usage data
@@ -1451,11 +1492,16 @@ impl Gateway {
             spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Stdio, None)
         };
 
-        // Reap what warm-start and lazy starts spawn. Without this the setting
-        // is accepted and validated in stdio mode and then never acted on.
-        // There is no broadcast shutdown channel in stdio mode, so the handle is
-        // kept and aborted explicitly at EOF below.
-        let idle_reaper = spawn_idle_reaper(Arc::clone(&self.backends), None);
+        // Reap what warm-start and lazy starts spawn, and probe backends so a
+        // dead one recovers. Both were HTTP-only or EOF-only before: stdio has
+        // no broadcast shutdown channel, so these guards own the tasks and abort
+        // them on EVERY exit path, not just the one that reaches EOF.
+        let idle_reaper = AbortOnDrop::new(spawn_idle_reaper(Arc::clone(&self.backends), None));
+        let health_loop = AbortOnDrop::new(spawn_health_loop(
+            Arc::clone(&self.backends),
+            &self.config.failsafe.health_check,
+            None,
+        ));
 
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
@@ -1517,12 +1563,13 @@ impl Gateway {
         }
 
         info!("stdio: EOF reached, shutting down");
-        // Stop sweeping before tearing the backends down. The reaper holds an
-        // Arc on the registry and has no shutdown channel in this mode, so
-        // leaving it running keeps both alive after run_stdio returns. Harmless
-        // when the process exits immediately after; a leak that keeps sweeping
-        // forever when the gateway is embedded or driven from a test.
-        idle_reaper.abort();
+        // Stop sweeping and probing before tearing the backends down. Both tasks
+        // hold an Arc on the registry and have no shutdown channel in this mode,
+        // so leaving either running keeps the registry alive after run_stdio
+        // returns. Dropping the guards here is explicit; they would also fire on
+        // any other exit path, which is the point of them.
+        drop(idle_reaper);
+        drop(health_loop);
         // Awaited, not left to the drop guard: an abort is asynchronous, so a
         // retry task mid-`ensure_started` would otherwise still be starting a
         // backend while `stop_all` drains it — delaying shutdown and logging
@@ -1595,28 +1642,13 @@ impl Gateway {
                 let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
                 let tool_name = tool_name.to_string();
 
-                // Apply tool policy check for gateway_invoke calls
-                if tool_name == "gateway_invoke"
-                    && let Some(ref p) = params
-                {
-                    let server = p
-                        .get("arguments")
-                        .and_then(|a| a.get("server"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let tool = p
-                        .get("arguments")
-                        .and_then(|a| a.get("tool"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if !server.is_empty()
-                        && !tool.is_empty()
-                        && let Err(e) = tool_policy.check(server, tool)
-                    {
-                        let resp = JsonRpcResponse::error(Some(id), -32600, e.to_string());
-                        return Some(resp.to_value_lossy());
-                    }
-                }
+                // The tool policy is applied at the dispatch chokepoint via the
+                // authorizer below, not here. The inline check this replaces ran
+                // for `gateway_invoke` alone, so a stdio playbook or code-mode
+                // step reached a backend with no policy check at all.
+                let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+                    tool_policy: tool_policy.as_ref(),
+                };
 
                 meta_mcp
                     .handle_tools_call(
@@ -1624,7 +1656,26 @@ impl Gateway {
                         &tool_name,
                         arguments,
                         Some(session_id),
-                        MetaMcpCallerContext::default(),
+                        MetaMcpCallerContext {
+                            authorizer: &stdio_authorizer,
+                            // Stdio has no port and no network surface: the
+                            // client SPAWNED this process, so it already holds
+                            // whatever the operator holds — it could edit the
+                            // config file just as easily. Withholding admin
+                            // here would take the management tools away from
+                            // exactly the single-user setup the origin gate
+                            // exists to protect, and protect nothing.
+                            //
+                            // Explicit since the admin gate moved to the
+                            // dispatcher: it previously lived on the HTTP path
+                            // alone, so stdio was never checked and the default
+                            // non-admin context went unnoticed.
+                            is_admin: true,
+                            api_key_name: None,
+                            agent_id: None,
+                            grant_subject: None,
+                            verified_identity: None,
+                        },
                     )
                     .await
             }
@@ -1762,6 +1813,87 @@ fn leaky_single_user_backends(config: &Config) -> Vec<&str> {
 ///
 /// `shutdown` is `None` in stdio mode, where the process exits with its read loop
 /// and there is no broadcast channel to observe.
+/// Aborts the task it owns when dropped.
+///
+/// Stdio mode has no broadcast shutdown channel, so its background tasks are
+/// stopped by aborting their handles. Aborting only on the EOF path is not
+/// enough: an embedded host that cancels `run_stdio` never reaches that line,
+/// and a dropped `JoinHandle` DETACHES its task rather than stopping it. The
+/// task then keeps the backend registry alive and keeps probing backends after
+/// the gateway is gone. Tying the abort to a guard's lifetime makes every exit
+/// path behave the same.
+#[must_use = "dropping this guard aborts the task immediately"]
+pub(crate) struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl AbortOnDrop {
+    pub(crate) const fn new(handle: tokio::task::JoinHandle<()>) -> Self {
+        Self(handle)
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Probe backends periodically so a dead one recovers without operator action.
+///
+/// `shutdown` is `Some` in HTTP mode, which has a broadcast channel; stdio mode
+/// passes `None` and owns the returned handle instead.
+fn spawn_health_loop(
+    backends: Arc<BackendRegistry>,
+    health_config: &crate::config::HealthCheckConfig,
+    shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+) -> tokio::task::JoinHandle<()> {
+    let (enabled, tick, probe_timeout) = (
+        health_config.enabled,
+        health_config.interval,
+        health_config.timeout,
+    );
+    tokio::spawn(async move {
+        if !enabled {
+            return;
+        }
+        let mut shutdown = shutdown;
+        let mut interval = tokio::time::interval(tick);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    for backend in backends.all() {
+                        // Probe running backends (liveness) AND backends whose
+                        // breaker is tripped (recovery). The old guard only
+                        // probed running backends — but a backend that died
+                        // and tripped its breaker reports `is_running()==false`,
+                        // so it was skipped exactly when it needed recovery.
+                        // Cleanly-idle backends (closed breaker, not running)
+                        // are left alone so the idle reaper can shut them down.
+                        if backend.is_running() || backend.is_circuit_tripped() {
+                            // `health_probe` bypasses the breaker, resets it on
+                            // success, and rebuilds the transport on failure —
+                            // the automatic equivalent of gateway_revive_server.
+                            if let Err(e) = backend.health_probe(probe_timeout).await {
+                                warn!(backend = %backend.name, error = %e, "Health check failed");
+                            }
+                        }
+                    }
+                }
+                // `Option::None` never resolves, so stdio mode simply loops
+                // until its handle is aborted.
+                Some(()) = async {
+                    match shutdown.as_mut() {
+                        Some(rx) => rx.recv().await.ok(),
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    break;
+                }
+            }
+        }
+    })
+}
+
 fn spawn_idle_reaper(
     backends: Arc<BackendRegistry>,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
@@ -2154,6 +2286,131 @@ mod tests {
         assert_eq!(response["error"]["message"], "Missing id");
     }
 
+    // ── MIK-7252: stdio authorization ──────────────────────────────────────
+    //
+    // Before this change stdio checked the tool policy for `gateway_invoke`
+    // alone, so a stdio playbook or code-mode step reached a backend with no
+    // policy check at all. The inline check is replaced by an authorizer at the
+    // dispatch chokepoint, which every shape passes through.
+
+    /// A policy that denies one tool by name.
+    fn policy_denying(tool: &str) -> Arc<ToolPolicy> {
+        Arc::new(ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig {
+                enabled: true,
+                deny: vec![tool.to_string()],
+                ..crate::security::ToolPolicyConfig::default()
+            },
+        ))
+    }
+
+    /// Register a one-step playbook on a meta instance and return it.
+    fn meta_with_step(server: &str, tool: &str) -> Arc<MetaMcp> {
+        let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let yaml = format!(
+            "name: p\ndescription: one step\non_error: abort\nsteps:\n  - name: s\n    server: {server}\n    tool: {tool}\n"
+        );
+        let definition: crate::playbook::PlaybookDefinition =
+            serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
+        let mut engine = crate::playbook::PlaybookEngine::new();
+        engine.register(definition);
+        meta.set_playbook_engine(engine);
+        Arc::new(meta)
+    }
+
+    fn run_playbook_over_stdio(
+        meta: &Arc<MetaMcp>,
+        policy: &Arc<ToolPolicy>,
+        mtls: &Arc<MtlsPolicy>,
+    ) -> serde_json::Value {
+        futures::executor::block_on(Gateway::dispatch_single(
+            meta,
+            policy,
+            mtls,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_run_playbook",
+                    "arguments": { "name": "p", "arguments": {} }
+                }
+            }),
+            "stdio-session",
+        ))
+        .expect("a tools/call must produce a response")
+    }
+
+    /// AUTHZ.15 — a stdio playbook step hitting a policy-denied tool is
+    /// refused. There was no coverage of this before: the inline check ran for
+    /// `gateway_invoke` only, so this step reached dispatch unchecked.
+    #[tokio::test]
+    async fn authz_15_stdio_playbook_step_denied_by_tool_policy() {
+        let meta = meta_with_step("alpha", "blocked_tool");
+        let response =
+            run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &test_mtls_policy());
+
+        let text = response.to_string();
+        assert!(
+            response["error"].is_object(),
+            "a policy-denied stdio step must be refused: {text}"
+        );
+        assert!(
+            text.contains("blocked_tool"),
+            "the refusal must name the tool: {text}"
+        );
+    }
+
+    /// AUTHZ.15a — a permitted tool is not refused. Without this, a stdio
+    /// authorizer that denied every backend target would pass AUTHZ.15 and
+    /// AUTHZ.16 on its own.
+    #[tokio::test]
+    async fn authz_15a_stdio_playbook_step_permitted_is_not_refused() {
+        let meta = meta_with_step("alpha", "permitted_tool");
+        let response =
+            run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &test_mtls_policy());
+
+        // A POSITIVE oracle, not the absence of a phrase: the step must have
+        // reached dispatch, which it can only do if the policy check passed.
+        // The backend does not exist, so dispatch is what fails — and saying so
+        // is proof the call got that far. Asserting "no refusal text" would
+        // stay green if the refusal were ever worded differently.
+        let text = response.to_string();
+        assert!(
+            text.contains("not found") || text.contains("missing"),
+            "a permitted tool must reach dispatch and fail there, not be \
+             refused before it: {text}"
+        );
+    }
+
+    /// AUTHZ.22 — with certificate rules configured, stdio calls are still not
+    /// refused.
+    ///
+    /// `MtlsPolicy::evaluate` returns `Deny` for a `None` identity once the
+    /// policy is enabled, and stdio presents no certificate. An implementation
+    /// that handed stdio the certificate policy would therefore refuse every
+    /// call — this is the row that catches it.
+    #[tokio::test]
+    async fn authz_22_stdio_is_not_refused_by_certificate_policy() {
+        let meta = meta_with_step("alpha", "permitted_tool");
+        let mtls = Arc::new(MtlsPolicy::from_config(&MtlsConfig {
+            enabled: true,
+            ..MtlsConfig::default()
+        }));
+
+        let response = run_playbook_over_stdio(&meta, &policy_denying("blocked_tool"), &mtls);
+
+        // Same positive oracle: the call must reach dispatch. With the
+        // certificate policy wrongly applied, `evaluate(None)` returns `Deny`
+        // and the step is refused before dispatch, so this assertion fails.
+        let text = response.to_string();
+        assert!(
+            text.contains("not found") || text.contains("missing"),
+            "stdio presents no certificate, so a configured mTLS policy must \
+             not stop the call reaching dispatch: {text}"
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_batch_returns_invalid_request_for_empty_batch() {
         let responses = Gateway::dispatch_batch(
@@ -2371,5 +2628,74 @@ mod tests {
             resolve_provenance_signer("  real key with spaces  ", "gateway").is_some(),
             "a key containing non-whitespace bytes must still yield a signer"
         );
+    }
+
+    // ── Background tasks must stop when the mode that owns them stops ────────
+
+    #[tokio::test]
+    async fn dropping_the_guard_aborts_the_task_it_owns() {
+        // REGRESSION. A dropped JoinHandle DETACHES its task rather than
+        // stopping it, so an embedded host that cancels `run_stdio` before EOF
+        // left the reaper sweeping and the health loop probing forever, both
+        // holding the backend registry alive.
+        let task = tokio::spawn(async { std::future::pending::<()>().await });
+        let probe = task.abort_handle();
+        let guard = super::AbortOnDrop::new(task);
+
+        tokio::task::yield_now().await;
+        assert!(!probe.is_finished(), "the task should still be running");
+
+        drop(guard);
+        tokio::task::yield_now().await;
+
+        assert!(
+            probe.is_finished(),
+            "dropping the guard must abort the task, not detach it"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_health_loop_exits_immediately_when_health_checks_are_disabled() {
+        let config = crate::config::HealthCheckConfig {
+            enabled: false,
+            ..Default::default()
+        };
+
+        let handle = super::spawn_health_loop(
+            Arc::new(crate::backend::BackendRegistry::new()),
+            &config,
+            None,
+        );
+
+        // No shutdown channel is passed, so if the `enabled` early-out were
+        // removed this would hang rather than fail -- the timeout is the assert.
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("a disabled health loop must return instead of idling")
+            .expect("the task must not panic");
+    }
+
+    #[tokio::test]
+    async fn the_health_loop_runs_without_a_shutdown_channel() {
+        // Stdio mode passes None. Before this change stdio had no health loop at
+        // all, so a backend that died there never recovered without a restart.
+        let config = crate::config::HealthCheckConfig {
+            enabled: true,
+            interval: std::time::Duration::from_millis(10),
+            ..Default::default()
+        };
+
+        let handle = super::spawn_health_loop(
+            Arc::new(crate::backend::BackendRegistry::new()),
+            &config,
+            None,
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !handle.is_finished(),
+            "with no shutdown channel the loop must keep probing until aborted"
+        );
+        handle.abort();
     }
 }

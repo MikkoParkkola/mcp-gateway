@@ -86,18 +86,21 @@ fn gap_before_attempt(policy: &WarmStartPolicy, attempt: u32, elapsed: Duration)
 /// anything not listed here must stop the loop: no amount of waiting turns an
 /// unsupported protocol version into a working backend.
 ///
-/// KNOWN LIMITATION, measured rather than assumed. The transport layer flattens
-/// its failures into `Error::Transport(String)` — `stdio.rs` maps a spawn
-/// failure to `Transport("Failed to spawn: …")` — so a mistyped command path is
-/// indistinguishable here from a port that is not listening yet, and both are
-/// retried. Classifying it properly means preserving typed errors across the
-/// transport boundary, which is a change to every backend call path rather than
-/// to warm-start. Filed, not bodged: string-matching the message would be a
-/// guess that breaks the first time the wording changes.
+/// The transport reports what it knows. `TransportPermanent` is the transport
+/// saying "this cannot work as configured" -- a missing command path, a file
+/// that is not executable, a request the server calls malformed -- and plain
+/// `Transport` remains "failed, cause unknown", which is the honest answer at
+/// most of its construction sites and stays retryable here.
 ///
-/// The `Io` narrowing below therefore protects only the paths that do surface a
-/// typed error today. It is correct, and it is not the whole story.
+/// Not every permanent failure is classified yet: only the sites that
+/// genuinely know map to the permanent variant, and the rest still arrive as
+/// `Transport` and are still retried. That is the safe direction of error --
+/// an unknown failure retrying costs a request a minute, while a recoverable
+/// one wrongly called permanent needs a gateway restart to notice.
 fn is_readiness_error(error: &Error) -> bool {
+    // `TransportPermanent` is deliberately unlisted: it is the transport saying
+    // the configuration cannot work, so retrying respawns a typo once a minute
+    // forever. It falls through to the catch-all below.
     match error {
         Error::Transport(_) | Error::BackendTimeout(_) | Error::BackendUnavailable(_) => true,
         Error::Io(e) => is_transient_io(e.kind()),
@@ -128,6 +131,22 @@ const fn is_transient_io(kind: std::io::ErrorKind) -> bool {
             | std::io::ErrorKind::UnexpectedEof
     )
 }
+
+/// How many times warm-start re-asks a backend that answered with no tools.
+///
+/// ACCEPTED RESIDUAL, raised in review: this budget is per warm-start task, not
+/// per backend instance, so a config reload that replaces a backend mid-loop
+/// inherits whatever the count had reached. A replacement whose tools register
+/// late therefore gets fewer than the full number of re-asks. Keying the count
+/// to the instance means tracking identity through the retry closure, which is
+/// more machinery than the case earns: the failure is reduced patience for a
+/// backend that was reloaded in the same minute it started, not invisibility.
+///
+/// A backend may register its tools a moment after it starts answering, so the
+/// first empty list is not proof. It may also genuinely have none, so this is
+/// bounded rather than endless -- polling and restarting a resource-only
+/// backend for the gateway's lifetime would be the mirror mistake.
+const EMPTY_TOOL_LISTS_BEFORE_ACCEPTING: u32 = 3;
 
 /// How many consecutive rounds warm-start yields to the idle reaper before it
 /// insists on one more fetch.
@@ -237,6 +256,7 @@ where
 {
     let started = tokio::time::Instant::now();
     let mut n = 0u32;
+    let mut empty_lists = 0u32;
 
     loop {
         n += 1;
@@ -252,24 +272,33 @@ where
         // call, so it never moves under a request already in flight.
         let attempt_ceiling = ceiling();
         match tokio::time::timeout(attempt_ceiling, attempt()).await {
-            // An empty tool list ends the loop, and the backend stays
-            // undiscoverable because discovery skips an empty cache. That is a
-            // KNOWN GAP, not an oversight, and briefly it was a bounded retry
-            // that did nothing: `get_tools_shared` caches an empty result with a
-            // fresh timestamp, so the follow-up attempts re-read the same cached
-            // answer milliseconds later without contacting the backend at all.
-            // Confirming an empty list needs a cache-bypassing refetch, which
-            // `CachedMetadata` does not expose. Filed rather than looped over.
-            Ok(Ok(tools)) => {
-                if tools == 0 {
-                    debug!(
-                        backend = %name,
-                        attempt = n,
-                        "Backend reports no tools; it will not appear in discovery"
-                    );
-                }
-                return Some(tools);
+            // An EMPTY tool list is not yet an answer. Discovery skips a backend
+            // with an empty cache, so accepting the first empty result reports
+            // "warm-started" about a backend nobody can find.
+            //
+            // Bounded, and it now RE-ASKS rather than re-reading: an empty
+            // result is cached with a fresh timestamp like any other, so the
+            // earlier version of this retry read the same cached emptiness back
+            // within microseconds and never reached the backend at all. The
+            // caller invalidates before each reconfirmation, which is the whole
+            // reason `invalidate_tools_cache` exists.
+            Ok(Ok(0)) if empty_lists < EMPTY_TOOL_LISTS_BEFORE_ACCEPTING => {
+                empty_lists += 1;
+                debug!(
+                    backend = %name,
+                    attempt = n,
+                    "Backend reports no tools; re-asking rather than accepting a cached empty list"
+                );
             }
+            Ok(Ok(0)) => {
+                debug!(
+                    backend = %name,
+                    attempt = n,
+                    "Backend consistently reports no tools; accepting that it has none"
+                );
+                return Some(0);
+            }
+            Ok(Ok(tools)) => return Some(tools),
             Ok(Err(e)) if is_readiness_error(&e) => {
                 debug!(backend = %name, attempt = n, error = %e, "Warm-start not ready, retrying");
             }
@@ -447,6 +476,9 @@ async fn warm_start_until_cached(
     // Shared rather than borrowed: each attempt is an async block that outlives
     // the closure call, so a plain `&mut` counter cannot escape into it.
     let dormant_yields = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    // Set when an attempt came back with no tools, so the NEXT attempt knows to
+    // discard the cached emptiness and actually re-ask.
+    let saw_empty_list = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let outcome = retry_warm_start_attempts(
         name,
@@ -460,6 +492,7 @@ async fn warm_start_until_cached(
         },
         || {
             let dormant_yields = Arc::clone(&dormant_yields);
+            let saw_empty_list = Arc::clone(&saw_empty_list);
             async move {
             // Resolved per attempt, never captured: a config reload can replace
             // the instance under us, and a task holding the old `Arc` would keep
@@ -500,7 +533,17 @@ async fn warm_start_until_cached(
             // duplicate subprocess.
             backend.ensure_started().await?;
 
-            backend.get_tools_shared().await.map(|tools| tools.len())
+            // Reconfirming an empty list means ASKING again. Without this the
+            // cached empty answer is served straight back, and the bounded retry
+            // above observes nothing it has not already seen.
+            if saw_empty_list.swap(false, ordering) {
+                backend.invalidate_tools_cache();
+            }
+            let count = backend.get_tools_shared().await.map(|tools| tools.len())?;
+            if count == 0 {
+                saw_empty_list.store(true, ordering);
+            }
+            Ok(count)
             }
         },
     )
@@ -539,10 +582,11 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ATTEMPT_REQUEST_BUDGET, DORMANT_YIELDS_BEFORE_RETRY, DormantAction, WarmStartMode,
-        WarmStartPolicy, dormant_action, effective_attempt_timeout, gap_before_attempt,
-        is_readiness_error, resolve_warm_start_names, retry_warm_start_attempts,
-        spawn_warm_start_task, warm_start_prefetches_tools,
+        ATTEMPT_REQUEST_BUDGET, DORMANT_YIELDS_BEFORE_RETRY, DormantAction,
+        EMPTY_TOOL_LISTS_BEFORE_ACCEPTING, WarmStartMode, WarmStartPolicy, dormant_action,
+        effective_attempt_timeout, gap_before_attempt, is_readiness_error,
+        resolve_warm_start_names, retry_warm_start_attempts, spawn_warm_start_task,
+        warm_start_prefetches_tools,
     };
     use crate::Error;
 
@@ -627,6 +671,33 @@ mod tests {
         ] {
             assert!(is_readiness_error(&e), "{e} must be retried");
         }
+    }
+
+    #[test]
+    fn a_transport_failure_the_transport_calls_permanent_stops_the_loop() {
+        // The whole point of the typed variant. Before it, a mistyped command
+        // path arrived as plain `Transport` and was respawned once a minute for
+        // the life of the process, with nothing saying the config was wrong.
+        let e = Error::TransportPermanent("Failed to spawn: no such file".to_string());
+
+        assert!(
+            !is_readiness_error(&e),
+            "a permanent transport failure must stop the loop"
+        );
+    }
+
+    #[test]
+    fn an_unclassified_transport_failure_is_still_retried() {
+        // The safe direction of error: most of the ~59 construction sites do not
+        // know whether their failure is permanent, so they still say `Transport`
+        // and are still retried. A recoverable failure wrongly called permanent
+        // would need a gateway restart to notice.
+        let e = Error::Transport("connection refused".to_string());
+
+        assert!(
+            is_readiness_error(&e),
+            "an unknown transport failure must stay retryable"
+        );
     }
 
     #[test]
@@ -722,6 +793,61 @@ mod tests {
 
         assert_eq!(cached, Some(7));
         assert_eq!(calls.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_empty_tool_list_is_re_asked_a_bounded_number_of_times() {
+        // A backend may register its tools a moment after it starts answering,
+        // so the first empty list is not proof. It may also genuinely have none,
+        // so the re-asking is bounded rather than endless.
+        let calls = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&calls);
+        let attempt = move || {
+            let n = seen.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok(if n < 2 { 0 } else { 4 }))
+        };
+
+        let cached = retry_warm_start_attempts(
+            "late-registrar",
+            &WarmStartPolicy::default(),
+            no_extra_ceiling(),
+            attempt,
+        )
+        .await;
+
+        assert_eq!(
+            cached,
+            Some(4),
+            "the tools that appeared late must be picked up"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_backend_that_really_has_no_tools_is_accepted() {
+        // The mirror case: a resource-only backend must not be re-asked and
+        // restarted for the gateway's lifetime just because it exposes no tools.
+        let calls = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&calls);
+        let attempt = move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok(0))
+        };
+
+        let cached = retry_warm_start_attempts(
+            "resources-only",
+            &WarmStartPolicy::default(),
+            no_extra_ceiling(),
+            attempt,
+        )
+        .await;
+
+        assert_eq!(cached, Some(0));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            EMPTY_TOOL_LISTS_BEFORE_ACCEPTING + 1,
+            "bounded: a few chances to register tools, then believed"
+        );
     }
 
     #[tokio::test(start_paused = true)]

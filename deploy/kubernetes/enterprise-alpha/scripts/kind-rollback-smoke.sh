@@ -47,6 +47,13 @@ fi
 "$KUBECTL" config use-context "kind-$CLUSTER" >/dev/null
 "$KUBECTL" create namespace "$NAMESPACE" --dry-run=client -o yaml | "$KUBECTL" apply -f -
 
+# The workload's MCP_GATEWAY_TOKEN comes from a Secret, and a pod without it
+# stops at startup rather than serving unauthenticated -- so the smoke has to
+# supply one or every rollout here waits for a pod that can never start.
+"$KUBECTL" create secret generic mcp-gateway-auth -n "$NAMESPACE" \
+  --from-literal=token="kind-smoke-not-a-real-credential" \
+  --dry-run=client -o yaml | "$KUBECTL" apply -f -
+
 # 1. Real apply of CRDs + base manifests (must be accepted by a live API server).
 echo "== apply: CRDs + base manifests =="
 "$KUBECTL" apply --server-side -f "$ROOT_DIR/crds/mcpgateway.io.yaml"

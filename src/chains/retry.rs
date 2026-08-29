@@ -132,11 +132,19 @@ where
             Ok(value) => return Ok((value, attempt)),
             Err(e) if attempt >= policy.max_attempts || !is_retryable(&e) => return Err(e),
             Err(e) => {
-                let delay = policy.backoff_for(attempt - 1);
+                let bound = policy.backoff_for(attempt - 1);
+                // Full jitter, which this module has always documented and did
+                // not do: it slept the exact exponential, so every caller
+                // retrying the same recovering service came back at the same
+                // instant. Spreading each sleep uniformly over [0, bound] is
+                // what breaks that synchronisation; `backoff_for` remains the
+                // deterministic ceiling, which is what its own tests pin.
+                let delay = jittered(bound);
                 debug!(
                     step = step_name,
                     attempt,
                     delay_ms = delay.as_millis(),
+                    bound_ms = bound.as_millis(),
                     error = %e,
                     "Step failed, retrying"
                 );
@@ -146,11 +154,33 @@ where
     }
 }
 
+/// Spread a delay uniformly over `[0, bound]` -- the "full jitter" this module
+/// has always claimed.
+///
+/// Without it, N callers backing off from the same failure wake together and
+/// hit the recovering service as one burst, which is the herd the exponential
+/// growth alone does not prevent.
+fn jittered(bound: Duration) -> Duration {
+    if bound.is_zero() {
+        return bound;
+    }
+    // NANOSECONDS, not milliseconds. Rounding to whole milliseconds collapses
+    // any sub-millisecond backoff to zero, so a policy built with a 100us
+    // initial delay would busy-retry with no wait at all -- a regression the
+    // exact-exponential code did not have.
+    let nanos = u64::try_from(bound.as_nanos()).unwrap_or(u64::MAX);
+    Duration::from_nanos(rand::random_range(0..=nanos))
+}
+
 /// Classify whether an error warrants a retry attempt.
 ///
 /// Transient network and I/O errors are retryable; protocol/config errors
 /// signal a permanent failure that retrying will not fix.
 fn is_retryable(error: &Error) -> bool {
+    // `TransportPermanent` is deliberately absent: it is the transport saying
+    // the configuration cannot work, and a retry loop is the wrong answer to
+    // that. Plain `Transport` stays retryable, because it means "failed, cause
+    // unknown".
     matches!(
         error,
         Error::Transport(_) | Error::BackendTimeout(_) | Error::Http(_) | Error::Io(_)
@@ -167,6 +197,18 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn a_permanent_transport_failure_is_not_retried() {
+        // Both consumers must agree on the new variant, or a caller's retry
+        // behaviour depends on which helper it happened to use.
+        assert!(!is_retryable(&Error::TransportPermanent(
+            "bad command".to_string()
+        )));
+        assert!(is_retryable(&Error::Transport(
+            "connection refused".to_string()
+        )));
+    }
 
     #[test]
     fn backoff_grows_exponentially() {
@@ -193,6 +235,77 @@ mod tests {
         let b = policy.backoff_for(10);
         // THEN it is capped
         assert_eq!(b, Duration::from_millis(250));
+    }
+
+    /// The gap `retry_step` actually sleeps before its second attempt.
+    ///
+    /// Measured on a paused clock, so this is the real slept duration rather
+    /// than a re-derivation of the policy.
+    async fn observed_first_gap(policy: &ChainRetryPolicy) -> Duration {
+        let start = tokio::time::Instant::now();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+
+        let _ = retry_step::<_, _, ()>(policy, "gap", move || {
+            recorder.lock().unwrap().push(start.elapsed());
+            std::future::ready(Err(Error::Transport("not ready".to_string())))
+        })
+        .await;
+
+        let stamps = seen.lock().unwrap();
+        stamps[1]
+            .checked_sub(stamps[0])
+            .expect("the second attempt cannot precede the first")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn backoff_sleeps_are_jittered_not_lockstep() {
+        // The doc on this module promises "full-jitter exponential backoff", and
+        // the code slept the exact exponential. Concurrent callers retrying the
+        // same recovering service therefore hit it in lockstep -- a thundering
+        // herd, which is the one thing the jitter was named for.
+        //
+        // Twenty independent runs. Under full jitter the first gap is uniform in
+        // [0, bound], so twenty identical values is not a plausible outcome;
+        // under the old code it is the only outcome.
+        let policy = ChainRetryPolicy::new(2, Duration::from_millis(100))
+            .with_multiplier(2.0)
+            .with_max_backoff(Duration::from_secs(10));
+        let bound = policy.backoff_for(0);
+
+        let mut gaps = Vec::new();
+        for _ in 0..20 {
+            gaps.push(observed_first_gap(&policy).await);
+        }
+
+        let distinct: std::collections::HashSet<_> = gaps.iter().collect();
+        assert!(
+            distinct.len() > 1,
+            "every retry slept exactly {bound:?} -- no jitter, so concurrent callers stay synchronised"
+        );
+        assert!(
+            gaps.iter().all(|g| *g <= bound),
+            "jitter must stay within the computed bound, got {gaps:?} against {bound:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_submillisecond_backoff_is_not_rounded_away() {
+        // Raised in review. Millisecond granularity would floor a 100us bound to
+        // zero every time, turning a deliberate small backoff into a busy retry.
+        let policy = ChainRetryPolicy::new(2, Duration::from_micros(100))
+            .with_multiplier(2.0)
+            .with_max_backoff(Duration::from_secs(1));
+
+        let mut gaps = Vec::new();
+        for _ in 0..20 {
+            gaps.push(observed_first_gap(&policy).await);
+        }
+
+        assert!(
+            gaps.iter().any(|g| !g.is_zero()),
+            "every sub-millisecond backoff rounded to zero: {gaps:?}"
+        );
     }
 
     #[tokio::test]

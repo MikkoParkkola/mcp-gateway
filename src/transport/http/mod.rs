@@ -47,6 +47,7 @@ fn same_origin(a: &Url, b: &Url) -> bool {
 /// Extracted from the [`reqwest::redirect::Policy::custom`] closure so the
 /// policy is unit-testable: reqwest's `Attempt` cannot be constructed in a
 /// test, but this pure decision can. See [`evaluate_redirect`].
+
 #[derive(Debug, PartialEq, Eq)]
 enum RedirectDecision {
     /// Hop budget exhausted — stop and surface the last response as-is.
@@ -583,7 +584,7 @@ impl HttpTransport {
     /// Negotiate protocol version from error message.
     ///
     /// Delegates to shared helpers in [`crate::protocol::negotiate`].
-    #[allow(clippy::unused_async)] // async for future network-based negotiation
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future network-based negotiation
     async fn negotiate_protocol_version(&self, error_msg: &str) -> Option<String> {
         let supported_versions = parse_supported_versions_from_error(error_msg)?;
 
