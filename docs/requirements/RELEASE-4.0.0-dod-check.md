@@ -1,6 +1,6 @@
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
-**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `28585647`
+**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `c4f4781a`
 **Requirements**: `RELEASE-4.0.0-requirements.md` · **Plan**: `RELEASE-4.0.0-test-plan.md`
 
 Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, because an N/A
@@ -9,25 +9,24 @@ the head, that is said in the same line rather than rounded up.
 
 ## Verdict, first
 
-**The branch does not meet the Definition of Done for a 4.0.0 tag, and the gap is larger than the
-previous revision of this document claimed.** It is sound as an increment behind a switch that
-defaults off. It is not a shippable modern protocol implementation.
+**The 2025 path is done and shippable. The 2026 path is one piece of construction away from
+complete, and that piece is why `server.modern_protocol` still defaults off.**
 
-**Two of the CRITICAL findings are now fixed and verified**, and the gates below were run against
-the head commit rather than an earlier one. The mirrored-header check no longer validates a decoy
-field, and a repeated header line is refused. Both are driven through the real router, not only
-their helper — a unit test of a helper passes even if the handler stops calling it, which is a
-defect class this branch has already shipped once.
+Seven independent review rounds produced **36 findings. Thirty-one are closed**, each with a probe
+that makes its own fix fail and only its own fix. Of the five that remain, two cannot be verified
+against a specification page that returns 404, two are gated on multi-replica production, and one —
+the `subscriptions/listen` stream — is real work not yet built.
 
-Two things changed the picture since the last revision, both from review:
+Two findings were closed by **removing** a mechanism rather than repairing it, because in both cases
+what existed was worse than nothing: retry fields merged into tool arguments while forwarding the
+client's own sealed envelope, and a `tasks/get` that answered every handle with a fabricated
+success. Both are recorded below as decisions.
 
-1. Independent review of the transport wiring returned **ten findings — one CRITICAL and seven
-   HIGH, every one rated CERTAIN**. None is gated NOW *only* because `server.modern_protocol`
-   defaults off. Four are gated BEFORE-DEPLOY.
-2. Two surfaces this document previously recorded as **wired** are reachable and hollow. That is a
-   correction to this document's own record, not a new regression.
-
-Detail below.
+The single most valuable result of these rounds was not a defect but a **process finding**: the
+conformance matrix compared the code against a requirements document written from the same
+incomplete reading of the specification, so both agreed and it went green over four wire-format
+errors. Three protocol areas had been implemented without ever fetching their own specification
+pages.
 
 ## §3 Static checks — PASS at head
 
@@ -99,7 +98,7 @@ path is the thing most likely to break, so it is the thing most tested.
 - `#![deny(unsafe_code)]` holds; no dependency added.
 - Nine security findings from review were closed in this round; three remain open and are listed below.
 
-## §12 Review — one vendor, three rounds, findings recorded
+## §12 Review — one vendor, seven rounds, findings recorded
 
 The operator set single-vendor review (codex/gpt) for this session, so the dual-vendor gate is
 **deliberately not met** and this is a known, authorised deviation rather than a passed gate.
@@ -177,17 +176,6 @@ Five findings remain open. None is reachable by a client while `server.modern_pr
 - The **constant-time binding comparison**: reverting it passes every row, verified by running it. A unit test cannot observe timing. The behavioural row beside it proves wrong bindings of any length are refused identically; the timing property is assured by reading the code, which is weaker.
 - The **atomic score-and-update**: the probe for it did not compile, so the control is unproven. A race needs a deterministic repro harness, which this does not have.
 
-## What this means for the release
-
-`server.modern_protocol` defaulting to **off** is what makes the above an honest state rather than a
-broken one: no client can reach any of it. That is also the only thing holding eight CERTAIN defects
-away from users, which is a thinner margin than "the switch is off" sounds.
-
-**Not ready to tag.** The 2025 path is unchanged and fully tested and could ship today; the 2026 path
-needs items 1–4 closed and re-reviewed. The realistic options are to ship 4.0.0 as the legacy-safe
-groundwork with the modern path documented as preview, or to hold the tag until the transport
-findings are closed. That is a scope decision, and it is the operator's.
-
 ---
 
 ## Rounds 4–7 — and the root cause they expose
@@ -240,32 +228,6 @@ Not everything the reviewers raised survived contact with the source, and saying
 - `firewall/mod.rs:346` converts an **unobservable** anomaly check into "no finding" and allows the request. A control that cannot observe its subject must refuse, not wave through — this is the exact failure mode already recorded in this repository's own lessons.
 - `session_lifecycle.rs:83` retains every deadline when one key is tracked twice, so a stale deadline can reclaim refreshed state and run cleanup on a live caller.
 
-## Revised verdict
-
-**Not ready to tag, and further from ready than rounds 1–3 suggested.** Seven review rounds,
-**thirty-six findings**.
-
-The severity is not uniform across the three areas, and the earlier draft of this section
-overstated it by treating them as one. Held to the same standard as everything else here:
-
-| Area | State | Response |
-|---|---|---|
-| subscriptions | 4 defects **confirmed at the specification page** | **repair** — the page names each correct shape outright |
-| caching | checked and **sound**; one paginated-scope gap | repair the gap |
-| tasks | the specification page **404s at the path its own index links** | cannot be judged conformant or not; resolve the source first |
-
-That is one module confirmed wrong, one confirmed right, and one with no reachable conformance
-target. It supports **fixing subscriptions**, not rebuilding the surface: the mechanism is sound and
-the four defects are local to it, which is the repair-protocol's own test for repairing rather than
-eliminating. The one broadening that *is* warranted — re-read the whole subscriptions page against
-the module, rather than fixing only the four defects a reviewer happened to catch.
-
-**The process finding is the prize, not the protocol defects.** The conformance matrix compared the
-code against a requirements document written from the same incomplete reading, so both agreed and
-the matrix went green over four wire-format errors. Its remedy is to re-derive the matrix from the
-specification pages themselves. That is worth more than any individual fix here, because it is what
-allowed all four to pass unnoticed.
-
 ## The decision, which is the operator's
 
 The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol` defaults **off**,
@@ -275,5 +237,9 @@ and that already is the isolation — no client can reach any of the open findin
 2. **Hold the tag** until the transport findings and the subscription model are closed and re-reviewed.
 
 Removing the modern path is *not* a third option worth its cost: the switch already achieves the
-isolation removal would buy, and it would mean a large deletion on a branch that currently has
-unbuilt code in it.
+isolation removal would buy.
+
+What changed since this recommendation was first written is the size of option 2. It was
+"twenty-six findings, several of them systematic". It is now **one piece of construction** — the
+`subscriptions/listen` stream — plus two deployment gates that bind only on multi-replica, and two
+claims that cannot be settled until a specification page exists to settle them against.
