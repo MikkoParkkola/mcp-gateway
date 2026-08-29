@@ -71,20 +71,52 @@ An empty filter is valid: the stream opens, acknowledges, and delivers nothing.
 Every delivered notification gets `params._meta.io.modelcontextprotocol/subscriptionId`, via the
 existing `SubscriptionId::tag`, which is already correct and tested.
 
+## Producing something to carry — the part the first draft got wrong
+
+The first draft listed "no producer changes" as out of scope. Review called that what it was: a
+registry nothing feeds is not the feature, however correct its plumbing. Corrected here.
+
+**Nothing in this gateway emits `notifications/tools/list_changed` today.** Searched: the string
+appears only as the `listChanged: true` capability declaration and in the removed-methods list. So
+the gateway advertises a capability it has never honoured — a defect this change closes rather than
+inherits.
+
+The tool surface changes when a backend is added, removed or revived
+(`gateway/ui/backends.rs`). Those three paths publish `notifications/tools/list_changed` to the
+registry. That is one real producer proved end to end: add a backend, and a listening modern client
+receives the notification on its open stream.
+
+Other kinds — `prompts/list_changed`, `resources/list_changed`, `resources/updated` — have no
+producer in this gateway either. They are **filtered correctly and never delivered**, because
+nothing raises them. That is stated here rather than implied by silence, and it is the honest
+boundary of this change: the transport is complete and one producer is real.
+
+## Admission is a permit, not a count
+
+A count checked before subscribing is two operations, so concurrent requests can both see room and
+both take it. The ceiling is a resource bound against a caller who opens streams and abandons them,
+so a bound that can be raced is not a bound.
+
+Each listener holds a **semaphore permit owned by the SSE body**. Admission is the permit
+acquisition; release is the body being dropped. The same structure `AppState` already uses for
+in-flight request limiting, so it is the house pattern rather than a new one.
+
+## A lagging client is disconnected, not silently starved
+
+A bounded broadcast channel drops messages for a receiver that falls behind, and the receiver is
+told it lagged. Delivering the remainder as though nothing happened leaves a client holding stale
+state with no way to learn it — the failure shape that reads as success.
+
+On lag the stream **closes**. The client sees its subscription end and re-subscribes, which is the
+recovery the revision leaves available now that resumability is gone. Recorded in a log line with
+the count missed.
+
 ## What is deliberately NOT built
 
 - **No resumability.** Removed by the revision.
-- **No replacement for the legacy GET SSE endpoint.** It keeps working for 2025 clients; this is the modern path's own stream. Retiring the GET endpoint is a separate decision with its own compatibility cost.
-- **No cross-replica fan-out.** A notification raised on one replica reaches listeners on that replica. This is the same shared-state gap the continuation ledger and mint counter already carry, and it is recorded with them rather than solved here.
-- **No producer changes in this step.** Nothing currently raises `tools/list_changed` on the modern path; wiring producers is a follow-on. **This is the honest limit of this change**: it builds the stream and proves it carries what it is given, and until a producer feeds the channel the stream is correct and quiet.
-
-## Open questions, each with the check that answers it
-
-| Question | How it is answered |
-|---|---|
-| Does the SSE response type compose with the existing handler return type, which is a single `Response`? | Build it. `Sse` implements `IntoResponse`; the handler already returns `Response` for the legacy GET stream, so the shape exists. |
-| What capacity for concurrent listeners? | Follow the existing bounds in this module rather than invent a number: the in-flight table and consumed ledger take theirs from config. Same pattern, same config surface. |
-| Does an SSE body on a POST break the existing test harness, which reads the whole body? | It will block on a stream that stays open. The tests must read a bounded prefix, or the stream must close when the sender is dropped. Checked by writing the first test before the handler. |
+- **No replacement for the legacy GET SSE endpoint.** It keeps working for 2025 clients; retiring it is a separate decision with its own compatibility cost.
+- **No cross-replica fan-out.** A notification raised on one replica reaches only listeners on that replica. Same shared-state gap as the continuation ledger and the mint counter, recorded with them, and it binds before multi-replica production rather than before merge.
+- **No producers for the other three kinds**, because this gateway raises none of those events at all. Named above rather than buried.
 
 ## How this will be proved
 
@@ -96,4 +128,7 @@ Tests first, and each must be able to fail:
 4. A `resources/updated` for a URI the client did not name never arrives.
 5. A request-scoped notification never arrives on this stream.
 6. At capacity, a new listen request is refused rather than accepted and starved.
-7. Dropping the stream releases the listener, so capacity comes back.
+7. Dropping the stream releases the permit, so capacity comes back.
+8. Two simultaneous listeners with different filters and different request ids each receive only their own kinds, tagged with their own id.
+9. Adding a backend delivers `tools/list_changed` to a listener that asked for it — the producer path, end to end.
+10. A receiver that falls behind has its stream closed rather than being silently starved.
