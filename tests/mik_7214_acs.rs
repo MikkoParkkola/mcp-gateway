@@ -338,6 +338,36 @@ mod http {
         )
     }
 
+    /// As `post_against`, and also returns the parsed body for diagnosis.
+    async fn post_against_json(
+        app_state: &Arc<AppState>,
+        body: Value,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, Value) {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = builder
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request");
+        let response = create_router(Arc::clone(app_state))
+            .oneshot(request)
+            .await
+            .expect("router must answer");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must read");
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
     /// POST against a caller-supplied state, so several requests share one
     /// gateway and its accumulated state can be observed.
     async fn post_against(
@@ -423,14 +453,23 @@ mod http {
 
     #[tokio::test]
     async fn a_duplicated_protocol_version_header_cannot_hide_a_modern_declaration() {
-        // Reading only the first value let a request send the header twice —
-        // legacy first, modern second — so classification saw legacy while an
-        // intermediary reading the second saw modern. Two occurrences is not a
-        // request to interpret; it is one to refuse.
+        // The bypass, stated precisely. Send the header twice - legacy first,
+        // modern second - with a body carrying NO protocol metadata. Reading
+        // only the first value classifies the request legacy, and the legacy
+        // path never reaches the mirrored-header comparison that would have
+        // noticed the duplicate, so an intermediary reading the second value
+        // routes one thing while the gateway serves another.
+        //
+        // The body must be metadata-free for this to test anything: with modern
+        // metadata the request is refused by the duplicate-header check inside
+        // the modern block, and the row passes whether or not classification
+        // was fixed. Verified by running it against the unfixed classifier.
         let app_state = state();
-        let (status, _) = post_against(
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+
+        let (status, response) = post_against_json(
             &app_state,
-            modern_body("tools/list"),
+            body,
             &[
                 ("mcp-protocol-version", "2025-11-25"),
                 ("mcp-protocol-version", "2026-07-28"),
@@ -442,7 +481,7 @@ mod http {
         assert_eq!(
             status,
             StatusCode::BAD_REQUEST,
-            "a repeated protocol-version header must be refused, never resolved"
+            "a repeated protocol-version header must be refused, never resolved: {response}"
         );
     }
 
