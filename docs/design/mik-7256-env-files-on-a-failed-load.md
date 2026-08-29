@@ -592,10 +592,11 @@ sitting in the process from the previous boot: an overlay consulted first and
 then falling through would keep serving the deleted secret, silently, forever.
 That is what the owned set in the constructor above is for — the keys of the
 overlay's own map, unioned with the owned set of the overlay it replaces — and
-`resolve` answers an owned key from the map alone. Absent there means unset, and a
-reader that requires it fails closed rather than resolving a value the
-operator has removed. Keys outside the owned set fall through to the process
-untouched, which is what keeps `PATH` and the `MCP_GATEWAY_*` knobs working.
+the resolution table governs what an owned key answers: the file value, else
+the baseline, else unset. A reader that requires a key which resolves to unset
+fails closed rather than resolving a value the operator has removed. Keys
+outside the owned set are not the overlay's business at all, which is what
+keeps `PATH` and the `MCP_GATEWAY_*` knobs working.
 The union is what makes the removal durable across a second reload; it grows
 only with keys the operator's own files have named.
 
