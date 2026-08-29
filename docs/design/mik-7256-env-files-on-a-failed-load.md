@@ -888,18 +888,15 @@ dropped it would force the caller to rebuild it from disk at commit time,
 which is exactly the two-reads window *One snapshot, read once* forbids. The
 evaluation object is the mechanical guarantee that the published map is the
 validated map — the caller cannot publish anything else, because it has
-nothing else. Same body as `Config::load` otherwise, with two lines changed:
+nothing else. Same body as `load_evaluated` otherwise, with two lines changed:
 it builds an `EnvOverlay` from the `env_files` ARGUMENT and `previous` — the
 running gateway's list, never the candidate's own
-`env_file_config.env_files` — instead of calling `load_env_files_from_paths`,
+`env_file_config.env_files` — rather than applying those files to the process,
 and passes it to
 `expand_env_vars`. `Config::load` is unchanged in signature and behaviour for
-all 35 call sites, which is why none of them is edited. HOW it stays unchanged
-is stated once, above: it is a thin wrapper over `load_evaluated` that drops the
-overlay. This paragraph deliberately does not restate it. An earlier draft did,
-and the restatement said it calls `load_env_files_from_paths` directly — which
-contradicts the wrapper and would cost exactly the single-read provenance the
-wrapper exists to give.
+all 35 call sites, which is why none of them is edited; it is the thin wrapper
+over `load_evaluated` stated above, and nothing here gives it a second
+definition.
 
 The two bodies share a private `load_inner(path, EnvSource)` with
 `enum EnvSource<'a> { ApplyToProcess, Overlay { paths: &'a [PathBuf],
