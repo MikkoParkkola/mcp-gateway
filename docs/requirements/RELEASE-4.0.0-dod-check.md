@@ -9,13 +9,13 @@ the head, that is said in the same line rather than rounded up.
 
 ## Verdict, first
 
-**The 2025 path is done and shippable. The 2026 path is one piece of construction away from
-complete, and that piece is why `server.modern_protocol` still defaults off.**
+**The 2025 path is done and shippable. The 2026 path has no unbuilt piece left; what remains is
+gated on production topology and on two specification pages that do not resolve.**
 
-Seven independent review rounds produced **36 findings. Thirty-one are closed**, each with a probe
-that makes its own fix fail and only its own fix. Of the five that remain, two cannot be verified
-against a specification page that returns 404, two are gated on multi-replica production, and one —
-the `subscriptions/listen` stream — is real work not yet built.
+Eight independent review rounds produced **42 findings. Thirty-eight are closed**, each with a probe
+that makes its own fix fail and only its own fix. Of the four that remain, two cannot be verified
+against a specification page that returns 404, and two are gated on multi-replica production —
+neither is reachable by a client while the switch defaults off.
 
 Two findings were closed by **removing** a mechanism rather than repairing it, because in both cases
 what existed was worse than nothing: retry fields merged into tool arguments while forwarding the
@@ -212,17 +212,35 @@ died. That was misread twice here before anyone looked at the process tree.
 
 ## What is honestly NOT finished
 
-Five findings remain open. None is reachable by a client while `server.modern_protocol` defaults off.
+Four findings remain open. None is reachable by a client while `server.modern_protocol` defaults off.
 
-1. **`subscriptions/listen` acknowledges but does not stream.** The specification's response is an SSE body that stays open and carries the opted-in notifications; this handler has no shape for one. The request is now parsed correctly, the filters are read, and the acknowledgement carries the right id — but a client that reads it as a live subscription waits for notifications nothing will send. **This is the one piece of genuine construction left**, and it is why the switch must stay off.
+1. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
 
-2. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
+2. **The mint counter is process-local.** It bounds envelopes sealed by *this process* since it started, not by the key over its life, so a restart resets it. That is a real ceiling on a single runaway process and not the per-key guarantee the NIST bound describes. Gated BEFORE-PRODUCTION; the module says so in as many words.
 
-3. **The mint counter is process-local.** It bounds envelopes sealed by *this process* since it started, not by the key over its life, so a restart resets it. That is a real ceiling on a single runaway process and not the per-key guarantee the NIST bound describes. Gated BEFORE-PRODUCTION; the module says so in as many words.
+3. **The task model cannot be verified.** A reviewer reported missing states and required fields. The specification page returns 404 at the path the index links, so those claims have no reachable source. Recorded as unverified rather than accepted or dismissed.
 
-4. **The task model cannot be verified.** A reviewer reported missing states and required fields. The specification page returns 404 at the path the index links, so those claims have no reachable source. Recorded as unverified rather than accepted or dismissed.
+4. **The failed-task payload shape is unverified**, for the same reason.
 
-5. **The failed-task payload shape is unverified**, for the same reason.
+### Closed since: `subscriptions/listen` now streams
+
+The handler returned an acknowledgement that closed, so a client reading it as a
+live subscription waited on notifications nothing would send. It now returns the
+stream itself: the acknowledgement is its first event, each notification the
+client opted into follows on the same body, and every one carries the
+subscription id the specification defines as the listen request's own JSON-RPC
+id. Falling behind closes the stream rather than delivering a gap, because the
+revision removed resumability and a client cannot learn what it missed.
+
+Open streams are bounded by a permit held for the life of the body, so a caller
+that opens streams and walks away costs something finite. A count checked before
+subscribing would be raced past by concurrent callers; the permit is the
+admission.
+
+Four tests drive it over the transport rather than calling the registry
+directly. Falsified by changing the published notification's method: exactly the
+delivery test failed, 20 of 21 still passed — the control observes the thing it
+claims to, and does not stand in for the other three.
 
 ### Two fixes have no runtime control, and that is stated rather than hidden
 
