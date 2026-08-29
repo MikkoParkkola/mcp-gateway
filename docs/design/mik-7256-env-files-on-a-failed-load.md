@@ -386,11 +386,13 @@ through an aliased import, which no scan spelled `std::env::var` can see, and
 it discovers backend endpoints — so a rotated endpoint stays at its startup
 value with nothing reporting it. Both route through `LiveEnv`, and both get a
 behavioural case rather than a scan entry, because the scan is what missed
-them. The scan matches on the CALL, whatever the path is spelled as — an
-aliased `env::vars`, a `use std::env::var as getenv`, a helper wrapping either
-— and a prefix-wide exemption is replaced by named, reviewed call sites, since
-an exemption covering a prefix covers every future reader that happens to
-start with it.
+them. What the scan does and does not reach is stated once, in the test
+plan's source-scan row, and not restated here — this paragraph asserted a reach
+the plan records as a residual, and two documents describing one mechanism is
+how a check acquires a capability nobody built. What belongs to the design is
+the consequence: a reader the scan cannot see needs a behavioural case, so the
+prefix-wide exemption is replaced by named, reviewed call sites. An exemption
+covering a prefix covers every future reader that happens to start with it.
 
 **`EffectiveEnv` — the reload's environment as a Figment provider.** Figment merges
 `Env::prefixed("MCP_GATEWAY_").split("__")` over the YAML file
