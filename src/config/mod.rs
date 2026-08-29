@@ -751,6 +751,21 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// Serve requests written against MCP revision 2026-07-28.
+    ///
+    /// **Off by default while the revision's support is being built.** The
+    /// gateway can already answer a stateless request, but not yet every part
+    /// of that revision — the standard request headers, multi-round-trip
+    /// requests, the cacheability fields and `subscriptions/listen` are still
+    /// arriving. Serving a client half a revision is worse than refusing it,
+    /// because the half that works hides the half that does not.
+    ///
+    /// With this off, a request declaring 2026-07-28 is refused with
+    /// `UnsupportedProtocolVersion` — the answer a client can act on — and
+    /// `server/discover` does not advertise the revision. Turning it on is one
+    /// switch, and it is what makes the two statements true together.
+    #[serde(default)]
+    pub modern_protocol: bool,
     /// Host to bind to.
     pub host: String,
     /// Port to listen on.
@@ -796,6 +811,8 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            // Off until the revision is served completely, not partly.
+            modern_protocol: false,
             host: "127.0.0.1".to_string(),
             port: 39400,
             ws_port: None,

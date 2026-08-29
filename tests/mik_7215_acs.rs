@@ -206,7 +206,12 @@ mod http {
     use tower::ServiceExt;
 
     fn state() -> Arc<AppState> {
-        let config = Config::default();
+        state_with_modern(true)
+    }
+
+    fn state_with_modern(modern: bool) -> Arc<AppState> {
+        let mut config = Config::default();
+        config.server.modern_protocol = modern;
         let backends = Arc::new(BackendRegistry::new());
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&backends),
@@ -237,9 +242,7 @@ mod http {
             firewall: None,
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
-            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(
-                Config::default(),
-            )),
+            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
@@ -248,7 +251,14 @@ mod http {
 
     /// POST to `/mcp`, returning status, the session header if any, and the body.
     async fn post_mcp(body: Value) -> (StatusCode, Option<String>, Value) {
-        let router = create_router(state());
+        post_mcp_against(state(), body).await
+    }
+
+    async fn post_mcp_against(
+        state: Arc<AppState>,
+        body: Value,
+    ) -> (StatusCode, Option<String>, Value) {
+        let router = create_router(state);
         let request = Request::builder()
             .method("POST")
             .uri("/mcp")
@@ -371,5 +381,114 @@ mod http {
                 .contains("clientCapabilities"),
             "the error names the field that was missing: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_4_an_unsupported_version_is_refused_with_its_own_error() {
+        // A modern client naming a revision this gateway cannot serve gets a
+        // recognised modern error listing what it can serve — which is what
+        // lets the client retry on a shared version instead of guessing.
+        let mut request = modern_tools_list(6);
+        request["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!("2099-01-01");
+        let (status, _, body) = post_mcp(request).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(
+            body["error"]["code"], -32022,
+            "UnsupportedProtocolVersion, renumbered from -32004 by this revision: {body}"
+        );
+        let supported = &body["error"]["data"]["supportedVersions"];
+        assert!(
+            supported.is_array() && !supported.as_array().expect("array").is_empty(),
+            "the error must list what the server does support: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_6_ping_is_refused_on_the_modern_path() {
+        // `ping` was removed by this revision. A modern peer that can still
+        // call it is not speaking this revision, whatever its version string
+        // claims.
+        let mut request = modern_tools_list(7);
+        request["method"] = json!("ping");
+        let (_, _, body) = post_mcp(request).await;
+
+        assert!(
+            body.get("error").is_some(),
+            "ping is removed in 2026-07-28 and must be refused: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_6_ping_still_works_on_the_legacy_path() {
+        // The regression. A version-blind removal satisfies the row above and
+        // breaks every 2025 client's health check — and this gateway's own
+        // backend health probe is a `ping`.
+        let (status, _, body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 8, "method": "ping"
+        }))
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(
+            body.get("error").is_none(),
+            "a 2025 client keeps the ping it has always had: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_8_one_endpoint_serves_both_eras() {
+        // The dual-era claim, end to end: the same URL answers a 2025 client
+        // and a 2026 client, and each gets its own era's treatment.
+        let (legacy_status, legacy_session, legacy_body) = post_mcp(json!({
+            "jsonrpc": "2.0", "id": 9, "method": "tools/list"
+        }))
+        .await;
+        let (modern_status, modern_session, modern_body) = post_mcp(modern_tools_list(10)).await;
+
+        assert_eq!(legacy_status, StatusCode::OK, "{legacy_body}");
+        assert_eq!(modern_status, StatusCode::OK, "{modern_body}");
+        assert!(
+            legacy_session.is_some(),
+            "the 2025 caller keeps its session"
+        );
+        assert_eq!(modern_session, None, "the 2026 caller is given none");
+        assert!(
+            legacy_body["result"]["tools"].is_array() && modern_body["result"]["tools"].is_array(),
+            "both are served the tools, whatever era they speak"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_8_modern_serving_is_off_unless_switched_on() {
+        // The default an operator inherits on upgrade. Until the revision is
+        // served completely, a client that asks for it is refused with an
+        // answer it can act on — not served half a revision, where the working
+        // half hides the missing one.
+        let (status, _, body) =
+            post_mcp_against(state_with_modern(false), modern_tools_list(11)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], -32022, "{body}");
+        assert_eq!(
+            body["error"]["data"]["supportedVersions"],
+            json!([]),
+            "with the switch off the gateway claims no modern revision at all: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_stateless_8_a_legacy_client_is_unaffected_by_the_switch() {
+        // The switch governs the modern path and nothing else. A 2025 client
+        // sees the same gateway either way.
+        for modern in [false, true] {
+            let (status, session, body) = post_mcp_against(
+                state_with_modern(modern),
+                json!({ "jsonrpc": "2.0", "id": 12, "method": "tools/list" }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "modern={modern}: {body}");
+            assert!(session.is_some(), "modern={modern}: {body}");
+        }
     }
 }

@@ -536,6 +536,43 @@ pub(super) async fn meta_mcp_handler(
     // For requests, id is guaranteed to exist (checked in parse_request)
     let id = id.expect("id should exist for non-notification requests");
 
+    if let crate::protocol::meta::RequestShape::Modern(ref fields) = shape {
+        // A version we cannot serve statelessly. The client is told which ones
+        // we can, so it can retry on a shared revision rather than guess.
+        let modern_enabled = state.live_config.running().server.modern_protocol;
+        if !modern_enabled
+            || !crate::protocol::meta::MODERN_VERSIONS.contains(&fields.protocol_version.as_str())
+        {
+            let mut rpc = crate::protocol::JsonRpcResponse::error(
+                Some(id.clone()),
+                -32022,
+                format!("unsupported protocol version '{}'", fields.protocol_version),
+            );
+            if let Some(ref mut error) = rpc.error {
+                error.data = Some(serde_json::json!({
+                    "supportedVersions": if modern_enabled {
+                        crate::protocol::meta::MODERN_VERSIONS
+                    } else {
+                        &[]
+                    },
+                }));
+            }
+            return build_response(rpc, &session_id, StatusCode::BAD_REQUEST);
+        }
+
+        // Methods this revision removed. Refusing them is the difference
+        // between claiming the revision and speaking it.
+        if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method.as_str()) {
+            return build_error_response(
+                Some(id.clone()),
+                -32601,
+                format!("method '{method}' was removed in MCP 2026-07-28"),
+                &session_id,
+                StatusCode::NOT_FOUND,
+            );
+        }
+    }
+
     // Extract optional profile hint from X-MCP-Profile header (used at initialize time).
     let header_profile: Option<String> = headers
         .get("x-mcp-profile")

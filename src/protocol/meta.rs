@@ -137,3 +137,20 @@ pub fn classify_request(params: Option<&Value>) -> RequestShape {
             .map(str::to_string),
     }))
 }
+
+/// Revisions the **stateless** path can serve.
+///
+/// Deliberately separate from `SUPPORTED_VERSIONS`, which is the list a legacy
+/// `initialize` negotiates over. The two sets are not the same thing and only
+/// coincide by accident: a 2025 revision cannot be served statelessly, and
+/// 2026-07-28 cannot be reached through a handshake that revision deleted.
+pub const MODERN_VERSIONS: &[&str] = &["2026-07-28"];
+
+/// Methods this revision removed. Refused on the modern path, served on the
+/// legacy one — the gateway's own backend health probe is a `ping`, and every
+/// 2025 client has one too.
+pub const REMOVED_IN_2026_07_28: &[&str] = &[
+    "ping",
+    "logging/setLevel",
+    "notifications/roots/list_changed",
+];
