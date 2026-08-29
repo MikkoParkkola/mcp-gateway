@@ -361,12 +361,33 @@ reader:
   call sites.
 
 - `EnvOverlay::resolve(&self, name: &str) -> Option<String>` — the single
-  reader every overlay-aware site calls. An owned key answers from the map
-  alone, absent meaning unset; anything else falls through to
-  `std::env::var_os`. One method rather than a `get()` each caller pairs with
+  reader every overlay-aware site calls. It implements the resolution table
+  below and states no semantics of its own. One method rather than a `get()` each caller pairs with
   its own fallback, because the owned-key rule is exactly the part a caller
   would get wrong, and eight sites getting it right by convention is seven
   more chances than the type needs to give them.
+
+#### What a key resolves to — the one statement
+
+This table is the ONLY definition of a key's value after startup. `resolve`,
+`EffectiveEnv`, the child-spawn path, the config provider, the firewall's
+free-text list and every acceptance criterion CITE it; none of them restates
+it. Owned means the key appears in the cumulative union the overlay carries.
+
+| overlay owns it | present in the current files | baseline captured | resolves to |
+|---|---|---|---|
+| no | — | — | `std::env::var_os`, the process untouched |
+| yes | yes | — | the current file value |
+| yes | no | yes | the baseline — the process value from before any env file loaded |
+| yes | no | no | unset |
+
+Row three is the one an implementation drops: an owned key that vanishes from
+the files restores what the shell exported, and only a key the files
+INTRODUCED disappears entirely. An earlier draft had `resolve` answer "absent
+means unset" for every owned key, which contradicts the baseline the same
+document requires two sections earlier — three reviewers found the collision
+independently, each through a different consumer, which is the argument for one
+owner rather than four careful readings.
 
 **A third site reads operator-named keys at launch, not per call.**
 `StdRuntimeCommandRunner::run` copies each `runtime.profiles.*.env_keys` name
