@@ -439,11 +439,11 @@ Doing these separately means a second pass through a function this release has a
 
 | Ticket | P | Slice | Why it rides |
 |---|---|---|---|
-| MIK-7116 | **P0** | 2 | Session-scoped cross-tenant guard and data minimisation. Slice 2 rebinds exactly this code from session-keyed to per-request `Principal`; fixing the guard against a target that is moving is strictly worse than fixing it while it moves. |
+| MIK-7116 | **P0** | 2 | Cross-tenant guard and data minimisation. Note the ticket **specifies its own mechanism in terms of sessions** — *"blocks accessing sensitive data about multiple customers within one session"* — and this release deletes the session. Its design must be rebound to `Principal` as part of slice 2, or it will be built on the substrate being removed. Fixing the guard while the target moves beats fixing it against a target that has already moved. |
 | MIK-6704 | **P0** | 3 | End-user identity propagation to backends (OAuth on-behalf-of / token exchange). The first real consumer of the seam slice 3 builds. Shipping the seam with no consumer means reopening the same path immediately. |
 | MIK-7252 | P1 | 3 | Playbook steps run with no caller identity, bypassing per-client scoping. Same `MetaMcpInvoker::invoke` chain slice 3 rewires — one extra parameter now, a second audit later. |
-| MIK-7246 | P3 | 2 | Destructive-confirmation gate fails open. That gate is **being rebuilt regardless**: it depends on `Mcp-Session-Id` and on server-initiated elicitation, and this revision deletes both. Fixing fail-open during the rebuild is free; fixing it before is work thrown away. |
-| MIK-7084 | P2 | 1 | Tiered tool disclosure (L0/L1/L2). Slice 1 already rewrites the `tools/list` response shape for `resultType`, `ttlMs`, `cacheScope` and ordering. |
+| MIK-7246 | P3 → **blocking** | 2 | **The migration turns this from a gap into a universal bypass, and the ticket's own evidence says so.** `destructive_confirmation.rs:19-21`: the action proceeds after a `WARN` when elicitation is unsupported **or there is no session**. 2026-07-28 has no sessions, so in modern mode *every* destructive call takes the fail-open branch. Filed P3 because an attacker had to opt out by omitting a capability; after this release nobody has to opt out of anything. It ships with slice 2 or slice 2 does not ship. Its AC also wants the tool set derived from the `destructiveHint` annotation rather than a hardcoded `gateway_kill_server` arm, which is the same annotation work as MIK-2982. |
+| MIK-7084 | P2 | 1 | Tiered tool disclosure (L0/L1/L2), and stop emitting the ranking blob — measured at ~60% of a `gateway_search` payload, 13 of 16 signals the constant `1.0`. **Honest reason: this is a response-shape change, and 4.0.0 is the breaking release.** The earlier claim that it shares code with the `tools/list` rewrite was overstated — `gateway_search` is a meta-tool result, not a list endpoint. It rides on the version boundary, not on shared lines, and it sits directly on the token-savings differentiator. |
 | MIK-6865 | P2 | 1 | Nested tool-schema hardening. This revision loosens `inputSchema`/`outputSchema` to full JSON Schema 2020-12 and adds `$ref` resolution and composition bounds — the schema-emission code is open on the bench either way. |
 
 ## C. Unblocked by the protocol, not by us (5)
@@ -497,6 +497,22 @@ Work aimed at code this release deletes. Implementing them is spending twice to 
 - **MIK-6158** — genuinely blocked by MIK-6156, **but** its description names a different blocker than the relation Linear records. One of the two is stale; resolve before re-triaging.
 - **Framework-mapping tickets** (MIK-7236, 3031, 3293, 3444) — four tickets doing one shape of work against the same capability inventory. Run as a single pass, after the release, when the inventory has stopped moving.
 - **Everything else** — ops, tooling, research and unrelated features. Untouched by the protocol work and no cheaper to do now than later.
+
+## Evidence quality — which verdicts are soft
+
+The classification read full descriptions for 52 of 71 tickets; 19 were judged from title, priority,
+state and labels alone. Verdicts resting on a title are weaker than verdicts resting on evidence, and
+pretending otherwise is how a manifest becomes fiction.
+
+Where a verdict mattered, the description was read before acting. That check changed three entries:
+MIK-7246 moved from a deferred P3 to a slice-2 blocker, MIK-6865 moved from deferred to ride-along,
+and MIK-7084's stated reason was wrong and has been rewritten. **Two of those three moved *into*
+scope** — the soft verdicts were biased toward deferring, so the remaining title-only deferrals
+should be read before 4.1.0 is planned, not before 4.0.0 starts.
+
+Separately: the classification was produced from ticket text written **before 3.5.0 shipped**, which
+is why five of its nine "security must" items are in section E instead. Any ticket describing the
+state of this repository before 2026-08-28 deserves the same suspicion.
 
 ## Release totals
 
