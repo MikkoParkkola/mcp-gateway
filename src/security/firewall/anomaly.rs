@@ -42,7 +42,55 @@ pub struct AnomalyDetector {
     last_tool: DashMap<String, String>,
 }
 
+/// What the detector could establish about one call.
+///
+/// An enum rather than an `f64` sentinel, and that is the whole design. Every
+/// comparison downstream reads `score > threshold`; a sentinel like `-1.0` or
+/// `NaN` compares `false` against any threshold, so "I could not look" would be
+/// indistinguishable from "I looked and it was fine" at every call site, in
+/// silence. A variant forces each caller to say what it does when the control
+/// cannot see.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Observation {
+    /// A score in `[0.0, 1.0]`; 1.0 means never observed before.
+    Scored(f64),
+    /// No identity to key on, so no transition could be established.
+    ///
+    /// Under MCP 2026-07-28 there is no session. A detector keyed on one sees a
+    /// first request every time and returns its neutral score forever — it
+    /// keeps running and stops protecting, which is the failure this variant
+    /// exists to make visible.
+    Unobservable,
+}
+
+impl Observation {
+    /// The score, or `None` when nothing could be observed.
+    #[must_use]
+    pub const fn score(self) -> Option<f64> {
+        match self {
+            Self::Scored(value) => Some(value),
+            Self::Unobservable => None,
+        }
+    }
+}
+
 impl AnomalyDetector {
+    /// Score a call against the caller's own recent history.
+    ///
+    /// `identity` is the stable per-caller key — the authenticated principal
+    /// after the migration, the session before it. `None` means the caller
+    /// could not be identified, and the honest answer is then
+    /// [`Observation::Unobservable`] rather than a passing score.
+    ///
+    /// Per caller, never globally: one caller's ordinary sequence must not make
+    /// another's unusual one look ordinary.
+    pub fn observe(&self, identity: Option<&str>, server: &str, tool: &str) -> Observation {
+        let Some(identity) = identity else {
+            return Observation::Unobservable;
+        };
+        Observation::Scored(self.score_transition(identity, server, tool))
+    }
+
     /// Create a new detector.
     ///
     /// `threshold` is the score above which a transition is considered

@@ -334,10 +334,31 @@ impl Firewall {
         }
 
         // 2. Anomaly detection — score how unusual this tool call sequence is.
-        let anomaly_score = self
-            .anomaly
-            .as_ref()
-            .map(|a| a.score_transition(session_id, server, tool));
+        //
+        // The key is the caller, and after MCP 2026-07-28 there is no session
+        // to be the caller. A detector handed a per-request identifier sees a
+        // first request every time and answers with its neutral score forever:
+        // it keeps running and stops protecting. `observe` says so instead, and
+        // this is the call site that has to do something about it.
+        let anomaly_score = self.anomaly.as_ref().and_then(|a| {
+            match a.observe(Some(session_id), server, tool) {
+                crate::security::firewall::anomaly::Observation::Scored(score) => Some(score),
+                crate::security::firewall::anomaly::Observation::Unobservable => {
+                    // Not a finding, and not nothing. The operator's traffic is
+                    // unaffected — refusing every unidentified call would deny
+                    // anonymous access they may have chosen to allow — but the
+                    // fact that a control is blind is on the record rather than
+                    // hidden inside a passing score.
+                    tracing::warn!(
+                        server = server,
+                        tool = tool,
+                        "OWASP ASI10: anomaly detection has no caller identity to key on; \
+                         this call was not scored"
+                    );
+                    None
+                }
+            }
+        });
 
         if let Some(score) = anomaly_score {
             let above_block = self
