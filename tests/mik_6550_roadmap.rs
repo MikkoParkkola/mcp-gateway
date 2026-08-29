@@ -30,9 +30,7 @@ fn child_section(ticket: &str) -> &str {
         .find(&marker)
         .unwrap_or_else(|| panic!("missing section for {ticket}"));
     let after_marker = &ROADMAP[start + marker.len()..];
-    let next = after_marker
-        .find("\n## MIK-")
-        .map_or(after_marker.len(), |idx| idx);
+    let next = after_marker.find("\n## MIK-").unwrap_or(after_marker.len());
     &ROADMAP[start..start + marker.len() + next]
 }
 

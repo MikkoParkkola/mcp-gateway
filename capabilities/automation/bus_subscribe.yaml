@@ -66,5 +66,8 @@ metadata:
     - surrealdb
   cost_category: free
   execution_time: fast
+  # A read despite the name: the body is `RETURN time::now();`, which returns a
+  # cursor timestamp. No subscription is created, no destination is registered,
+  # and the parameters are not interpolated into the query at all.
   read_only: true
   docs: /tmp/c-agent-bus-design.md

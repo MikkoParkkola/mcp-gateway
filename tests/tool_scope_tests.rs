@@ -15,12 +15,14 @@ use mcp_gateway::gateway::auth::AuthenticatedClient;
 #[test]
 fn test_no_tool_restrictions() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "unrestricted".to_string(),
         rate_limit: 0,
         backends: vec![],
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
 
     // All tools should be allowed (fallback to global policy)
@@ -33,6 +35,7 @@ fn test_no_tool_restrictions() {
 #[test]
 fn test_allowlist_exact_match() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "frontend".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -43,6 +46,7 @@ fn test_allowlist_exact_match() {
         ]),
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
 
     // Tools in allowlist should be permitted
@@ -70,12 +74,14 @@ fn test_allowlist_exact_match() {
 #[test]
 fn test_allowlist_glob_patterns() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "search_only".to_string(),
         rate_limit: 0,
         backends: vec![],
         allowed_tools: Some(vec!["search_*".to_string(), "read_*".to_string()]),
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
 
     // Tools matching glob patterns should be allowed
@@ -98,6 +104,7 @@ fn test_allowlist_glob_patterns() {
 #[test]
 fn test_denylist_exact_match() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "no_writes".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -108,6 +115,7 @@ fn test_denylist_exact_match() {
             "execute_command".to_string(),
         ]),
         admin: false,
+        authenticated: true,
     };
 
     // Tools in denylist should be blocked
@@ -138,12 +146,14 @@ fn test_denylist_exact_match() {
 #[test]
 fn test_denylist_glob_patterns() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "no_filesystem".to_string(),
         rate_limit: 0,
         backends: vec![],
         allowed_tools: None,
         denied_tools: Some(vec!["filesystem_*".to_string(), "exec_*".to_string()]),
         admin: false,
+        authenticated: true,
     };
 
     // Tools matching deny patterns should be blocked
@@ -169,6 +179,7 @@ fn test_denylist_glob_patterns() {
 #[test]
 fn test_qualified_name_matching() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "specific_server".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -178,6 +189,7 @@ fn test_qualified_name_matching() {
         ]),
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
 
     // Qualified match: filesystem:read_file allowed, but not on other servers
@@ -201,6 +213,7 @@ fn test_qualified_name_matching() {
 #[test]
 fn test_allowlist_and_denylist_combination() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "complex".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -210,6 +223,7 @@ fn test_allowlist_and_denylist_combination() {
             "filesystem_delete".to_string(),
         ]),
         admin: false,
+        authenticated: true,
     };
 
     // In allowlist AND NOT in denylist: allowed
@@ -261,12 +275,14 @@ fn test_api_key_config_with_tool_scopes() {
 #[test]
 fn test_empty_allowlist() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "deny_all".to_string(),
         rate_limit: 0,
         backends: vec![],
         allowed_tools: Some(vec![]), // Empty allowlist = nothing allowed
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
 
     // All tools should be denied with empty allowlist
@@ -278,12 +294,14 @@ fn test_empty_allowlist() {
 #[test]
 fn test_empty_denylist() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "allow_all".to_string(),
         rate_limit: 0,
         backends: vec![],
         allowed_tools: None,
         denied_tools: Some(vec![]), // Empty denylist = no additional blocks
         admin: false,
+        authenticated: true,
     };
 
     // Empty denylist should not block anything (falls back to global policy)
@@ -295,6 +313,7 @@ fn test_empty_denylist() {
 #[test]
 fn test_pattern_matching_edge_cases() {
     let client = AuthenticatedClient {
+        principal: String::new(),
         name: "edge_cases".to_string(),
         rate_limit: 0,
         backends: vec![],
@@ -305,6 +324,7 @@ fn test_pattern_matching_edge_cases() {
         ]),
         denied_tools: None,
         admin: false,
+        authenticated: true,
     };
 
     // Prefix glob works

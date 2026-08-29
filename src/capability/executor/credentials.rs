@@ -268,7 +268,7 @@ impl CapabilityExecutor {
     }
 
     #[cfg(target_os = "macos")]
-    #[allow(clippy::unused_async)]
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
     pub(super) async fn fetch_from_keychain(&self, key: &str) -> Result<String> {
         use std::process::Command;
         let output = Command::new("security")
@@ -285,6 +285,7 @@ impl CapabilityExecutor {
     }
 
     #[cfg(not(target_os = "macos"))]
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     pub(super) async fn fetch_from_keychain(&self, _key: &str) -> Result<String> {
         Err(Error::Config(
             "Keychain access only supported on macOS. Use env: instead.".to_string(),
