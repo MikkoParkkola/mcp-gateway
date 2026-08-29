@@ -369,9 +369,16 @@ reader:
   gateway keeps its recorded path — is REPORTED rather than accepted, and
   reporting it costs no second resolution. Two facts the reload already holds
   decide it: the raw `env_files` list still carries the `~` spellings even
-  though `ResolvedEnvFiles` does not, and the new overlay's `HOME` is
-  comparable with the running one. Any `~` entry plus a changed `HOME` is
-  restart-required, alongside the added-path case
+  though `ResolvedEnvFiles` does not, and the new overlay knows which keys its
+  files ASSIGNED. Any `~` entry plus any assignment of `HOME` is
+  restart-required — the assignment, not a changed value. Comparing values
+  would miss a file that sets `HOME` and a later file that puts it back, which
+  leaves the merged value identical while a restart still resolves the entry
+  between them somewhere else; a rule that asks only *was `HOME` assigned*
+  cannot have an intermediate state to miss, because it never looks at states.
+  It over-reports when a file assigns the value `HOME` already had, which
+  costs a restart notice nobody needed and is the same trade as the platform
+  one below. Reported alongside the added-path case
   (`pending_restart_fields`, `src/config_reload/mod.rs:552`). Deliberately
   unconditional on platform: on Windows `dirs::home_dir()` ignores `HOME` and
   the report is unnecessary, and it is still the right trade — an
