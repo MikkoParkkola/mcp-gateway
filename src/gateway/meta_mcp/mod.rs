@@ -970,10 +970,20 @@ impl MetaMcp {
             "",
         );
 
+        // Field names and placement are the specification's, transcribed from
+        // the `DiscoverResult` example rather than invented: `supportedVersions`
+        // (not `protocolVersions`), and `serverInfo` inside `_meta` under its
+        // reverse-DNS key rather than at the top level. A first cut used the
+        // obvious names, and every test passed — because the tests asserted the
+        // same invented names. A wire format that agrees with itself is not a
+        // wire format anyone else can read.
         serde_json::json!({
-            "protocolVersions": crate::protocol::SUPPORTED_VERSIONS,
+            "resultType": "complete",
+            "supportedVersions": crate::protocol::SUPPORTED_VERSIONS,
             "capabilities": handshake.capabilities,
-            "serverInfo": handshake.server_info,
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": handshake.server_info,
+            },
         })
     }
 

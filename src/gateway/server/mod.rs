@@ -2316,16 +2316,16 @@ mod tests {
         );
         let result = &response["result"];
         assert!(
-            result.get("protocolVersions").is_some(),
-            "discovery must advertise protocol versions: {response}"
+            result.get("supportedVersions").is_some(),
+            "discovery must advertise supportedVersions: {response}"
         );
         assert!(
             result.get("capabilities").is_some(),
             "discovery must advertise capabilities: {response}"
         );
         assert!(
-            result.get("serverInfo").is_some(),
-            "discovery must identify the server: {response}"
+            result["_meta"]["io.modelcontextprotocol/serverInfo"].is_object(),
+            "discovery must identify the server in _meta: {response}"
         );
     }
 
@@ -2345,7 +2345,7 @@ mod tests {
         .expect("discovery must answer without a handshake");
 
         assert!(
-            response["result"].get("protocolVersions").is_some(),
+            response["result"].get("supportedVersions").is_some(),
             "discovery must answer on a connection that never handshook: {response}"
         );
     }

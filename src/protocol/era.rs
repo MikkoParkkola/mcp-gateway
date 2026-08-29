@@ -60,10 +60,11 @@ pub enum ProbeOutcome {
 #[must_use]
 pub fn classify(outcome: &ProbeOutcome) -> Era {
     match outcome {
-        // A document that names the protocol versions it speaks. The field is
-        // what distinguishes a discovery result from some other server's idea
-        // of what `server/discover` might mean.
-        ProbeOutcome::Result(doc) if doc.get("protocolVersions").is_some() => Era::Modern,
+        // A document that names the versions it speaks. `supportedVersions` is
+        // the specification's field name; it is what distinguishes a discovery
+        // result from some other server's idea of what `server/discover` might
+        // mean.
+        ProbeOutcome::Result(doc) if doc.get("supportedVersions").is_some() => Era::Modern,
 
         // A recognised modern error proves a modern peer just as well as a
         // document does: only a server that implements this revision knows
