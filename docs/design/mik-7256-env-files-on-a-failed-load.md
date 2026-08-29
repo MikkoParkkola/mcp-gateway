@@ -981,7 +981,10 @@ rather than default is an operator's call, not a repair.
   scan; the count above is a description, not the mechanism.
 - *Which behaviour does the operator want to lose — `MCP_GATEWAY_*` on reload,
   or hot-add with a new credential?* — asked, answered: the `MCP_GATEWAY_*`
-  narrowing, with hot-add preserved. Changed the design: option B was the
+  narrowing, with hot-add preserved. **SUPERSEDED by the bullet below, which
+  put the same axis back to the operator and got the opposite answer.** The
+  record stays because the answer was given and the design moved on it; it is
+  the next bullet that governs. Changed the design: option B was the
   chosen option before this answer and is now rejected. The narrowing has since
   DEEPENED: with no process write on the reload path, a `MCP_GATEWAY_*` value
   added while running waits for a restart rather than for the next config load.
