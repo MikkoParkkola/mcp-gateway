@@ -345,10 +345,21 @@ Not everything the reviewers raised survived contact with the source, and saying
 - **`cacheable.rs` is correct.** It defaults to `private`, which is the conservative direction: the specification confirms `public` responses "may be shared between callers even if the Result is coming from an authenticated endpoint". Its doc comment cites the schema, so despite the empty cached page it was not written from nothing. One real gap: the specification requires the same `cacheScope` across all pages of a paginated list, which is not implemented — though a uniform `private` default satisfies it by accident rather than by design.
 - **The tasks findings are UNVERIFIED, not accepted.** The specification page for tasks returns 404 at the path the index itself links to. The reviewer's claims about required `createdAt`/`lastUpdatedAt`/`ttlMs` fields and `input_required`/`cancelled` states have no source this session could reach, so they are recorded as unverified rather than treated as fact.
 
-### Two security controls fail open
+### Two controls that failed open — both closed, re-verified at head
 
-- `firewall/mod.rs:346` converts an **unobservable** anomaly check into "no finding" and allows the request. A control that cannot observe its subject must refuse, not wave through — this is the exact failure mode already recorded in this repository's own lessons.
-- `session_lifecycle.rs:83` retains every deadline when one key is tracked twice, so a stale deadline can reclaim refreshed state and run cleanup on a live caller.
+- **Closed.** `src/security/firewall/mod.rs:355-386` no longer turns an unobservable
+  anomaly check into "no finding". `Observation::Unobservable` now sets `anomaly_blind`,
+  logs the reason, and pushes a `Severity::High` `SequenceAnomaly` finding, which the
+  caller treats as a block (`src/security/firewall/mod.rs:1147`). A detector with no
+  identity to key on refuses instead of waving the call through.
+- **Closed, with a stated residual.** `src/gateway/session_lifecycle.rs:75-82` records that
+  a key re-tracked between reaping's removal and `fire_cleanup` still has its handlers
+  fired, and says why: closing it needs an ownership model this module does not have. The
+  module is not reached from production at all, tracked as MIK-7291, so the residual is
+  bounded by that.
+
+The path in the original finding, `firewall/mod.rs`, does not exist; the file is
+`src/security/firewall/mod.rs`.
 
 ## The decision, which is the operator's
 
