@@ -183,3 +183,77 @@ mod lifecycle {
         assert_eq!(reclaimed.load(Ordering::SeqCst), 1);
     }
 }
+
+// ===========================================================================
+// MIK-7246.CONFIRM.1 / .3 — the destructive-operation confirmation gate.
+//
+// Filed P3 because an attacker had to opt out of it by omitting a capability.
+// After this migration nobody has to opt out of anything: the gate proceeds on
+// a WARN when elicitation is unsupported **or there is no session**, and
+// 2026-07-28 deletes sessions. In modern mode every destructive call takes the
+// fail-open branch.
+// ===========================================================================
+
+mod confirmation {
+    use mcp_gateway::gateway::destructive_confirmation::{
+        ConfirmationPolicy, destructive_tools_from_annotations, is_destructive_meta_tool,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn ac_confirm_1_an_unconfirmable_destructive_call_is_refused_not_warned() {
+        // The whole change, in one row. "Proceeds after a WARN" is a courtesy
+        // wearing a control's name — and the module's own header said so.
+        assert_eq!(
+            ConfirmationPolicy::for_modern().on_unconfirmable(),
+            ConfirmationPolicy::REFUSE,
+            "with no way to ask, a destructive call must not run"
+        );
+    }
+
+    #[test]
+    fn ac_confirm_1_the_legacy_path_keeps_its_documented_behaviour() {
+        // The regression, and a deliberate asymmetry. A 2025 client that never
+        // declared elicitation has been served this way for the life of the
+        // gateway; refusing it now is a breaking change made in passing rather
+        // than decided. The modern path has no such history — it has never
+        // worked at all — so it starts closed.
+        assert_eq!(
+            ConfirmationPolicy::for_legacy().on_unconfirmable(),
+            ConfirmationPolicy::PROCEED_WITH_WARNING
+        );
+    }
+
+    #[test]
+    fn ac_confirm_3_the_governed_set_comes_from_the_annotation() {
+        // Today the set is one hardcoded name. A tool added tomorrow with
+        // `destructiveHint: true` inherits nothing, which is how a gate ends up
+        // guarding one door in a building that grew.
+        let tools = json!([
+            { "name": "gateway_kill_server", "annotations": { "destructiveHint": true } },
+            { "name": "gateway_search_tools", "annotations": { "destructiveHint": false } },
+            { "name": "gateway_wipe_everything", "annotations": { "destructiveHint": true } },
+            { "name": "gateway_list_servers" }
+        ]);
+
+        let governed = destructive_tools_from_annotations(&tools);
+        assert!(governed.contains("gateway_kill_server"));
+        assert!(
+            governed.contains("gateway_wipe_everything"),
+            "a new destructive tool must inherit the gate without anyone editing a match arm"
+        );
+        assert!(!governed.contains("gateway_search_tools"));
+        assert!(
+            !governed.contains("gateway_list_servers"),
+            "an unannotated tool is not destructive"
+        );
+    }
+
+    #[test]
+    fn ac_confirm_3_the_hardcoded_name_remains_governed() {
+        // Belt and braces: the annotation is the source of truth, and the tool
+        // the gate was written for must not fall out of it if an annotation is
+        // ever dropped by accident.
+        assert!(is_destructive_meta_tool("gateway_kill_server"));
+    }
+}

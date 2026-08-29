@@ -4,7 +4,7 @@
 
 pub mod auth;
 pub(crate) mod authz;
-pub(crate) mod destructive_confirmation;
+pub mod destructive_confirmation;
 mod differential;
 mod http_error;
 mod meta_mcp;

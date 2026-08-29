@@ -66,6 +66,85 @@ pub enum ConfirmationOutcome {
 /// The set is derived from `meta_mcp_tool_defs.rs`.  Only
 /// `gateway_kill_server` currently sets the flag.
 #[must_use]
+/// What the gateway does when it cannot ask.
+///
+/// Named as a policy rather than decided inline, because the two eras get
+/// different answers and the difference is deliberate rather than an oversight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfirmationPolicy(&'static str);
+
+impl ConfirmationPolicy {
+    /// Refuse the call. There is no way to ask, so it does not run.
+    pub const REFUSE: &'static str = "refuse";
+    /// Run it, having logged that nobody was asked.
+    pub const PROCEED_WITH_WARNING: &'static str = "proceed-with-warning";
+
+    /// The policy for a request written against 2026-07-28.
+    ///
+    /// Refuse. The old behaviour proceeded on a warning when elicitation was
+    /// unsupported **or there was no session** — and this revision deletes
+    /// sessions, so *every* modern destructive call would take that branch. A
+    /// gate that is open for everyone is not a gate, and the modern path has no
+    /// history of working differently to protect.
+    pub const fn for_modern() -> Self {
+        Self(Self::REFUSE)
+    }
+
+    /// The policy for a request written against an earlier revision.
+    ///
+    /// Unchanged. A 2025 client that never declared elicitation has been served
+    /// this way for the life of the gateway; tightening it here would be a
+    /// breaking change made in passing rather than decided. The asymmetry is
+    /// the point: the modern path starts closed because it has never been open.
+    pub const fn for_legacy() -> Self {
+        Self(Self::PROCEED_WITH_WARNING)
+    }
+
+    /// What to do when confirmation cannot be obtained.
+    #[must_use]
+    pub const fn on_unconfirmable(self) -> &'static str {
+        self.0
+    }
+}
+
+/// The tools a `tools/list` says are destructive.
+///
+/// Derived from the `destructiveHint` annotation rather than a match arm. The
+/// gate was written for one tool name, so a tool added later with the same
+/// annotation inherited nothing — which is how a gate ends up guarding one door
+/// in a building that grew.
+#[must_use]
+pub fn destructive_tools_from_annotations(
+    tools: &serde_json::Value,
+) -> std::collections::HashSet<String> {
+    tools
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter(|tool| {
+                    tool.get("annotations")
+                        .and_then(|a| a.get("destructiveHint"))
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                })
+                .filter_map(|tool| {
+                    tool.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a meta-tool is one the confirmation gate governs.
+///
+/// The name the gate was written for, kept alongside
+/// [`destructive_tools_from_annotations`] rather than replaced by it: the
+/// annotation is the source of truth for tools the gateway did not write, and
+/// this is the floor for the one it did, so an annotation dropped by accident
+/// cannot quietly ungovern it.
+#[must_use]
 pub fn is_destructive_meta_tool(tool_name: &str) -> bool {
     matches!(tool_name, "gateway_kill_server")
 }
