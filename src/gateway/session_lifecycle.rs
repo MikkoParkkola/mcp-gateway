@@ -21,6 +21,18 @@ type CleanupFn = Box<dyn Fn(&str) + Send + Sync>;
 #[derive(Default)]
 pub struct SessionLifecycle {
     callbacks: RwLock<Vec<(String, Arc<CleanupFn>)>>,
+    /// Keys awaiting reclamation, and the deadline each is reclaimed at.
+    ///
+    /// MCP 2026-07-28 removed protocol sessions, so `on_disconnect` has nothing
+    /// left to fire on: there is no session to DELETE, and the stream whose
+    /// close drove the other trigger is replaced by `subscriptions/listen`.
+    /// Every handler registered here would simply never run, and everything it
+    /// reclaimed would leak — in silence, because nothing errors when a
+    /// callback is not called.
+    ///
+    /// So the trigger becomes a deadline. The handlers are unchanged; what
+    /// changes is that something still fires them.
+    tracked: RwLock<Vec<(String, u64)>>,
 }
 
 impl SessionLifecycle {
@@ -33,7 +45,11 @@ impl SessionLifecycle {
     ///
     /// The callback receives the session ID string when a session disconnects.
     /// Name is used for debug logging only.
-    pub fn register(&self, name: impl Into<String>, callback: impl Fn(&str) + Send + Sync + 'static) {
+    pub fn register(
+        &self,
+        name: impl Into<String>,
+        callback: impl Fn(&str) + Send + Sync + 'static,
+    ) {
         self.callbacks
             .write()
             .push((name.into(), Arc::new(Box::new(callback))));
@@ -48,11 +64,48 @@ impl SessionLifecycle {
         if cbs.is_empty() {
             return;
         }
-        debug!(session_id, callbacks = cbs.len(), "Session disconnect cleanup");
+        debug!(
+            session_id,
+            callbacks = cbs.len(),
+            "Session disconnect cleanup"
+        );
         for (name, cb) in cbs.iter() {
             cb(session_id);
             debug!(session_id, handler = %name, "Cleanup handler executed");
         }
+    }
+
+    /// Note that `key` is reclaimable once `expires_at` has passed.
+    ///
+    /// The key is whatever the caller is identified by — a principal after the
+    /// migration, a session before it. The handlers do not care which; they
+    /// care that something eventually names the key again.
+    pub fn track(&self, key: impl Into<String>, expires_at: u64) {
+        self.tracked.write().push((key.into(), expires_at));
+    }
+
+    /// Reclaim every tracked key whose deadline has passed.
+    ///
+    /// Each key fires the handlers exactly once and is then forgotten: these
+    /// callbacks free things, and a handler that runs twice for one key is its
+    /// own defect.
+    pub fn reap(&self, now: u64) {
+        let expired: Vec<String> = {
+            let mut tracked = self.tracked.write();
+            let (expired, live): (Vec<_>, Vec<_>) = tracked
+                .drain(..)
+                .partition(|(_, expires_at)| now > *expires_at);
+            *tracked = live;
+            expired.into_iter().map(|(key, _)| key).collect()
+        };
+        for key in expired {
+            self.on_disconnect(&key);
+        }
+    }
+
+    /// How many keys are awaiting reclamation.
+    pub fn tracked_count(&self) -> usize {
+        self.tracked.read().len()
     }
 
     /// Number of registered callbacks (for diagnostics).

@@ -108,3 +108,78 @@ mod firewall {
         assert!(acted_on, "every caller must handle the unobservable arm");
     }
 }
+
+// ===========================================================================
+// MIK-7215.CONTROL.4 — every behaviour reclaimed by session-disconnect cleanup
+// must be re-expressed as an expiry.
+//
+// `SessionLifecycle` fires on "SSE disconnect or DELETE /mcp". Under
+// 2026-07-28 there is neither: no session to delete, and the stream those
+// disconnects came from is replaced. So the callbacks never run, and
+// everything they reclaimed leaks — quietly, because nothing errors when a
+// callback is not called.
+// ===========================================================================
+
+mod lifecycle {
+    use mcp_gateway::gateway::session_lifecycle::SessionLifecycle;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn ac_control_4_expiry_reclaims_what_disconnect_used_to() {
+        // The same handlers, driven by a deadline rather than an event. An
+        // event that cannot occur is not a trigger.
+        let lifecycle = SessionLifecycle::new();
+        let reclaimed = Arc::new(AtomicUsize::new(0));
+
+        let counter = Arc::clone(&reclaimed);
+        lifecycle.register("test-handler", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track("caller-a", 1_000);
+        lifecycle.track("caller-b", 5_000);
+
+        lifecycle.reap(2_000);
+        assert_eq!(
+            reclaimed.load(Ordering::SeqCst),
+            1,
+            "the entry past its deadline is reclaimed, and only that one"
+        );
+
+        lifecycle.reap(6_000);
+        assert_eq!(reclaimed.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn ac_control_4_reaping_twice_reclaims_once() {
+        // A handler that runs twice for one key is its own defect: these
+        // callbacks free things.
+        let lifecycle = SessionLifecycle::new();
+        let reclaimed = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&reclaimed);
+        lifecycle.register("test-handler", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track("caller-a", 1_000);
+        lifecycle.reap(2_000);
+        lifecycle.reap(3_000);
+        assert_eq!(reclaimed.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn ac_control_4_disconnect_still_works_for_a_legacy_session() {
+        // The regression. A 2025 client still disconnects, and its cleanup must
+        // still fire on the event rather than waiting for a deadline.
+        let lifecycle = SessionLifecycle::new();
+        let reclaimed = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&reclaimed);
+        lifecycle.register("test-handler", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.on_disconnect("legacy-session");
+        assert_eq!(reclaimed.load(Ordering::SeqCst), 1);
+    }
+}

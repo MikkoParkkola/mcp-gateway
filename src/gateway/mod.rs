@@ -16,6 +16,7 @@ pub mod proxy;
 pub mod recovery;
 mod router;
 mod server;
+pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
 pub mod trace;
