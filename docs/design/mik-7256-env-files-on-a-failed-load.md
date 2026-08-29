@@ -8,10 +8,13 @@ before it validates anything (`src/config/mod.rs:198`, then `:303`
 `load_config_patch` (`src/config_reload/mod.rs:1239`). A reload that fails —
 parse error, validation error, shutdown abort, or the posture refusal — has
 already overwritten process variables from the candidate file. The reload
-reports failure; the environment keeps the new values, and they leak two ways:
-a later `${VAR}` expansion resolves against the overridden value, and any
-backend spawned afterwards inherits it. `from_path_override` overwrites
-existing variables, so this is not additive-only.
+reports failure; the environment keeps the new values, and every later reader
+sees them — a `${VAR}` expansion resolves against the overridden value, and so
+does every lazily-resolved `env:` reference, including capability credentials
+read on each call. `from_path_override` overwrites existing variables, so this
+is not additive-only. Backends are not among the readers: they are spawned
+with a cleared environment (`src/transport/stdio.rs:39-75`) and see only the
+values the config resolved for them.
 
 ## Constraints, measured
 
@@ -36,6 +39,23 @@ capability directories, and resolves each `${NAME}` or `${NAME:-default}`
 through one function, `expand_string` → `env::var` (`:330`). It is a private
 method on `Config` with a single call site. Nothing outside the crate depends
 on how it obtains a value.
+
+**`${VAR}` is not the only convention, and the other one reads the process
+environment at call time.** A second spelling, `env:NAME`, is resolved lazily
+wherever the value is used, never through `expand_env_vars`:
+`fetch_credential` accepts `env:VAR`, `{env.VAR}` and a bare `UPPER_SNAKE`
+name for every capability credential and reads `std::env` on each call
+(`src/capability/executor/credentials.rs:20-56`); `auth.bearer_token`
+(`src/config/features/auth.rs:122`), `auth.api_keys[].key` (`:169`),
+`agent_auth.agents[].hs256_secret` (`:267`) and `key_server.admin_token`
+(`src/config/features/key_server.rs:139`) each resolve their own. Validation
+reads it too, at `validate_env_reference` (`src/config/mod.rs:651`, four call
+sites) and inline for agent key material (`:433`).
+
+This constraint was missed in the first draft and it falsifies that draft's
+central claim. `${VAR}` is not "where credentials live" — capability
+credentials, the bearer token and the admin token all live behind `env:`. An
+overlay consulted only by `expand_env_vars` reaches none of them.
 
 **Backends do not inherit the gateway's environment.**
 `configure_child_environment` calls `cmd.env_clear()` and then sets PATH, HOME,
@@ -73,43 +93,76 @@ succeeded, failed validation, was refused by the posture check, or aborted at
 shutdown. There is no path on which anything is left behind, because nothing
 is ever applied.
 
-**Chosen: C.** After it the finding cannot be stated: the reload path contains
-no code that writes the environment. It is also the only option that keeps
-hot-add-with-a-new-secret working, which B does not and A does only by
-mutating first and repairing after.
+**C is not sufficient.** It defends a stronger invariant than the ticket asks
+for — *never* write the process environment — and that extra strength is what
+breaks the `env:` convention. Under C a rotated capability credential
+delivered by an env file would not take effect until restart, and a candidate
+adding `auth.bearer_token: env:NEW_TOKEN` with the value in its own env file
+would be rejected by validation. Both are exactly the hot-add case the
+operator's constraint protects.
 
-## What C costs
+**D. Overlay for the evaluation; a real apply once the candidate is
+accepted.** The env files the running gateway lists are re-read into a
+temporary map and consulted by `${VAR}` expansion and by validation, as in C,
+so nothing is written while the outcome is still unknown. When the reload is accepted —
+after validation, after the posture check, after the shutdown abort could
+still have fired — the files are applied for real with
+`dotenvy::from_path_override`, exactly as startup applies them.
 
-**One kind of variable stops being reloadable: `MCP_GATEWAY_*` set from an env
-file.** Those reach the config through Figment's env layer
+**Chosen: D.** The ticket's invariant is that a *failed* reload leaves the
+environment untouched, and D holds it: on every failing path the map is
+dropped and nothing was written. On the succeeding path the process ends up
+where a restart would have put it, so every lazy `env:` reader — capability
+credentials, bearer token, api keys, agent secrets, admin token — keeps
+working with no plumbing at all. After D the finding cannot be stated: there
+is no reload outcome that mutates the environment without proceeding.
+
+## What D costs
+
+**`MCP_GATEWAY_*` set from an env file takes effect at the next config load,
+not at this one.** Those reach the config through Figment's env layer
 (`src/config/mod.rs:286`), which reads the process environment directly and
-cannot be handed an overlay. Under C a candidate env file that changes
-`MCP_GATEWAY_PORT` has no effect until restart. Everything routed through
-`${VAR}` — backend headers, backend env, capability directories, which is
-where credentials live — reloads normally.
+accepts no overlay, and the apply now happens after the candidate has been
+evaluated. The value is applied, so the following reload or a restart picks it
+up; the reload that introduced it does not. Everything else — `${VAR}`
+expansion, every `env:` reference, capability credentials — reloads in full.
 
-This is a narrowing of user-visible behaviour, put to the operator with that
-cost stated, and chosen by them over option B.
+This is the whole of the narrowing, and it is smaller than the one put to the
+operator when C was chosen: that one required a restart, this one does not.
+Nothing the operator relies on is removed, so it is a notification rather than
+a scope change. It is pinned by a test and logged at warn level when an
+env file sets a `MCP_GATEWAY_*` key, so the lag is diagnosable rather than
+silent. **The log names the key and never the value** — open PR #439 is
+removing configured values from diagnostic output across the CLI and the
+transport logs, and a new log that reintroduces one would land on top of that
+work.
 
-The cost is bounded and it is the small half. `MCP_GATEWAY_*` in an env file
-duplicates a key the YAML already carries; the YAML is what the reload is
-reading. Credentials are the half that must keep working, and they do.
+**A path ADDED to `env_files` still needs a restart.** The overlay and the
+apply both use the running gateway's list, so a newly named file is neither
+read nor applied until the gateway restarts — the same rule as before this
+change, now for a stated reason rather than by accident. Editing the CONTENTS
+of a listed file is the hot path and is unaffected. The watcher agrees
+independently: `notify` watches are registered once before the event loop
+starts and the callback cannot add more (open issue #453), so a newly named
+env file would not be watched even if it were read.
 
-**Env-file values inside env files resolve against the process environment,
-not against the candidate.** `dotenvy`'s `apply_substitution` consults
-`std::env::var` before its own per-file table (`parse.rs:260-265`), so a
-`${VAR}` *inside* an env file cannot see a value the overlay holds — the
-overlay is not in the environment, which is the entire point. Consequences,
-both stated rather than fixed: a later env file referencing a variable an
-earlier one defined resolves to the process value or to empty, and a file that
-redefines a variable the process already holds and then references it resolves
-to the process value. On startup both resolve to the file's value, because
-startup really does apply as it goes.
+**A `${VAR}` inside an env file resolves against the process environment
+first, then against the same file.** `dotenvy`'s `apply_substitution` consults
+`std::env::var` before its own per-file table (dotenvy 0.15.7,
+`parse.rs:260-273`). Two cases, and they differ:
 
-One rule covers both, and it is the same rule the `MCP_GATEWAY_*` cost states:
-**on the reload path the candidate's env files supply values to the YAML, and
-not to each other.** Documented, and pinned by a test rather than left as a
-surprise.
+- *Same file*: `A=1` then `B=${A}`, with `A` absent from the process, resolves
+  `B` to `1` — the per-file table carries it. Identical to startup. The first
+  draft claimed this resolved to empty; that was wrong, and reading the crate
+  is what settled it.
+- *Across files*: each file gets its own table, so a later file referencing a
+  variable an earlier one defined resolves to the process value or to empty.
+  On the reload path the earlier file has not been applied yet, so it resolves
+  to empty where startup would have resolved it to the earlier file's value.
+
+The rule is therefore narrower than the first draft's: **on the reload path an
+env file can reference its own values, but not another file's.** Documented,
+and pinned by two cases rather than one.
 
 **The overlay must strip a byte-order mark itself.** `remove_bom` is called
 only from `Iter::load` and `Iter::load_override` (`iter.rs:30,48`), not on the
@@ -119,7 +172,7 @@ Without an explicit strip the overlay would silently disagree with startup
 about the first variable of exactly those files. Named here because it is
 invisible in every test that does not write a BOM.
 
-**No design event on the watcher.** Under C an edit to a watched env file
+**No design event on the watcher.** Under D an edit to a watched env file
 genuinely changes the resulting config — the overlay re-reads it — so
 `ReloadTrigger::EnvFile` (`src/config_reload/mod.rs:1227`),
 `resolve_env_file_paths` (`:941`), `matching_env_file` (`:967`) and their six
@@ -129,19 +182,67 @@ them; that followed from option B and goes with it.
 
 ## Shape
 
-Three changes, no signature churn at 35 call sites.
+Four changes, no signature churn at 35 call sites.
 
 **`EnvOverlay`** — a newtype over `HashMap<String, String>`, private to
 `src/config/mod.rs`, with two constructors and one reader:
 
 - `EnvOverlay::none()` — empty. What startup passes.
-- `EnvOverlay::from_paths(&[PathBuf]) -> Result<Self>` — for each existing
-  path in order, open the file, strip a leading BOM, `dotenvy::from_read_iter`,
-  and insert each pair. Later files overwrite earlier ones, matching
-  `from_path_override`'s precedence. A missing path is skipped, exactly as
-  `load_env_files_from_paths` skips it today; a parse error is returned, so a
-  malformed candidate env file fails the reload instead of half-loading.
-- `get(&self, name: &str) -> Option<&str>`.
+- `EnvOverlay::from_paths(&[PathBuf]) -> Self` — **infallible, and that is a
+  decision, not an omission.** For each existing path in order it opens the
+  file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
+  inserts each pair; later files overwrite earlier ones, matching
+  `from_path_override`'s precedence. A missing path is skipped and a parse
+  error is logged at warn level and skipped — byte-for-byte the behaviour of
+  `load_env_files_from_paths` today (`src/config/mod.rs:305`). A fallible
+  builder would introduce a *new* error class into `Config::load`, and
+  `load_config_or_default` turns any `Config::load` error into
+  `Config::default()` (`src/config_persistence.rs:14-23`), which the admin-UI
+  read-modify-write then writes to disk. A malformed env file would silently
+  replace an operator's configuration with defaults. Parity with startup makes
+  that unreachable rather than merely unlikely.
+
+**Validation reads the overlay too.** `validate_env_reference`
+(`src/config/mod.rs:651`) and the inline agent-key resolution (`:433`) are the
+only two validate-time readers of `env:` — the first funnels four call sites
+(`auth.bearer_token`, `auth.api_keys[].key`, `agent_auth.agents[].hs256_secret`,
+`key_server.admin_token`), the second stands alone. Both take an
+`&EnvOverlay`, consult it first and fall back to `env::var_os`, reached
+through `validate` on the same parameter. Without this a candidate that adds
+`auth.bearer_token: env:NEW_TOKEN` with the value in its own env file fails
+validation, because the value is not in the process yet — the hot-add case,
+failing at the last gate before it would have worked.
+
+The lazy `env:` readers — `fetch_credential`
+(`src/capability/executor/credentials.rs:20-56`), `resolve_key`,
+`resolved_hs256_secret`, `resolve_admin_token` — are **not** touched. They read
+the process environment at call time, and by the time they run on an accepted
+config the apply has happened. That is the whole reason D exists: the
+alternative is threading an overlay handle into the capability executor and
+four resolver methods for a value the process will hold anyway.
+
+**The apply happens on acceptance.** `load_config_patch` evaluates the
+candidate with an overlay and returns it; the reload path applies the env files
+with `load_env_files_from_paths` at the point the reload is committed — after
+validation, after the posture refusal (`src/config_reload/mod.rs:1478`), after
+the shutdown abort. One call, on one path, and it is the same function startup
+uses. Every earlier exit drops the overlay and leaves the process untouched.
+
+**Both the overlay and the apply read the RUNNING gateway's `env_files` list,
+never the candidate's.** A candidate is an unvalidated file on disk, and its
+`env_files` list is part of what has not been validated. Building the overlay
+from it would let an edited config name any path and have its contents
+activated as credentials during evaluation; under D it is sharper still,
+because acceptance would then write those contents into the process. So the
+path list is an input to the load, not a field read out of the candidate:
+`load_with_overlay` takes `&[PathBuf]` from the caller, and the reload path
+passes the list the running gateway started with. A path the candidate ADDS is
+parsed by nobody and applied by nobody — it takes effect at the next restart,
+which is what adding a path already required (below). A path the candidate
+REMOVES stays applied until restart, matching the fact that nothing unsets a
+variable today either. This is also why `Config::load` keeps reading the list
+out of the file: at startup the config on disk *is* the running config, and
+there is no earlier list to prefer.
 
 **`expand_env_vars(&mut self, overlay: &EnvOverlay)`** and
 `expand_string(s: &str, overlay: &EnvOverlay)`. The only behavioural line is in
@@ -150,17 +251,19 @@ then to the `:-` default. Overlay-before-environment mirrors
 `from_path_override`, which is what startup does — so a variable present in
 both resolves the same way on both paths.
 
-**`Config::load_with_overlay(path: Option<&Path>) -> Result<Config>`**,
-`pub(crate)`. Same body as `Config::load` with two lines changed: it builds an
-`EnvOverlay` from `env_file_config.env_files` instead of calling
-`load_env_files_from_paths`, and passes it to `expand_env_vars`. `Config::load`
+**`Config::load_with_overlay(path: Option<&Path>, env_files: &[PathBuf]) ->
+Result<Config>`**, `pub(crate)`. Same body as `Config::load` with two lines
+changed: it builds an `EnvOverlay` from the `env_files` ARGUMENT — the running
+gateway's list, never the candidate's own `env_file_config.env_files` — instead
+of calling `load_env_files_from_paths`, and passes it to `expand_env_vars`. `Config::load`
 keeps its signature, calls `load_env_files_from_paths` exactly as today, and
 expands with `EnvOverlay::none()` — byte-for-byte the current behaviour for all
 35 call sites, which is why none of them is edited.
 
 The two bodies share a private `load_inner(path, EnvSource)` with
-`enum EnvSource { ApplyToProcess, Overlay }` — an enum, not a boolean, so the
-call site says which it means without opening the signature.
+`enum EnvSource<'a> { ApplyToProcess, Overlay(&'a [PathBuf]) }` — an enum, not
+a boolean, so the call site says which it means without opening the signature,
+and the overlay variant cannot be constructed without naming the list it reads.
 
 `load_with_overlay` is `pub(crate)` because `config_persistence` is a different
 module and must reach it, and nothing outside the crate should. Its documented
@@ -183,6 +286,11 @@ readers satisfy it today, found by reading every caller of `Config::load`,
   `ConfigMutation::Rejected` having changed no file and already changed the
   environment. Found by review; the first draft named only `load_config_patch`.
 
+Both supply the path list from the config the gateway is currently serving —
+`load_config_patch` from the running config the reload manager already holds,
+the admin-UI path from the same handle it uses to publish the reload. Neither
+reads `env_files` out of the candidate.
+
 `load_config_or_default` keeps its signature — five of its seven callers are
 CLI commands (`src/commands/setup.rs`, `src/commands/add_remove.rs`) where
 applying is correct. It gains one `pub(crate)` sibling that delegates to
@@ -200,18 +308,22 @@ observation, not a ticket.
 - **MIK.ENVFILE.1** Given a running gateway, When a reload fails for any reason
   — parse, validation, posture refusal, or shutdown abort — Then process
   environment variables are identical to before the reload.
-- **MIK.ENVFILE.2** Given a reload that succeeds, Then process environment
-  variables are still identical to before the reload.
-- **MIK.ENVFILE.3** Given a reload whose candidate env file sets a variable the
-  process already holds, Then a backend spawned afterwards that does not
-  reference it receives the original value.
+- **MIK.ENVFILE.2** Given a reload that succeeds, Then the running gateway's
+  env files are applied to the process, so a variable they define is readable
+  afterwards exactly as it would be after a restart.
+- **MIK.ENVFILE.3** Given a reload whose candidate env file sets a variable
+  that fails validation, When a backend is spawned afterwards, Then the child
+  does not receive the candidate's value — it does not receive the variable at
+  all, because `configure_child_environment` clears the environment and passes
+  only the backend's own resolved `env` map.
 - **MIK.ENVFILE.4** Given startup, Then env files are applied exactly as today
   — same variables, same override order, same final state.
 - **MIK.ENVFILE.5** Given a reload that hot-adds a backend whose header or env
-  references `${NEW_KEY}`, and a candidate env file defining `NEW_KEY`, Then the
-  running backend receives that value, without a restart and without the process
-  environment being changed.
-- **MIK.ENVFILE.6** Given a candidate env file that changes a `MCP_GATEWAY_*`
+  references `${NEW_KEY}`, and an already-listed env file whose contents now
+  define `NEW_KEY`, Then the running backend receives that value without a
+  restart, and the value reaches the resolved config before the process
+  environment is touched.
+- **MIK.ENVFILE.6** Given an env-file edit that changes a `MCP_GATEWAY_*`
   variable, Then the reloaded config keeps the value the process has had since
   startup — the stated narrowing, pinned so it cannot regress silently in
   either direction.
@@ -224,22 +336,36 @@ observation, not a ticket.
   gateway, Then a reload is triggered and the new `${VAR}` values reach the
   running backends — the behaviour option B would have removed.
 
+- **MIK.ENVFILE.10** Given a reload that adds an `env:` reference — an
+  `auth.bearer_token`, an api key, an agent secret, an admin token, or a
+  capability credential — whose value is defined only in an already-listed env
+  file, Then the reload validates and the value is in use afterwards, with no
+  restart. The criterion the first design would have failed.
+
+- **MIK.ENVFILE.11** Given a candidate that ADDS a path to `env_files`, When
+  the reload succeeds, Then no variable defined only in that new file is
+  readable from the process or resolvable in the reloaded config — an
+  unvalidated file cannot activate a credential by being named.
+
 An earlier form required the gateway to report `env_files` as restart-required
 after a content-only edit. Cut, not weakened: `pending_restart_fields` compares
 the `env_files` *path list* (`src/config_reload/mod.rs:552`), which a content
-edit does not change, and under C a content edit does not need a restart for
+edit does not change, and under D a content edit does not need a restart for
 the values that matter.
 
 ## Docs corrected here
 
 - `CHANGELOG.md:333` and `docs/DEPLOYMENT.md:596` — both describe a candidate
-  config applying its `env_files` before validation. That stops happening.
+  config applying its `env_files` before validation. That stops happening; the
+  apply moves to the point the reload is committed.
+- `docs/DEPLOYMENT.md:177` — describes `env_files` without saying what a reload
+  can and cannot pick up from one. It now needs both halves: `${VAR}` and
+  `env:` values reload, a `MCP_GATEWAY_*` value lands one config load later.
 - `src/config_reload/mod.rs:1485` and `src/config_reload/tests.rs:1271,1295` —
   comments explaining why the reload refusal message may not claim that nothing
-  was applied. Correct when written; the reload path applies nothing after this.
-- `docs/DEPLOYMENT.md:177` — describes `env_files` without saying what a reload
-  can and cannot pick up from one. It now needs both halves: `${VAR}` values
-  reload, `MCP_GATEWAY_*` and env-file-internal `${VAR}` do not.
+  was applied. Under D a *refused* reload really does apply nothing, so the
+  comments become wrong in the direction of understating the guarantee. The
+  message itself stays out of scope (below); the comments are corrected.
 
 ## Out of scope
 
@@ -248,16 +374,26 @@ requires a restart. This change is about what a failing reload may do to the
 process, and about the contents of paths already listed.
 
 **Making Figment's env layer overlay-aware.** It would close the
-`MCP_GATEWAY_*` narrowing, and it is a change to how every configuration key is
-resolved, not to how env files are handled. Disposal: recorded as an
+`MCP_GATEWAY_*` lag entirely, and it is a change to how every configuration
+key is resolved, not to how env files are handled. Disposal: recorded as an
 observation, not filed — nobody has asked for it.
 
-**Strengthening the reload refusal message.** Once the reload path applies
+**Strengthening the reload refusal message.** Once a refused reload applies
 nothing the gateway can honestly say so, and the message at
 `src/config_reload/mod.rs:1478` was deliberately weakened over three review
 rounds because it could not. Still out: it changes user-visible security
 messaging and the tests guarding it assert the ABSENCE of those phrases, so
 they keep passing either way. Disposal: filed as a follow-up.
+
+**`load_config_or_default` turning a config error into `Config::default()`.**
+`src/config_persistence.rs:14-23` logs a warning and returns defaults for any
+`Config::load` failure, and the admin-UI read-modify-write then writes that
+result to disk — a YAML syntax error in a config an operator is editing can
+replace it with defaults. Pre-existing, on a path this change does not create,
+and `load_existing_or_default` (`:29-35`) already shows the fallible shape a
+fix would take. This change avoids *adding* to it by keeping the overlay
+builder infallible. Disposal: filed as a ticket, because whether the admin
+path should refuse rather than default is an operator's call, not a repair.
 
 ## Open questions
 
@@ -265,15 +401,23 @@ they keep passing either way. Disposal: filed as a follow-up.
   environment?* — yes. `configure_child_environment` calls `env_clear` and then
   sets the backend's own resolved `env` map (`src/transport/stdio.rs:39-75`),
   and that map is what `expand_env_vars` writes into. Changed the design: it is
-  why C works at all, and why option B's blank credential is silent rather than
-  loud.
+  why an overlay works at all during evaluation, and why option B's blank
+  credential is silent rather than loud.
 - *Does `dotenvy`'s iterator behave like `from_path_override` on a candidate
   file?* — no, in two ways, both read at source: no BOM strip
-  (`iter.rs:30,48,58`) and `${VAR}` resolving against the real environment
-  first (`parse.rs:260-265`). Changed the design: added an explicit BOM strip
-  and the "env files supply values to the YAML, not to each other" rule, plus
-  MIK.ENVFILE.8.
+  (`iter.rs:30,48,58`) and `${VAR}` consulting `env::var` before the per-file
+  table (dotenvy 0.15.7, `parse.rs:260-273`). Changed the design: added an
+  explicit BOM strip, and the same-file/cross-file split above. The first draft
+  read the second fact as "an env file cannot reference itself", which the
+  crate contradicts — same-file references resolve.
+- *Is `${VAR}` the only way a config value reaches the process environment?* —
+  no, and this is what broke the first design. `env:` references are resolved
+  lazily by six sites and validated by two more, all reading `std::env`
+  directly. Found by reading every `env::var` caller under `src/`, prompted by
+  a review finding. Changed the design: option C was chosen before this answer
+  and is now insufficient; D exists because of it.
 - *Which behaviour does the operator want to lose — `MCP_GATEWAY_*` on reload,
   or hot-add with a new credential?* — asked, answered: the `MCP_GATEWAY_*`
   narrowing, with hot-add preserved. Changed the design: option B was the
-  chosen option before this answer and is now rejected.
+  chosen option before this answer and is now rejected. D narrows less than the
+  option that answer selected, so the answer still holds a fortiori.
