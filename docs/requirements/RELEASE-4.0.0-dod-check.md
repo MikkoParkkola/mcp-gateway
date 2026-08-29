@@ -270,8 +270,8 @@ is the reversible branch — a later release turns the capability on once the im
 matches the specification, and nothing shipped in 4.0.0 has to be withdrawn to do it. One
 line overturns it.
 
-Owner of the conformant implementation: a 4.1.0 ticket, filed before the tag, alongside the
-one that owns gaps 1 and 2.
+Owner of the conformant implementation: **MIK-7311**, filed before the tag, carrying seven
+acceptance criteria and a fail-fast on the capability check. **MIK-7312** owns gaps 1 and 2.
 
 ### Closed since: `subscriptions/listen` now streams
 

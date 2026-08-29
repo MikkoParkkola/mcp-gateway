@@ -36,7 +36,7 @@ Deferred, carrying the four fields §P1 requires:
 
 | field | value |
 |---|---|
-| owner | a 4.1.0 ticket, filed before the tag, not "we" |
+| owner | **MIK-7312**, filed before the tag, not "we" |
 | what would resolve it | a shared atomic insert-if-absent store behind both the ledger and the mint counter |
 | when | before the first multi-replica deployment of the modern path, whichever release that lands in |
 | what if it resolves badly | the modern path stays single-replica; the release notes carry the constraint, and the deployment documentation refuses multi-replica while `modern_protocol` is on |
@@ -81,9 +81,9 @@ The finder-unavailable clock under the repair protocol started at the round-18 l
    statuses, two required fields, an error payload shape and a capability check. The
    extension ships not implemented — the capability key is not advertised, so no client
    negotiates it (DoD check, disposition of 3 and 4). Verify in code that nothing offers
-   the key, and say so in the release notes. File the 4.1.0 tickets: one owning tasks
-   conformance, one owning gaps 1 and 2. Put the single-replica constraint into shipped
-   text.
+   the key, and say so in the release notes. Tasks conformance is owned by MIK-7311 and the
+   two multi-replica gaps by MIK-7312, both filed. Put the single-replica constraint into
+   shipped text.
 4. Re-run §3, §4 and §5 on Spark at the final head.
 5. Second-vendor review pass when quota returns; then the DoD comment on each ticket.
 6. Open the PR, land it, then §P5 housekeeping.
