@@ -116,8 +116,8 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 ## Current Status
 
-- **v2.10.0** · Rust 1.88+ · Edition 2024 · ~101K LOC · MIT
-- Published on crates.io + Homebrew + Glama + VS Code + Cursor one-click install
+- **v3.5.0** · Rust 1.88+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
+- Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
 - **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
 - **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; OWASP Agentic AI 10/10 docs at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`

@@ -25,9 +25,20 @@ use crate::security::ToolPolicy;
 use crate::security::firewall::Firewall;
 
 mod authorization;
+pub(crate) use authorization::{ADMIN_META_TOOLS, is_admin_meta_tool};
 mod backend_handlers;
 mod handlers;
 pub(crate) mod helpers;
+mod origin_guard;
+
+/// `true` when `host` names the loopback interface.
+///
+/// Re-exported so startup can warn about a bind that puts the unauthenticated
+/// surface on the network, using the same classifier the Origin gate uses.
+#[must_use]
+pub fn is_loopback_bind(host: &str) -> bool {
+    well_known::is_loopback_host(host)
+}
 mod well_known;
 
 #[cfg(test)]
@@ -51,6 +62,8 @@ pub struct AppState {
     pub streaming_config: StreamingConfig,
     /// Authentication configuration (static keys)
     pub auth_config: Arc<ResolvedAuthConfig>,
+    /// Single-use value that opens the dashboard from the link `serve` prints.
+    pub dashboard_bootstrap: Arc<crate::gateway::auth::DashboardBootstrap>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
     /// Tool access policy
@@ -107,9 +120,34 @@ pub struct AppState {
 /// Create the router.
 #[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
 pub fn create_router(state: Arc<AppState>) -> Router {
+    create_router_with(state, None)
+}
+
+/// Create the router, folding in routes a caller assembles separately.
+///
+/// Extra routes are merged **here**, before the origin gate is applied, rather
+/// than by the caller afterwards. A layer only covers what is already merged,
+/// so a route merged onto the finished router silently skips the gate. That has
+/// happened twice: first for the routes merged below, then for the webhook
+/// routes merged at the call site. Taking them as a parameter removes the
+/// ordering discipline that failed both times.
+#[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
+pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router {
     let auth_state = AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
+        dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
+        tls_enabled: {
+            let c = state.live_config.get();
+            // Also when a proxy terminates TLS in front: the browser speaks
+            // HTTPS even though this listener does not, and without `Secure` a
+            // downgrade puts the operator's session on the wire.
+            c.mtls.enabled
+                || c.server
+                    .public_url
+                    .as_deref()
+                    .is_some_and(|u| u.starts_with("https://"))
+        },
     };
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
@@ -135,6 +173,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let startup_config = state.live_config.get();
     let bind_origin =
         well_known::bind_fallback_origin(&startup_config.server.host, startup_config.server.port);
+    let origin_policy = Arc::new(origin_guard::OriginPolicy::from_live(&state.live_config));
     let protected_resource_route =
         Router::new()
             .route(
@@ -214,5 +253,23 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         app = app.merge(super::ui::html_router());
     }
 
-    app
+    if let Some(extra) = extra {
+        app = app.merge(extra);
+    }
+
+    // Origin/Host validation wraps the FULLY MERGED router, and does so last so
+    // it runs first. Two properties depend on that placement:
+    //
+    // - it is outside authentication, so a cross-site request is refused before
+    //   any identity, the anonymous one included, is assigned;
+    // - it covers the routes merged above, which sit outside the auth layer and
+    //   would otherwise skip the gate entirely. That set includes the key
+    //   server's token exchange and revocation endpoints.
+    //
+    // Non-browser callers are unaffected: they send no `Origin`, and Prometheus
+    // and health probes reach `/metrics` and `/health` as before.
+    app.layer(middleware::from_fn_with_state(
+        origin_policy,
+        origin_guard::origin_guard_middleware,
+    ))
 }

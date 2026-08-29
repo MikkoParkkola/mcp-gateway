@@ -54,6 +54,17 @@ spec:
               value: "json"
             - name: MCP_GATEWAY_LOG_LEVEL
               value: "info"
+            # The ConfigMap references env:MCP_GATEWAY_TOKEN. Create this Secret
+            # before applying:
+            #   kubectl create secret generic mcp-gateway-auth \
+            #     --from-literal=token="$(openssl rand -base64 32)"
+            # A missing value fails validation at startup rather than serving
+            # without a credential, which is the intended outcome.
+            - name: MCP_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-auth
+                  key: token
           volumeMounts:
             - name: config
               mountPath: /etc/mcp-gateway

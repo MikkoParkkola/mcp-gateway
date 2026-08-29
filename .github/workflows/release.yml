@@ -92,7 +92,12 @@ jobs:
         run: cargo test --all-features
 
       - name: Verify publish package
-        run: cargo publish --locked --dry-run
+        # The runner image replaces the crates-io source with a mirror, and
+        # cargo refuses to publish against a replaced source unless the target
+        # registry is named explicitly. The replacement is not carried in
+        # CARGO_HOME, so overriding that does not clear it.
+        # https://doc.rust-lang.org/cargo/reference/source-replacement.html
+        run: cargo publish --locked --dry-run --registry crates-io
 
   build:
     needs: verify
@@ -246,13 +251,23 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Publish to crates.io
-        run: cargo publish --locked
+        # Same reason as the verify job: the runner replaces the crates-io
+        # source, so the target registry must be named explicitly. Naming it
+        # can route the token lookup to the per-registry variable, so supply
+        # both spellings rather than risk an auth failure at publish time.
+        run: cargo publish --locked --registry crates-io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRIES_CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   npm-publish:
     needs: release
-    runs-on: avrea-ubuntu-latest-4-vcpu
+    # GitHub-hosted on purpose. npm rejects a provenance bundle signed on a
+    # self-hosted runner ("Unsupported GitHub Actions runner environment:
+    # self-hosted"), so publishing from avrea-* costs the build attestation.
+    # This package is a thin wrapper that needs nothing from that fleet.
+    # https://docs.npmjs.com/generating-provenance-statements
+    runs-on: ubuntu-latest
     permissions:
       id-token: write     # OIDC for npm trusted publishing + provenance attestation
       contents: read
@@ -273,8 +288,10 @@ jobs:
 
       - name: Sync npm package version to git tag
         working-directory: npm
+        env:
+          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${TAG_REF}"
           VERSION="${TAG#v}"
           echo "Setting npm version to ${VERSION}"
           npm version "${VERSION}" --no-git-tag-version --allow-same-version
@@ -284,7 +301,13 @@ jobs:
         # Trusted publisher is configured on npmjs.com for
         # @mikkoparkkola/mcp-gateway against this workflow. npm CLI auto-detects
         # OIDC via id-token:write — no NODE_AUTH_TOKEN required.
-        run: npm publish --access public --provenance
+        #
+        # The runner image points npm at a mirror in its user-level .npmrc, and
+        # setup-node's registry-url writes the project .npmrc at the repository
+        # root, which npm does not read from this subdirectory. Name the real
+        # registry on the command line so publish targets npmjs.org, which is
+        # also the only registry the trusted publisher can authenticate to.
+        run: npm publish --access public --provenance --registry https://registry.npmjs.org
 
   homebrew-update:
     needs: release
@@ -293,8 +316,10 @@ jobs:
     steps:
       - name: Compute version and download checksums
         id: meta
+        env:
+          TAG_REF: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${TAG_REF}"
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"

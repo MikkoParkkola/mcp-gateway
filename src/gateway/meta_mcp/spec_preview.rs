@@ -130,6 +130,7 @@ impl MetaMcp {
     /// Searches the capability backend and all MCP backend caches.  Returns a
     /// JSON-RPC error when the tool is not found in any cache, with a "did you mean?"
     /// suggestion when the name is a close misspelling of a known tool.
+    #[allow(unknown_lints, clippy::unused_async_trait_impl)]
     pub async fn handle_tools_resolve(
         &self,
         id: RequestId,
