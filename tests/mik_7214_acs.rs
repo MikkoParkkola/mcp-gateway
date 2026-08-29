@@ -352,6 +352,66 @@ mod http {
         })
     }
 
+    /// A `resources/read` body carrying both a `uri` and a decoy `name`.
+    fn resources_read_with_decoy(uri: &str, decoy_name: &str) -> Value {
+        let mut body = modern_body("resources/read");
+        body["params"]["uri"] = json!(uri);
+        body["params"]["name"] = json!(decoy_name);
+        body
+    }
+
+    #[tokio::test]
+    async fn a_decoy_name_cannot_authorise_a_different_uri_over_http() {
+        // The bypass, end to end. `resources/read` executes on `uri`. While the
+        // check read `name` with a fallback to `uri`, a caller could attach a
+        // permitted-looking `name`, mirror THAT in the header, and have the
+        // gateway read the `uri` beside it — an intermediary routing on the
+        // header would have authorised a resource the gateway never fetched.
+        //
+        // Driven through the real router rather than the helper: a unit test of
+        // the field-selection function passes even if the handler stops calling
+        // it, which is the defect class this branch has already shipped once.
+        let (status, body) = post_with_headers(
+            resources_read_with_decoy("file:///etc/shadow", "public-readme"),
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "resources/read"),
+                ("mcp-name", "public-readme"),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a header agreeing with a decoy name must not authorise the uri: {body}"
+        );
+        assert_eq!(body["error"]["code"], -32020, "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_repeated_mirrored_header_is_refused_over_http() {
+        // Two lines of one header let one intermediary route on the first and
+        // another act on the second. The disagreement between them is the
+        // bypass, arriving through the header list rather than past it.
+        let (status, body) = post_with_headers(
+            modern_body("tools/list"),
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/list"),
+                ("mcp-method", "server/discover"),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a repeated mirrored header must be refused: {body}"
+        );
+        assert_eq!(body["error"]["code"], -32020, "{body}");
+    }
+
     #[tokio::test]
     async fn ac_header_3_a_disagreeing_method_header_is_refused_over_http() {
         // The vulnerability, end to end: a header naming one method and a body
