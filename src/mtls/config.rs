@@ -107,8 +107,16 @@ pub struct PolicyRuleConfig {
 /// Certificate matching criteria.
 ///
 /// All non-`None` fields must match for the rule to fire.
-/// If `any: true` is set, the rule matches every valid certificate
-/// (and even unauthenticated connections when `require_client_cert: false`).
+/// If `any: true` is set, the rule matches every valid certificate.
+///
+/// It does NOT match a connection that presented no certificate, even with
+/// `require_client_cert: false`: [`MtlsPolicy::evaluate`] returns `Deny` for a
+/// missing identity before it looks at any rule. This comment used to say the
+/// opposite, which mattered once the network-posture refusal began treating a
+/// non-empty policy as proof that the tools demand a credential — that is only
+/// true because of the fail-closed behaviour described here.
+///
+/// [`MtlsPolicy::evaluate`]: crate::mtls::MtlsPolicy::evaluate
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CertMatchConfig {

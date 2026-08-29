@@ -338,7 +338,12 @@ pub(crate) fn is_truthy(value: &Value) -> bool {
 // ============================================================================
 
 /// Result of a playbook execution.
+///
+/// `#[non_exhaustive]` because this is public API and gained a field: the
+/// source-level break for downstream struct literals happens once, here, rather
+/// than again for every field added later.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct PlaybookResult {
     /// Final output (after output mapping).
     pub output: Value,
@@ -348,6 +353,26 @@ pub struct PlaybookResult {
     pub steps_skipped: Vec<String>,
     /// Steps that failed.
     pub steps_failed: Vec<String>,
+    /// Why each failed step failed, keyed by step name.
+    ///
+    /// `steps_failed` carries names and has nowhere to put a reason, so under
+    /// `on_error: continue` — and under `retry` once attempts are exhausted —
+    /// a caller received a result with a null in place of a step and no way to
+    /// learn why. That is worst for an authorization refusal, where the answer
+    /// is "you were not allowed" and the caller could not tell.
+    ///
+    /// Records every failed step, not refusals alone: a refusal's entry is its
+    /// reason, an ordinary failure's is the same string `Abort` would already
+    /// have returned to the same caller, so nothing newly reaches anyone.
+    ///
+    /// Keyed by step name like `step_results` and `$step.path` interpolation,
+    /// so two steps sharing a name are ambiguous here exactly as they already
+    /// are everywhere else in the engine.
+    ///
+    /// Omitted from the serialized form when empty, so a playbook that fails
+    /// nothing produces the same JSON it did before this field existed.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub step_errors: std::collections::BTreeMap<String, String>,
     /// Total execution time in milliseconds.
     pub duration_ms: u64,
 }

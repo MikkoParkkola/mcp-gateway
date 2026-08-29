@@ -831,6 +831,16 @@ pub struct CapabilityMetadata {
     #[serde(default)]
     pub read_only: bool,
 
+    /// Whether this capability registers a caller-chosen destination that a
+    /// third party will later deliver to.
+    ///
+    /// Declared rather than inferred where the shape is not obvious from the
+    /// name or the parameters: `gws_gmail_watch` registers a Pub/Sub topic,
+    /// which is a delivery destination with neither "webhook" in its name nor a
+    /// URL in its schema. `None` falls back to inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registers_external_callback: Option<bool>,
+
     /// Whether the operation may destructively modify user-visible state.
     ///
     /// When omitted, capability tools infer a conservative value from
@@ -1074,5 +1084,224 @@ mod cwe532_debug_redaction {
             dbg.contains("/linear/webhook"),
             "path should stay visible: {dbg}"
         );
+    }
+}
+
+/// `true` when this capability hands a caller-chosen destination to a third
+/// party that will later call it.
+///
+/// Such a call creates persistent state outside this gateway, addressed by the
+/// caller and authorised by the operator's credential — an out-of-band channel
+/// that needs no readable response. `linear_create_webhook` is the shape:
+/// a URL parameter, posted to Linear, which then delivers events to it.
+///
+/// Derived from the definition rather than a hand-kept list, so a capability
+/// added later inherits the rule instead of needing to be remembered. The
+/// ticket that filed this recorded a hand count of six URL-taking capabilities;
+/// the count was wrong, which is the argument for deriving it.
+#[must_use]
+pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bool {
+    // Not an HTTP method test: a capability backed by a CLI has no method, and
+    // `gws_gmail_watch` — which registers a Pub/Sub topic — is exactly that. A
+    // read-only capability cannot register anything, so that flag is the
+    // transport-independent question, with the method as a fallback where the
+    // flag was left at its default.
+    // An explicit `read_only: true` settles it. The previous form OR'd the
+    // provider method in, so a capability that declared itself read-only but
+    // reached its API with POST — which plenty do — was treated as mutating,
+    // and an unauthenticated laptop client lost a tool it should have.
+    if def.metadata.read_only {
+        return false;
+    }
+    let mutating = def
+        .providers
+        .named
+        .values()
+        .chain(def.providers.fallback.iter())
+        .any(|p| {
+            matches!(
+                p.config.method.to_ascii_uppercase().as_str(),
+                "POST" | "PUT" | "PATCH"
+            )
+        })
+        // A CLI-backed capability has no HTTP method; not being read-only is
+        // what makes it mutating there.
+        || def.providers.named.values().any(|p| p.service == "cli");
+    if !mutating {
+        return false;
+    }
+    let Some(props) = def
+        .schema
+        .input
+        .get("properties")
+        .and_then(|p| p.as_object())
+    else {
+        return false;
+    };
+    // Narrow deliberately. "Mutating, and takes a URL" is too broad: archiving a
+    // page or attaching a link posts a URL as DATA, and blocking those behind
+    // admin would take ordinary tools away from the single-user client for no
+    // security gain. What matters is REGISTERING an address the third party
+    // will later deliver to.
+    // An explicit declaration wins. Name inference is a fallback, not the
+    // contract: `gws_gmail_watch` registers a Pub/Sub topic, whose destination
+    // is not a URL and whose name is not "webhook", and inference alone missed
+    // it. A capability author can say so instead of hoping the heuristic holds.
+    if let Some(declared) = def.metadata.registers_external_callback {
+        return declared;
+    }
+
+    let name = def.name.to_ascii_lowercase();
+    let registers_a_callback = ["webhook", "subscribe", "callback", "watch", "notify"]
+        .iter()
+        .any(|k| name.contains(k));
+    if !registers_a_callback {
+        return false;
+    }
+
+    props.iter().any(|(name, spec)| {
+        let lower = name.to_ascii_lowercase();
+        // Not only URLs. A Pub/Sub topic, a queue name or an address is just as
+        // much a caller-chosen destination that a third party will deliver to.
+        let looks_like_a_destination = lower == "url"
+            || lower.ends_with("_url")
+            || lower == "callback"
+            || lower == "webhook"
+            || lower == "endpoint"
+            || lower == "address"
+            || lower.contains("topic")
+            || lower.contains("queue")
+            || lower.contains("channel");
+        let declared_uri = spec.get("format").and_then(|f| f.as_str()) == Some("uri");
+        looks_like_a_destination || declared_uri
+    })
+}
+
+#[cfg(test)]
+mod caller_addressed_state_tests {
+    use super::*;
+
+    fn def(method: &str, input: &serde_json::Value) -> CapabilityDefinition {
+        named_def("create_webhook", method, input)
+    }
+
+    fn named_def(name: &str, method: &str, input: &serde_json::Value) -> CapabilityDefinition {
+        // A read capability declares itself read-only, as the shipped ones do.
+        // Leaving the flag at its default means "unknown", which is treated as
+        // mutating: the safe direction for a rule about registering a
+        // destination somebody else will deliver to.
+        let read_only = method.eq_ignore_ascii_case("GET");
+        let yaml = format!(
+            "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\nmetadata:\n  read_only: {read_only}\n",
+            serde_json::to_string(input).unwrap()
+        );
+        serde_yaml::from_str(&yaml).expect("definition parses")
+    }
+
+    #[test]
+    fn the_shipped_capabilities_classify_as_expected() {
+        // Run against the real files, not synthetic ones: the hand count that
+        // justified deferring this was wrong, so the classifier has to be shown
+        // against what actually ships.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        if !root.exists() {
+            return;
+        }
+        let mut flagged = Vec::new();
+        let mut walked = 0usize;
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "yaml") {
+                    walked += 1;
+                    let Ok(text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    if let Ok(def) = serde_yaml::from_str::<CapabilityDefinition>(&text)
+                        && creates_caller_addressed_external_state(&def)
+                    {
+                        flagged.push(def.name);
+                    }
+                }
+            }
+        }
+        assert!(
+            walked > 100,
+            "expected the full capability set, walked {walked}"
+        );
+        flagged.sort();
+        // Every shipped registration, not only the one that prompted this.
+        // `gws_gmail_watch` registers a Pub/Sub topic: no "webhook" in the name
+        // and no URL in the schema, and the first version missed it.
+        for expected in ["linear_create_webhook", "gws_gmail_watch"] {
+            assert!(
+                flagged.contains(&expected.to_string()),
+                "{expected} registers a delivery destination and must be caught: {flagged:?}"
+            );
+        }
+        // Sending a URL as DATA is not registering a destination: nothing calls
+        // back, and requiring a credential would take ordinary tools away.
+        for ordinary in [
+            "wayback_availability",
+            "wayback_save",
+            "linear_attach_url",
+            "notion_create_page",
+            // Named for a subscription, but its body returns a timestamp and
+            // registers nothing. A name is a hint, never the evidence.
+            "bus_subscribe",
+        ] {
+            assert!(
+                !flagged.contains(&ordinary.to_string()),
+                "{ordinary} posts a URL as data and must stay open: {flagged:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_posted_caller_url_creates_external_state() {
+        let d = def(
+            "POST",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        assert!(creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn a_read_of_a_caller_url_does_not() {
+        // wayback_availability asks a third party ABOUT a URL. Nothing is
+        // created and nothing calls back.
+        let d = def(
+            "GET",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        assert!(!creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn posting_a_url_as_data_is_not_registering_an_address() {
+        // wayback_save posts a URL to be archived. Nothing calls back, and
+        // requiring admin would take an ordinary tool away from a single-user
+        // client for no gain.
+        let d = named_def(
+            "wayback_save",
+            "POST",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        assert!(!creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn a_post_without_a_destination_does_not() {
+        let d = def(
+            "POST",
+            &serde_json::json!({"properties": {"title": {"type": "string"}}}),
+        );
+        assert!(!creates_caller_addressed_external_state(&d));
     }
 }

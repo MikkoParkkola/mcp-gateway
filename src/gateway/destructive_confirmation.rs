@@ -1,6 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Destructive-tool confirmation gate (OWASP ASI09 — Human Trust Exploitation).
+//! Destructive-tool confirmation prompt.
+//!
+//! **This is a courtesy, not a security control.** It asks the connected client
+//! to confirm with the human before a destructive meta-tool runs, and it
+//! proceeds when the client cannot ask — see the outcome table below. A caller
+//! that wants to skip it simply declares no elicitation capability, so it stops
+//! nobody who is trying to get past it.
+//!
+//! What actually restricts these tools is the admin requirement: every tool this
+//! covers is in the admin set, so a caller without a credential cannot reach one
+//! at all. That is the control; this is the confirmation an honest client offers
+//! its user.
+//!
+//! It is documented this way deliberately. An earlier version of this header
+//! cited OWASP ASI09, which reads as a control and invites over-trust in a
+//! prompt that waves things through.
 //!
 //! Before executing any meta-tool annotated with `destructiveHint: true`, the
 //! gateway sends an `elicitation/create` request to the connected MCP client so
@@ -82,7 +97,7 @@ pub async fn require_destructive_confirmation(
             warn!(
                 action = action_desc,
                 "Destructive meta-tool invoked without active SSE session; \
-                 proceeding without human confirmation (OWASP ASI09 partial)"
+                 proceeding without human confirmation"
             );
             ConfirmationOutcome::Unsupported
         }
@@ -91,7 +106,7 @@ pub async fn require_destructive_confirmation(
                 action = action_desc,
                 timeout_secs = d.as_secs(),
                 "Elicitation confirmation timed out; proceeding without confirmation \
-                 (OWASP ASI09 partial)"
+                "
             );
             ConfirmationOutcome::Unsupported
         }
@@ -100,7 +115,7 @@ pub async fn require_destructive_confirmation(
                 action = action_desc,
                 error = %e,
                 "Elicitation delivery failed; proceeding without confirmation \
-                 (OWASP ASI09 partial)"
+                "
             );
             ConfirmationOutcome::Unsupported
         }

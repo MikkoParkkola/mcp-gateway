@@ -24,6 +24,13 @@ The Compose template mounts `$PWD/gateway.yaml` as `/config.yaml` and
 relative `capabilities` directory in the local profile resolves to the mounted
 `/capabilities` path.
 
+On Linux, use a dedicated deployment directory rather than changing ownership
+on your working config. The image runs as UID/GID 1001, so prepare the copy with
+`install -m 600 <working-config> gateway.yaml && sudo chown 1001:1001
+gateway.yaml` before starting Compose. Do not make a credential-bearing config
+world-readable. Docker Desktop handles bind-mount identity differently on
+macOS and Windows.
+
 ## Linux systemd
 
 Run these commands in a root shell or through your configuration-management

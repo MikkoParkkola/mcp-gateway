@@ -160,6 +160,23 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "  host: \"127.0.0.1\"\n",
             "  port: 39400\n",
             "\n",
+            "# Admin credential, generated for this install.\n",
+            "#\n",
+            "# Tools stay open on the endpoints listed under public_paths, so the\n",
+            "# MCP client you already configured keeps working with no change.\n",
+            "# Managing the gateway and reading the dashboard need this token,\n",
+            "# because an unauthenticated gateway cannot tell its operator from\n",
+            "# anything else that reaches the port.\n",
+            "#\n",
+            "# On Unix this file is written readable only by you. Do not commit it.\n",
+            "auth:\n",
+            "  enabled: true\n",
+            "  bearer_token: \"{admin_token}\"\n",
+            "  single_user: true\n",
+            "  public_paths:\n",
+            "    - \"/health\"\n",
+            "    - \"/mcp\"\n",
+            "\n",
             "# Meta-MCP mode - exposes a compact gateway tool surface\n",
             "# Common deployment: 14 tools (12 minimum, 15 with webhooks)\n",
             "# Keeps prompt overhead low by discovering backend tools on demand\n",
@@ -171,6 +188,21 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
         ),
         profile = profile,
         examples_section = examples_section,
+        admin_token = generate_admin_token(),
+    )
+}
+
+/// A fresh admin credential for a new install.
+///
+/// Generated rather than asked for: a setup step the operator must perform is a
+/// step most will skip, and the gateway would then have no admin path at all.
+/// The prefix makes it recognisable in a log or a paste.
+fn generate_admin_token() -> String {
+    use rand::RngExt;
+    let bytes: [u8; 32] = rand::rng().random();
+    format!(
+        "mcpgw_{}",
+        base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
     )
 }
 
@@ -238,7 +270,11 @@ fn write_init_files(
         }
     }
 
-    std::fs::write(output, config_content)?;
+    // Through the config writer, not `std::fs::write`: this file now carries a
+    // generated admin credential, and a plain write leaves it at the umask for
+    // any other local account to read.
+    mcp_gateway::config_persistence::write_config_text(output, config_content)
+        .map_err(std::io::Error::other)?;
 
     for (path, content) in sample_files {
         std::fs::write(path, content)?;
@@ -253,6 +289,15 @@ fn print_init_success(output: &std::path::Path, profile: InitProfile, wrote_samp
     if wrote_samples {
         println!("Created zero-key sample capabilities under ./capabilities/");
     }
+    println!();
+    // The credential is generated and written silently otherwise, and it is the
+    // one thing in this file the operator has to know exists: management and the
+    // dashboard need it, tool calls do not. Saying so here reaches the person
+    // who never opens the docs.
+    println!("An admin credential was generated and written into that file,");
+    println!("which on Unix is readable only by you. Tool calls do not need it;");
+    println!("managing the gateway and opening the dashboard do. `serve` prints");
+    println!("a single-use dashboard link on startup.");
     println!();
     println!("Next steps:");
     println!("  1. Run diagnostics:");
@@ -576,4 +621,89 @@ async fn tool_completions(
     let script = generate_completion(target, &tool_names);
     print!("{script}");
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod admin_credential_tests {
+    use super::{InitProfile, build_init_config, generate_admin_token};
+
+    #[test]
+    #[cfg(unix)]
+    fn the_generated_config_is_not_readable_by_other_users() {
+        // The starter config now carries a generated admin credential. Writing
+        // it with `std::fs::write` left it at the umask, so the very file the
+        // 0600 work was done for was the one that missed it.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let code = super::run_init_command(&path, false, InitProfile::Local);
+        assert_eq!(code, std::process::ExitCode::SUCCESS, "init must succeed");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "credential file wrote mode {mode:o}");
+    }
+
+    #[test]
+    fn ordinary_tool_calls_still_work_without_the_credential() {
+        // Enabling authentication gates EVERY path, not just admin ones. A
+        // starter config that turns it on without exempting the MCP endpoint
+        // breaks the client the operator already configured — a worse
+        // regression than the missing dashboard it set out to fix.
+        let config = build_init_config(true, InitProfile::Local);
+        assert!(
+            config.contains("/mcp"),
+            "the MCP endpoint must stay reachable without a credential: {config}"
+        );
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("the starter config must parse");
+        let paths = parsed["auth"]["public_paths"]
+            .as_sequence()
+            .expect("public_paths must be a list");
+        let paths: Vec<&str> = paths.iter().filter_map(|v| v.as_str()).collect();
+        assert!(
+            paths.contains(&"/mcp"),
+            "tools open, admin closed: {paths:?}"
+        );
+        assert!(paths.contains(&"/health"), "probes keep working: {paths:?}");
+    }
+
+    #[test]
+    fn a_new_install_has_an_admin_credential() {
+        // Removing admin from the anonymous identity left a fresh install with
+        // no admin path at all: no dashboard, no management tools, and a YAML
+        // edit as the only remedy. A generated credential restores it without
+        // asking the operator to do anything.
+        let config = build_init_config(true, InitProfile::Local);
+        assert!(config.contains("enabled: true"), "auth must be on");
+        assert!(
+            config.contains("mcpgw_"),
+            "a credential must be generated, not left blank: {config}"
+        );
+        assert!(
+            config.contains("single_user: true"),
+            "a laptop install is one principal; say so rather than making the \
+             operator discover the flag"
+        );
+    }
+
+    #[test]
+    fn each_install_gets_its_own_credential() {
+        assert_ne!(
+            generate_admin_token(),
+            generate_admin_token(),
+            "a shared credential across installs is no credential"
+        );
+    }
+
+    #[test]
+    fn the_credential_is_not_guessable() {
+        let token = generate_admin_token();
+        assert!(token.starts_with("mcpgw_"));
+        // 32 random bytes, base64url without padding.
+        assert!(
+            token.len() >= 6 + 42,
+            "too short to be 32 random bytes: {token}"
+        );
+    }
 }

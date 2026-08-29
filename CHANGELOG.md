@@ -5,6 +5,300 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-08-28
+
+### Added
+
+- **`mcp-gateway init` generates an admin credential for the install** and
+  writes it into `gateway.yaml`, along with `auth.public_paths` covering
+  `/health` and `/mcp` so tool calls keep working. This is what makes the
+  credential requirement below survivable on a new install: management needs a
+  credential, and now there is one.
+
+  An upgrade does not rewrite an existing config. If you manage the gateway
+  today with authentication off, see the BREAKING note below for the edit to
+  make by hand.
+
+- **A way into the dashboard that a browser can actually use.** A browser
+  cannot attach an `Authorization` header to a navigation, so `serve` prints a
+  link once:
+
+  ```
+  DASHBOARD (opens once, then remembered in this browser):
+    http://127.0.0.1:39400/dashboard?bootstrap=...
+  ```
+
+  Opening it exchanges a single-use value for a session cookie and redirects,
+  so nothing stays in the address bar. The value in the link is **not** the
+  admin credential; it works once, dies with the process, and is redeemable only
+  from this machine, so a link left in a shell history is spent.
+
+  Locality is established from the connection's peer address rather than from
+  the `Host` header, which the caller writes and a reverse proxy rewrites —
+  nginx's default for a bare `proxy_pass` is the upstream address, so a
+  forwarded request used to arrive carrying a loopback `Host`. A request with a
+  forwarding header is refused as well, since a proxy on this same machine also
+  connects from loopback. A proxy that strips those headers remains
+  indistinguishable from a local browser; the printed value is sensitive. The cookie carries
+  an opaque handle rather than the credential, `HttpOnly` and
+  `SameSite=Strict`, and `Secure` when the listener speaks TLS. Details in
+  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#opening-the-dashboard).
+
+- **Config files are written readable only by you** (`0600`) on Unix, on every
+  path that writes one — `init`, the dashboard's edits, and the config-export
+  command. The file holds this gateway's credentials, and until now it
+  inherited the process umask.
+
+  Windows has no equivalent here and the file takes the directory's inherited
+  permissions; stated rather than silently implied by the sentence above.
+
+  An existing file is **reported, not changed**: the startup log names it, its
+  mode, and the `chmod` to fix it. Silently re-permissioning a file you own is
+  its own surprise. It does not stay wide forever either — writes replace the
+  file from a scratch file created `0600`, so the next config write tightens
+  it.
+
+### Security
+
+- **Origin validation on the HTTP surface (CWE-346).** Reported by Avishai
+  Gonen, Pluto Security. `mcp-gateway serve` accepted requests on `/mcp`
+  without checking `Origin` or `Host`, and the identity used when
+  authentication is disabled carried admin rights and access to every backend.
+  A web page could therefore reach the gateway's local port and call its tools
+  with whatever credentials the gateway holds.
+
+  A related shape is worth stating precisely, because the mechanism that
+  closes it is not the obvious one. The handler accepts a request body without
+  requiring a JSON content type, a session, or a prior `initialize`, so a
+  cross-origin form POST can reach `tools/call` without triggering a preflight.
+  That vector is closed by the origin check below and by nothing else: a form
+  POST from a browser carries `Origin`, and the request is refused on it. No
+  content-type requirement was added, because non-browser MCP clients do not
+  reliably send one and refusing them would break the callers this gateway
+  exists to serve.
+
+  Separately, the checks below apply to browsers only; a process running under
+  the same user account is not constrained by them.
+
+  Two changes, both required:
+
+  - `Origin`, `Host`, the HTTP/2 `:authority` and `Sec-Fetch-Site` are checked
+    ahead of authentication, so a cross-site request is refused before an
+    identity is assigned. A request without `Origin` is not refused on that
+    ground, since non-browser MCP clients do not send one — but the `Host`
+    check applies to every request regardless, so a client that reaches the
+    gateway by a name it does not answer to is refused whether or not it is a
+    browser. `Sec-Fetch-Site` covers the no-CORS GET, which the Fetch standard
+    omits `Origin` from.
+  - The identity used when authentication is disabled no longer carries admin.
+
+- **A playbook step now faces the caller's own permissions.** Found while
+  reviewing the fix above, and pre-existing rather than introduced by it. The
+  per-caller checks — backend scope, tool allow-list, global tool policy,
+  certificate policy and agent scope — ran at the HTTP router, which inspects
+  the incoming request. A playbook's steps come from the stored playbook, so
+  their targets never appeared in that request and the router had nothing to
+  check: a restricted client could reach a backend through a playbook that it
+  could not reach directly.
+
+  The check moved to the single point every backend invocation passes through,
+  ahead of every side effect, so a refused call reads no cached result, consumes
+  no replay nonce, mints no credential and charges no budget. Code-mode steps
+  and surfaced tools pass the same check.
+
+  Operator-visible consequences:
+
+  - A client with `backends` or `allowed_tools` set may now see a playbook step
+    refused that previously ran. That is the fix working; widen the client's
+    scope if the access was intended.
+  - A refused call answers HTTP `403` rather than `200` with the refusal in the
+    body.
+  - Under `on_error: continue`, a refused step is recorded in a new
+    `step_errors` field on the playbook result, keyed by step name, alongside
+    the existing `steps_failed`. A run that fails nothing omits the field
+    entirely, so successful output is unchanged. A refusal is never retried,
+    since retrying a permission denial cannot change the answer.
+  - `PlaybookResult` gained that field and is now `#[non_exhaustive]`. Code
+    constructing it with a struct literal must change; code reading it need not.
+
+  Standing limitation, unchanged: a process running under the same user account
+  is not constrained by any of this.
+
+- **stdio gained the tool-policy check it never had.** The stdio transport
+  applied the global tool policy to `gateway_invoke` alone, so a playbook or
+  code-mode step reached a backend with no policy check. Every dispatch shape
+  now passes the same check. Certificate policy is deliberately not applied
+  there: stdio presents no certificate, so evaluating it would refuse every
+  call once any certificate rule existed.
+
+### Changed
+
+- **BREAKING: an agent's key material is checked at startup.** With
+  `agent_auth.enabled = true`, a config that previously loaded is now refused
+  when an agent:
+
+  - sets an `hs256_secret` shorter than the 32-byte minimum, or one whose
+    `env:` variable is unset. `DecodingKey::from_secret(b"")` is a valid key,
+    so an empty secret verifies a token anyone can sign — that agent
+    authenticates the world. A secret that is merely short is not forgeable by
+    inspection, but it falls under the project's minimum and is refused on the
+    same line;
+  - sets both `hs256_secret` and `rs256_public_key`. The algorithm is read
+    from the token header, so the caller picks which key verifies it and the
+    agent is only as strong as the weaker one. Configure exactly one;
+  - sets neither, and so can verify nothing.
+
+  The refusal names the agent and the reason. To upgrade: rotate any secret
+  below 32 bytes, and drop one key from any agent holding both.
+
+- **BREAKING: server management requires a credential.** With `auth.enabled =
+  false`, `gateway_kill_server`, `gateway_revive_server`,
+  `gateway_reload_config` and `gateway_reload_capabilities` are unavailable.
+  Those four change the gateway for every session. `gateway_set_profile` and
+  `gateway_set_state` are NOT gated: each writes only the caller's own session
+  and cannot widen what that caller reaches, and gating the first stopped
+  nothing anyway, since a profile can be chosen at `initialize` through the
+  same call with no credential. This applies to callers over HTTP. A stdio
+  caller is treated as admin, because the client that spawned the process
+  already holds whatever the operator holds and could edit the config file
+  directly; withholding it there would remove management from exactly the
+  single-user setup this protects. `/dashboard` and the
+  management endpoints under `/ui/api/` return `403`. So does `/api/costs`,
+  which reports spend across every key and session and was previously open —
+  note that is the top-level route, not `/ui/api/costs`, which already required
+  admin. `/ui/api/status` returns counts without backend names, and
+  `/health` returns a backend count and overall health rather than names.
+  Ordinary tool invocation is unchanged, so local MCP clients are unaffected.
+
+  To restore them on an existing install, set `auth.enabled = true` with a
+  bearer token — and list `/health` and `/mcp` under `auth.public_paths` at the
+  same time:
+
+  ```yaml
+  auth:
+    enabled: true
+    bearer_token: "<your token>"
+    public_paths: ["/health", "/mcp"]
+  ```
+
+  The second half is not optional. Turning authentication on gates **every**
+  path, so enabling it alone makes the MCP client you already configured start
+  failing — a worse outcome than the missing dashboard it was meant to fix.
+  `mcp-gateway init` writes this shape for a new install; an upgrade does not
+  rewrite your config, so this is the step to take by hand. The startup log
+  says the same.
+
+  Without a credential the gateway cannot distinguish its operator from any
+  other caller that reaches the port, so admin now follows an explicit
+  credential.
+
+- **The gateway refuses to serve when its tools are reachable without a
+  credential.** Reachable means a non-loopback bind, or a `server.public_url`
+  declaring a name a proxy or tunnel answers to; open means authentication is
+  off, or an entry in `auth.public_paths` covers the `/mcp` tool surface. Public
+  paths are matched by prefix, so `""`, `/`, `/m` and `/mcp` all count, while
+  `/health` and `/metrics` do not. The refusal happens
+  before the listener binds, so such a configuration never opens a port. It
+  names which of the two conditions fired and how to fix that one. Where
+  authentication terminates in front of the gateway — a sidecar, a mesh, a
+  reverse proxy — set `server.allow_unauthenticated_network_bind = true`, which
+  is logged on every start while it remains set.
+
+  This is a real break for a deployment that binds wide with authentication
+  off. It is the shape a browser or any other caller on the network can drive
+  today, which is why it now stops rather than warns.
+
+  **The shipped deployment templates were that deployment.** The Helm chart and
+  the Kubernetes base bind `0.0.0.0` — a pod that binds loopback receives
+  nothing — and carried no `auth` section at all, so an unmodified install would
+  now exit at startup instead of serving. Both now require a credential and read
+  it from a Secret:
+
+  ```yaml
+  # values.yaml
+  auth:
+    existingSecret: mcp-gateway-auth   # kubectl create secret generic ...
+    secretKey: token
+  ```
+
+  **Upgrading the chart therefore needs that Secret created first.** Without it
+  Kubernetes stops the pod with `CreateContainerConfigError`, naming the Secret
+  and key it could not find — the container never starts, so there are no
+  gateway logs to read.
+
+  If a service mesh authenticates before anything reaches the pod, set
+  `auth.mode=mesh`. That renders `server.allow_unauthenticated_network_bind`
+  AND removes the credential and its Secret reference; setting the override on
+  its own leaves credential mode active and the pod still demanding a token.
+
+  **Both templates now also declare `server.public_url`.** On a `0.0.0.0` bind
+  the Host gate admits a NAME only when it is declared, so an install that did
+  not declare one answered the kubelet's numeric probes — staying green —
+  while refusing every caller that dialled the Service DNS name. The chart
+  derives the name from the release and namespace; the raw Kubernetes base
+  carries the default `mcp-gateway` namespace and a comment saying to edit it.
+  **Applying the base into another namespace, or fronting it with an ingress,
+  means editing that one line**, and a refusal is logged with the Host it
+  rejected.
+
+  The Docker Compose template needed no credential: it publishes to
+  `127.0.0.1:39400` on the host, so the container's `0.0.0.0` is the container's
+  own interface. It now says so with
+  `MCP_GATEWAY_SERVER__ALLOW_UNAUTHENTICATED_NETWORK_BIND`, which stops being
+  true the moment that publish is widened.
+
+  It is also a break, less obviously, for a reachable gateway whose
+  `auth.public_paths` contains a blank entry — a stray `-` in that YAML list.
+  Because public paths match by prefix, a blank entry is a prefix of every path
+  and makes the whole gateway public, `/mcp` included, whatever `auth.enabled`
+  says. Such a config previously started and read as protected. It now refuses,
+  and the message names the list. Remove the empty entry.
+
+- `server.public_url` is re-read on each request, so a configuration reload
+  takes effect without a restart — **unless applying it would leave the tools
+  reachable without a credential**, in which case the reload is refused and
+  no backend is started or stopped and no configuration is published.
+
+  It does not claim more than that. Reading a config file applies any
+  `env_files` it names to the process environment before the file is validated,
+  so a refused reload is not a complete no-op, and that is true of every failed
+  reload rather than only this one.
+
+  The refusal is judged against the configuration that would be **in force**,
+  not against the file. `auth` and the override are not applied by a reload —
+  the router snapshots them at startup — so declaring a `public_url` and
+  enabling authentication in one edit does not pass the check.
+
+  It then says which of two things a restart does with that same file, because
+  they differ. A file that also enables authentication would not be refused for
+  this reason on a restart: set both and restart, and that is the documented
+  fix. A file that only declares the name will *refuse* at the next start,
+  planned or not, so revert it or close the tool paths.
+
+  Not refused *for this reason* is the whole promise. A restart reads the whole
+  file, so a missing `env:` reference or an unreadable certificate can still
+  stop it — this check answers its own question and no other.
+
+- The startup log states what the anonymous identity cannot do and how to
+  restore it, reports when the gateway binds to a non-loopback address while
+  authentication is disabled, and warns on every start while
+  `server.allow_unauthenticated_network_bind` is set — including when
+  authentication is enabled with tool paths left public, which is the shape that
+  escape hatch is most often reached from.
+
+### Fixed
+
+- **A config file reached through a symlink now reloads when its target is
+  written.** The watcher followed the path it was given and nothing else, so a
+  deployment that points `gateway.yaml` at a released file and rewrites that
+  file in place produced no matching event, and the gateway kept serving the
+  configuration it started with. The link is resolved on every filesystem
+  event, so repointing it at a new release and editing that file is picked up
+  too, as long as the new target sits in a directory watched at startup — the
+  link's own directory and the directory of the target it pointed at then. A
+  retarget outside those directories is tracked in #453. A plain config file is
+  unaffected: it resolves to itself.
+
 ## [3.4.0] - 2026-07-27
 
 ### Added
@@ -993,7 +1287,7 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
-[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.10.0...HEAD
+[3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
 [2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0
 [2.9.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.0...v2.9.1
 [2.9.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.8.1...v2.9.0
