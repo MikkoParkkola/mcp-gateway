@@ -213,17 +213,30 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
     );
     println!("Enabled:     {}", info.enabled);
 
-    if let Some(cmd) = &info.command {
-        println!("Command:     {cmd}");
+    if let Some(command) = &info.command {
+        println!(
+            "Command:     {} ({} argument(s) redacted)",
+            command.executable, command.argument_count
+        );
     }
     if let Some(url) = &info.url {
         println!("URL:         {url}");
     }
 
+    // Names and presence, never values. This output is routinely pasted into
+    // bug reports and CI logs, which is what made the previous `{k}={v}` a
+    // credential disclosure rather than a cosmetic issue (MIK-7221).
     if !info.env.is_empty() {
         println!("Environment:");
-        for (k, v) in &info.env {
-            println!("  {k}={v}");
+        for key in &info.env {
+            println!("  {key}=<set>");
+        }
+    }
+
+    if !info.headers.is_empty() {
+        println!("Headers:");
+        for key in &info.headers {
+            println!("  {key}=<set>");
         }
     }
 

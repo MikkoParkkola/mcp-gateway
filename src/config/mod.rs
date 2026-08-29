@@ -620,7 +620,10 @@ impl Config {
                     }
                     url::Url::parse(http_url).map_err(|e| {
                         Error::ConfigValidation(format!(
-                            "Backend '{name}' has an invalid http_url '{http_url}': {e}"
+                            // The URL is not echoed: a malformed one still carries its
+                            // userinfo and query, and a validation error is printed on
+                            // startup and in support threads (MIK-7221).
+                            "Backend '{name}' has an invalid http_url: {e}"
                         ))
                     })?;
                 }
@@ -633,7 +636,9 @@ impl Config {
                     }
                     url::Url::parse(a2a_url).map_err(|e| {
                         Error::ConfigValidation(format!(
-                            "Backend '{name}' has an invalid a2a_url '{a2a_url}': {e}"
+                            // Twin of the http_url line above. Fixing one spelling of a
+                            // leak and not the other is how the first fix stops mattering.
+                            "Backend '{name}' has an invalid a2a_url: {e}"
                         ))
                     })?;
                 }
