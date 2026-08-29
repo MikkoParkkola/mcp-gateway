@@ -264,6 +264,14 @@ pub enum FindingLocation {
 // ─── Firewall impl ───────────────────────────────────────────────────────────
 
 impl Firewall {
+    /// Read the input scanner's operator overrides from `env` rather than the
+    /// process environment, so an env file can set them.
+    #[must_use]
+    pub fn with_env(mut self, env: &crate::config::EnvOverlay) -> Self {
+        self.input_scanner = input_scanner::InputScanner::with_env(env);
+        self
+    }
+
     /// Create a new firewall from config.
     ///
     /// Compiles all rules, initialises scanners, and opens the audit log if

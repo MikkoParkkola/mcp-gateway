@@ -23,6 +23,11 @@ use super::{Finding, FindingLocation, ScanType, Severity};
 /// by default). SQL injection findings are `Severity::Medium` (→ warn by
 /// default) because SQL keywords appear legitimately in many search queries.
 pub struct InputScanner {
+    /// Free-text keys, resolved once at construction. Reading the override on
+    /// every scanned string re-allocated the list per value and, once env files
+    /// stopped mutating the process environment, could not see an override an
+    /// env file assigns.
+    free_text_keys: Vec<String>,
     shell: RegexSet,
     path: RegexSet,
     sql: RegexSet,
@@ -67,9 +72,12 @@ const FREE_TEXT_KEYS: &[&str] = &[
     "acceptance_criteria",
 ];
 
-/// Resolve the active free-text key list. Env override wins.
-fn free_text_keys() -> Vec<String> {
-    if let Ok(s) = std::env::var("MCP_GATEWAY_FIREWALL_SKIP_KEYS") {
+/// Name of the operator override for the free-text key list.
+const SKIP_KEYS_ENV: &str = "MCP_GATEWAY_FIREWALL_SKIP_KEYS";
+
+/// Resolve the active free-text key list. An override wins over the defaults.
+fn free_text_keys(override_value: Option<&str>) -> Vec<String> {
+    if let Some(s) = override_value {
         return s
             .split(',')
             .map(|k| k.trim().to_lowercase())
@@ -105,7 +113,22 @@ impl InputScanner {
     /// Panics at startup if any pattern string is invalid regex — this is a
     /// programming error caught during development, not a runtime condition.
     pub fn new() -> Self {
+        Self::with_free_text_keys(free_text_keys(std::env::var(SKIP_KEYS_ENV).ok().as_deref()))
+    }
+
+    /// Create a scanner whose free-text key override is read from `env`.
+    ///
+    /// Env files load into an in-memory overlay rather than into the process
+    /// environment, so a `std::env` read cannot see an override an env file
+    /// assigns.
+    #[must_use]
+    pub fn with_env(env: &crate::config::EnvOverlay) -> Self {
+        Self::with_free_text_keys(free_text_keys(env.resolve(SKIP_KEYS_ENV).as_deref()))
+    }
+
+    fn with_free_text_keys(free_text_keys: Vec<String>) -> Self {
         Self {
+            free_text_keys,
             shell: RegexSet::new(SHELL_PATTERNS).expect("Shell injection patterns must compile"),
             path: RegexSet::new(PATH_TRAVERSAL_PATTERNS)
                 .expect("Path traversal patterns must compile"),
@@ -147,7 +170,7 @@ impl InputScanner {
     fn scan_string(&self, key: &str, value: &str, findings: &mut Vec<Finding>) {
         let fragment = truncate(value, 200);
         let key_lc = key.to_lowercase();
-        let in_free_text = free_text_keys().iter().any(|k| k == &key_lc);
+        let in_free_text = self.free_text_keys.iter().any(|k| k == &key_lc);
 
         // Shell injection — HIGH severity (deterministic, very few false positives
         // on command/argument fields). Skipped on free-text keys (description,
@@ -210,6 +233,33 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_text_override_from_an_env_file_reaches_the_scanner() {
+        // The override used to be read with `std::env::var`, which cannot see a
+        // value an env file assigns once env files load into an overlay.
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        std::fs::write(&env_file, "MCP_GATEWAY_FIREWALL_SKIP_KEYS=release_notes\n").unwrap();
+        let overlay =
+            crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+
+        let mut args = Map::new();
+        args.insert(
+            "release_notes".to_string(),
+            Value::String("run `id`".into()),
+        );
+
+        assert!(
+            !InputScanner::new().scan_args(&args).is_empty(),
+            "default key list must still flag a backtick command in this key"
+        );
+        assert!(
+            InputScanner::with_env(&overlay).scan_args(&args).is_empty(),
+            "the env-file override must make this key free text"
+        );
+        assert!(std::env::var("MCP_GATEWAY_FIREWALL_SKIP_KEYS").is_err());
+    }
     use serde_json::json;
 
     fn scanner() -> InputScanner {
