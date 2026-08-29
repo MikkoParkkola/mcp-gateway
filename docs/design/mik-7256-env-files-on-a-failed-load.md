@@ -359,6 +359,20 @@ then absent from the child rather than present with a stale value. This is the
 third reader the enumeration missed — first `SecretResolver::resolve`, now
 this — which is the argument for the rule and the source scan over any list.
 
+**The reported set is derived, never a list of four.** An earlier draft named
+four eager authentication forms and reported a rotation only when the changed
+key was one of them. A fixed list is wrong the moment a consumer is added, and
+it was already wrong when written: `src/attestation/wiring.rs:117-118` reads
+the attestation mode and signing key with `std::env::var` at startup, and
+`src/attestation/launcher.rs:86` reads the rollback flag the same way. None is
+an authentication form, all three are startup-only, and a rotated signing key
+that goes unreported is the exact failure this reporting exists to prevent.
+So the reported set is the intersection of the changed keys with the
+startup-only consumers the scan finds — attestation included, and whatever the
+scan finds next included without editing this paragraph. The list of four is
+gone rather than extended: extending it leaves the finding statable one
+consumer later.
+
 **And the scan itself missed two, which is the argument for what it matches
 on.** `MCP_GATEWAY_FIREWALL_SKIP_KEYS` is read with `std::env::var`
 (`src/security/firewall/input_scanner.rs:72`) and keeps its startup value, so
@@ -560,7 +574,7 @@ contains:
   from a watcher that fired on the wrong file.
 - The outcome reports `restart_required` when a changed key is referenced by a
   restart-only holder. `EnvOverlay` knows which keys changed and the running
-  config knows which keys the four eager auth forms resolved at startup, so the
+  config knows which keys the startup-only consumers resolved at startup, so the
   intersection is computable without resolving anything. Without this the worst
   case is silent and security-shaped: an operator rotates a compromised
   `auth.bearer_token` through the env file alone, sees a successful reload, and
@@ -776,10 +790,13 @@ observation, not a ticket.
   for the evaluation — before that overlay is published, and without the
   process environment being touched at any point.
 - **MIK.ENVFILE.6** Given an env-file edit that changes a `MCP_GATEWAY_*`
-  variable, Then the reloaded config carries the new value, and a value
-  exported into the process still outranks one from an env file — startup's
-  precedence, unchanged by the overlay. Pinned so it cannot regress in either
-  direction: the earlier design asserted the opposite of the first half.
+  variable, Then the reloaded config carries the new value, and it wins over
+  the same variable exported into the process — startup's precedence,
+  unchanged by the overlay, because startup calls
+  `dotenvy::from_path_override` (`src/config/mod.rs:303`) and the file
+  therefore overrides the process. Pinned so it cannot regress in either
+  direction: three drafts got this wrong, the last two by asserting the
+  process wins.
 - **MIK.ENVFILE.7** Given an admin-UI config edit against a running gateway,
   When the mutation is rejected or the write fails, Then process environment
   variables and the published overlay are both identical to before the edit,
@@ -810,7 +827,7 @@ observation, not a ticket.
   exit a publish placed on the change-applying branch would miss — and it is
   the change's own headline case, rotation without a config edit.
 - **MIK.ENVFILE.10.4** Given an env-file-only edit that rotates a key which the
-  running config references from one of the four eager auth forms, When the
+  running config references from one of the enumerated startup-only consumers, When the
   reload is accepted, Then the outcome names the changed key and reports
   `restart_required`, and the value appears in neither. This holds whatever the
   config patch contains: an empty patch reports it instead of `no_changes`, and
