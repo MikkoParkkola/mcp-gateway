@@ -382,6 +382,16 @@ reader:
   its own fallback, because the owned-key rule is exactly the part a caller
   would get wrong, and eight sites getting it right by convention is seven
   more chances than the type needs to give them.
+- `EnvOverlay::effective_vars(&self) -> BTreeMap<String, String>` — for the
+  reader that ITERATES rather than asks. `config_scanner` walks the whole
+  environment looking for backend endpoints (`env::vars()`,
+  `src/discovery/config_scanner.rs:212`), and a per-key `resolve` gives it
+  nothing to walk. Defined BY the table below rather than beside it: the
+  process environment, with each owned key's row applied — the overlay's value
+  where the row says value, the baseline where it says baseline, absent where
+  it says unset. Like `resolve` it states no semantics of its own, which is the
+  whole point of naming it here instead of letting the scanner keep reading the
+  process directly. ENVFILE.19b asserts the scanner sees a rotated endpoint.
 
 #### What a key resolves to — the one statement
 
