@@ -596,8 +596,20 @@ called once by an accepted reload.
 **Startup publishes the overlay its own load returned, never a second read of
 the same paths.** The gateway's own startup calls `Config::load_evaluated`,
 which applies the env files to the process exactly as today AND returns the map
-it applied, as the same `Evaluated { config, overlay }` the reload path
-produces. `LiveEnv` is seeded from that value and handed to the reload context
+it applied, as the same `Evaluated { config, overlay, env_paths }` the reload path
+produces. **`env_paths` is the third field, and it is what stops the one
+resolution becoming two.** It is a `ResolvedEnvFiles` — an opaque wrapper over
+the absolute paths startup recorded as it opened them, constructible ONLY by
+the resolver and carrying no `~` spelling to expand a second time. The watcher
+and every reload take it from the startup result instead of calling
+`resolve_env_file_paths(&config.env_files)` themselves
+(`src/config_reload/mod.rs:1011-1014` is the call that changes), and
+`load_with_overlay`'s `env_files: &[PathBuf]` argument is fed from it. Without
+a named owner every consumer has `Config.env_files` in reach and rebuilding
+the list from it is the obvious thing to write — which is the divergence this
+rule exists to remove, arriving through the back door. A type that cannot be
+built from raw strings is the mechanism; a paragraph asking implementers not
+to is not. `LiveEnv` is seeded from that value and handed to the reload context
 and the executor. `Config::load` is a thin wrapper that calls it and drops the
 overlay, so its signature and behaviour are unchanged for all 35 call sites,
 and the CLI paths that hold only a `Config` still have no overlay to pass —
