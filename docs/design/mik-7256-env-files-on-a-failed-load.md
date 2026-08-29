@@ -568,10 +568,19 @@ duplicated rule is one that gets fixed in one copy.
 **One read of the bytes, not one call.** `dotenvy::from_path_override` opens
 the file itself, so calling it and then building the map would be two reads
 however it is phrased. So the apply reads each file once into memory, parses
-that buffer once, applies the pairs to the process with override semantics in
-file order, and keeps the same pairs as the overlay's map. A DESIGN DECISION,
-named: startup stops delegating to `from_path_override` and performs the write
-itself. What is preserved is every observable — same order, same override
+that buffer TWICE and applies nothing itself: `dotenvy::from_read_iter`
+(`dotenvy-0.15.7/src/lib.rs:303`) yields the pairs for the overlay's map and the
+baseline snapshot, and `dotenvy::from_read_override`
+(`dotenvy-0.15.7/src/lib.rs:278`) applies the same buffer to the process with
+override semantics in file order. A DESIGN DECISION, named: startup stops
+delegating to `from_path_override`, which opens the file itself and would make
+that two reads however it is phrased, and delegates to the reader-taking
+override instead. Performing the write in our own code is NOT available and
+saying so is the point: `std::env::set_var` is `unsafe` in edition 2024 and
+this crate is `#![deny(unsafe_code)]`, so the write stays inside `dotenvy`
+where the unsafety already lives. Two parses of one buffer is the price, and it
+is not the race the single read exists to close: both parses see identical
+bytes. What is preserved is every observable — same order, same override
 precedence, same skip-if-absent, same warn on a failed file — and what is
 gained is that the process and the overlay cannot disagree, because they came
 from one buffer. `ENVFILE.6d` is the case that fails if this is implemented as
