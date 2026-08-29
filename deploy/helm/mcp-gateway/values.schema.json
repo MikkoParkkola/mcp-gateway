@@ -1,25 +1,58 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/MikkoParkkola/mcp-gateway/deploy/helm/mcp-gateway/values.schema.json",
-  "$comment": "schemaVersion: 1 — evolve additively within a chart minor; a breaking values change requires a chart major + a note in the release.",
+  "$comment": "schemaVersion: 1 \u2014 evolve additively within a chart minor; a breaking values change requires a chart major + a note in the release.",
   "title": "mcp-gateway Helm values",
   "type": "object",
   "additionalProperties": true,
-  "required": ["replicaCount", "image", "service"],
+  "required": [
+    "replicaCount",
+    "image",
+    "service"
+  ],
   "properties": {
-    "nameOverride": { "type": "string" },
-    "fullnameOverride": { "type": "string" },
-    "replicaCount": { "type": "integer", "minimum": 1 },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
     "image": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["registry", "repository", "pullPolicy"],
+      "required": [
+        "registry",
+        "repository",
+        "pullPolicy"
+      ],
       "properties": {
-        "registry": { "type": "string", "minLength": 1 },
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string" },
-        "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
-        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+        "registry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[a-f0-9]{64})?$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
       }
     },
     "imagePullSecrets": {
@@ -27,52 +60,166 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name"],
-        "properties": { "name": { "type": "string", "minLength": 1 } }
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
     "service": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "port"],
+      "required": [
+        "type",
+        "port"
+      ],
       "properties": {
-        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        "type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
       }
     },
-    "resources": { "type": "object" },
-    "config": { "type": "object" },
+    "resources": {
+      "type": "object"
+    },
+    "config": {
+      "type": "object"
+    },
     "serviceAccount": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "create": { "type": "boolean" },
-        "name": { "type": "string" },
-        "automountToken": { "type": "boolean" }
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "automountToken": {
+          "type": "boolean"
+        }
       }
     },
     "rbac": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "create": { "type": "boolean" } }
+      "properties": {
+        "create": {
+          "type": "boolean"
+        }
+      }
     },
     "networkPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "enabled": { "type": "boolean" } }
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
     },
     "logging": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "format": { "type": "string", "enum": ["json", "text"] },
-        "level": { "type": "string", "enum": ["trace", "debug", "info", "warn", "error"] }
+        "format": {
+          "type": "string",
+          "enum": [
+            "json",
+            "text"
+          ]
+        },
+        "level": {
+          "type": "string",
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        }
       }
     },
     "probes": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "enabled": { "type": "boolean" } }
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "description": "How this gateway proves who is calling it. A pod binds a network address, and the gateway refuses to serve a reachable tool surface that needs no credential, so exactly one of these modes is rendered.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "credential",
+            "mesh"
+          ],
+          "description": "credential: tools require a bearer token from the Secret named below. mesh: a service mesh authenticates first, so server.allow_unauthenticated_network_bind is set and no token is rendered."
+        },
+        "existingSecret": {
+          "type": "string",
+          "minLength": 1,
+          "description": "credential mode only: the Secret holding the bearer token. Must not be empty \u2014 the rendered config references env:MCP_GATEWAY_TOKEN and a pod without it fails configuration validation."
+        },
+        "secretKey": {
+          "type": "string",
+          "minLength": 1,
+          "default": "token"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "credential"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "existingSecret",
+              "secretKey"
+            ],
+            "properties": {
+              "existingSecret": {
+                "minLength": 1
+              },
+              "secretKey": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

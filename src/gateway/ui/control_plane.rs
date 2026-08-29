@@ -47,6 +47,30 @@ pub fn control_plane_router() -> Router<Arc<AppState>> {
             "/ui/api/control-plane/export-status",
             get(export_status_handler),
         )
+        // Governance data is refused to a caller that presented no credential,
+        // as a LAYER rather than a check inside each handler. Every route here
+        // derives an actor from the client, and filtering one field of the
+        // result missed the rest; a layer also cannot be forgotten when a sixth
+        // route is added.
+        .layer(axum::middleware::from_fn(require_authenticated))
+}
+
+/// Refuse a caller that presented no credential.
+///
+/// The anonymous identity used when authentication is disabled, and the
+/// identity given to a public path, both carry `authenticated: false`.
+async fn require_authenticated(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let authenticated = request
+        .extensions()
+        .get::<AuthenticatedClient>()
+        .is_some_and(|c| c.authenticated);
+    if !authenticated {
+        return auth_required(StatusCode::FORBIDDEN).into_response();
+    }
+    next.run(request).await
 }
 
 /// GET the SIEM export status (MIK-6703 SIEM.RUN.2): per-source forwarded/lag/
@@ -721,7 +745,14 @@ fn local_policy_rows(state: &AppState) -> Vec<crate::control_plane::ControlPlane
 }
 
 fn can_view_backend(client: Option<&AuthenticatedClient>, backend_name: &str) -> bool {
-    client.is_some_and(|client| client.admin || client.can_access_backend(backend_name))
+    client.is_some_and(|client| {
+        // Backend ACCESS is not inventory VISIBILITY. The anonymous identity
+        // used when authentication is disabled carries `backends: ["*"]` so
+        // that ordinary tool invocation keeps working, which handed it the
+        // whole control-plane inventory through `can_access_backend`. A scoped
+        // API key still sees the backends it is scoped to.
+        client.admin || (client.authenticated && client.can_access_backend(backend_name))
+    })
 }
 
 fn server_status_from_backend(status: &crate::backend::BackendStatus) -> ControlPlaneServerStatus {
@@ -1327,12 +1358,14 @@ mod role_wiring_tests {
 
     fn client(admin: bool) -> AuthenticatedClient {
         AuthenticatedClient {
+            principal: String::new(),
             name: "c".to_string(),
             rate_limit: 0,
             backends: Vec::new(),
             allowed_tools: None,
             denied_tools: None,
             admin,
+            authenticated: true,
         }
     }
 
