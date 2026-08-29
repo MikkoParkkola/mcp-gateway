@@ -76,7 +76,7 @@ Two rules the design states but no criterion owns, pinned as one case each:
   fails on the variable name. Written and shown failing, not asserted to fail.
 - Every negative case asserts ONE absent sentinel, which cannot see a partial
   apply that stopped before that name. The env-file fixtures for `.1`, `.1b`,
-  `.1c`, `.1d`, `.7`, `.7c` and `.10.2` therefore define three variables, and
+  `.1c`, `.7`, `.7c` and `.10.2` therefore define three variables, and
   each case compares the full `std::env::vars_os()` set before and after
   against the snapshot taken at case start — equality, not the absence of one
   key. A failed reload that set two of the three passes the sentinel form and
@@ -145,8 +145,8 @@ The third seam is the publish, and it is the one with no compiler help at all.
 publishes on the wrong branch, still compiles and still passes every case that
 only reads the resolved config. The cases that hold it are .2 (published on
 the ordinary success path), .10.1 (published on the empty-patch early return),
-.10.2 and .7c (NOT published on the two late aborts) and .1/.1b/.1c/.1d (not
-published on the four early exits). One publish site reachable from every exit
+.10.2 and .7c (NOT published on the two late aborts) and .1/.1b/.1c (not
+published on the three early exits). One publish site reachable from every exit
 is what makes that set pass together; any arrangement that satisfies a subset
 is the bug this table exists to catch.
 
