@@ -306,8 +306,10 @@ reader:
   env files configured runs on.
 - `EnvOverlay::from_paths_checked(&[PathBuf], previous: &EnvOverlay) ->
   Result<Self, EnvFileError>` — what a RELOAD calls. Same resolution, same
-  precedence, same union; but a listed path that exists and fails to open or to
-  parse is an `Err`, and on `Err` the previous overlay stands unchanged and the
+  precedence, same union; but the required set is the set of paths that were
+  PRESENT AT THE LAST SUCCESSFUL LOAD, carried by `previous` alongside the owned
+  set and the baseline. A path in that set which no longer exists, or which
+  exists and fails to open or to parse, is an `Err`; and on `Err` the previous overlay stands unchanged and the
   reload is rejected with a diagnostic naming the file and the line.
   **The asymmetry with `from_paths` is the decision.** At startup a truncated
   file yields the pairs before the bad line and a warning, which is byte-for-byte
@@ -318,6 +320,13 @@ reader:
   credential file unsets a live credential for every holder that resolves
   through it. A refused reload changing nothing is the rule the rest of this
   design already runs on; this is that rule reaching the file layer.
+  **A file that disappears is the same event as a file that truncates**, and
+  checking existence against the previous load rather than against nothing is
+  what makes them one case: a path listed but absent at the last load is still
+  skipped, exactly as today, so an optional env file that has never existed does
+  not break every reload. What cannot happen is revocation by absence.
+  Deliberately retiring an env file means removing it from the configuration,
+  which is a config edit, which is a reload that carries its own intent.
 - `EnvOverlay::from_paths(&[PathBuf], previous: &EnvOverlay) -> Self` — the
   map from the files, and an owned set of its own keys unioned with
   `previous`'s. Startup passes `&EnvOverlay::none()`; a reload does not call
