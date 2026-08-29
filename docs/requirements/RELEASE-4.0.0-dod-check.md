@@ -1,6 +1,6 @@
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
-**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `a2319c8c`
+**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `fa811e4b`
 **Requirements**: `RELEASE-4.0.0-requirements.md` · **Plan**: `RELEASE-4.0.0-test-plan.md`
 
 Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, because an N/A
@@ -12,6 +12,12 @@ the head, that is said in the same line rather than rounded up.
 **The branch does not meet the Definition of Done for a 4.0.0 tag, and the gap is larger than the
 previous revision of this document claimed.** It is sound as an increment behind a switch that
 defaults off. It is not a shippable modern protocol implementation.
+
+**HEAD contains code that has never been compiled.** Commit `2c774d4c` changes the mirrored-header
+security check — the field it validates and its handling of repeated header lines — and was authored
+while the machine's build guard blocked every `cargo` command. It is committed so the work is
+durable, not because it is verified. Nothing in this document should be read as evidence about that
+commit until the gates are re-run against it.
 
 Two things changed the picture since the last revision, both from review:
 
@@ -231,11 +237,37 @@ Not everything the reviewers raised survived contact with the source, and saying
 ## Revised verdict
 
 **Not ready to tag, and further from ready than rounds 1–3 suggested.** Seven review rounds,
-**thirty-six findings**. The 2026-07-28 implementation needs its wire models rebuilt against the
-specification pages, not patched finding by finding — per the repair protocol, a defect this
-systematic is an elimination, not a series of repairs.
+**thirty-six findings**.
 
-The 2025 path remains unchanged, fully tested and shippable. The recommendation is unchanged in
-shape and stronger in degree: **ship 4.0.0 as the legacy-safe groundwork with the modern path
-removed or documented as unbuilt, and rebuild the 2026 surface against the specification as its own
-piece of work.** That is a scope decision and it is the operator's.
+The severity is not uniform across the three areas, and the earlier draft of this section
+overstated it by treating them as one. Held to the same standard as everything else here:
+
+| Area | State | Response |
+|---|---|---|
+| subscriptions | 4 defects **confirmed at the specification page** | **repair** — the page names each correct shape outright |
+| caching | checked and **sound**; one paginated-scope gap | repair the gap |
+| tasks | the specification page **404s at the path its own index links** | cannot be judged conformant or not; resolve the source first |
+
+That is one module confirmed wrong, one confirmed right, and one with no reachable conformance
+target. It supports **fixing subscriptions**, not rebuilding the surface: the mechanism is sound and
+the four defects are local to it, which is the repair-protocol's own test for repairing rather than
+eliminating. The one broadening that *is* warranted — re-read the whole subscriptions page against
+the module, rather than fixing only the four defects a reviewer happened to catch.
+
+**The process finding is the prize, not the protocol defects.** The conformance matrix compared the
+code against a requirements document written from the same incomplete reading, so both agreed and
+the matrix went green over four wire-format errors. Its remedy is to re-derive the matrix from the
+specification pages themselves. That is worth more than any individual fix here, because it is what
+allowed all four to pass unnoticed.
+
+## The decision, which is the operator's
+
+The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol` defaults **off**,
+and that already is the isolation — no client can reach any of the open findings. Two real options:
+
+1. **Ship 4.0.0 as the legacy-safe groundwork**, modern path documented as preview with the findings listed. The default-off switch is what makes this honest.
+2. **Hold the tag** until the transport findings and the subscription model are closed and re-reviewed.
+
+Removing the modern path is *not* a third option worth its cost: the switch already achieves the
+isolation removal would buy, and it would mean a large deletion on a branch that currently has
+unbuilt code in it.
