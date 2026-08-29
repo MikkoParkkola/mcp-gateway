@@ -31,6 +31,8 @@ omission. Criteria are in `docs/design/mik-7256-env-files-on-a-failed-load.md`.
 | ENVFILE.12-inert | env files carrying `${K}` inside a `#` comment, inside a single-quoted value, and escaped, where `K` is a key those files define; assert the reload is ACCEPTED | integration | negative | the refusal must key on tokens `dotenvy` would substitute, not on the three characters. Without this case the cheapest implementation — a raw substring scan — passes .12 and refuses reloads over bytes that change no value |
 | ENVFILE.13 | accepted reload after a key is REMOVED from an already-listed env file whose value the process still holds from startup; assert the reader fails rather than resolving the startup value, and still fails after a second accepted reload that touches nothing — the removal is durable only if each overlay inherits the previous owned set | integration | negative | the case that distinguishes an overlay that owns a key domain from one consulted first and then fallen through. A fall-through implementation passes every rotation case in this plan and serves a deleted secret forever |
 | ENVFILE.14 | accepted reload rotating a name referenced as `{env.NAME}` through `SecretResolver`; assert the next resolution returns the new value | integration | positive | the second lazy runtime reader (`src/secrets.rs:82`), reached from webhook signing, secret injection and the executor. `fetch_credential` alone was the enumeration this plan shipped with, and it is not the whole set |
+| ENVFILE.17 | an env file whose second line is malformed and whose third is a valid assignment; build the overlay and run `Config::load` over the same bytes; assert both keep the first pair and neither takes the third | unit (config) | negative | "warn and skip" reads naturally as skip-the-line-and-continue, which would publish a pair startup never applies — live until the next restart, gone after it. The startup half is the oracle, so the case cannot pass by agreeing with itself |
+| ENVFILE.16 | a `runtime.profiles.*.env_keys` name supplied by an env file; rotate it through an accepted reload and launch a runtime child; assert the child receives the new value, and receives nothing for that name when the key is removed instead | integration | positive | `StdRuntimeCommandRunner::run` copies the name out of `std::env::var_os` (`src/runtime/provider.rs:651`); nothing writes the process any more, so without the overlay the child gets the startup value or the deleted secret. Third reader the enumeration missed |
 | ENVFILE.15 | rotate a key in an already-listed env file through an accepted reload, then write an admin-UI edit that references it; assert the write validates | integration | positive | the regression the fix itself creates: the value now lives in the overlay and no longer in the process, so a write path validating against the process alone rejects a configuration that works. Passes trivially before the change, which is why it is paired with .13 rather than standing alone |
 
 Two rules the design states but no criterion owns, pinned as one case each:
@@ -41,7 +43,7 @@ Two rules the design states but no criterion owns, pinned as one case each:
 | duplicate key across files | unit (config) | positive | first file `A=1`, second `A=2`; assert the overlay yields `2`, matching `from_path_override`'s later-file-wins precedence |
 | the applied bytes are the validated bytes | integration (config_reload) | negative | build the overlay, then rewrite the env file before the commit runs; assert the PUBLISHED overlay carries the value the evaluation captured, not the value now on disk. A commit that re-reads the files passes every other case and fails this one |
 | overlay precedence | unit (config) | positive | overlay entry wins over a process variable of the same name, matching `from_path_override` |
-| every operator-declared reference resolves through the overlay | unit (source scan) | negative | `pub(crate)` buys nothing here: `src/config_reload/` is the same crate, so the startup loader stays nameable and the compile-time claim this row used to make could never fail. What is checkable is the reader set: a test walks the source, collects every `std::env::var`/`var_os` call site outside tests, and fails on any that is not either overlay-aware or on the named infrastructure allowlist (`PATH`, `HOME`, `TMPDIR`, `NO_COLOR`, `MCP_GATEWAY_*`). It fails when a new reader is added and nobody thought about the overlay, which is the actual failure mode — a scan is weak against an alias and strong against the omission this change is about |
+| every operator-declared reference resolves through the overlay | unit (source scan) | negative | `pub(crate)` buys nothing here: `src/config_reload/` is the same crate, so the startup loader stays nameable and the compile-time claim this row used to make could never fail. What is checkable is the reader set: a test walks the source, collects every `std::env::var`/`var_os` call site outside tests, and fails on any that is not either overlay-aware or on the named infrastructure allowlist (`PATH`, `HOME`, `TMPDIR`, `NO_COLOR`, `MCP_GATEWAY_*`). It fails when a new reader is added and nobody thought about the overlay, which is the actual failure mode — a scan is weak against an alias and strong against the omission this change is about. Two further assertions ride on the same walk, because they are the same kind of claim: `std::env::vars_os` appears only in the whole-environment test binary, and `Config::load` appears nowhere in it — the process separation the parallelism note describes, checked rather than asked for. Residual, stated: an alias (`use std::env::var as v`, a helper wrapping the call) evades all three. Closing that needs every environment read behind a wrapper and a lint forbidding the direct call, which is a crate-wide change this one does not carry; recorded as an observation, not filed |
 
 ## Can any of these pass while broken?
 
@@ -84,19 +86,26 @@ Two rules the design states but no criterion owns, pinned as one case each:
   inside `dotenvy` — the only path in the design that still writes the process
   at all. The workspace lint stays intact and the tests exercise the real apply
   path rather than a hand-rolled substitute.
-- The suite runs threads in parallel and .4 and .6 are the only cases that
-  mutate the process. Neither is serialised by a lock, because a lock is a
-  convention every later test has to know about; both are separated by
-  PROCESS instead. .4 writes uniquely suffixed names and stays in the config
-  unit binary, where nothing compares a whole environment. .6 writes
-  `MCP_GATEWAY_PORT`, a name it cannot choose — figment reads that exact key
-  — so it gets its own integration binary,
-  `tests/env_files_startup_precedence.rs`, separate from the whole-environment
-  cases in `tests/env_files_on_failed_load.rs`. Two binaries, no shared
-  mutable process, and a test added later to either one cannot break the other
-  by forgetting a marker. Every other case is safe under parallelism by
-  construction, because the reload path it drives cannot write the process at
-  all.
+- The suite runs threads in parallel, so the cases that write the process are
+  separated by PROCESS rather than by a lock — a lock is a convention every
+  later test has to know about. The rule is one line and it is mechanical: a
+  case that reaches `Config::load`, or any other startup path, does NOT live
+  in the whole-environment binary. An earlier draft of this bullet named .4
+  and .6 as the only writers and was wrong twice over: .12's startup half and
+  .13's fixture both need a value applied by a real startup load, and both had
+  been placed beside the snapshot cases.
+- That leaves three homes. `tests/env_files_on_failed_load.rs` holds only
+  reload-driven cases, which cannot write the process at all, so their
+  whole-environment comparisons are sound however many run at once.
+  `tests/env_files_startup_precedence.rs` holds .6, which must write
+  `MCP_GATEWAY_PORT` — a name figment fixes, so the test cannot suffix it away
+  — plus .12's startup half and .13's fixture, none of which compares a whole
+  environment. The config unit binary keeps .4 and .17, which write uniquely
+  suffixed names that no other test reads.
+- The separation is enforced by the source-scan case, not by this paragraph:
+  it asserts that `std::env::vars_os` appears only in the whole-environment
+  binary and that `Config::load` appears nowhere in it. A later test violating
+  either half fails the scan instead of quietly making a snapshot flaky.
 - .12 asserts a REFUSAL, which passes trivially against a reload that refuses
   for some other reason. The assertion is on the message naming the file and
   the key, and its startup half must SUCCEED over the same bytes — a blanket

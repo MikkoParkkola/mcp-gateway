@@ -257,7 +257,8 @@ them; that followed from option B and goes with it.
 
 ## Shape
 
-Four changes, no signature churn at 35 call sites.
+No signature churn at the 35 `Config::load` call sites: everything below is
+additive, and the existing entry point keeps today's behaviour exactly.
 
 **`EnvOverlay`** — a `HashMap<String, String>` and the set of keys the env
 files own, private to `src/config/mod.rs`, with two constructors and one
@@ -274,9 +275,16 @@ reader:
   compile. **Infallible, and that is a decision, not an omission.** For each existing path in order it opens the
   file, strips a leading BOM, iterates with `dotenvy::from_read_iter`, and
   inserts each pair; later files overwrite earlier ones, matching
-  `from_path_override`'s precedence. A missing path is skipped and a parse
-  error is logged at warn level and skipped — byte-for-byte the behaviour of
-  `load_env_files_from_paths` today (`src/config/mod.rs:305`). A fallible
+  `from_path_override`'s precedence. A missing path is skipped. A parse error
+  ENDS that file at the offending line, keeping the pairs before it and taking
+  none after it, then moves to the next file with a warning — byte-for-byte the
+  behaviour of `load_env_files_from_paths` today, which calls
+  `dotenvy::from_path_override` and gets exactly that: the iterator applies each
+  pair as it goes and returns `Err` at the first line it cannot parse
+  (`src/config/mod.rs:303-306`). Skipping the bad line and continuing would be
+  the more obvious reading of "warn and skip", and it would publish assignments
+  startup would never have applied — a credential live on a reload and absent
+  after the next restart. A fallible
   builder would introduce a *new* error class into `Config::load`, and
   `load_config_or_default` turns any `Config::load` error into
   `Config::default()` (`src/config_persistence.rs:14-23`), which the admin-UI
@@ -291,6 +299,17 @@ reader:
   its own fallback, because the owned-key rule is exactly the part a caller
   would get wrong, and eight sites getting it right by convention is seven
   more chances than the type needs to give them.
+
+**A third site reads operator-named keys at launch, not per call.**
+`StdRuntimeCommandRunner::run` copies each `runtime.profiles.*.env_keys` name
+out of `std::env::var_os` into a runtime child
+(`src/runtime/provider.rs:651`). The names are operator-supplied, so they may
+be env-file keys, and after this change a rotated value is not in the process
+for it to find. `run` takes the `&EnvOverlay` alongside the `env_keys` slice
+it already receives and resolves through it; a key the operator removed is
+then absent from the child rather than present with a stale value. This is the
+third reader the enumeration missed — first `SecretResolver::resolve`, now
+this — which is the argument for the rule and the source scan over any list.
 
 **Validation reads the overlay too.** `validate_env_reference`
 (`src/config/mod.rs:651`) and the inline agent-key resolution (`:433`) are the
@@ -424,22 +443,30 @@ the reload refuses any config that depends on it, for the reason given under
 
 **Where the apply sits: after the last abort, immediately before the publish.**
 The last way an accepted reload can still fail is the shutdown abort
-(`:1517-1522`), which fires after `apply_patch` has already stopped and started
-backends. The apply goes below it and above `self.live_config.set(new_config)`
-(`:1524`). `set` is a lock write and cannot fail (`:281-283`), and there is no
-await between the two, so no reader observes the new environment paired with the
-old config, and no failure path exists between publishing the overlay and
-committing the config. Apply-before-`apply_patch` would read better for backends
+(`:1517-1522`), which fires after `apply_patch` has already stopped and
+started backends. The apply goes below it and above
+`self.live_config.set(new_config)` (`:1524`). `set` is a lock write and cannot
+fail (`:281-283`), so no failure path exists between publishing the overlay
+and committing the config. It does NOT make the pair atomic: there is a window
+in which a request sees the new overlay under the old config, which is the
+window the publish order above argues is the harmless one. An earlier draft of
+this paragraph claimed no reader could observe it, which contradicted that
+argument two paragraphs earlier and would have been read as licence not to
+test the transition. Apply-before-`apply_patch` would read better for backends
 this reload restarts, and would reopen the ticket's exact defect: a shutdown
 abort would leave the new overlay in force under the old config.
 
-Named residual: a backend that this same reload restarts is spawned before the
-new values land, so a `${VAR}` in its `env` map that the rotation changed
-carries the old value until it next restarts. Bounded, not general — children
-get `env_clear()` and only the keys the config names
-(`src/transport/stdio.rs:40,71-73`), so nothing leaks in by inheritance, and a
-capability credential is unaffected because `fetch_credential` reads per call.
-Pinned by a test rather than left as a caveat.
+A backend this same reload restarts is spawned before the publish and is
+nonetheless correct: `apply_patch` starts it from the CANDIDATE config, whose
+`${VAR}` were already expanded against the new overlay during evaluation, so
+the new values are baked into its `env` map before the cell is written. An
+earlier draft named this as a residual, which was wrong in the direction that
+matters — it would have had the implementation and its test agree on stale
+values being acceptable. Children get `env_clear()` and only the keys the
+config names (`src/transport/stdio.rs:40,71-73`), so nothing stale reaches one
+by inheritance either, and a capability credential is unaffected because
+`fetch_credential` reads per call. Pinned by a test rather than left as a
+claim.
 
 **Both the overlay and the apply read the RUNNING gateway's `env_files` list,
 never the candidate's.** A candidate is an unvalidated file on disk, and its
@@ -518,6 +545,14 @@ replaces.
 `load_with_overlay` is `pub(crate)` because `config_persistence` is a different
 module and must reach it, and nothing outside the crate should. Its documented
 invariant is that it does not mutate the process environment.
+
+**`write_config` takes the overlay too.** `src/config_persistence.rs:42`
+revalidates before writing, and validation is now overlay-aware, so leaving it
+on the process alone would reject an admin edit naming a key that an
+already-listed env file supplies and a reload has since rotated — a rejection
+this change would have caused. It gains an `&EnvOverlay` parameter, supplied
+from the `LiveEnv` cell by the in-process admin path; the CLI path, which has
+no running gateway, passes what its own `Config::load` produced.
 
 **Who calls it: every config read that happens inside a running gateway.** A
 rule, not a list, because a list goes stale the moment a reader is added. Two
@@ -645,6 +680,14 @@ observation, not a ticket.
   applied to the process at startup, When the reload is accepted, Then the key
   no longer resolves for any overlay-aware reader, and a reader that requires it
   fails rather than serving the startup value.
+- **MIK.ENVFILE.17** Given an env file whose second line cannot be parsed and
+  whose third line is a valid assignment, When the overlay is built from it,
+  Then the first line's pair is present and the third line's is not — the same
+  answer startup gives over the same bytes.
+- **MIK.ENVFILE.16** Given a `runtime.profiles.*.env_keys` name supplied by an
+  env file, and a reload that rotates its value, When a runtime child is
+  launched afterwards, Then it receives the rotated value; and given the key is
+  removed instead, Then it receives no value for that name.
 - **MIK.ENVFILE.15** Given an admin-UI edit naming a key that an already-listed
   env file supplies, and whose current value reached the gateway through an
   accepted reload rather than through the process, When the edit is written,
