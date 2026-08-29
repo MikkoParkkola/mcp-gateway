@@ -380,3 +380,99 @@ mod retry {
         assert!(fields.request_state.is_none());
     }
 }
+
+// ===========================================================================
+// MIK-7212.MRTR.6 — a modern client retrying against a LEGACY backend that is
+// holding an open request.
+//
+// The bridge, and the one direction that cannot be stateless on the backend
+// side: the legacy backend is sitting inside an RPC waiting for an answer, and
+// that RPC lives on exactly one replica. A stateless client's retry may land on
+// any of them.
+// ===========================================================================
+
+mod inflight {
+    use std::sync::Arc;
+
+    use mcp_gateway::protocol::continuation::{InFlight, Routing};
+
+    #[tokio::test]
+    async fn ac_mrtr_6_a_retry_reaching_the_holding_replica_is_served_here() {
+        let table = InFlight::new("gw-1", 100);
+        let key = table.hold("weather", 2_000).await.expect("capacity");
+
+        assert!(matches!(table.route(&key, "gw-1"), Routing::Here));
+    }
+
+    #[tokio::test]
+    async fn ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder() {
+        // Not started afresh. Beginning a second exchange would leave the first
+        // one hanging on another replica and ask the user the same question
+        // twice — and for a destructive tool, the second answer would authorise
+        // a call the first one already authorised.
+        // gw-1 holds the open request; the retry lands on gw-2.
+        let table = InFlight::new("gw-1", 100);
+        let key = table.hold("weather", 2_000).await.expect("capacity");
+
+        match table.route(&key, "gw-2") {
+            Routing::Elsewhere { replica } => assert_eq!(
+                replica, "gw-1",
+                "the retry belongs where the exchange is held, not where it arrived"
+            ),
+            other => panic!("a retry for another replica must be routed there, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ac_mrtr_6_an_unknown_exchange_fails_explicitly() {
+        // The replica that held it died, or the entry was evicted. Either way
+        // the honest answer is a refusal the client can act on — never a silent
+        // second exchange.
+        let table = InFlight::new("gw-1", 100);
+        assert!(matches!(table.route("no-such-key", "gw-1"), Routing::Gone));
+    }
+
+    #[tokio::test]
+    async fn ac_mrtr_8_the_table_is_bounded() {
+        // A client may abandon a continuation, and the specification says a
+        // server MUST NOT assume otherwise. So entries arrive at a rate the
+        // client sets, and refusing at capacity is the difference between a
+        // bounded table and a memory-exhaustion vector.
+        let table = InFlight::new("gw-1", 4);
+        for _ in 0..4 {
+            assert!(table.hold("weather", 9_999).await.is_some());
+        }
+        assert!(
+            table.hold("weather", 9_999).await.is_none(),
+            "at capacity the gateway must refuse to start a new exchange rather \
+             than grow, and refusing is what the caller turns into an error the \
+             client can see"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_mrtr_8_an_abandoned_exchange_is_reclaimed() {
+        let table = InFlight::new("gw-1", 4);
+        let key = table.hold("weather", 1_000).await.expect("capacity");
+
+        table.reap(1_001).await;
+        assert!(
+            matches!(table.route(&key, "gw-1"), Routing::Gone),
+            "an abandoned exchange must not hold its slot forever"
+        );
+        assert!(
+            table.hold("weather", 9_999).await.is_some(),
+            "and its slot must come back"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_mrtr_6_the_key_is_not_something_the_client_chooses() {
+        // Two exchanges for the same backend must not collide, and a client
+        // must not be able to name someone else's.
+        let table = Arc::new(InFlight::new("gw-1", 100));
+        let a = table.hold("weather", 9_999).await.expect("capacity");
+        let b = table.hold("weather", 9_999).await.expect("capacity");
+        assert_ne!(a, b, "each exchange gets its own key");
+    }
+}

@@ -362,3 +362,110 @@ impl ConsumedLedger {
         self.len().await == 0
     }
 }
+
+/// Where a retry must be handled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Routing {
+    /// This replica holds the exchange.
+    Here,
+    /// Another replica holds it, and the retry belongs there.
+    Elsewhere {
+        /// The replica that holds the open request.
+        replica: String,
+    },
+    /// Nobody holds it: evicted, expired, or the holder is gone.
+    Gone,
+}
+
+/// Exchanges this gateway is holding open on behalf of a legacy backend.
+///
+/// This is the one place the gateway is permitted to hold state, and the reason
+/// is not convenience. A **legacy** backend that elicits does so by keeping its
+/// RPC open and waiting; there is no continuation it can hand back, because the
+/// revision that invented continuations is the one it does not speak. So the
+/// gateway absorbs that statefulness and presents the modern client a
+/// continuation anyway. That is the bridge earning its keep.
+///
+/// The open RPC lives on exactly one replica, and a stateless client's retry
+/// may land on any of them — which is why `origin_replica` travels inside the
+/// sealed envelope. A retry that arrives in the wrong place is **routed**, and
+/// one whose holder is gone **fails explicitly**. Starting a second exchange
+/// instead would leave the first hanging and ask the user the same question
+/// twice; for a destructive tool, the second answer would authorise a call the
+/// first one already authorised.
+#[derive(Debug)]
+pub struct InFlight {
+    replica: String,
+    capacity: usize,
+    /// key -> (replica holding it, deadline).
+    held: tokio::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
+}
+
+impl InFlight {
+    /// A table for this replica, holding at most `capacity` exchanges.
+    #[must_use]
+    pub fn new(replica: &str, capacity: usize) -> Self {
+        Self {
+            replica: replica.to_string(),
+            capacity,
+            held: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Record that this replica is holding an exchange open, returning its key.
+    ///
+    /// `None` at capacity — a refusal the caller turns into an error the client
+    /// can see. Growing instead would make the table a memory-exhaustion vector
+    /// reachable by any client that starts elicitations and walks away, which
+    /// the specification explicitly permits it to do.
+    pub async fn hold(&self, backend_id: &str, expires_at: u64) -> Option<String> {
+        let mut held = self.held.lock().await;
+        if held.len() >= self.capacity {
+            return None;
+        }
+        // Named by the gateway, never by the client: two exchanges against one
+        // backend must not collide, and no caller may name another's.
+        let key = format!("{backend_id}:{}", uuid::Uuid::new_v4());
+        held.insert(key.clone(), (self.replica.clone(), expires_at));
+        Some(key)
+    }
+
+    /// Where a retry for `key` belongs, given the replica that received it.
+    #[must_use]
+    pub fn route(&self, key: &str, receiving_replica: &str) -> Routing {
+        let Ok(held) = self.held.try_lock() else {
+            // Contended. Answering `Gone` here would turn a lock collision into
+            // a lost exchange, so say nothing and let the caller retry.
+            return Routing::Gone;
+        };
+        match held.get(key) {
+            Some((holder, _)) if holder == receiving_replica => Routing::Here,
+            Some((holder, _)) => Routing::Elsewhere {
+                replica: holder.clone(),
+            },
+            None => Routing::Gone,
+        }
+    }
+
+    /// Drop exchanges whose deadline has passed.
+    ///
+    /// Abandonment is the common case, not the exceptional one: a client is
+    /// free never to retry, so every held exchange needs a deadline and someone
+    /// to enforce it.
+    pub async fn reap(&self, now: u64) {
+        self.held
+            .lock()
+            .await
+            .retain(|_, (_, deadline)| now <= *deadline);
+    }
+
+    /// How many exchanges are held.
+    pub async fn len(&self) -> usize {
+        self.held.lock().await.len()
+    }
+
+    /// Whether nothing is held.
+    pub async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
+}
