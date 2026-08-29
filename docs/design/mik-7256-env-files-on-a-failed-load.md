@@ -1361,3 +1361,36 @@ an unrecorded one reaches no reviewer.
 Items 4 and 5 are outside what this change is for. They are repaired here rather
 than filed because each repair is smaller than the ticket describing it, and
 both blocked the suite.
+
+## Open regression found in review (2026-08-29)
+
+The change moves env-file assignments out of the process environment and into
+the overlay. A second placeholder syntax still reads the process environment
+directly, so env-file-declared values no longer reach it.
+
+`SecretResolver::resolve` expands `{env.VAR}` with
+`std::env::var(var_name).unwrap_or_default()` (`src/secrets.rs:81`). Two
+consequences, both live:
+
+- an env-file-declared value expands to the empty string, where before this
+  change it expanded to the value the env file assigned;
+- an unresolvable name is not an error. `validate_signature`
+  (`src/gateway/webhooks/mod.rs:427`) takes the empty result as the HMAC key,
+  and an empty key is computable by anyone, so a forged webhook verifies.
+
+Three call sites construct a resolver and are affected the same way:
+`src/gateway/webhooks/mod.rs:427`, `src/secret_injection.rs:160`,
+`src/capability/executor/mod.rs:196`.
+
+Closing it needs both halves. Threading `LiveEnv` into `SecretResolver` so
+`{env.VAR}` resolves through the overlay restores the value. Rejecting an
+unresolved placeholder rather than substituting an empty string is what stops
+the empty-key signature check, and it is required whether or not the overlay
+is threaded.
+
+A related divergence is recorded but not treated as a regression: a reload
+inherits the previous overlay (`EnvOverlay::inheriting`, `src/config/mod.rs:338`
+passes `live_env.get()`), so removing a key from an env file does not revoke
+its value until a restart. The process-mutating loader this change replaced did
+not revoke either, so the behaviour is unchanged; it differs from a restart, and
+whether reload should match a restart is an open design question.
