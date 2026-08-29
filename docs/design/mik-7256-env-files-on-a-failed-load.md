@@ -62,3 +62,60 @@ has no code that writes the environment, so no failure mode of any kind can
 leave it mutated. It is also what the gateway already reports: `env_files` is
 listed restart-required by `pending_restart_fields`
 (`src/config_reload/mod.rs:552`) and documented as such at `:669`.
+
+## What C costs
+
+**Editing an env file's contents no longer takes effect until a restart.**
+Today a change to a watched env file triggers a reload
+(`ReloadTrigger::EnvFile`, `src/config_reload/mod.rs:1227`) and the values flow
+into the live config through `Config::load`. Under C that reload would
+re-read the YAML and find nothing new: a trigger that cannot change anything.
+So the env-file watch goes with it — `resolve_env_file_paths`
+(`:1011`), the `ReloadTrigger::EnvFile` variant and its log line are removed
+rather than left in place lying about what they do. Adding a *path* to
+`env_files` already required a restart; now editing the file behind the path
+does too, and the two halves finally agree.
+
+**This is a narrowing of user-visible behaviour and was decided without an
+answer.** The choice was put to the operator and went unanswered; C is taken
+because it is the only buildable fix and because it matches what the gateway
+already tells users about `env_files`. It is cheap to reverse: restoring
+today's behaviour means passing `Apply` on the reload path, at the price of
+reopening MIK-7256 with no mechanism available to close it.
+
+Startup is untouched. Same `dotenvy::from_path_override` call, same order,
+same byte-order-mark handling, same cross-file `${VAR}` substitution, same
+Figment layering. None of the semantics that killed option B are in play,
+because nothing about how env files are applied changes — only *whether* the
+reload path applies them.
+
+## Shape
+
+`Config::load(path)` becomes `Config::load(path, env_files: EnvFiles)` with
+`enum EnvFiles { Apply, Skip }` — an enum and not a boolean, so the call site
+says which it means without opening the signature. The body's only change is
+that `Self::load_env_files_from_paths` runs under `EnvFiles::Apply`.
+
+- `Apply`: the five startup sites in `src/main.rs` and the setup wizard.
+- `Skip`: `load_config_patch` (`src/config_reload/mod.rs:1239`) and the
+  config-export watcher (`src/commands/config_export/watch.rs:81`), both of
+  which evaluate a candidate inside a process that is already running.
+
+`load_env_files(&self)` (`src/config/mod.rs:276`) is unused outside tests and
+is deleted with the watch that motivated it.
+
+## Acceptance criteria
+
+- **MIK.ENVFILE.1** Given a running gateway, When a reload fails for any reason
+  — parse, validation, posture refusal, or shutdown abort — Then process
+  environment variables are identical to before the reload.
+- **MIK.ENVFILE.2** Given a reload that succeeds, Then process environment
+  variables are still identical to before the reload.
+- **MIK.ENVFILE.3** Given a candidate env file that sets a variable the process
+  already has, When the reload runs, Then a subsequently spawned backend
+  inherits the original value.
+- **MIK.ENVFILE.4** Given startup, Then env files are applied exactly as today
+  — same variables, same override order, same final state.
+- **MIK.ENVFILE.5** Given an env file whose contents change under a running
+  gateway, Then no reload is triggered by that change alone, and the config
+  reports `env_files` as restart-required.
