@@ -32,6 +32,14 @@ use dashmap::DashMap;
 
 use crate::transition::TransitionTracker;
 
+/// The most callers whose last tool is remembered at once.
+///
+/// A ceiling rather than a policy: the mechanism that should reclaim these on
+/// disconnect is not wired, and a stateless caller has no disconnect to reclaim
+/// on. Sized well above any plausible concurrent caller count so eviction is a
+/// backstop and not an ordinary event.
+const MAX_TRACKED_IDENTITIES: usize = 100_000;
+
 /// Per-session anomaly detector backed by transition probability data.
 pub struct AnomalyDetector {
     tracker: Arc<TransitionTracker>,
@@ -117,6 +125,23 @@ impl AnomalyDetector {
         // sequence could be walked in parallel with every step scored as though
         // it were the first — which is precisely the sequence a detector exists
         // to notice.
+        // Bounded. Every distinct identity leaves a predecessor behind, and
+        // nothing reclaims one: `SessionLifecycle` was built to fire cleanup on
+        // disconnect and is not wired to anything (recorded as its own issue),
+        // and a stateless caller never disconnects because it never connected.
+        // Without a ceiling this map is a memory-exhaustion vector reachable by
+        // anyone who can present distinct credentials.
+        //
+        // Evicting an arbitrary entry costs that one caller its predecessor —
+        // its next call scores as a first call — which is a far smaller loss
+        // than unbounded growth, and is why the ceiling is generous.
+        if self.last_tool.len() >= MAX_TRACKED_IDENTITIES
+            && !self.last_tool.contains_key(session_id)
+            && let Some(victim) = self.last_tool.iter().next().map(|e| e.key().clone())
+        {
+            self.last_tool.remove(&victim);
+        }
+
         match self.last_tool.entry(session_id.to_string()) {
             dashmap::mapref::entry::Entry::Vacant(slot) => {
                 // First tool for this identity — no prior context.
@@ -161,6 +186,27 @@ impl AnomalyDetector {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_identity_map_is_bounded() {
+        // Every distinct identity leaves a predecessor behind and nothing
+        // reclaims one: the cleanup registry is not wired to anything, and a
+        // stateless caller never disconnects because it never connected. Without
+        // a ceiling this is a memory-exhaustion vector reachable by anyone who
+        // can present distinct credentials.
+        let tracker = Arc::new(TransitionTracker::new());
+        let detector = AnomalyDetector::new(tracker, 0.7);
+
+        for n in 0..(MAX_TRACKED_IDENTITIES + 500) {
+            detector.score_transition(&format!("caller-{n}"), "srv", "tool");
+        }
+
+        assert!(
+            detector.last_tool.len() <= MAX_TRACKED_IDENTITIES,
+            "the identity map must hold its ceiling, got {}",
+            detector.last_tool.len()
+        );
+    }
     use super::*;
 
     fn empty_tracker() -> Arc<TransitionTracker> {

@@ -394,6 +394,59 @@ mod http {
     }
 
     #[tokio::test]
+    async fn an_unsupported_modern_version_still_gets_no_session() {
+        // A client naming a 2026 revision this build does not serve is still a
+        // stateless client. Recognising only an exactly-supported version meant
+        // it was handed a session its own revision deleted, and grew the table
+        // on behalf of a caller about to be refused anyway.
+        let app_state = state();
+        let (_, headers) = post_against(
+            &app_state,
+            modern_body("tools/list"),
+            &[
+                ("mcp-protocol-version", "2026-99-99"),
+                ("mcp-method", "tools/list"),
+            ],
+        )
+        .await;
+
+        assert!(
+            !headers.contains_key("mcp-session-id"),
+            "an unsupported modern revision must not be given a session: {headers:?}"
+        );
+        assert_eq!(
+            app_state.multiplexer.session_count(),
+            0,
+            "and must not leave one behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_duplicated_protocol_version_header_cannot_hide_a_modern_declaration() {
+        // Reading only the first value let a request send the header twice —
+        // legacy first, modern second — so classification saw legacy while an
+        // intermediary reading the second saw modern. Two occurrences is not a
+        // request to interpret; it is one to refuse.
+        let app_state = state();
+        let (status, _) = post_against(
+            &app_state,
+            modern_body("tools/list"),
+            &[
+                ("mcp-protocol-version", "2025-11-25"),
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/list"),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a repeated protocol-version header must be refused, never resolved"
+        );
+    }
+
+    #[tokio::test]
     async fn a_legacy_error_response_still_carries_its_session_header() {
         // The regression that matters: 2025 clients track the session across a
         // refusal too.

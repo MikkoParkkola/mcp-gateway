@@ -193,6 +193,16 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
     }))
 }
 
+/// Whether a protocol-version value declares the stateless era at all.
+///
+/// Broader than [`MODERN_VERSIONS`] on purpose: a client naming a 2026 revision
+/// this build does not serve has still declared itself stateless, and treating
+/// it as legacy would hand it a session its own revision deleted.
+#[must_use]
+pub fn declares_modern_era(version: &str) -> bool {
+    MODERN_VERSIONS.contains(&version) || version.starts_with("2026-")
+}
+
 /// Revisions the **stateless** path can serve.
 ///
 /// Deliberately separate from `SUPPORTED_VERSIONS`, which is the list a legacy

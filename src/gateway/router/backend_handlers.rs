@@ -97,7 +97,16 @@ fn apply_backend_tool_call_security(
         let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
         let session_id = format!("direct:{backend_name}");
         let verdict =
-            fw.check_request(&session_id, backend_name, tool_name, arguments, caller_name);
+            // A direct backend call always has this synthetic per-backend key,
+            // so the per-caller controls have a stable identity to score on.
+            fw.check_request(
+                &session_id,
+                backend_name,
+                tool_name,
+                arguments,
+                caller_name,
+                &session_id,
+            );
         if verdict.action == FirewallAction::Warn {
             warn!(
                 backend = %backend_name,

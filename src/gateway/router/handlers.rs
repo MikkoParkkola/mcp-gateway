@@ -149,6 +149,21 @@ fn session_owner(client: Option<&AuthenticatedClient>) -> String {
     )
 }
 
+/// The stable identity of a caller with no session.
+///
+/// Empty when the caller is unauthenticated: that is not an identity, and the
+/// controls that key on this refuse rather than pool every anonymous caller
+/// into one bucket.
+fn session_owner_key(client: Option<&AuthenticatedClient>) -> String {
+    client.map_or_else(String::new, |c| {
+        if c.authenticated && !c.principal.is_empty() {
+            format!("credential:{}", c.principal)
+        } else {
+            String::new()
+        }
+    })
+}
+
 pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
@@ -450,10 +465,14 @@ pub(super) async fn meta_mcp_handler(
     // is created before the body is parsed. That is sound rather than a
     // shortcut: the mirrored-header check refuses a modern request that omits
     // `MCP-Protocol-Version`, so every modern request that survives carries it.
+    // Any modern declaration, not only a version this build serves. A client
+    // naming an unsupported 2026 revision is still a stateless client: minting
+    // it a session hands it state its own revision deleted and grows a table on
+    // behalf of a caller that is about to be refused.
     let declares_modern_by_header = headers
         .get("mcp-protocol-version")
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| crate::protocol::meta::MODERN_VERSIONS.contains(&v));
+        .is_some_and(crate::protocol::meta::declares_modern_era);
 
     // Get or create session for this client
     let existing_session_id = headers
@@ -538,12 +557,21 @@ pub(super) async fn meta_mcp_handler(
     // `2026-07-28` in the header an upstream routes on, while carrying no body
     // metadata, would otherwise classify as legacy and pass the feature gate
     // and every mirrored-header check behind it.
-    let shape = crate::protocol::meta::classify_request(
-        params.as_ref(),
-        headers
-            .get("mcp-protocol-version")
-            .and_then(|v| v.to_str().ok()),
-    );
+    // Read duplicate-safe. `headers.get` returns the FIRST value, so a request
+    // sending the header twice — legacy first, modern second — could hide its
+    // modern declaration behind the legacy one and be classified legacy, which
+    // is the bypass this argument exists to close. Two occurrences is not a
+    // request to interpret; it is one to refuse, and the mirrored-header check
+    // below refuses it. Passing `None` here would silently pick the lenient
+    // reading before that check runs, so an ambiguous header is treated as a
+    // modern declaration and reaches the refusal.
+    let mut version_headers = headers.get_all("mcp-protocol-version").iter();
+    let declared_version = match (version_headers.next(), version_headers.next()) {
+        (Some(only), None) => only.to_str().ok(),
+        (None, _) => None,
+        (Some(_), Some(_)) => Some(crate::protocol::meta::MODERN_VERSIONS[0]),
+    };
+    let shape = crate::protocol::meta::classify_request(params.as_ref(), declared_version);
     if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
         // Declared itself modern and then omitted a required field. The
         // specification is specific about both halves of the answer: -32602,
@@ -875,12 +903,27 @@ pub(super) async fn meta_mcp_handler(
                 if let Some(ref fw) = state.firewall {
                     let target = target.as_target();
                     let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                    // The key the per-caller controls are scored on. A session
+                    // when there is one; otherwise the validated credential.
+                    //
+                    // Never the display name: it is operator-configured, two
+                    // API keys may share one, and every unauthenticated caller
+                    // presents the same one — so scoring on it lets one caller
+                    // poison another's sequence history or trigger its blocks.
+                    // Empty means no identity at all, which the firewall
+                    // refuses rather than scores.
+                    let control_identity = if session_id.is_empty() {
+                        session_owner_key(client.as_ref())
+                    } else {
+                        session_id.clone()
+                    };
                     let verdict = fw.check_request(
                         &session_id,
                         target.server,
                         target.tool,
                         target.arguments,
                         caller_name,
+                        &control_identity,
                     );
                     if verdict.action == FirewallAction::Warn {
                         warn!(
