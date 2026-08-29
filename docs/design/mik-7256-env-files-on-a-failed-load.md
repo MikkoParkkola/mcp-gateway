@@ -1190,3 +1190,38 @@ rather than default is an operator's call, not a repair.
   already has, on the same terms as any other config source. That is the point
   of the answer rather than a caveat on it: an env file stops being a special
   case.
+
+## Two layer changes the reviews proposed, and why neither is this change
+
+Both external reviewers proposed replacing the mechanism rather than repairing
+it, in different rounds and different words. Recorded with its reason, because
+an unrecorded rejection comes back every round and costs a round every time.
+
+**Overlay-only — never write the process at all, at startup or on reload.**
+Declined at source. `reqwest` honours `HTTPS_PROXY` and `NO_PROXY` from the
+process environment it reads for itself — documented in the crate
+(`reqwest-0.13.2/src/lib.rs`) — and every HTTP client the gateway builds goes
+through it (`Cargo.toml:59`). A third-party crate reading the environment is a
+reader no overlay can reach and no scan of our source can see, so a gateway
+that never wrote the process would silently stop honouring an operator's proxy
+settings. Startup therefore keeps applying its files. What this change removes
+is the write on the RELOAD path, which is the one that leaks a rejected
+candidate's values. The narrowing is forced by a dependency, not chosen.
+
+**One typed, generation-scoped runtime environment service that every
+operator-declared lookup goes through.** Declined for scope, not for merit — it
+is the right end state, and this design moves toward it deliberately: `resolve`
+and `effective_vars` are already the only two places an outcome is written, and
+every named reader routes through one of them. What the service would add is
+compiler enforcement in place of an AST-aware scan, and atomic
+value-with-binding generations in place of two ordered publishes — which is
+exactly the residual named above, where a rotated credential outlives its
+restart-only binding. It needs every environment read in the crate behind a
+wrapper plus a lint forbidding the direct call, crate-wide, across subsystems
+this ticket does not open, and it is entangled with the tracked-section
+boundary that makes those bindings restart-only in the first place.
+
+So it is a decision rather than a deferral, its TRIGGER is named: the first
+defect the scan admits it cannot catch — an aliased environment read that
+reaches production, or a second value-with-binding mismatch — promotes the
+service from an improvement to the fix, and it gets its own design.
