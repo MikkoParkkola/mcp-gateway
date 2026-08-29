@@ -380,23 +380,20 @@ mod http {
         state: &Arc<AppState>,
         params: Value,
     ) -> (StatusCode, Option<String>, axum::body::BodyDataStream) {
+        // Built by the same helper every other modern call uses, so an
+        // envelope change cannot make these tests pass while real clients fail.
+        let (body, headers) = modern_call("subscriptions/listen", params);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json");
+        for (name, value) in &headers {
+            builder = builder.header(*name, value.as_str());
+        }
         let response = create_router(Arc::clone(state))
             .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/mcp")
-                    .header("content-type", "application/json")
-                    .header("mcp-protocol-version", "2026-07-28")
-                    .header("mcp-method", "subscriptions/listen")
-                    .body(Body::from(
-                        serde_json::to_vec(&json!({
-                            "jsonrpc": "2.0",
-                            "id": 1,
-                            "method": "subscriptions/listen",
-                            "params": params,
-                        }))
-                        .expect("body"),
-                    ))
+                builder
+                    .body(Body::from(serde_json::to_vec(&body).expect("body")))
                     .expect("request"),
             )
             .await

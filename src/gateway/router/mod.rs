@@ -248,7 +248,7 @@ pub fn create_router_with(state: Arc<AppState>, extra: Option<Router>) -> Router
         .layer(CatchPanicLayer::new())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        .with_state(Arc::clone(&state));
+        .with_state(state);
 
     // Merge key server routes (unauthenticated) if enabled
     if let Some(ks_routes) = maybe_ks_routes {

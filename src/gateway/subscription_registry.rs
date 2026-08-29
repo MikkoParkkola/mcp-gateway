@@ -161,7 +161,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn filter(value: Value) -> ListenRequest {
+    fn filter(value: &Value) -> ListenRequest {
         ListenRequest::from_params(Some(&json!({ "notifications": value })))
             .expect("a filter the tests build must parse")
     }
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn a_kind_the_client_asked_for_is_delivered() {
-        let wants_tools = filter(json!({ "toolsListChanged": true }));
+        let wants_tools = filter(&json!({ "toolsListChanged": true }));
         assert!(delivers(
             &wants_tools,
             &notification("notifications/tools/list_changed")
@@ -183,7 +183,7 @@ mod tests {
     fn a_kind_the_client_did_not_ask_for_is_never_delivered() {
         // The specification is explicit: a server MUST NOT send notification
         // types the client has not explicitly requested.
-        let wants_tools = filter(json!({ "toolsListChanged": true }));
+        let wants_tools = filter(&json!({ "toolsListChanged": true }));
         for method in [
             "notifications/prompts/list_changed",
             "notifications/resources/list_changed",
@@ -201,7 +201,7 @@ mod tests {
         // Progress and log messages belong to the request that caused them and
         // travel on its own response stream. Delivering them here would hand
         // them to a client that never made that request.
-        let wants_everything = filter(json!({
+        let wants_everything = filter(&json!({
             "toolsListChanged": true,
             "promptsListChanged": true,
             "resourcesListChanged": true,
@@ -223,7 +223,7 @@ mod tests {
     fn a_resource_update_is_delivered_only_for_a_named_uri() {
         // The opt-in is a list of URIs, so "subscribed to resource updates" is
         // never true in general — only for the resources named.
-        let names_one = filter(json!({ "resourceSubscriptions": ["file:///wanted"] }));
+        let names_one = filter(&json!({ "resourceSubscriptions": ["file:///wanted"] }));
 
         let wanted = json!({
             "jsonrpc": "2.0",
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn an_empty_filter_receives_nothing() {
-        let empty = filter(json!({}));
+        let empty = filter(&json!({}));
         for method in [
             "notifications/tools/list_changed",
             "notifications/prompts/list_changed",
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn a_malformed_notification_is_not_delivered() {
-        let wants_tools = filter(json!({ "toolsListChanged": true }));
+        let wants_tools = filter(&json!({ "toolsListChanged": true }));
         assert!(!delivers(&wants_tools, &json!({})));
         assert!(!delivers(&wants_tools, &json!({ "method": 7 })));
     }
