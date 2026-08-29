@@ -116,8 +116,13 @@ Two rules the design states but no criterion owns, pinned as one case each:
   environment. The config unit binary keeps .4 and .17, which write uniquely
   suffixed names that no other test reads.
 - The separation is enforced by the source-scan case, not by this paragraph:
-  it asserts that `std::env::vars_os` appears only in the whole-environment
-  binary and that `Config::load` appears nowhere in it. A later test violating
+  it asserts that WITHIN `tests/`, `std::env::vars_os` appears only in the
+  whole-environment binary, and that `Config::load` appears nowhere in it. The
+  scope matters: `EffectiveEnv` enumerates the process with `vars_os` by
+  construction, so a case forbidding the call outright could never go green
+  against the design it exists to test. That one production site is allowed by
+  name in the env-reader scan, never by prefix — a prefix exemption is what let
+  `FIREWALL_SKIP_KEYS` past an earlier scan. A later test violating
   either half fails the scan instead of quietly making a snapshot flaky.
 - .12 asserts a REFUSAL, which passes trivially against a reload that refuses
   for some other reason. The assertion is on the message naming the file and
