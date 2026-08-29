@@ -982,7 +982,7 @@ pub(super) async fn meta_mcp_handler(
         // A stateless client has no handshake in which to learn who answered,
         // so every result says. And it holds no session, so it is sent no
         // session header — the legacy path below keeps both unchanged.
-        return build_modern_response(response, status);
+        return build_modern_response(response, status, &method);
     }
     build_response(response, &session_id, status)
 }
@@ -993,13 +993,55 @@ pub(super) async fn meta_mcp_handler(
 /// connection carries no state. There is no `Mcp-Session-Id`, because the
 /// revision deleted protocol sessions; and the result names the server, because
 /// there was no handshake in which to say so.
+/// The methods whose results carry `ttlMs` and `cacheScope`.
+///
+/// Five, from the `CacheableResult` interface. `server/discover` supports
+/// caching too, but is not in this list — its document is built elsewhere and
+/// the fields are added there when its own scope is decided.
+const CACHEABLE_METHODS: &[&str] = &[
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/read",
+    "resources/templates/list",
+];
+
+/// How long a client may consider a list fresh. A freshness hint, not a
+/// promise: `listChanged` notifications remain the authority on change, and
+/// this only stops a client re-listing on every turn.
+const LIST_TTL_MS: u64 = 60_000;
+
 fn build_modern_response(
     mut response: crate::protocol::JsonRpcResponse,
     status: StatusCode,
+    method: &str,
 ) -> axum::response::Response {
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {
+        // Required on every result in this revision. `complete` here because
+        // an interim result is built by the multi-round-trip path, which owns
+        // its own value.
+        object.insert(
+            "resultType".to_string(),
+            serde_json::Value::String("complete".to_string()),
+        );
+
+        if CACHEABLE_METHODS.contains(&method) {
+            object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
+            // Private, and not provisionally. This gateway's list varies by the
+            // credential presented, which is what `private` describes. `public`
+            // would tell every shared intermediary it may serve one caller's
+            // filtered view to another.
+            object.insert(
+                "cacheScope".to_string(),
+                serde_json::Value::String(
+                    crate::protocol::cacheable::CacheScope::current_for_tools_list()
+                        .as_str()
+                        .to_string(),
+                ),
+            );
+        }
         let meta = object
             .entry("_meta")
             .or_insert_with(|| serde_json::json!({}));
