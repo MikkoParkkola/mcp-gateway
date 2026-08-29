@@ -195,6 +195,47 @@ already worth nothing once this release.
 
 ---
 
+## Increment 4 — Results, errors and cacheability
+
+`resultType` and the renumbered error codes are mechanical. `cacheScope` is not: it is the field
+MIK-7213 is filed against, and getting it wrong is a cross-tenant leak rather than a compliance
+finding.
+
+### Coverage rows
+
+| AC | Case | Level | Type | Can it fail? |
+|---|---|---|---|---|
+| RESULT.1 | Every modern result carries `resultType: "complete"` | I | positive | Yes |
+| RESULT.1 | A legacy result carries none | I | regression | Yes — adding it in the shared builder changes the 2025 wire format |
+| RESULT.2 | As a client, a backend result with no `resultType` is read as `"complete"` | U | positive | Yes — the alternative is treating every legacy backend's answer as unknown |
+| ERROR.1 | The three renumbered codes are emitted at their new numbers | U | table | Yes — pinned as literals, so a rename that keeps the old number fails |
+| ERROR.2 | Resource-not-found is `-32602`, not `-32002` | U | negative | Yes |
+| CACHE.1 | `ttlMs` and `cacheScope` present on the five cacheable results | I | positive | Yes |
+| CACHE.2 | A list whose content depends on the caller is `private` | I | **security** | Yes |
+| CACHE.3 | **No `public` is emitted from a filtered assembly, anywhere** | C | security | Yes — the ticket's own stop-the-line |
+| CACHE.4 | Two callers with different credentials are never served each other's cached list | I | security | Yes — needs two principals and a live cache to be a real test, not one |
+| ORDER.1 | `tools/list` order is stable across repeated calls | I | positive | Yes |
+| ORDER.1 | Order is stable across two *different* callers when the tool set is the same | I | boundary | Yes — a `HashMap` iteration order passes the first row and fails this one |
+| ORDER.2 | A modern list does not vary with anything session-derived | I | security | Yes |
+
+### `cacheScope` starts at `private`, and the burden of proof runs the other way
+
+`public` means *"any client or intermediary MAY cache this and serve it across authorization
+contexts"*. That is a statement about every future caller, made by a server that has seen one.
+
+This gateway's `tools/list` varies by the credential presented — legally, since credentials are
+per-request input — so its list is `private` by construction today. **The release therefore emits
+`private` and never `public`**, and the path to `public` is a proof of invariance across
+authorization contexts, not a default that a filtered assembly can fall into. That is the ticket's
+stop-the-line stated as a rule the code can hold: *no `cacheScope: "public"` from a scoped assembly
+ships, anywhere.*
+
+Cost of the conservative choice, stated: a shared intermediary cannot reuse one caller's tool list
+for another. That is the correct answer while the list varies by caller, and the wrong answer only
+once the decision table proves a case where it does not.
+
+---
+
 ## Later increments — planned, not yet detailed
 
 Listed so the shape of the whole is visible and so no increment is quietly dropped. Each gets its own
