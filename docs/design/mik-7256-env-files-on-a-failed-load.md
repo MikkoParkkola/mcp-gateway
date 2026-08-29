@@ -298,7 +298,13 @@ never the whole list up front. Startup ends holding the resulting
 `ResolvedEnvFiles`, which the watcher binds instead of resolving the list again
 at `:1011-1014`. "Once" describes the number of TIMES the list is resolved, not
 a single whole-list pass: per the Shape rule, expansion happens per open,
-against the overlay as it stands at that point. `matching_env_file` goes
+against the overlay as it stands at that point. One consequence is a seam:
+the expansion reaches its home through an injected resolver rather than
+calling `dirs::home_dir()` inline as `src/config/mod.rs:291-292` does today.
+That is what lets a test install a resolver which fails after startup, so a
+second resolution is impossible rather than merely unobserved — an outcome
+assertion cannot tell the two apart, because a re-resolving implementation
+agrees with itself. `matching_env_file` goes
 on matching a changed file against that list, which is the same list it
 matched against before.
 
