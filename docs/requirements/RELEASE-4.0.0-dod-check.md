@@ -136,32 +136,50 @@ worst first:
 from the cross-check whose control failed, so they rank the modules rather than grade them — which
 is what the row promised and all it needs to do.
 
-### Mutation — not yet measured
+### Mutation — measured on `src/protocol`, and it passes there
 
-The canonical DoD §4 asks for a mutation score ≥75% on new code (`cargo-mutants`), and this release
-does not have one. `cargo-mutants` finds **245 mutants** in `src/protocol/*.rs` alone; the full
-branch diff is several times that surface, and running every mutant against the full 4,611-test
-suite is not affordable on this hardware.
+The canonical DoD §4 asks for a mutation score ≥75% on new code. `cargo-mutants` now has a number,
+scoped to `src/protocol/*.rs`: **28 caught, 2 missed, 0 timeouts — 93.3%**, run on Spark with
+`--all-features -j 8 --timeout 300`. 132 mutants were unviable (they do not compile) and are not
+scored, which is the tool's own convention.
 
-What stands in its place, and what it does not substitute for: 4,611 passing tests and thirty-one
-falsification probes, of which two controls could not be made to fail and are named as such. A
-falsification probe is stronger evidence than a mutation score for the control it targets — it
-proves that specific control observes what it claims — and weaker for the release as a whole,
-because thirty-one probes cover thirty-one controls and mutation covers every line of new code. The
-probes do not tell us how much of the branch is untested. Coverage now partly does, and its answer
-is: not enough.
+Both survivors were in the continuation envelope, and both are now closed:
+
+| survivor | what it proved absent | closed by |
+|---|---|---|
+| `continuation.rs:368` — `>` becomes `>=` in `Keyring::open` | nothing pinned the 8 KiB envelope bound at its exact boundary | `envelope_size::a_token_of_exactly_the_permitted_size_is_judged_on_its_contents` |
+| `continuation.rs:178` — `client_message` returns `""` | nothing required a refusal to say anything at all | `envelope_size::a_client_facing_refusal_still_tells_the_caller_something` |
+
+Both tests were proven by falsifier probe before being committed: baseline green, each mutant
+reintroduced by hand and each test red **on its own assertion** rather than on a compile error,
+then the source restored and both green again. With them the scoped score is 30/30.
+
+**This is a subset, and a subset score is a LOWER BOUND on the branch, not a grade for it.** The
+full branch diff is several times the `src/protocol` surface; the modules coverage named as weakest
+(`src/main.rs`, `src/transport/http/mod.rs`, `src/gateway/server/mod.rs`, `src/oauth/client/mod.rs`,
+`src/gateway/router/handlers.rs`) are not in this run. What the run does establish is that the
+security-critical new module — envelope mint, open, caller binding, single-use ledger — has no
+surviving mutants.
+
+Getting here cost two blocked baselines, which is worth recording because the failure was invisible
+where a human runs the tests: `cargo-mutants` sets a **relative** `TMPDIR`, `tempfile::tempdir()`
+then returns a relative path, and the `config` crate drops the leading `./` when it names the file
+in a parse error. One test compared the rendered path verbatim, so it passed in the repo, passed in
+isolation, and failed the mutation baseline on two machines. A baseline failure stops the tool
+before it tests a single mutant, so the whole gate was blocked by a test that looked green
+everywhere else. Reproduced in one command (`TMPDIR=./reltmp cargo test --lib <name>`) and fixed by
+matching the last two path components instead.
 
 | field | value |
 |---|---|
 | owner | **MIK-7324** |
-| what would resolve it | coverage: **done**, recorded above. Mutation: `cargo mutants` over the branch diff, on Spark, where the full suite per mutant is affordable |
+| what would resolve it | mutation over the **rest** of the branch diff, on Spark, module by module, starting with the five coverage named |
 | when | before the 4.1.0 tag, or immediately if the operator holds 4.0.0 for it |
-| what if it resolves badly | it has, on the coverage half: the touched-file aggregate is 2.6 points under the Standard floor and the five modules above are named. Those become tickets under MIK-7324, and the modern path stays default-off until they close |
+| what if it resolves badly | survivors outside `src/protocol` become tests under MIK-7324; the modern path stays default-off until they close |
 
-This is a deferred item under §P1, not an N/A: both criteria apply, one is now measured and fails,
-the other is still outstanding. A §P1 deferral schedules a question; it does not waive a blocking
-DoD criterion, so §4 stands BLOCKED. Coverage moving from unmeasured to measured-and-failing is
-progress in the record's honesty, not in the verdict.
+§4 stands BLOCKED regardless: mutation is now measured and passing on the scope that was run, and
+**coverage is measured and failing** — the touched-file aggregate is 2.6 points under the Standard
+floor. One of the two criteria passing does not unblock a gate that needs both.
 Holding the tag is a live option and one line from the operator takes it.
 
 ### Falsification — every control was made to fail, and two could not be
