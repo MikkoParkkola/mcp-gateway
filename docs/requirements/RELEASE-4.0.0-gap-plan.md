@@ -62,8 +62,23 @@ carry it by driving `serve` itself. Design recorded in
 `docs/design/2026-08-30-shared-continuation-state.md`. Nothing is left to do here; increment 2b is
 the next open item.
 
-**2a — The mint site can see who is calling (S).** No behaviour change, so the existing suite
-green before and after is the evidence. Review added four tests anyway, on the capability string the
+**2a — The mint site can see who is calling (S). Reviewed and shipped.** Both vendors returned
+SHIP on `ddf12582`: GPT-5.x on the confirmation pass, Grok on the first. Neither found a behaviour
+defect. What they did find was three stale citations and one missing test, all repaired here: the
+seam table pointed at the wrong two arms of the retry branch (the `is_retry` arm is
+`handlers.rs:879-896`, the `is_malformed` arm that stays is `867-878` -- the reviewer's own repair
+was a line short on the second, which is why a cited line gets re-read rather than copied), a design
+paragraph cited the `client_info_name` docs for a rule that lives eight lines above them, and the
+method's doc comment named a false case no test constructed. That last one is the only defect of the
+four that could have reached a user: a mutant flipping the malformed arm to `true` would have
+survived, because production returns on a failed classification before the field is read and so
+never exercises it.
+
+Line citations have now drifted three times in this document. The seam-table rows name their arm
+predicate as well as their range, so the next drift is self-correcting rather than misleading.
+
+No behaviour change, so the existing suite
+green before and after is the evidence. Review added five tests anyway, on the capability string the
 new `RequestShape::may_request_input` compares against: a typo there compiles and reads as a
 correct no-op, so the string needs a test even when the caller of the method does nothing yet. `invoke_tool_traced`
 takes `caller: &MetaMcpCallerContext<'_>` in place of its six flattened caller fields, and the
@@ -232,13 +247,58 @@ struct level. That satisfies the criterion's literal text and cannot catch a cal
 consults the policy — the same shape as increment 18's defect, one layer down. MIK-7214's suite
 already has the pattern worth copying: real axum-router integration tests under its `mod http`.
 
-**20 — The header contract's two open halves (S).** Closes MIK-7214.HDR.2 and HDR.4. Inbound
-validation is done and green (`protocol/headers.rs:148-213`, wired at `handlers.rs:600-687`,
-mismatch to -32020, 32 tests). Two halves are absent, both verified by search on 2026-08-31:
-outbound `Mcp-Method`/`Mcp-Name` emission has zero hits in `src/backend` or `src/transport`, and
-`x-mcp-header` has zero hits anywhere in `src/`. HDR.4 may be closeable by a recorded declination
-rather than code — the criterion asks for support or an explicit decision, and which one it gets is
-an owner call, not an implementation detail.
+**20 — The header contract's outbound half (M).** Closes the emission side of
+MIK-7214.HEADER.2, the encode side of HEADER.4, and HEADER.5. Sized M rather than the S carried by
+earlier drafts: the emission and encode work share one seam and are S together, and HEADER.5 adds an
+unopened parameter-to-header path on top. Inbound validation is done and green
+(`protocol/headers.rs:148-213`, wired at `handlers.rs:600-687`, mismatch to -32020, 32 tests).
+
+This increment carried its own numbering defect, corrected here. Earlier drafts of this plan wrote
+`HDR.2` and `HDR.4`, a local scheme that does not map onto the canonical criteria. In
+`requirements.md` the identifiers are `MIK-7214.HEADER.1-6`, `x-mcp-header` is **HEADER.5** rather
+than HDR.4, and **HEADER.4** is the sentinel-encoding criterion — "in both directions", which is
+precisely the encode half this increment closes. The tests already use the canonical names
+(`tests/mik_7214_acs.rs`, `ac_header_{1..4}`), so the drift lived only in the planning documents.
+Same failure class as the `SESSION.*`/`CONTROL.*` mismatch recorded for MIK-7215.
+
+Two things are absent, verified by search on 2026-08-31: outbound `Mcp-Method`/`Mcp-Name` emission
+has zero hits in `src/backend` or `src/transport`, and `x-mcp-header` has zero hits anywhere in
+`src/`. Both go through one seam — `build_mcp_headers` (`transport/http/mod.rs:544-637`), whose own
+doc comment calls itself the single source of truth for outgoing request headers and which already
+inserts `MCP-Protocol-Version`. `HeaderMode::Request` (`transport/http/mod.rs:249`) carries only
+`method`, so the name value is not reachable at the seam yet; widening that enum is the change.
+`encode_header_value` does not exist — `decode_header_value` (`protocol/headers.rs:79-98`) has no
+counterpart anywhere in `src/`, which is the encode gap stated as code.
+
+**Two more records overstate what shipped, and this is now the fourth and fifth case.**
+`criteria-status.md:35` marks HEADER.2 MET on the strength of inbound validation. The criterion says
+`Mcp-Method` MUST be required on *every modern request*, and the gateway is a client to its own
+backends, so its outbound requests are in scope and carry neither header. `criteria-status.md:37`
+marks HEADER.4 MET while its own evidence column records "decode-only, no encode/emit path found
+anywhere in src/" — a caveat that contradicts the verdict beside it. Neither row is dishonest; both
+read the criterion as the inbound half only. The plan's rule of thumb now has both directions
+represented: rows claiming something is missing get re-read first, and rows claiming MET get checked
+against the *whole* criterion, not the half the implementation covered.
+
+**HEADER.5 is a MUST with no opt-out, so declination is not this plan's call.** Earlier text here
+floated a recorded declination as a viable close. Re-reading the criterion at
+`requirements.md:104` — "Custom headers supplied through tool parameters (`x-mcp-header`) MUST be
+accepted and forwarded" — there is no support-or-decide language in it; that reading came from
+applying the development process's disposal table to a conformance criterion, which is not
+something the criterion grants. RFC-0061:251 lists `x-mcp-header` in scope and records no
+declination either. Building it is M, not XS: it is a new parameter-to-header path with no existing
+seam. Dropping it is a scope reduction, and per the repair protocol that needs the operator's
+recorded agreement before it happens, not a note afterwards. **This is the one open question in
+this increment that no command can answer** — and it is already answered. The instruction governing
+this plan is to fix all gaps "with the full scope", stated twice. That is a standing decision by the
+person entitled to make it, covering exactly this class of choice, so HEADER.5 is **built**. Recorded
+here as answered rather than assumed: asked of the operator, answered "full scope", and what it
+changed is that the M-sized parameter-to-header path stays in this increment instead of becoming a
+declination note.
+
+Also to fix regardless of that decision: `tests/mik_7272_conformance.rs:194-201` bundles HEADER.1-6
+under a single row claiming `x-mcp-header` support, on evidence that only covers the inbound
+tests. That table currently self-reports coverage for a criterion with zero implementing code.
 
 MIK-7214's own ticket comment dated 2026-08-30 says "no code implementing any part of the header
 contract" and cites a search returning nothing. The code is there, wired and tested. That comment is
@@ -248,6 +308,58 @@ less had shipped than had. The rows claiming something is *missing* are the ones
 
 Increment 18 runs the other way and is worth naming as the opposite failure: there, the record says
 a mechanism exists and the tests agree, and only the call site tells the truth.
+
+### Three increments designed, and two were undersized
+
+**2b is M, and the version this plan described would have shipped a silent no-op.** Replacing the
+`is_retry()` refusal arm at `handlers.rs:879-896` cannot work alone, for two reasons verified at
+source on 2026-08-31.
+
+There is no envelope for a client to retry *with*. `Keyring::mint`, `Keyring::open` and
+`ConsumedLedger::consume` have no call site outside `continuation.rs`'s own definitions and tests.
+Nothing seals a continuation on the way out, so the outbound leg is a prerequisite, not a follow-up.
+
+Worse, the naive fix fails quietly. The idempotency key is `derive_key("{server}:{tool}", arguments)`
+(`support.rs:31-46`); the response-cache key is `ResponseCache::build_key(server, tool, &arguments)`
+plus projection and identity suffixes. Neither carries a continuation identifier. A retry sends the
+same server, tool and arguments and differs only in its answers, so it hashes to the original call's
+entry — an entry already populated, because `invoke.rs:1265-1270` calls `cache.set` and then
+`mark_completed` with no test of the result discriminator anywhere in that file (`rg -n
+"resultType|input_required"` over it returns nothing). An `input_required` result is an `Ok(value)`,
+so it is stored as final. Every retry then returns the stale first-round prompt and never reaches
+the backend.
+
+This increment was scoped against a double-side-effect risk. The real defect is availability, and it
+is invisible — the client receives a well-formed response every time. The cache-key fix ships in the
+same change or the feature is worse than the refusal it replaces. Held-open RPC for legacy backends
+is explicitly out of scope and filed separately.
+
+**18 has no cache, so the open question this plan recorded was the wrong question.** The destructive
+set is derived at gate time from stores that already exist: compile-time meta-tool definitions, the
+per-backend `tools_cache` read through the non-blocking `get_cached_tool()`, and the capability tool
+set. The list path reads the same store at `surfaced.rs:130`, so gate and `tools/list` cannot
+disagree by construction. `normalize_tool_annotations()` runs in the cache-fill closure, so every
+cached tool carries `destructive_hint: Some(_)` and there is no absent-hint case to fail open on.
+
+The shape is a `&self` method on `MetaMcp` composing the two checks exactly as
+`destructive_confirmation.rs:143-147` already specifies, reached through `state.meta_mcp` — which
+also dissolves the "only a `&str` is in scope at `handlers.rs:1024`" blocker recorded earlier here.
+Fail-closed is scoped, not blanket: a name already admitted as callable whose tool cannot be
+resolved right now counts as destructive. Blanket "unknown means destructive" would prompt on every
+read-only call, and unadmitted names never reach a backend. `destructive_tools_from_annotations()`
+keeps its name and takes the live store instead of a detached `Value` array — that detachment is
+precisely why it has unit tests and no production caller.
+
+Two questions here are the operator's and neither blocks the design. The stdio path
+(`server/mod.rs:1711`) has no destructive gate and its own comment argues the spawning client
+already holds operator authority; recording that as N/A-with-reason is the cheap disposal. And
+TTL-only staleness for a re-listing backend is the same window `tools/list` already ships to
+clients, where what goes stale is a courtesy prompt rather than the control.
+
+**One citation died on inspection.** The 2b analysis placed `build_modern_response` at
+`invoke.rs:1313-1348`; that file contains no `resultType` at all. The mechanism is real and lives
+elsewhere. Worth recording for the ratio: of today's design findings checked at source, the
+substantive claims held and the line numbers did not.
 
 ### Still open, and it will not resolve itself
 
