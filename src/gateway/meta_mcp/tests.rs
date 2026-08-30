@@ -2452,3 +2452,207 @@ async fn global_meta_tool_reaches_an_admin_caller() {
          tool's business: {message}"
     );
 }
+
+// ============================================================================
+// Prompts/resources aggregation: parallel fan-out + per-backend timeout
+// ============================================================================
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// A minimal streamable-http MCP backend for testing aggregation.
+///
+/// Responds to `initialize` and to a single configured method (`prompts/list`
+/// or `resources/list`) with a configurable payload and latency. Latency is
+/// applied before responding so a backend that "hangs" is one whose sleep
+/// exceeds the aggregation fetch timeout.
+struct MockMcpBackend {
+    name: String,
+    /// The method this backend answers (`prompts/list` or `resources/list`).
+    method: &'static str,
+    /// JSON array to return for `method`.
+    payload: serde_json::Value,
+    /// Sleep before responding.
+    delay: std::time::Duration,
+}
+
+async fn start_mock(backend: MockMcpBackend) -> String {
+    use axum::extract::State;
+    use axum::routing::post;
+    use axum::Router;
+    use axum::Json;
+
+    #[derive(Clone)]
+    struct S {
+        backend: std::sync::Arc<MockMcpBackend>,
+        seen: std::sync::Arc<AtomicUsize>,
+    }
+
+    let state = S {
+        backend: std::sync::Arc::new(backend),
+        seen: std::sync::Arc::new(AtomicUsize::new(0)),
+    };
+
+    async fn handle(
+        State(s): State<S>,
+        Json(req): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        let method = req["method"].as_str().unwrap_or("");
+        let resp = match method {
+            "initialize" => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {
+                        "tools": {"listChanged": true},
+                        "prompts": {"listChanged": true},
+                        "resources": {"listChanged": true},
+                    },
+                    "serverInfo": {"name": "mock", "version": "0.1.0"},
+                }
+            }),
+            m if m == s.backend.method => {
+                s.seen.fetch_add(1, Ordering::SeqCst);
+                if !s.backend.delay.is_zero() {
+                    tokio::time::sleep(s.backend.delay).await;
+                }
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": req["id"],
+                    "result": { "prompts": s.backend.payload, "resources": s.backend.payload },
+                })
+            }
+            _ => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "error": { "code": -32601, "message": "Method not found" },
+            }),
+        };
+        Json(resp)
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/mcp", post(handle)).with_state(state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}/mcp")
+}
+
+/// Build a `MetaMcp` whose only backend is a mock at `url`, with a short
+/// aggregation timeout so tests run fast.
+fn meta_with_backend(url: &str, timeout: Duration) -> MetaMcp {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, TransportConfig};
+
+    let config = BackendConfig {
+        description: String::new(),
+        enabled: true,
+        transport: TransportConfig::Http {
+            http_url: url.to_string(),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        stop_when_idle_for: None,
+        timeout: Duration::from_secs(5),
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "mock",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let registry = Arc::new(BackendRegistry::new());
+    let _ = registry.register(backend);
+
+    MetaMcp::new(registry)
+        .with_prompts_fetch_timeout(timeout)
+        .with_resources_fetch_timeout(timeout)
+}
+
+#[tokio::test]
+async fn prompts_list_includes_backend_prompts() {
+    let url = start_mock(MockMcpBackend {
+        name: "mock".to_string(),
+        method: "prompts/list",
+        payload: serde_json::json!([{ "name": "greet", "description": "say hi" }]),
+        delay: Duration::ZERO,
+    })
+    .await;
+    let meta = meta_with_backend(&url, Duration::from_secs(5));
+
+    let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
+    let prompts = resp.result.unwrap()["prompts"].as_array().unwrap().clone();
+    let names: Vec<&str> = prompts.iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"gateway/gateway-discover"), "meta prompts kept");
+    assert!(names.contains(&"mock/greet"), "backend prompt namespaced");
+}
+
+#[tokio::test]
+async fn prompts_list_skips_hung_backend_within_timeout() {
+    let url = start_mock(MockMcpBackend {
+        name: "mock".to_string(),
+        method: "prompts/list",
+        payload: serde_json::json!([]),
+        delay: Duration::from_secs(60), // far beyond the 100ms test timeout
+    })
+    .await;
+    let meta = meta_with_backend(&url, Duration::from_millis(100));
+
+    let start = std::time::Instant::now();
+    let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
+    let elapsed = start.elapsed();
+
+    assert!(resp.error.is_none(), "list still succeeds: {:?}", resp.error);
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "must skip hung backend quickly, took {:?}",
+        elapsed
+    );
+    // Only the gateway meta-prompts remain.
+    let result = resp.result.unwrap();
+    let prompts = result["prompts"].as_array().unwrap();
+    assert_eq!(prompts.len(), 2);
+}
+
+#[tokio::test]
+async fn resources_list_skips_hung_backend_within_timeout() {
+    let url = start_mock(MockMcpBackend {
+        name: "mock".to_string(),
+        method: "resources/list",
+        payload: serde_json::json!([]),
+        delay: Duration::from_secs(60),
+    })
+    .await;
+    let meta = meta_with_backend(&url, Duration::from_millis(100));
+
+    let start = std::time::Instant::now();
+    let resp = meta.handle_resources_list(RequestId::Number(1), None).await;
+    let elapsed = start.elapsed();
+
+    assert!(resp.error.is_none(), "list still succeeds: {:?}", resp.error);
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "must skip hung backend quickly, took {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn resources_list_includes_backend_resources() {
+    let url = start_mock(MockMcpBackend {
+        name: "mock".to_string(),
+        method: "resources/list",
+        payload: serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
+        delay: Duration::ZERO,
+    })
+    .await;
+    let meta = meta_with_backend(&url, Duration::from_secs(5));
+
+    let resp = meta.handle_resources_list(RequestId::Number(1), None).await;
+    let resources = resp.result.unwrap()["resources"].as_array().unwrap().clone();
+    let uris: Vec<&str> = resources.iter().map(|r| r["uri"].as_str().unwrap()).collect();
+    assert!(uris.contains(&"mock://a"), "backend resource included");
+}

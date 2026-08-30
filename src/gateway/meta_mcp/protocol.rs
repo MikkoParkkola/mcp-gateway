@@ -9,6 +9,7 @@
 //! without forwarding to any backend, prepended to every `prompts/list`
 //! response so clients always find them first.
 
+use futures::future::join_all;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
@@ -149,14 +150,29 @@ impl MetaMcp {
         // Prepend gateway-owned meta-prompts (served inline, no backend required).
         let mut all_prompts: Vec<Prompt> = gateway_prompts().into();
 
-        for backend in self.backends.all() {
-            if self.meta_route_isolation_refused(&backend) {
-                continue;
+        // Fetch all backends in parallel; skip ones that fail or time out.
+        let backends: Vec<_> = self
+            .backends
+            .all()
+            .iter()
+            .filter(|backend| !self.meta_route_isolation_refused(backend))
+            .cloned()
+            .collect();
+        let timeout = self.prompts_fetch_timeout;
+        let results = join_all(backends.iter().map(|backend| async move {
+            match tokio::time::timeout(timeout, backend.get_prompts_shared()).await {
+                Ok(Ok(prompts)) => Ok(prompts.as_ref().clone()),
+                Ok(Err(e)) => Err(e),
+                Err(_elapsed) => Err(crate::Error::BackendTimeout(backend.name.clone())),
             }
-            match backend.get_prompts_shared().await {
+        }))
+        .await;
+
+        for (backend, prompts) in backends.iter().zip(results) {
+            match prompts {
                 Ok(prompts) => {
-                    for prompt in prompts.iter() {
-                        let mut prompt = prompt.clone();
+                    for prompt in prompts {
+                        let mut prompt = prompt;
                         prompt.name = format!("{}/{}", backend.name, prompt.name);
                         all_prompts.push(prompt);
                     }
