@@ -246,7 +246,10 @@ impl ConfigScanner {
                     .to_lowercase()
                     .replace('_', "-");
 
-                debug!("Found MCP server in environment: {name} = {value}");
+                // The variable name, never its value: an endpoint URL carries
+                // userinfo and query-string tokens often enough that logging it
+                // writes a credential into the log because discovery ran.
+                debug!("Found MCP server in environment: {name} (from {key})");
 
                 servers.push(DiscoveredServer {
                     name: name.clone(),
