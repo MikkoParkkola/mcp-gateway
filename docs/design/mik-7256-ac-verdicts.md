@@ -1,10 +1,20 @@
 # MIK-7256 — acceptance-criterion verdicts
 
-Commit: `ec633332`. Suite: `cargo test --quiet` → **4537 passed, 0 failed, 23 ignored**
-(E3). `cargo test --all-features` → **1 failure**, `ac_discover_3_initialize_result_is_unchanged`,
-a missing `spec_preview` golden fixture that has never existed in this repository. Pre-existing
-on this branch's base and out of scope here; disposed as a ticket because the choice between
-capturing the fixture and gating the assertion is a product decision.
+Commit: `30b462a8`, the final commit of this change. Two runs stand behind this table, and they
+are not the same run:
+
+- At `30b462a8`: `cargo test --lib` → **3740 passed, 0 failed, 3 ignored**; `cargo clippy
+  --all-targets -- -D warnings` clean; `cargo fmt --check` clean (E3).
+- At `34894e4e`, the last commit before the two documentation-and-test repairs: `cargo test
+  --all-features` → **4287 passed, 1 failed, 10 ignored** across 28 suites (E3). The all-features
+  run was not repeated at `30b462a8`; the two commits after it touch one test function and one
+  design document, so the per-criterion verdicts below are unaffected, but the full-feature count
+  is a figure from the earlier commit and is labelled as one.
+
+The single failure is `ac_discover_3_initialize_result_is_unchanged`, a missing `spec_preview`
+golden fixture that has never existed in this repository. Pre-existing on this branch's base and
+out of scope here; disposed as a ticket because the choice between capturing the fixture and
+gating the assertion is a product decision.
 
 **Headline: this change does not pass DoD §1.** Of 26 acceptance criteria, 9 are verified by a
 test, 6 are partly verified, and 11 have no verifying test. None is unimplemented.
@@ -19,7 +29,7 @@ Searches run for this table (cited, not recalled):
 - `rg -n 'set_var' src --glob '*.rs'` → **zero matches**, whole crate
 - `rg -n 'from_path_override' src tests` → **zero matches**
 - `rg -n '\.baseline\(' src tests` → **zero callers**
-- `rg -n 'ENVFILE\.12|envfile_12' src tests` → design document only
+- `rg -n 'ENVFILE\.12|envfile_12' src tests` → `src/config_reload/mod.rs:1264`, `src/config/tests.rs:1354`
 
 | AC | verdict | evidence | E |
 |---|---|---|---|
@@ -52,7 +62,7 @@ Searches run for this table (cited, not recalled):
 
 **Totals over the 26 acceptance criteria: 9 PASS, 6 PARTIAL, 11 NO TEST, 0 FAIL.**
 
-Two rows have been verified at source and closed since the table was drafted: ENVFILE.13 and ENVFILE.12, both now PASS. The remaining rows were mapped by reading each criterion against the tests that appear to cover it; no test names its criterion, so the mapping is prose matching rather than traceability. `rg 'MIK\.ENVFILE\.' src/ tests/` returns nothing for all 26 identifiers.
+Two rows have been verified at source and closed since the table was drafted: ENVFILE.13 and ENVFILE.12, both now PASS. The remaining rows were mapped by reading each criterion against the tests that appear to cover it; only ENVFILE.12 names its criterion in source (`src/config_reload/mod.rs:1264`, `src/config/tests.rs:1354`), so for the other 25 the mapping is prose matching rather than traceability.
 
 ## Test-plan cases that are not acceptance criteria
 
