@@ -253,12 +253,6 @@ fn ac_discover_3_initialize_result_is_unchanged() {
                 serde_json::to_string_pretty(&result).expect("result must serialise"),
             )
             .expect("golden must be writable");
-        } else if !std::path::Path::new(golden_path).exists() {
-            eprintln!(
-                "SKIPPED: golden fixture missing at {golden_path}. Capture it with \
-                 UPDATE_GOLDEN=1 from a qualifying historical commit if intended."
-            );
-            continue;
         }
 
         let golden_raw = std::fs::read_to_string(golden_path).unwrap_or_else(|e| {
