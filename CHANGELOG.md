@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-08-29
 
+### Changed
+
+- **OAuth credentials are keyed by the authorization server that granted
+  them.** MCP 2026-07-28 requires a client to key persisted credentials by the
+  issuer identifier, to not reuse them with a different authorization server,
+  and to re-register when that server changes. Tokens and dynamically
+  registered client ids were keyed on the backend name alone, so moving a
+  backend to a new authorization server presented it a client id it never
+  issued — surfacing later as a confusing rejection rather than the
+  re-registration it should have been.
+
+  **On upgrade, backends using OAuth re-authenticate once.** Credentials stored
+  by an earlier version carry no issuer and so cannot be attributed to one;
+  they are not served to any. Reading them under the old key would defeat the
+  separation this change exists to enforce, so the gateway re-registers and
+  re-authorizes instead. No configuration change is needed.
+
 ### Fixed
 
 - **A failed config load no longer leaks its env files into the process.**
