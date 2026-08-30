@@ -185,9 +185,13 @@ it hands a backend a value the client controls.
    belong to the same run — and stating it as a structural property rather than a convention is
    what keeps a later config-reload refactor from resetting the ledger while the keys live on.
 
-   The continuation lifetime is **at most 300 seconds**, and minting derives `expires_at` from the
-   current time rather than accepting one, which is what the API does today (continuation.rs:475).
-   A caller asking for longer gets 300. The number bounds two things at once and both are now
+   The continuation lifetime is **300 seconds**, and minting derives `expires_at` from the current
+   time rather than accepting one, which is what the API does today (continuation.rs:475). Clamping
+   an over-long request would be a silent narrowing, and the paragraph above spends its whole
+   argument on preferring a visible failure to a silent one; so the lifetime is not a parameter at
+   all. `Payload::mint` loses its `expires_at` argument, and an over-long lifetime stops being
+   something to refuse because it stops being expressible. There is no external caller to
+   disappoint: minting happens on the gateway's own response path, never at a client's request. The number bounds two things at once and both are now
    measurable: how long a stolen token is worth stealing, and how much work a restart destroys.
 
 ## Unknowns, scheduled
@@ -201,6 +205,15 @@ it hands a backend a value the client controls.
 
 The first row changes what the release can claim: the response side no longer waits on anything,
 and the retry side waits only on the review of this document.
+
+A lifetime is a trade-off, not a fact about the code, so it was **asked, not measured**:
+
+- *How long should a paused call stay resumable?* — asked of the operator, 2026-08-30 — **300
+  seconds**, on the reading that the answering party is a client program or a person already at the
+  screen, not someone who walks away. — Changed nothing: it confirmed the value already in decision
+  4, which had been chosen without asking. Had the answer been fifteen minutes, the spent-token list
+  would have had to hold roughly three times as many live entries and MRTR.8's capacity row would
+  have moved with it.
 
 ## Test plan sketch
 
