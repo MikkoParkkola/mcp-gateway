@@ -1159,6 +1159,22 @@ observation, not a ticket.
   restart-required and names `HOME`, and the gateway keeps reading the paths
   it recorded at startup.
 
+- **MIK.ENVFILE.19b** Given the two runtime readers that ENUMERATE the
+  environment rather than asking it for one key — the firewall's scan-skip
+  list and discovery's config scanner — When an accepted reload rotates a key
+  an env file supplies, Then the next read sees the rotated value; and When a
+  later reload stops supplying it, Then the next read no longer sees it. The
+  process environment is written at neither point. Enumeration is why these
+  two need naming at all: a per-key `resolve` gives a reader that walks the
+  environment nothing to walk, so each is defined by the resolution table
+  applied over the process environment rather than by `resolve`.
+- **MIK.ENVFILE.19c** Given `env_files` entries spelled with a leading `~`, and
+  an earlier entry that assigns `HOME`, When the files are opened, Then the
+  later entry's `~` expands against the overlay as it stands at that moment and
+  the absolute path is recorded as it is handed over — never in an up-front
+  pass over the whole list, which would expand every entry against the `HOME`
+  in force before any file had been read.
+
 An earlier form required the gateway to report `env_files` as restart-required
 after a content-only edit. Cut, not weakened: `pending_restart_fields` compares
 the `env_files` *path list* (`src/config_reload/mod.rs:552`), which a content
