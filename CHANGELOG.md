@@ -51,6 +51,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a key supplied by an env file no longer reached it and the signer stayed
   uninstalled. The key and its id now resolve through the overlay.
 
+- **A config rewrite no longer persists a resolved secret.** Every
+  read-modify-write path — the admin UI and the CLI commands that edit
+  `gateway.yaml` — used to load the config with `env:` references and `${VAR}`
+  placeholders already resolved, then serialise the result back to disk in
+  plaintext. Those paths now load the file literally: references are preserved
+  as written, and a value an env file or an `MCP_GATEWAY_*` variable supplies
+  never reaches the struct that is written out. A write is still validated,
+  against the env files the config being written names.
+
+- **A reload is no longer refused over a reference the parser would ignore.**
+  Env files are no longer applied to the process, so a `${K}` or `$K` reference
+  to a key another env file defines can no longer expand on a reload, and the
+  gateway refuses the reload rather than silently substituting nothing. That
+  refusal now matches `dotenvy`'s own grammar: an unbraced name ends at the
+  first non-alphanumeric character, a tab before `#` starts a trailing comment,
+  and comments, single-quoted values and escaped `\$` are inert as they always
+  were. Scanning is per logical line, as the parser reads them.
+
 ### Added
 
 - **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The

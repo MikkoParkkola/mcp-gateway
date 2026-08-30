@@ -422,8 +422,8 @@ reader:
   startup would never have applied — a credential live on a reload and absent
   after the next restart. A fallible
   builder would introduce a *new* error class into `Config::load`, and
-  `load_config_or_default` turns any `Config::load` error into
-  `Config::default()` (`src/config_persistence.rs:14-23`), which the admin-UI
+  `load_config_or_default` turns any load error into
+  `Config::default()` (`src/config_persistence.rs:17-26`), which the admin-UI
   read-modify-write then writes to disk. A malformed env file would silently
   replace an operator's configuration with defaults. Parity with startup makes
   that unreachable rather than merely unlikely.
@@ -916,18 +916,25 @@ APPLYING, not about opening. The `env:` form needs no such log: it
 resolves through `validate_env_reference`, which refuses, so the operator is
 told by the refusal.
 
-The same asymmetry answers the admin-UI write path, which revalidates through
-`write_config` (`src/config_persistence.rs:42`) against the running
-environment: an edit referencing a variable only a candidate-added env file
-supplies is rejected in the `env:` form and warned in the `${VAR}` form. That is
-the unreloadable `env_files` LIST reaching the UI, not a defect: the file
-supplying the name has never been read, so no overlay contains it. A
-write-validation path that resolved a candidate against files the running
-process has never opened would let the UI accept exactly the configuration a
-restart would need, and it is OUT of scope for the same reason the list itself
-is. This is also why `Config::load` keeps
-reading the list out of the file: at startup the config on disk *is* the
-running config, and there is no earlier list to prefer.
+The admin-UI write path resolves this differently, and the difference is a
+DESIGN EVENT rather than an oversight. It revalidates through `write_config`
+(`src/config_persistence.rs:47`) against `config.env_overlay()`
+(`src/config/mod.rs:385`) — an overlay built by reading the CANDIDATE's own
+`env_files`, tolerantly, for key names. So an edit that adds an env file and a
+reference the file supplies is ACCEPTED, where the earlier draft of this
+section said it would be rejected in the `env:` form and warned in the
+`${VAR}` form. The draft assumed a write validated against the running
+environment; the shipped write validates against the config it is about to
+persist.
+
+That is the more useful behaviour and the one the literal load forces: a UI
+that refused the configuration a restart would then need is a UI that cannot
+express the change this ticket exists to make safe. It does NOT bring the
+`env_files` LIST into scope — the running process still applies only the list
+it started with, and the write path resolves nothing into the config, because
+the load is literal. Startup keeps reading the list out of the file for the
+same reason as before: at startup the config on disk *is* the running config,
+and there is no earlier list to prefer.
 
 **`expand_env_vars(&mut self, overlay: &EnvOverlay)`** and
 `expand_string(s: &str, overlay: &EnvOverlay)`. The only behavioural line is
@@ -961,10 +968,14 @@ it builds an `EnvOverlay` from the `env_files` ARGUMENT and `previous` — the
 running gateway's list, never the candidate's own
 `env_file_config.env_files` — rather than applying those files to the process,
 and passes it to
-`expand_env_vars`. `Config::load` is unchanged in signature and behaviour for
-all 35 call sites, which is why none of them is edited; it is the thin wrapper
-over `load_evaluated` stated above, and nothing here gives it a second
-definition.
+`expand_env_vars`. `Config::load` keeps its signature and its
+apply-to-process behaviour. SHIPPED DEVIATION from "none of the 35 call sites
+is edited": the read-modify-write callers in `config_persistence` moved to
+`Config::load_literal` (`src/config/mod.rs:369`), which parses without
+resolving `env:` or `${VAR}` at all. They had to — a resolved secret loaded on
+that path is a secret written back out in plaintext by the very next line.
+`Config::load` itself is unchanged, and is the thin wrapper over
+`load_evaluated` stated above; nothing here gives it a second definition.
 
 The two bodies share a private `load_inner(path, EnvSource)` with
 `enum EnvSource<'a> { ApplyToProcess, Overlay { paths: &'a [PathBuf],
@@ -977,16 +988,34 @@ replaces.
 module and must reach it, and nothing outside the crate should. Its documented
 invariant is that it does not mutate the process environment.
 
-**`write_config` takes the overlay too.** `src/config_persistence.rs:42`
-revalidates before writing, and validation is now overlay-aware, so leaving it
-on the process alone would reject an admin edit naming a key that an
-already-listed env file supplies and a reload has since rotated — a rejection
-this change would have caused. It gains an `&EnvOverlay` parameter, supplied
-from the `LiveEnv` cell by the in-process admin path. The CLI path passes
-`EnvOverlay::none()`: `Config::load` deliberately returns only a `Config`, so
-there is no overlay to hand it, and a CLI invocation has no running gateway
-whose rotations it could be missing. An earlier draft said the CLI passed what
-`Config::load` produced, which could not have been wired as written.
+**`write_config` validates against the config it is writing.** SHIPPED
+MECHANISM, and it is not the one this section originally prescribed; the change
+is recorded here rather than rewritten away. The prescription was an
+`&EnvOverlay` parameter, supplied from the `LiveEnv` cell by the in-process
+admin path and `EnvOverlay::none()` by the CLI. What shipped is
+`write_config(path, config)` revalidating through `config.env_overlay()`
+(`src/config_persistence.rs:47`) — the overlay the config's own `env_files`
+produce.
+
+Why the mechanism moved: the rewrite paths became literal (below), so the
+config handed to `write_config` still carries `env:NAME` references
+unresolved. `EnvOverlay::none()` resolves only through the process
+environment, so every CLI write of a config whose secrets live in an env file —
+precisely the population this change exists to serve — would have failed
+`validate_required_env_references`. The prescription was unimplementable
+alongside the literal load, not merely inconvenient.
+
+What that costs, stated rather than defended: a write validates against files
+the running process may never have opened, when the candidate's `env_files`
+list differs from the one in force. Bounded by the same asymmetry as the
+`${VAR}` read above — the values answer existence and length questions and are
+never resolved into the config, because the load is literal and
+`expand_env_vars` does not run on this path. Nothing read here is written,
+published or logged.
+
+It revalidates at all because validation is overlay-aware: leaving it on the
+process environment alone would reject an admin edit naming a key that a
+listed env file supplies and a reload has since rotated.
 
 **Who calls it: every config read that happens inside a running gateway.** A
 rule, not a list, because a list goes stale the moment a reader is added. Two
@@ -998,12 +1027,14 @@ readers satisfy it today, found by reading every caller of `Config::load`,
   before a reload.
 - `mutate_and_reload_outcome_within` (`:1405`) — the admin-UI
   read-modify-write path. It reads through
-  `config_persistence::load_config_or_default`, which calls `Config::load`
-  (`src/config_persistence.rs:16`), so today it applies the candidate's env
-  files *before* the mutation closure has run, before the file is written, and
-  before the reload that may then be refused. A rejected mutation returns
-  `ConfigMutation::Rejected` having changed no file and already changed the
-  environment. Found by review; the first draft named only `load_config_patch`.
+  `config_persistence::load_config_or_default`, which called `Config::load`,
+  so it applied the candidate's env files *before* the mutation closure had
+  run, before the file was written, and before the reload that may then be
+  refused. A rejected mutation returned `ConfigMutation::Rejected` having
+  changed no file and already changed the environment. Found by review; the
+  first draft named only `load_config_patch`. SHIPPED FIX: that helper now
+  calls `Config::load_literal` (`src/config_persistence.rs:19`), so the
+  read-modify-write path applies nothing and resolves nothing.
 
 Both supply the paths as the `ResolvedEnvFiles` **the running process
 actually opened at startup**, not by resolving `running().env_files` again,
@@ -1547,3 +1578,39 @@ Deferred, with the four fields the process requires:
 
 Nothing in this change depends on the answer: the refusal is what the criteria
 as written require, and both resolutions replace it rather than build on it.
+
+### Two repairs after the final review (2026-08-30)
+
+**An `MCP_GATEWAY_*` value from an env file could still be written back into a
+config file.** The literal load exists so a read-modify-write never persists a
+resolved secret, but it built its Figment from YAML *and* the env overlay, so a
+key an env file supplied arrived as an ordinary struct field with no `env:`
+marker left on it — indistinguishable, at serialisation time, from a value the
+operator typed. The rewrite then wrote it out in plaintext. `load_literal` now
+builds from YAML alone (`src/config/mod.rs`); the resolved load is unchanged and
+still applies the overlay. The round trip is covered as one test: the resolved
+load sees the override, the literal load does not, and the rewritten file does
+not carry it.
+
+**The reload scanner refused references `dotenvy` would never have expanded.**
+The scan that turns `${K}`/`$K` into a refusal has to agree with the parser it
+is protecting, and it disagreed twice: an unbraced `$KEY` was read to the end of
+the token rather than ending at the first non-alphanumeric character, and a tab
+before `#` was treated as value text rather than as the start of a trailing
+comment. Both made the scan refuse a file `dotenvy` reads without substituting.
+`src/config/env_overlay.rs` now follows the library's grammar, and the
+differential test grew its negative half: references the parser leaves alone
+must not refuse a reload. The library stays the oracle for its own lexical
+rules — every fixture is checked against `dotenvy`'s parse of the same bytes,
+in both directions.
+
+### Residual: the runtime command runner is tests-only
+
+`StdRuntimeCommandRunner::with_env` (`src/runtime/provider.rs:642`) threads the
+live overlay into runtime command execution, but the type is constructed
+nowhere outside `src/runtime/provider_tests.rs`. The threading is correct and
+currently unreachable: no production path builds this runner, so no runtime
+command reads an env-file value through it today, and none reads a stale one
+either. Recorded as an observation rather than filed — the wiring belongs to
+whatever change first gives the runner a production caller, and a ticket now
+would describe work nobody is choosing between.
