@@ -290,9 +290,11 @@ impl EnvOverlay {
 
     /// True when this overlay's own files assign `name`.
     ///
-    /// Assignment, never value comparison: the value a restart would resolve
-    /// against is not knowable from a reload, so a same-value assignment still
-    /// counts.
+    /// Ownership, never value: this answers "did these files say so", which is
+    /// what `~` expansion needs mid-sequence, where `resolve`'s fall-through to
+    /// the process environment would answer for a home no file named. Deciding
+    /// whether a *restart* would read differently is a value question and uses
+    /// `resolve` — see `changed_startup_env_keys`.
     #[must_use]
     pub fn assigns(&self, name: &str) -> bool {
         self.owned.contains(name)

@@ -1289,11 +1289,25 @@ const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
 /// * a rotated `env:NAME` secret. The holder that consumed it — a
 ///   `ResolvedAuthConfig`, an agent's HS256 key — is built once at startup and
 ///   nothing rebuilds it, so the running process keeps the old value.
-/// * an assignment to `HOME`, when an env-file entry was spelled with `~`. A
-///   restart resolves that entry against the new home and can open a different
-///   file. Reported on ASSIGNMENT, not on a value change: the running process
-///   already resolved `~` and will not resolve it again, so what matters is
-///   that a restart would ask a question this process no longer asks.
+/// * a `HOME` that no longer resolves where it did at startup, when an env-file
+///   entry was spelled with `~`. A restart resolves that entry against the new
+///   home and opens a different file.
+///
+/// The `HOME` rule is a comparison, not a presence check, because the presence
+/// check was wrong in both directions. An overlay that re-states the same
+/// `HOME` moves nothing, and demanding a restart on every later reload of an
+/// unchanged file teaches an operator to ignore the notice. An overlay that
+/// *removes* a `HOME` assignment startup had assigns nothing to notice, while
+/// `HOME` falls back to the process environment and relocates every `~` entry —
+/// the case that moves most is the one a presence check cannot see.
+///
+/// The comparison is sound without resolving `~` a second time, which the
+/// design forbids: nothing here writes the process environment
+/// (`EnvOverlay::resolve`), so the fall-through both sides read is the same
+/// baseline, and a restart applying the same files in the same order arrives at
+/// the value this overlay already holds. Reordering is not this rule's to
+/// catch — an edit to the `env_files` list is reported as `env_files` by the
+/// config diff.
 ///
 /// Names only. The values are secrets and a reload report is not a place to
 /// print one.
@@ -1308,7 +1322,9 @@ fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<S
         .map(ToString::to_string)
         .collect();
     let mut keys: Vec<String> = keys.into_iter().collect();
-    if env.env_paths().has_tilde_entry() && evaluated.overlay.assigns("HOME") {
+    if env.env_paths().has_tilde_entry()
+        && startup.resolve("HOME") != evaluated.overlay.resolve("HOME")
+    {
         keys.push("HOME".to_string());
     }
     keys

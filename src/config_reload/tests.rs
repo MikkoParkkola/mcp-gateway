@@ -2235,6 +2235,108 @@ async fn envfile_19f_neither_half_of_the_conjunction_alone_is_restart_required_o
     }
 }
 
+/// ENVFILE.19g — a `~/...` entry, and a reload that re-states the SAME `HOME`.
+///
+/// The over-reporting half of the pair with 19h. Reporting on ASSIGNMENT alone
+/// makes every later reload of an unchanged file demand a restart that would
+/// read the identical directory, and a restart notice that fires when nothing
+/// moved is one an operator learns to ignore.
+#[tokio::test]
+async fn envfile_19g_a_reload_restating_the_same_home_reports_no_restart() {
+    let home_a = tempfile::tempdir().unwrap();
+    let home_b = tempfile::tempdir().unwrap();
+
+    // GIVEN: a `~/...` entry whose file assigns `HOME` elsewhere
+    let recorded_path = env_file(
+        home_a.path(),
+        "rot.env",
+        &format!(
+            "HOME={}\nMCP_GW_TEST_ENVFILE19G_KEY=startup-value\n",
+            home_b.path().display()
+        ),
+    );
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg = config_naming_env_files(cfg_dir.path(), &["~/rot.env"]);
+
+    let home = RecordingHome::based_at(home_a.path());
+    let startup = startup_through(&cfg, &home);
+
+    // WHEN: the file is rewritten with the SAME `HOME` and a rotated value
+    home.finish_startup();
+    std::fs::write(
+        &recorded_path,
+        format!(
+            "HOME={}\nMCP_GW_TEST_ENVFILE19G_KEY=rotated-value\n",
+            home_b.path().display()
+        ),
+    )
+    .unwrap();
+
+    let ctx = reload_context_with_env(&cfg, &startup);
+    let outcome = ctx.reload_outcome().await.unwrap();
+
+    // THEN: nothing moved, so nothing is pending on `HOME`
+    assert!(
+        !outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+        "`HOME` resolves where it did at startup, so a restart would open the \
+         same file; got {:?}",
+        outcome.pending_restart_fields
+    );
+}
+
+/// ENVFILE.19h — a `~/...` entry, and a reload that REMOVES the `HOME`
+/// assignment startup had.
+///
+/// The under-reporting half, and the one that matters. Deleting the line does
+/// not leave `HOME` where it was: it falls back to the process environment, so
+/// a restart resolves the entry somewhere else entirely and reads a file this
+/// process never opened. A rule keyed on the new overlay ASSIGNING `HOME` sees
+/// no assignment and stays silent about exactly the case that relocates most.
+#[tokio::test]
+async fn envfile_19h_a_reload_removing_the_home_assignment_reports_restart_required() {
+    let home_a = tempfile::tempdir().unwrap();
+    let home_b = tempfile::tempdir().unwrap();
+
+    // GIVEN: a `~/...` entry whose file assigns `HOME` elsewhere
+    let recorded_path = env_file(
+        home_a.path(),
+        "rot.env",
+        &format!(
+            "HOME={}\nMCP_GW_TEST_ENVFILE19H_KEY=startup-value\n",
+            home_b.path().display()
+        ),
+    );
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg = config_naming_env_files(cfg_dir.path(), &["~/rot.env"]);
+
+    let home = RecordingHome::based_at(home_a.path());
+    let startup = startup_through(&cfg, &home);
+    assert_eq!(
+        startup.overlay.resolve("HOME").as_deref(),
+        Some(home_b.path().to_str().unwrap()),
+        "fixture: startup must have taken its `HOME` from the env file"
+    );
+
+    // WHEN: the `HOME` line is deleted and the file reloaded
+    home.finish_startup();
+    std::fs::write(&recorded_path, "MCP_GW_TEST_ENVFILE19H_KEY=rotated-value\n").unwrap();
+
+    let ctx = reload_context_with_env(&cfg, &startup);
+    let outcome = ctx.reload_outcome().await.unwrap();
+
+    // THEN: the restart is reported, and it names `HOME`
+    assert!(
+        outcome.restart_required,
+        "removing the `HOME` assignment moves where a restart would read: \
+         outcome was {outcome:?}"
+    );
+    assert!(
+        outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+        "the report must name HOME; got {:?}",
+        outcome.pending_restart_fields
+    );
+}
+
 /// ENVFILE.6b — a key that genuinely cannot be applied to a running process.
 ///
 /// Retargeted: `MCP_GATEWAY_PORT` is applied live by `EffectiveEnv`, so the warn

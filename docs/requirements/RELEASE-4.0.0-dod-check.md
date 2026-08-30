@@ -315,6 +315,19 @@ a test, not because of the switch.
    the check has to be sensitive to is the HOME in force *at each tilde-spelled entry*, against what
    was in force there at startup — assignment, removal and reordering alike.
 
+   **Repaired.** The rule is now a comparison of the HOME actually in force —
+   `startup.resolve("HOME") != evaluated.overlay.resolve("HOME")`, still conjoined with
+   `has_tilde_entry()` — in place of the presence check. A re-stated HOME resolves equal and
+   reports nothing; a removed assignment falls through to the process environment, resolves
+   different, and reports. The paragraph above overstated what defeats a value comparison: the
+   reordering case it describes is an edit to the `env_files` list, which `compute_diff` already
+   reports as `env_files` (`src/config_reload/mod.rs:571-572`), so it never needed this rule to
+   catch it. Nothing resolves `~` a second time, so `RecordingHome`'s one-resolution assertion
+   (ENVFILE.19e) still holds. New rows ENVFILE.19g (re-stated HOME reports nothing) and
+   ENVFILE.19h (removed assignment reports HOME) were written first and observed failing on the
+   presence check — 19g reporting `HOME` with nothing moved, 19h omitting it with everything
+   moved. `config_reload` is 79/79.
+
 One further finding is open and gates nothing: the OAuth metadata tests release an ephemeral port
 before rebinding it — once inline at `src/oauth/metadata.rs:322-324` and once in the `free_addr`
 helper at `:332-337` — so a concurrent process can take it in between.
@@ -446,7 +459,12 @@ The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol`
 and that is the isolation for findings 1 to 5 — no client reaches a modern protocol path while the
 switch is off. It does not cover the other two. Finding 6 is in config reload, which any
 authenticated operator can trigger regardless of the switch; the port race exists only in tests.
-Two real options:
+
+Finding 6 has since been repaired rather than accepted, on the operator's instruction that anything
+fixable gets fixed and that the rules left standing should be ones any user can state. The rule that
+replaced it is one sentence: *a `~` in an env-file path, plus a `HOME` that differs from startup,
+means a restart is required.* With it closed, nothing outstanding is reachable while the switch is
+off, and the port race is test-only. Two real options remain:
 
 1. **Ship 4.0.0 as the legacy-safe groundwork**, modern path documented as preview with the findings listed. The default-off switch is what makes this honest.
 2. **Hold the tag** until the six numbered open findings above are closed and re-reviewed.
