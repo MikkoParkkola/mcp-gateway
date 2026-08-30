@@ -57,7 +57,7 @@ travels with the identity it authorizes. `invoke_tool_traced` is private with ex
 site. The alternative, two more loose parameters taking it from eleven to thirteen, is rejected by
 that same comment.
 
-**2b — Retry reaches the backend (M).** Closes MRTR.1, .2, .3, .9. Delete the `is_retry` arm at
+**2b — Retry reaches the backend (M).** Closes MRTR.1, .2, .3, .9, .10. Delete the `is_retry` arm at
 `handlers.rs:872-889` and leave the malformed-envelope arm above it alone; open the envelope, forward
 retry fields to the backend as siblings of `arguments` rather than merged into them, mint at the
 call site after the result, pass `complete` and legacy results through unchanged. Inbound
@@ -65,7 +65,11 @@ call site after the result, pass `complete` and legacy results through unchanged
 opaque value recovered from the token — conflating the two is the MRTR.2 defect, so they stay
 separate types. One defect drives the increment: an `input_required` result is today neither a
 success nor an error, so it falls through the `mark_completed` at `invoke.rs:1276` and is cached as
-a final answer. Tests: the integration rows the plan already names, plus a pass-through row and a
+a final answer. MRTR.10 has a second half on the same path: `resolve_idempotency_key`
+(`support.rs:31-46`, called from `invoke.rs:779-790`) derives the key from server, tool and
+arguments alone, so two retries carrying different `inputResponses` collide on one key and the
+second is answered from cache. A sweep note calls that a different call path from `tools/call`;
+reading the call site shows it is the same one. Tests: the integration rows the plan already names, plus a pass-through row and a
 fresh-JSON-RPC-id row that a fixture transport can fail. Pass-through asserts value equality and
 that no `requestState` key was added, not byte identity — the crate does not preserve key order.
 
