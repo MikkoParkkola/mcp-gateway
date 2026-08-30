@@ -39,10 +39,13 @@
 //! }
 //! ```
 
+use std::collections::HashSet;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use tracing::warn;
 
+use crate::gateway::meta_mcp_tool_defs::{build_code_mode_tools, build_meta_tools};
 use crate::gateway::proxy::{ProxyManager, SamplingError};
 use crate::protocol::ElicitationCreateParams;
 
@@ -61,11 +64,6 @@ pub enum ConfirmationOutcome {
     Unsupported,
 }
 
-/// Returns `true` when the given meta-tool name carries `destructiveHint: true`.
-///
-/// The set is derived from `meta_mcp_tool_defs.rs`.  Only
-/// `gateway_kill_server` currently sets the flag.
-#[must_use]
 /// What the gateway does when it cannot ask.
 ///
 /// Named as a policy rather than decided inline, because the two eras get
@@ -114,9 +112,7 @@ impl ConfirmationPolicy {
 /// annotation inherited nothing — which is how a gate ends up guarding one door
 /// in a building that grew.
 #[must_use]
-pub fn destructive_tools_from_annotations(
-    tools: &serde_json::Value,
-) -> std::collections::HashSet<String> {
+pub fn destructive_tools_from_annotations(tools: &serde_json::Value) -> HashSet<String> {
     tools
         .as_array()
         .map(|list| {
@@ -137,16 +133,45 @@ pub fn destructive_tools_from_annotations(
         .unwrap_or_default()
 }
 
+/// The floor: kept governed regardless of what the annotations say, so an
+/// annotation dropped by accident from `meta_mcp_tool_defs.rs` cannot quietly
+/// ungovern the one destructive tool the gate was originally written for.
+const FLOOR_TOOL_NAME: &str = "gateway_kill_server";
+
+/// The meta-tool names this gate governs, computed once from the compile-time
+/// tool definitions rather than rebuilt on every call.
+///
+/// Built with every feature flag enabled — stats, cost report, webhooks, and
+/// config reload — so a destructive tool gated behind a disabled feature is
+/// still governed once that feature turns on; the gate must not depend on
+/// which flags happen to be set at startup. Code Mode's two tools are
+/// included too, since Code Mode replaces the traditional tool list rather
+/// than adding to it, and the gate must cover whichever surface is active.
+///
+/// Backend and capability tools are deliberately absent: they are not part of
+/// `meta_mcp_tool_defs.rs`, `infer_destructive_tool()` only guesses their
+/// hints by substring match, and `ConfirmationPolicy::for_modern()` is an
+/// unconditional refusal — governing them here would refuse a large slice of
+/// the tool surface with no confirmation path. See the module docs.
+static DESTRUCTIVE_META_TOOLS: LazyLock<HashSet<String>> = LazyLock::new(|| {
+    let mut tools = build_meta_tools(true, true, true, true, 0, 0);
+    tools.extend(build_code_mode_tools());
+    let json = serde_json::to_value(&tools).unwrap_or(serde_json::Value::Null);
+    let mut governed = destructive_tools_from_annotations(&json);
+    governed.insert(FLOOR_TOOL_NAME.to_string());
+    governed
+});
+
 /// Whether a meta-tool is one the confirmation gate governs.
 ///
-/// The name the gate was written for, kept alongside
-/// [`destructive_tools_from_annotations`] rather than replaced by it: the
-/// annotation is the source of truth for tools the gateway did not write, and
-/// this is the floor for the one it did, so an annotation dropped by accident
-/// cannot quietly ungovern it.
+/// Derived from [`DESTRUCTIVE_META_TOOLS`], itself derived from the
+/// `destructiveHint` annotation on the gateway's own compile-time meta-tool
+/// definitions in `meta_mcp_tool_defs.rs` — not from a hardcoded match arm.
+/// A tool added later with the same annotation is governed automatically,
+/// which is how a gate stops guarding one door in a building that grew.
 #[must_use]
 pub fn is_destructive_meta_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "gateway_kill_server")
+    DESTRUCTIVE_META_TOOLS.contains(tool_name)
 }
 
 /// Send an `elicitation/create` confirmation request and wait for the operator
@@ -251,7 +276,7 @@ mod tests {
 
     #[test]
     fn destructive_tool_gateway_kill_server_is_recognised() {
-        // GIVEN/WHEN/THEN: kill server is the only destructive meta-tool
+        // GIVEN/WHEN/THEN: kill server is governed (the explicit floor)
         assert!(is_destructive_meta_tool("gateway_kill_server"));
     }
 
@@ -274,6 +299,93 @@ mod tests {
                 "'{name}' should NOT be destructive"
             );
         }
+    }
+
+    #[test]
+    fn read_only_meta_tool_gateway_list_servers_is_not_governed() {
+        // GIVEN: a read-only, non-destructive meta-tool definition
+        // WHEN/THEN: the gate does not govern it
+        assert!(!is_destructive_meta_tool("gateway_list_servers"));
+    }
+
+    #[test]
+    fn unknown_or_backend_tool_name_is_not_governed() {
+        // GIVEN: names that are not compile-time meta-tool definitions at all
+        // (backend/capability tool names, or plain garbage) — the confirmation
+        // gate explicitly defers on these (team-lead scope: backend/capability
+        // tools are OUT OF SCOPE for this gate; ConfirmationPolicy::for_modern()
+        // is an unconditional refusal, so governing them would block a large
+        // slice of the tool surface with no confirmation path).
+        let deferred = [
+            "some_backend_tool_delete_everything",
+            "capability_stripe_charge_refund",
+            "not_a_real_tool_at_all",
+        ];
+        // WHEN/THEN: none are governed by the meta-tool gate
+        for name in &deferred {
+            assert!(
+                !is_destructive_meta_tool(name),
+                "'{name}' should NOT be governed (deferred: backend/capability tool)"
+            );
+        }
+    }
+
+    #[test]
+    fn every_meta_tool_with_destructive_hint_true_is_governed() {
+        // GIVEN: the REAL compile-time meta-tool definitions, built with every
+        // feature flag on (so a flag-gated destructive tool is still covered),
+        // plus the Code Mode tool set.
+        use crate::gateway::meta_mcp_tool_defs::{build_code_mode_tools, build_meta_tools};
+
+        let mut tools = build_meta_tools(true, true, true, true, 0, 0);
+        tools.extend(build_code_mode_tools());
+
+        // WHEN/THEN: every tool whose annotations carry `destructiveHint: true`
+        // is recognised by the gate — proven from the definitions themselves,
+        // not from a name hardcoded in this test. A future destructive meta-tool
+        // added to meta_mcp_tool_defs.rs without updating the gate fails this
+        // assertion the moment it sets `destructive_hint: Some(true)`.
+        let mut governed_count = 0;
+        for tool in &tools {
+            let carries_destructive_hint = tool
+                .annotations
+                .as_ref()
+                .is_some_and(|a| a.destructive_hint == Some(true));
+            if carries_destructive_hint {
+                governed_count += 1;
+                assert!(
+                    is_destructive_meta_tool(&tool.name),
+                    "'{}' carries destructiveHint:true but is NOT governed",
+                    tool.name
+                );
+            }
+        }
+        // Sanity: the fixture actually exercised at least one destructive tool,
+        // so this test cannot pass vacuously if every annotation were stripped.
+        assert!(
+            governed_count >= 1,
+            "expected at least one destructive meta-tool in the fixture"
+        );
+    }
+
+    #[test]
+    fn governed_set_is_derived_not_hand_duplicated() {
+        // GIVEN: the same annotation-filter helper the implementation must use,
+        // applied independently in the test to the real compile-time defs.
+        // Proves DESTRUCTIVE_META_TOOLS is DERIVED from annotations (this test
+        // fails to compile until that static exists — the RED before
+        // `is_destructive_meta_tool` stops being a hardcoded match arm) rather
+        // than a second, hand-maintained copy of the same predicate.
+        use crate::gateway::meta_mcp_tool_defs::{build_code_mode_tools, build_meta_tools};
+
+        let mut tools = build_meta_tools(true, true, true, true, 0, 0);
+        tools.extend(build_code_mode_tools());
+        let json = serde_json::to_value(&tools).expect("tool defs must serialize");
+        let mut expected = destructive_tools_from_annotations(&json);
+        expected.insert("gateway_kill_server".to_string()); // the floor
+
+        // WHEN/THEN: the gate's governed set is exactly this, no more no less.
+        assert_eq!(&*DESTRUCTIVE_META_TOOLS, &expected);
     }
 
     // ── build_confirmation_params ────────────────────────────────────────────
