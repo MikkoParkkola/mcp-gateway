@@ -867,9 +867,21 @@ pub(super) async fn meta_mcp_handler(
                 );
             }
             if retry.is_retry() {
+                // Well-formed, and still unforwardable: unsealing the
+                // continuation is not wired. Dispatching it as a fresh call
+                // would repeat whatever the first attempt already did, which is
+                // precisely what the malformed branch above refuses. One
+                // answer for both shapes, until forwarding exists.
                 debug!(
                     tool = %tool_name,
                     "MRTR retry received; forwarding is not wired (continuation unsealing absent)"
+                );
+                return build_error_response(
+                    Some(id),
+                    -32602,
+                    "retry forwarding is not available on this build".to_string(),
+                    &session_id,
+                    StatusCode::BAD_REQUEST,
                 );
             }
 

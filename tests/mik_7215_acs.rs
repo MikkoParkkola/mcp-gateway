@@ -387,6 +387,38 @@ mod http {
     }
 
     #[tokio::test]
+    async fn a_well_formed_retry_is_refused_while_forwarding_is_unwired() {
+        // Adversarial review, 2026-08-30, confirmed at source: a malformed
+        // retry was refused with -32602, but a well-formed one was logged at
+        // debug and then dispatched as a fresh `tools/call`. For a destructive
+        // tool that repeats whatever the first attempt already did — the exact
+        // outcome the malformed branch exists to prevent, and the outcome the
+        // comment above it claims cannot happen. Until continuation unsealing
+        // is wired, both shapes fail closed.
+        let (status, _, body) = post_mcp(json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "gateway_list_servers",
+                "arguments": {},
+                "inputResponses": {
+                    "confirm": { "action": "accept", "content": { "ok": true } }
+                },
+                "requestState": "opaque-envelope"
+            }
+        }))
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a retry that cannot be forwarded must fail visibly: {body}"
+        );
+        assert_eq!(body["error"]["code"], -32602, "{body}");
+    }
+
+    #[tokio::test]
     async fn ac_stateless_9_a_malformed_modern_request_is_refused() {
         // Declared a version, omitted the capabilities. Refused, not served.
         let (status, _, body) = post_mcp(json!({
