@@ -473,16 +473,17 @@ material, scope declared in the prompt each time.
 | 10 | the repair to round 9 | 2 MEDIUM (gpt), 2 improvements (grok), the same passage | SHIP-WITH-FIXES / SHIP |
 | 11 | the closing paraphrase deleted | no finding at any gate; 1 improvement (gpt), 2 (grok) | SHIP / SHIP |
 | 12 | two omitted findings added to the inventory | 4 (gpt), 1 + 2 improvements (grok); both vendors on the same false claim | SHIP-WITH-FIXES |
-| 13 | the repairs to round 12 | 2 (gpt); grok found none | SHIP-WITH-FIXES / SHIP |
+| 13 | the repairs to round 12 | 2 + 1 improvement (gpt); grok found none | SHIP-WITH-FIXES / SHIP |
 | 14 | the repairs to round 13 | 1 improvement (gpt), 1 (grok) | **SHIP** / **SHIP** |
 
 Rounds 12 to 14 are the same pattern one level down. Round 12 asked whether the document's open
 inventory matched the reviews that produced it, and it did not: a MEDIUM config-reload finding and a
 LOW test-hygiene one had never been written down, while round 11 had shipped a sentence calling the
 list complete. Adding them introduced a fresh false claim — that the `HOME` branch errs only in the
-safe direction — which both vendors caught, and then a wrong prescribed repair, which one did. Both
-were closed the same way rounds 9 to 11 were: by deleting the claim rather than correcting it a
-third time. The completeness assertion is gone for good.
+safe direction — which both vendors caught, and then a wrong prescribed repair, which one did. The
+safe-direction sentence was corrected, because the finding underneath it is real and had to be
+stated accurately. The completeness assertion and the prescribed repair were deleted outright,
+each having been written wrong twice.
 
 Rounds 9 and 10 both found their defect in the previous round's repair, in the same paragraph:
 a prose summary of the numbered open-findings list, which fell out of date each time the list
