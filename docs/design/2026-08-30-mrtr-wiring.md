@@ -34,10 +34,9 @@ answers it, and gets HTTP 400. This is a DoD §2 WIRED violation on the branch's
   **not** give it a construction path: `gateway_key_pair` is an ECDSA P-256 *signing* key generated
   at startup (`src/gateway/oauth/jwks.rs:103-113`), and `Keyring` holds AES `LessSafeKey` material
   (continuation.rs:206-208). They are different primitives for different jobs and neither derives
-  from the other. The continuation keyring is therefore a **new, independently configured** item:
-  persistent key material, explicit key ids, and retired keys retained for at least one continuation
-  lifetime so that a rotation or a restart does not kill calls already in flight. An ephemeral
-  keyring would make every restart a silent mass refusal.
+  from the other. The continuation keyring is therefore a **new, independently configured** item
+  with its own key material and explicit key ids. Whether that material outlives the process is
+  decided by the consumed-ledger, not by convenience — see decision 4.
 - `Keyring::open` takes `now` explicitly, so time is injected rather than read, and
   `Payload::redeemable_by` (continuation.rs:122) already *compares* the two binding values in
   constant time. It does not produce them: both are caller-supplied `String`s and nothing in the
@@ -170,6 +169,21 @@ it hands a backend a value the client controls.
    is right, while still caching the *interim* answer under the original key, which is the
    dangerous half. Storing nothing leaves the defect undescribable rather than unreachable.
 
+4. **Key material does not outlive the process while the spent-list does not either.**
+   `ConsumedLedger` (continuation.rs:437) is in-memory. A keyring whose material survived a restart
+   while the spent-list did not would make every already-redeemed continuation redeemable again:
+   single-use would hold only until the next deploy, and would fail *silently*, which is the worst
+   way for it to fail. So for 4.0.0 the keyring is generated per run. A restart kills continuations
+   in flight, every affected client gets an ordinary refusal, and nothing already spent becomes
+   spendable. That trades a visible failure for a silent one, which is the right direction.
+   Persistent keys are not an independent feature: they arrive **with** the durable ledger under
+   MIK-7312, never before it.
+
+   The continuation lifetime is capped short — minutes, not hours — and the cap is enforced at
+   mint rather than trusted from the caller, which today supplies `expires_at` outright
+   (continuation.rs:475). It bounds how long a stolen token is worth anything and how much a
+   restart can destroy.
+
 ## Unknowns, scheduled
 
 | unknown | how it is settled |
@@ -194,6 +208,7 @@ backend the first unknown says does not exist yet.
 - a retry with a valid token reaches the backend with the backend's state and the client's answers
 - a retry with a token minted for a different caller is refused, and the message says nothing useful
 - a replayed token is refused the second time
+- a token minted before the keyring is regenerated is refused after it, rather than opening
 - a malformed retry is refused without dispatching (the existing behaviour, kept)
 - an interim result for an unauthenticated caller is refused, and nothing is minted
 - an interim result whose `requestState` is absent completes, and the retry carries no `requestState`
