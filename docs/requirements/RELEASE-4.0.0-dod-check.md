@@ -320,13 +320,52 @@ a test, not because of the switch.
    `has_tilde_entry()` — in place of the presence check. A re-stated HOME resolves equal and
    reports nothing; a removed assignment falls through to the process environment, resolves
    different, and reports. The paragraph above overstated what defeats a value comparison: the
-   reordering case it describes is an edit to the `env_files` list, which `compute_diff` already
-   reports as `env_files` (`src/config_reload/mod.rs:571-572`), so it never needed this rule to
+   reordering case it describes is an edit to the `env_files` list, which the restart-field diff
+   already reports as `env_files` (`src/config_reload/mod.rs:571-572`, inside
+   `pending_restart_fields`, not `compute_diff`), so it never needed this rule to
    catch it. Nothing resolves `~` a second time, so `RecordingHome`'s one-resolution assertion
    (ENVFILE.19e) still holds. New rows ENVFILE.19g (re-stated HOME reports nothing) and
    ENVFILE.19h (removed assignment reports HOME) were written first and observed failing on the
    presence check — 19g reporting `HOME` with nothing moved, 19h omitting it with everything
    moved. `config_reload` is 79/79.
+
+   **Closure re-check found the layer is wrong (2026-08-30).** Both vendors returned
+   SHIP-WITH-FIXES on the repair commit and converged on one defect: comparing the *final* HOME
+   still misses a HOME that changes before a later `~` entry and is restored by a file after it —
+   the paths move, both finals compare equal, and the `env_files` list is untouched, so nothing
+   reports. Verified at source: `~` is substituted with the home in force at that point in the
+   sequence (`src/config/mod.rs:456-466`, `expand_home` at `:475-484`), and the only consumer of
+   overlay HOME is a later env-file entry — `fallback_config_path` reads `dirs::home_dir()`
+   directly (`:268`). The same reading condemns the tests, including one that predates this
+   change: a HOME assignment inside the *sole* `~/x.env` entry moves nothing, because that entry
+   was expanded from the process home before its own assignments applied. ENVFILE.19h asserts a
+   restart for exactly that, and so does ENVFILE.19e, whose premise sentence — "a `HOME`
+   assignment against a `~` entry moves where a restart would read" — is false whenever the
+   assignment sits in the last, or only, tilde entry. The rule being encoded is not "did HOME
+   change" at any layer; it is *would a restart open different files than startup did*. That
+   question is answered by the recorded paths, not by HOME, and it needs an owner decision
+   because the design deliberately forbids resolving `~` a second time.
+
+   **Closed conservatively; the semantics question stays open.** ENVFILE.19i was written first and
+   observed failing on the value comparison — two entries, the first moving HOME and the file the
+   second names restoring it, finals equal, `HOME` absent from the report. The rule now fires on
+   either an assignment or a value change beside a tilde entry
+   (`src/config_reload/mod.rs:1325-1332`), which is statable in one line: *a restart notice about
+   HOME may be early, never absent*. This is a deliberate design event, not a repair: ENVFILE.19g
+   now asserts the notice it previously asserted away, because nothing available at reload can tell
+   its harmless case apart from 19i's real one without re-expanding `~`, which the design forbids.
+   19h keeps its assertion and loses its false premise — its sole entry relocates nothing; it is
+   the value branch's test, not the relocation case. `config_reload` is 80/80; lib 3762/3762;
+   clippy and fmt clean.
+
+   What remains for the owner is one question, and it is about behaviour rather than mechanism:
+   *should setting HOME in an env file be able to move where a later env file is looked for?*
+   If no, the coupling goes and `~` always means the real home directory — the branch, the
+   `so_far` parameter on `HomeResolver`, and the ENVFILE.19 family all delete, and the rule
+   becomes one an operator never has to think about. If yes, the check has to be path-based
+   ("a restart is required when it would open different files than startup did"), which means
+   relaxing ENVFILE.19e's one-resolution fixture. Either answer is its own change with its own
+   design review; neither gates 4.0.0, because the conservative rule cannot be silent.
 
 One further finding is open and gates nothing: the OAuth metadata tests release an ephemeral port
 before rebinding it — once inline at `src/oauth/metadata.rs:322-324` and once in the `free_addr`

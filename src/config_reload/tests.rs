@@ -2237,12 +2237,16 @@ async fn envfile_19f_neither_half_of_the_conjunction_alone_is_restart_required_o
 
 /// ENVFILE.19g — a `~/...` entry, and a reload that re-states the SAME `HOME`.
 ///
-/// The over-reporting half of the pair with 19h. Reporting on ASSIGNMENT alone
-/// makes every later reload of an unchanged file demand a restart that would
-/// read the identical directory, and a restart notice that fires when nothing
-/// moved is one an operator learns to ignore.
+/// The accepted cost of the conservative rule, and the reason it is written
+/// down as a test rather than left to be rediscovered. Re-stating the same
+/// value moves nothing, and the notice fires anyway, because the only thing
+/// that could tell this case apart from 19i — where the same final value hides
+/// a genuine relocation — is knowing which home each entry was expanded
+/// against, and a reload does not re-expand them. Early beats absent: an
+/// operator who restarts for nothing loses a restart, one who is not told
+/// silently reads a file the running process never opened.
 #[tokio::test]
-async fn envfile_19g_a_reload_restating_the_same_home_reports_no_restart() {
+async fn envfile_19g_a_reload_restating_the_same_home_reports_restart_required() {
     let home_a = tempfile::tempdir().unwrap();
     let home_b = tempfile::tempdir().unwrap();
 
@@ -2275,11 +2279,12 @@ async fn envfile_19g_a_reload_restating_the_same_home_reports_no_restart() {
     let ctx = reload_context_with_env(&cfg, &startup);
     let outcome = ctx.reload_outcome().await.unwrap();
 
-    // THEN: nothing moved, so nothing is pending on `HOME`
+    // THEN: the notice fires, though nothing moved — the rule cannot tell this
+    // apart from 19i without re-expanding, and it errs early
     assert!(
-        !outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
-        "`HOME` resolves where it did at startup, so a restart would open the \
-         same file; got {:?}",
+        outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+        "the conservative rule reports on any `HOME` assignment beside a `~` \
+         entry; got {:?}",
         outcome.pending_restart_fields
     );
 }
@@ -2287,11 +2292,13 @@ async fn envfile_19g_a_reload_restating_the_same_home_reports_no_restart() {
 /// ENVFILE.19h — a `~/...` entry, and a reload that REMOVES the `HOME`
 /// assignment startup had.
 ///
-/// The under-reporting half, and the one that matters. Deleting the line does
-/// not leave `HOME` where it was: it falls back to the process environment, so
-/// a restart resolves the entry somewhere else entirely and reads a file this
-/// process never opened. A rule keyed on the new overlay ASSIGNING `HOME` sees
-/// no assignment and stays silent about exactly the case that relocates most.
+/// The half a rule keyed on ASSIGNMENT alone cannot see: the deleted line
+/// leaves no assignment to notice, and `HOME` falls back to the process
+/// environment. For the sole entry here nothing relocates — `~/rot.env` was
+/// expanded before its own `HOME` line applied — but the same deletion ahead of
+/// a later `~` entry does relocate it, and the value comparison is what catches
+/// both. Kept as the value branch's own test, alongside 19i for the assignment
+/// branch.
 #[tokio::test]
 async fn envfile_19h_a_reload_removing_the_home_assignment_reports_restart_required() {
     let home_a = tempfile::tempdir().unwrap();
@@ -2329,6 +2336,79 @@ async fn envfile_19h_a_reload_removing_the_home_assignment_reports_restart_requi
         outcome.restart_required,
         "removing the `HOME` assignment moves where a restart would read: \
          outcome was {outcome:?}"
+    );
+    assert!(
+        outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+        "the report must name HOME; got {:?}",
+        outcome.pending_restart_fields
+    );
+}
+
+/// ENVFILE.19i — `HOME` moved BEFORE a later `~/...` entry, with the final
+/// value restored by the file that entry names.
+///
+/// The case a comparison of final `HOME` values cannot see. The first env file
+/// moves `HOME` somewhere new, so a restart expands the second entry against a
+/// different directory and reads a file this process never opened; the file it
+/// did open then sets `HOME` back, so startup and reload agree on the final
+/// value and a rule comparing only that value stays silent. `~` is expanded
+/// against the home in force AT THAT POINT (`Config::evaluate`), not the home
+/// left standing at the end, so the end value is not what decides.
+#[tokio::test]
+async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_required() {
+    let home_a = tempfile::tempdir().unwrap();
+    let home_b = tempfile::tempdir().unwrap();
+    let home_c = tempfile::tempdir().unwrap();
+    let cfg_dir = tempfile::tempdir().unwrap();
+
+    // GIVEN: a plain entry that sets `HOME`, then a `~/...` entry whose own
+    // file restores it
+    let mover = env_file(
+        cfg_dir.path(),
+        "mover.env",
+        &format!("HOME={}\n", home_b.path().display()),
+    );
+    env_file(
+        home_b.path(),
+        "late.env",
+        &format!(
+            "HOME={}\nMCP_GW_TEST_ENVFILE19I_KEY=startup-value\n",
+            home_b.path().display()
+        ),
+    );
+    let cfg = config_naming_env_files(cfg_dir.path(), &[mover.to_str().unwrap(), "~/late.env"]);
+
+    let home = RecordingHome::based_at(home_a.path());
+    let startup = startup_through(&cfg, &home);
+    assert_eq!(
+        startup.env_paths.as_paths().last().unwrap(),
+        &home_b.path().join("late.env"),
+        "fixture: the tilde entry must have expanded against the home the \
+         FIRST file assigned"
+    );
+
+    // WHEN: the first file moves `HOME` somewhere else, leaving the final
+    // value untouched — the second file still assigns it back
+    home.finish_startup();
+    std::fs::write(&mover, format!("HOME={}\n", home_c.path().display())).unwrap();
+
+    let ctx = reload_context_with_env(&cfg, &startup);
+    let outcome = ctx.reload_outcome().await.unwrap();
+
+    assert_eq!(
+        startup.overlay.resolve("HOME").as_deref(),
+        Some(home_b.path().to_str().unwrap()),
+        "fixture: `late.env` assigns the same `HOME` on both runs, so the FINAL \
+         values agree and this test exercises the case a final-value comparison \
+         misses"
+    );
+
+    // THEN: the restart is reported, and it names `HOME`
+    assert!(
+        outcome.restart_required,
+        "a restart would expand `~/late.env` against {} and read a file this \
+         process never opened: outcome was {outcome:?}",
+        home_c.path().display()
     );
     assert!(
         outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),

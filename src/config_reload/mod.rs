@@ -1322,8 +1322,15 @@ fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<S
         .map(ToString::to_string)
         .collect();
     let mut keys: Vec<String> = keys.into_iter().collect();
+    // A `~` entry is expanded against the `HOME` in force AT THAT POINT in the
+    // sequence (`Config::evaluate`), not the one left standing at the end, so
+    // an env file can move where a LATER entry reads while the final value is
+    // restored and compares equal (ENVFILE.19i). Comparing values alone cannot
+    // see that, so an assignment counts too: the notice may be early, never
+    // absent.
     if env.env_paths().has_tilde_entry()
-        && startup.resolve("HOME") != evaluated.overlay.resolve("HOME")
+        && (evaluated.overlay.assigns("HOME")
+            || startup.resolve("HOME") != evaluated.overlay.resolve("HOME"))
     {
         keys.push("HOME".to_string());
     }

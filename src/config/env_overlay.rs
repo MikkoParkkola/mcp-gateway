@@ -293,8 +293,9 @@ impl EnvOverlay {
     /// Ownership, never value: this answers "did these files say so", which is
     /// what `~` expansion needs mid-sequence, where `resolve`'s fall-through to
     /// the process environment would answer for a home no file named. Deciding
-    /// whether a *restart* would read differently is a value question and uses
-    /// `resolve` — see `changed_startup_env_keys`.
+    /// whether a *restart* would read differently needs BOTH — a file that
+    /// assigns `HOME` can move where a later `~` entry is looked for while the
+    /// value standing at the end is unchanged — see `changed_startup_env_keys`.
     #[must_use]
     pub fn assigns(&self, name: &str) -> bool {
         self.owned.contains(name)
