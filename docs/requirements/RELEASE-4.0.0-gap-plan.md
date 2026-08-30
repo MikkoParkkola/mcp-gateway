@@ -361,6 +361,107 @@ clients, where what goes stale is a courtesy prompt rather than the control.
 elsewhere. Worth recording for the ratio: of today's design findings checked at source, the
 substantive claims held and the line numbers did not.
 
+### The design review moved two increments and rewrote one requirement
+
+Codex reviewed the 18/20/2b designs on 2026-08-31 and returned SHIP-WITH-FIXES. Its findings were
+checked at source before being accepted; the six below survived, and one of them says the
+requirement itself is wrong.
+
+**Increment 20 rests on an outbound path that does not exist.** The design added header emission to
+`transport/http/mod.rs` on the assumption that a modern request leaves the gateway. None does. The
+transport still opens with a legacy `initialize` handshake carrying `protocolVersion` in `params`
+(`mod.rs:430-452`), and `rg '_meta'` across `src/transport/` and `src/backend/` returns no JSON-key
+hit at all: outbound requests carry no `_meta` envelope. HEADER.1 requires the emitted header to
+equal `_meta.protocolVersion`, and outbound that field is not merely unset, it is unbuilt. The
+`MCP-Protocol-Version` header at `mod.rs:570` is emitted from the legacy-negotiated version. So 20
+must first consume an outbound era negotiation and construct the modern envelope, then emit the new
+headers only on requests negotiated modern. Emission on a legacy peer is a regression, not a
+partial implementation.
+
+**`x-mcp-header` is not what this plan said it was.** The row read "custom headers supplied through
+tool parameters MUST be accepted and forwarded". The specification says something else. From
+`docs/specification/2026-07-28/server/tools.mdx:342-344`, the annotation "is placed directly within
+the JSON Schema of the property to be mirrored", and its value "specifies the name portion of the
+resulting `Mcp-Param-{name}` HTTP header". It is a backend's declaration on its own tool schema,
+not a caller-supplied parameter. A client owes six MUST-level checks on it — non-empty, HTTP
+field-name token syntax, no CR or LF, case-insensitively unique across the `inputSchema`, primitive
+types only with `number` forbidden, integers inside the safe range — and a tool violating any of
+them MUST be excluded from `tools/list` entirely.
+
+That last duty is the one that changes the work. Excluding a tool is a change to the surfaced tool
+set, which is the same store increment 18 gates on. HDR.4 is therefore not a plumbing task that
+could be closed by a recorded declination; it is validation plus an exclusion rule sharing a seam
+with 18, and increment 20 moves from S to L. Our own requirement text would have passed our own
+tests while shipping a non-conformant client, which is what a requirement written from a summary
+rather than the specification buys.
+
+**Increment 20 also misses the notification path.** `HeaderMode` (`mod.rs:246-251`) has four arms —
+`Sse`, `Request { method }`, `Notify`, `Close` — and the design widened only `Request`. Modern
+notification POSTs would go out without the required `Mcp-Method`. The standard headers want
+deriving once for every outbound JSON-RPC POST rather than per call site.
+
+**Increment 2b needs a state, not just a key.** The cache-key discriminator recorded above is
+necessary and insufficient. `input_required` is an `Ok(value)`, so it still enters the generic
+response cache and still marks the idempotency record `Completed` (`invoke.rs:1260-1270`). An
+awaiting-input result needs its own state: excluded from the response cache, and completed only
+when the continuation finishes. Separately, an explicit `idempotency_key` bypasses derived-key
+construction at `support.rs:31`, so a client reusing one operation key can never complete a
+multi-round exchange — the continuation digest has to be appended after the explicit-or-derived
+choice, not inside the derivation.
+
+**One finding is real and deferred with its reason.** Continuation keys are process-local
+(`continuation.rs:651`), so a retry landing on another replica, or arriving after a restart, cannot
+decrypt. Single-process deployments are unaffected; this blocks multi-replica production, not the
+release. Owner: deployment. Resolution: shared key material with an atomic consumed ledger, or
+authenticated origin-routing. Trigger: before the first multi-replica deployment. If it resolves
+badly, the fallback is pinning continuations to an origin.
+
+The review also asked for three test surfaces the plan had not named: an end-to-end multi-round
+matrix covering the response cache, both key forms, repeated rounds and replay; outbound header
+generation checked against independent spec vectors rather than our own reading; and router-level
+tests proving the destructive gate governs backend and capability tools while missing cached
+metadata fails closed.
+
+### The second reviewer shrank increment 18 and found the header bypass
+
+Grok reviewed the same three designs and also returned SHIP-WITH-FIXES. Two of its findings change
+the work, and the first of them contradicts what this plan recorded an hour earlier.
+
+**Increment 18 must not govern backend tools yet.** The plan treated "every cached tool carries a
+`destructive_hint`" as the reason there is no fail-open case. That is the defect, not the comfort.
+`infer_destructive_tool()` (`backend/annotations.rs:71-82`) sets the hint by substring match on the
+tool name against `archive, bash, clear, delete, forget, kill, login, post, remove, run, send,
+submit, type, write` — so `send_email`, `write_file`, `run_query` and `create_post` are all
+destructive by guess, not by a backend's declaration. `ConfirmationPolicy::for_modern()`
+(`destructive_confirmation.rs:88-91`) is an unconditional refusal, deliberately, because the modern
+revision has no session to elicit over. Composing the two would refuse a large slice of the tool
+surface outright, with no path for a user to confirm, until the elicitation increment exists.
+
+So CONF.3 closes on the compile-time meta-tool definitions plus the `gateway_kill_server` floor, and
+backend and capability tools stay out until there is a confirmation path to send them to. The
+increment gets smaller and its blast radius disappears. This is the second time in this plan that a
+mechanism looked ready because its data was populated; the question worth asking of a populated
+field is who wrote it.
+
+**The header mirroring has an ordering duty.** `x-mcp-header` values reach the same seam that
+`insert`s `Authorization`, `MCP-Protocol-Version` and session headers
+(`transport/http/mod.rs:544-637`, overlaid at `:853-861`). The specification's mandatory
+`Mcp-Param-` prefix is what keeps a declared name from colliding with a gateway-owned one, so the
+bypass needs an implementation that drops the prefix — but the margin is one mistake wide. Mirrored
+headers are applied before the identity headers, and hop-by-hop and gateway-owned names are dropped
+regardless, so credentials win by construction rather than by ordering luck.
+
+Grok also caught that outbound `Mcp-Name` must come from `mcp_name_body_field(method)`
+(`protocol/headers.rs:59-64`) rather than a generic name slot, or `resources/read` emits `params.name`
+where the spec wants `uri` — the same decoy-name confusion the inbound check was written to stop,
+reappearing on the way out. And `ConsumedLedger::consume` should be called on a successful open in
+2b: the method exists, is tests-only, and calling it stops a redeemed continuation being replayed on
+the minting replica without waiting for the shared-key work.
+
+Both reviewers independently found the `x-mcp-header` design under-specified, from opposite
+directions — one that it was more than plumbing, one that it was a bypass. Two vendors converging on
+one requirement row is the signal that the row, not the design, was wrong.
+
 ### Still open, and it will not resolve itself
 
 The recovered audit is a floor, not a total. One row (SCHEMA.1, concerning `gateway_execute`'s
