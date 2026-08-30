@@ -179,10 +179,16 @@ it hands a backend a value the client controls.
    Persistent keys are not an independent feature: they arrive **with** the durable ledger under
    MIK-7312, never before it.
 
-   The continuation lifetime is capped short — minutes, not hours — and the cap is enforced at
-   mint rather than trusted from the caller, which today supplies `expires_at` outright
-   (continuation.rs:475). It bounds how long a stolen token is worth anything and how much a
-   restart can destroy.
+   The keyring and the ledger therefore share **one owner and one lifecycle**: they are constructed
+   together, held together in `AppState`, and there is no path that replaces one without replacing
+   the other. That is the whole of the invariant — keys and the memory of what those keys spent
+   belong to the same run — and stating it as a structural property rather than a convention is
+   what keeps a later config-reload refactor from resetting the ledger while the keys live on.
+
+   The continuation lifetime is **at most 300 seconds**, and minting derives `expires_at` from the
+   current time rather than accepting one, which is what the API does today (continuation.rs:475).
+   A caller asking for longer gets 300. The number bounds two things at once and both are now
+   measurable: how long a stolen token is worth stealing, and how much work a restart destroys.
 
 ## Unknowns, scheduled
 
@@ -209,6 +215,7 @@ backend the first unknown says does not exist yet.
 - a retry with a token minted for a different caller is refused, and the message says nothing useful
 - a replayed token is refused the second time
 - a token minted before the keyring is regenerated is refused after it, rather than opening
+- a mint asking for a lifetime beyond 300 seconds gets 300, not what it asked for
 - a malformed retry is refused without dispatching (the existing behaviour, kept)
 - an interim result for an unauthenticated caller is refused, and nothing is minted
 - an interim result whose `requestState` is absent completes, and the retry carries no `requestState`
