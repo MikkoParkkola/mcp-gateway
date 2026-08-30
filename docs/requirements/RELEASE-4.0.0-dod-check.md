@@ -302,7 +302,7 @@ is exactly what this disposition declines to do until the implementation is conf
 stays in the tree as the entry point that implementation will use.
 
 Chosen over making it conformant before the tag. Conformance is two statuses, the whole
-mid-flight input exchange, cooperative cancellation, two required fields, an error payload
+mid-flight input exchange, cooperative cancellation, three required fields, an error payload
 change and a per-request capability check — real construction on a branch that had already
 converged, and it reopens review rounds on everything it touches. Shipping the subset with
 a note was rejected outright: a client reading the extension identifier expects five
@@ -416,6 +416,8 @@ Removing the modern path is *not* a third option worth its cost: the switch alre
 isolation removal would buy.
 
 What changed since this recommendation was first written is the size of option 2. It was
-"twenty-six findings, several of them systematic". It is now **one piece of construction** — the
-`subscriptions/listen` stream — plus two deployment gates that bind only on multi-replica, and two
-claims that cannot be settled until a specification page exists to settle them against.
+"twenty-six findings, several of them systematic". It is now **no outstanding construction on the
+transport itself** — the `subscriptions/listen` stream landed, recorded above — leaving two
+deployment gates that bind only on multi-replica, the task model's distance from its extension
+specification, and a parsed `logLevel` with no reader. Nothing here waits on a page that cannot
+be reached: the tasks schema was read and the inventory now rests on it.
