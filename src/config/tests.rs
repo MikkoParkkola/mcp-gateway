@@ -1371,13 +1371,27 @@ fn a_substitution_naming_a_defined_key_is_detected_and_a_quoted_one_is_not() {
         ("URL=${OTHER}\n", None, "a key the files do not define"),
         ("URL=plain\n", None, "no substitution at all"),
         ("URL=plain # ${BASE}\n", None, "a trailing comment"),
+        (
+            "URL='prefix'$BASE\n",
+            Some("BASE"),
+            "a substitution after a closing single quote",
+        ),
+        (
+            "URL=\"${BASE}\" # ${BASE}\n",
+            Some("BASE"),
+            "a substitution inside double quotes",
+        ),
     ];
 
     for (index, (body, expected, what)) in cases.iter().enumerate() {
         let path = dir.path().join(format!("case{index}.env"));
         std::fs::write(&path, body).unwrap();
         assert_eq!(
-            crate::config::substitution_naming_defined_key(&path, &defined).as_deref(),
+            super::env_overlay::substitution_naming_defined_key(
+                &std::fs::read_to_string(&path).unwrap(),
+                &defined,
+            )
+            .as_deref(),
             *expected,
             "{what} was classified wrongly"
         );

@@ -82,6 +82,13 @@ pub struct EnvOverlay {
     /// Keys this overlay's files assign. Distinct from `vars`' key set only in
     /// intent, but the intent is what the restart notice is decided from.
     owned: BTreeSet<String>,
+    /// The exact bytes each file was parsed from, in application order.
+    ///
+    /// Kept so the substitution scan and the parser cannot disagree. Reopening
+    /// a path re-reads whatever is there at that moment, and a reload is
+    /// triggered by a watcher on exactly these paths, so a rewrite between the
+    /// two reads is the expected interleaving rather than an exotic one.
+    sources: Vec<(PathBuf, String)>,
 }
 
 /// The name of a substitution in `path` that refers to a key `defined`
@@ -96,60 +103,78 @@ pub struct EnvOverlay {
 /// one is refused rather than repaired.
 ///
 /// Only a substitution the parser would actually expand counts: a whole-line
-/// comment, a single-quoted value, an escaped `\$` and a trailing comment are
+/// comment, a single-quoted region, an escaped `\$` and a trailing comment are
 /// all inert.
 pub(crate) fn substitution_naming_defined_key(
-    path: &Path,
+    text: &str,
     defined: &BTreeSet<String>,
 ) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
     text.lines().find_map(|line| {
         let line = line.trim_start();
         if line.starts_with('#') {
             return None;
         }
         let (_, value) = line.split_once('=')?;
-        let value = value.trim_start();
-        if value.starts_with('\'') {
-            return None;
-        }
-        let value = match value.strip_prefix('"') {
-            // A double-quoted value ends at its closing quote; everything after
-            // it is a comment.
-            Some(rest) => rest.split('"').next().unwrap_or(rest),
-            // An unquoted value ends at the first ` #`.
-            None => value.split(" #").next().unwrap_or(value),
-        };
-        first_substitution(value, defined)
+        first_expanded_substitution(value.trim_start(), defined)
     })
 }
 
-/// The first `${K}` or `$K` in `value` naming a key in `defined`.
-fn first_substitution(value: &str, defined: &BTreeSet<String>) -> Option<String> {
-    let bytes: Vec<char> = value.chars().collect();
+/// The first `${K}` or `$K` in `value` that the parser would expand and that
+/// names a key in `defined`.
+///
+/// One walk, because quoting decides three things at once: a single-quoted
+/// region is inert, a double-quoted region is not, and a trailing comment only
+/// begins outside both. Judging a value inert because it *starts* with a quote
+/// misses `K='literal'$OTHER`, which the parser expands — measured against
+/// `dotenvy` rather than assumed.
+fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> Option<String> {
+    let chars: Vec<char> = value.chars().collect();
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == '\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] != '$' {
+    let mut single = false;
+    let mut double = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if single {
+            if c == '\'' {
+                single = false;
+            }
             i += 1;
             continue;
         }
+        match c {
+            '\\' => {
+                i += 2;
+                continue;
+            }
+            '\'' => {
+                single = true;
+                i += 1;
+                continue;
+            }
+            '"' => {
+                double = !double;
+                i += 1;
+                continue;
+            }
+            ' ' if !double && chars.get(i + 1) == Some(&'#') => return None,
+            '$' => {}
+            _ => {
+                i += 1;
+                continue;
+            }
+        }
         let mut j = i + 1;
-        let braced = bytes.get(j) == Some(&'{');
-        if braced {
+        if chars.get(j) == Some(&'{') {
             j += 1;
         }
         let start = j;
-        while bytes
+        while chars
             .get(j)
             .is_some_and(|c| c.is_alphanumeric() || *c == '_')
         {
             j += 1;
         }
-        let name: String = bytes[start..j].iter().collect();
+        let name: String = chars[start..j].iter().collect();
         if !name.is_empty() && defined.contains(&name) {
             return Some(name);
         }
@@ -250,13 +275,27 @@ impl EnvOverlay {
             tracing::debug!("Env file not found (skipped): {}", path.display());
             return Ok(());
         }
-        let iter = dotenvy::from_path_iter(path).map_err(|e| Self::describe(path, &e))?;
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| Self::describe(path, &dotenvy::Error::Io(e)))?;
+        let iter = dotenvy::from_read_iter(std::io::Cursor::new(text.as_bytes()));
         for entry in iter {
             let (key, value) = entry.map_err(|e| Self::describe(path, &e))?;
             self.insert(key, value);
         }
+        self.sources.push((path.to_path_buf(), text));
         tracing::info!("Loaded env file: {}", path.display());
         Ok(())
+    }
+
+    /// The first env file whose own bytes substitute a key these same files
+    /// define, with the key named.
+    ///
+    /// Scans the buffers the parser consumed, never the paths again.
+    #[must_use]
+    pub(crate) fn substitution_naming_owned_key(&self) -> Option<(PathBuf, String)> {
+        self.sources.iter().find_map(|(path, text)| {
+            substitution_naming_defined_key(text, &self.owned).map(|key| (path.clone(), key))
+        })
     }
 
     fn insert(&mut self, key: String, value: String) {

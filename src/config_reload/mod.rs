@@ -1263,16 +1263,18 @@ fn load_config_patch(
         .map_err(|e| format!("Failed to parse config: {e}"))?;
     // MIK.ENVFILE.12: refuse a reload whose env files substitute a key those
     // same files define. `dotenvy` expands the reference against the process
-    // environment, which is no longer written, so the value it resolved to at
-    // startup is not the value it would resolve to now.
-    let defined = evaluated.overlay.owned_keys();
-    for path in env.env_paths().as_paths() {
-        if let Some(key) = crate::config::substitution_naming_defined_key(path, defined) {
-            return Err(format!(
-                "Refusing reload: env file {} substitutes {key}, a key the env files themselves                  define. Its value is resolved from the process environment, which the gateway                  does not write, so a reload would not reproduce what startup read. Inline the                  value or export the key before starting.",
-                path.display()
-            ));
-        }
+    // environment and the keys already read from the same file, so a
+    // cross-file reference resolves to nothing now that nothing writes the
+    // process environment. The scan runs over the buffers the parser consumed,
+    // so the guard and the parser cannot see different bytes.
+    if let Some((path, key)) = evaluated.overlay.substitution_naming_owned_key() {
+        return Err(format!(
+            "Refusing reload: env file {} substitutes {key}, a key the env files themselves \
+             define. That reference is resolved from the process environment, which the \
+             gateway does not write, so it would expand to nothing and the value would be \
+             lost without an edit. Inline the value or export the key before starting.",
+            path.display()
+        ));
     }
 
     let patch = compute_diff(&old_config, &evaluated.config);
