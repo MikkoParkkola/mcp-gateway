@@ -22,8 +22,7 @@ refused at the door.
 
 | gap | evidence | blocks |
 |---|---|---|
-| MRTR is unwired end to end | `handlers.rs:873-889` returns -32602 "retry forwarding is not available on this build" for every retry | MRTR.1-.10 |
-| No production owner for continuation state | `Keyring`/`ConsumedLedger`/`InFlight` have zero non-test constructors; `AppState` holds no field for any of them | MRTR.5, MRTR.6 |
+| MRTR is unwired end to end | `handlers.rs:879-895` returns -32602 "retry forwarding is not available on this build" for every retry | MRTR.1-.10 |
 | Legacy-client bridge never called | `Bridge::to_legacy_client` has no caller | MRTR.7 |
 | Outbound era probing unwired | `EraCache::resolve_with`/`classify` implemented and tested, zero callers in `src/backend` or `src/transport` | outbound modern/legacy negotiation |
 | Tasks extension is dead code | `protocol::tasks::Task`/`TaskStatus` have no production call site; `tasks/get`/`tasks/update` fall through to method-not-found honestly | nothing — needs a keep/delete decision |
@@ -36,16 +35,27 @@ against the defect they are attached to, and the existing `tests/mik_7212_acs.rs
 primitives directly rather than the dispatcher — so it stays green whatever the wiring does. The
 test plan says this itself at lines 327-330.
 
+Re-verified on 2026-08-31 against the current tree: the retry refusal, the uncalled
+`Bridge::to_legacy_client`, the zero-caller `EraCache` and the dead tasks extension all still hold
+exactly as the audit described. Only the continuation-state row had gone stale, and it is removed
+above. That is the measured reliability of the audit rows: one in five, and the one that moved moved
+because the work was done, not because the reading was wrong.
+
 ## 2. The sequence
 
 Each increment is independently reviewable and mergeable. Delivery order within every increment is
 the standing one: failing tests first, then implementation, then dual-vendor review.
 
-**1 — Continuation state has one owner (S).** Closes MIK-7312, unblocks everything after it.
-Add keyring, consumed-ledger and in-flight fields to `AppState` as a single owner with one
-lifecycle; construct per process at startup; generate key material per process and never share it.
-Tests: construction through the production path, and a second `AppState` refusing the first's token
-(the current test builds two `Keyring`s by hand and proves only AES key separation).
+**1 — Continuation state has one owner (S). DONE — closed MIK-7312.** Re-read of the source on
+2026-08-31 found this already landed, so the audit row that reported no production owner was written
+against an earlier tree and has been removed from section 1. `ContinuationState`
+(`protocol/continuation.rs:664-742`) owns the keyring, ledger and in-flight table behind one
+lifecycle, generates its key material and replica name per process, and is constructed in the
+production `AppState` builder at `gateway/server/mod.rs:1171` — not under `cfg(test)`. Both test rows
+this increment asked for exist in `tests/mik_7312_continuation_state.rs`: reachability from the
+production `AppState`, and a token minted by one `AppState` refused by another. Design recorded in
+`docs/design/2026-08-30-shared-continuation-state.md`. Nothing is left to do here; increment 2b is
+the next open item.
 
 **2a — The mint site can see who is calling (S).** No behaviour change, so the existing suite
 green before and after is the evidence. Review added four tests anyway, on the capability string the
@@ -60,7 +70,7 @@ site. The alternative, two more loose parameters taking it from eleven to thirte
 that same comment.
 
 **2b — Retry reaches the backend (M).** Closes MRTR.1, .2, .3, .9, .10. Delete the `is_retry` arm at
-`handlers.rs:872-889` and leave the malformed-envelope arm above it alone; open the envelope, forward
+`handlers.rs:879-895` and leave the malformed-envelope arm above it alone; open the envelope, forward
 retry fields to the backend as siblings of `arguments` rather than merged into them, mint at the
 call site after the result, pass `complete` and legacy results through unchanged. Inbound
 `RetryFields` is attacker-controlled client shape and the outbound state is the backend's own
