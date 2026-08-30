@@ -47,11 +47,12 @@ pages.
 | Formatter | `cargo fmt --check` | clean |
 | Secret scan | private-key / API-key patterns over the branch diff | 0 |
 
-Run on the Linux build host, not this laptop: a local guard halted every `cargo` command at 4.6 GB
-free disk. Clearing another session's build cache was not this session's to decide, so verification
-moved to the machine with room for it — which is where heavy builds belong regardless. Only this
-branch's own debug artifacts were removed locally, which is housekeeping the rules already assign to
-the change that created them.
+Both the linter and the suite were re-run at the release head on this laptop, under a load limiter
+and with the build directory outside the repository. An earlier round ran them on the Linux build
+host instead, because a local guard halted every `cargo` command at 4.6 GB free disk; clearing
+another session's build cache was not this session's to decide. Only this branch's own debug
+artifacts were removed locally, which is housekeeping the rules already assign to the change that
+created them.
 
 ## §4 Testing — PASS at head
 
