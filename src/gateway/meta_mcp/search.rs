@@ -410,11 +410,9 @@ impl MetaMcp {
             matches = ranked_results_to_code_mode_json(ranked, disclosure.explain, &matches);
         }
 
-        matches.truncate(limit);
-        matches = matches
-            .into_iter()
-            .map(|m| crate::gateway::search_disclosure::project_code_mode_match(m, disclosure))
-            .collect();
+        matches = crate::gateway::search_disclosure::finalize_search_matches(
+            matches, disclosure, use_glob, limit,
+        );
 
         let suggestions = if matches.is_empty() && !use_glob {
             build_suggestions(&query, &all_tags)

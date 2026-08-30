@@ -146,6 +146,33 @@ pub(crate) fn project_code_mode_match(value: Value, disclosure: SearchDisclosure
     Value::Object(out)
 }
 
+/// Drop L0-hidden disabled tools, attach a glob score when ranking was skipped,
+/// then project onto the requested tier.
+pub(crate) fn finalize_search_matches(
+    mut matches: Vec<Value>,
+    disclosure: SearchDisclosure,
+    glob: bool,
+    limit: usize,
+) -> Vec<Value> {
+    if disclosure.detail == SearchDetail::L0 {
+        matches.retain(|m| m.get("status").and_then(Value::as_str) != Some("disabled"));
+    }
+    if glob {
+        for m in &mut matches {
+            if m.get("score").is_none()
+                && let Some(obj) = m.as_object_mut()
+            {
+                obj.insert("score".to_string(), json!(1.0));
+            }
+        }
+    }
+    matches.truncate(limit);
+    matches
+        .into_iter()
+        .map(|m| project_code_mode_match(m, disclosure))
+        .collect()
+}
+
 /// First sentence of `description`, keywords suffix stripped, capped.
 pub(crate) fn one_line_purpose(description: &str) -> String {
     let stripped = strip_keyword_suffix(description);

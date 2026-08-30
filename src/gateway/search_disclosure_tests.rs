@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::{
-    ONE_LINE_MAX, SearchDetail, SearchDisclosure, one_line_purpose, project_code_mode_match,
-    ranking_debug_object, required_params, resolve_search_disclosure, schema_signature,
-    when_to_use,
+    ONE_LINE_MAX, SearchDetail, SearchDisclosure, finalize_search_matches, one_line_purpose,
+    project_code_mode_match, ranking_debug_object, required_params, resolve_search_disclosure,
+    schema_signature, when_to_use,
 };
 use crate::ranking::{RankingExplanation, SearchResult};
 use serde_json::{Value, json};
@@ -542,4 +542,55 @@ fn mik_gw_t5_l0_selects_the_same_tool_as_legacy_full() {
         );
         assert_eq!(l0["tool"], expected);
     }
+}
+
+#[test]
+fn glob_matches_get_a_score_on_l0() {
+    let hits = vec![json!({
+        "tool": "linear:linear_get_issue",
+        "description": "Get a Linear issue.",
+        "input_schema": {"type": "object"}
+    })];
+    let out = finalize_search_matches(
+        hits,
+        SearchDisclosure {
+            detail: SearchDetail::L0,
+            explain: false,
+        },
+        true,
+        5,
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["score"], 1.0);
+    assert!(out[0].get("ranking").is_none());
+    assert!(out[0].get("input_schema").is_none());
+}
+
+#[test]
+fn l0_drops_disabled_glob_candidates() {
+    let hits = vec![
+        json!({
+            "tool": "dead:tool",
+            "description": "Killed.",
+            "status": "disabled",
+            "input_schema": {"type": "object"}
+        }),
+        json!({
+            "tool": "live:tool",
+            "description": "Healthy.",
+            "input_schema": {"type": "object"}
+        }),
+    ];
+    let out = finalize_search_matches(
+        hits,
+        SearchDisclosure {
+            detail: SearchDetail::L0,
+            explain: false,
+        },
+        true,
+        5,
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["tool"], "live:tool");
+    assert_eq!(out[0]["score"], 1.0);
 }
