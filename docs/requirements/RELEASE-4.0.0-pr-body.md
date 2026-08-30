@@ -60,9 +60,10 @@ material was then reviewed twice on 2026-08-30 by two vendors each time:
 |---|---|---|---|---|
 | release material | `e6e2ddd9` | SHIP-WITH-FIXES | SHIP-WITH-FIXES | error, no verdict |
 | repair commit | `edfd020a` | SHIP-WITH-FIXES | SHIP-WITH-FIXES | unavailable, monthly quota |
+| confirmation | `fae481ef` | SHIP | SHIP | unavailable, monthly quota |
 
-Grok is recorded as unavailable rather than as agreement. Both rounds returned
-`SHIP-WITH-FIXES`, and `SHIP-WITH-FIXES` is not an authorisation: the fixes from
-the second round are applied in the commit above this line, which means the head
-being merged is again one commit past the last reviewed head. That is stated here
-rather than rounded up.
+Grok is recorded as unavailable rather than as agreement. The first two rounds
+returned `SHIP-WITH-FIXES`, which is not an authorisation; the third returned `SHIP`
+from both vendors with no findings. The single improvement both raised in that round
+is applied in the commit that carries this table, so the head being merged is one
+commit past the last reviewed head. That is stated here rather than rounded up.

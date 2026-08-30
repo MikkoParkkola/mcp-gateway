@@ -161,12 +161,14 @@ Every other document points here rather than restating it.
 | 9-17 | per-module chunks | GPT + Grok | findings below |
 | release material | `e6e2ddd9` | GPT + Kimi | both SHIP-WITH-FIXES; Grok errored, no verdict |
 | repair commit | `edfd020a` | GPT + Kimi | both SHIP-WITH-FIXES; Grok unavailable, monthly quota |
+| confirmation | `fae481ef` | GPT + Kimi | both SHIP, no findings; Grok unavailable, monthly quota |
 
-The two 2026-08-30 rounds reviewed the release *material* — the PR body, this document and the
+The three 2026-08-30 rounds reviewed the release *material* — the PR body, this document and the
 repair diff — not the feature work, which rounds 1-17 covered per module. Grok is recorded as
-unavailable in both, which is not agreement. The findings from the `edfd020a` round are repaired
-in the commit that carries this paragraph, so the head being merged is one commit past the last
-reviewed head; that is stated rather than rounded up.
+unavailable in all three, which is not agreement. The confirmation round returned SHIP from both
+vendors with no findings; the one improvement they both raised — a closed item still sitting inside
+the numbered open list — is applied in the commit that carries this paragraph. So the head being
+merged is one commit past the last reviewed head, and that is stated rather than rounded up.
 
 The operator set single-vendor review (codex/gpt) for rounds 1 to 8, so the dual-vendor gate was
 **deliberately not met** there and it is a known, authorised deviation rather than a passed gate.
@@ -281,15 +283,10 @@ died. That was misread twice here before anyone looked at the process tree.
 
 ## What is honestly NOT finished
 
-Six findings are recorded open: five numbered here, and one test-hygiene item after them.
-Findings 1 to 5 are unreachable by a client while `server.modern_protocol` defaults off. The sixth
-is unreachable because it lives in a test, not because of the switch.
-
-Item 6 below is **closed**, and is kept for its analysis rather than as an open item. Its repair is
-in the tree at `src/config_reload/mod.rs:1340-1344`, where the notice now fires on either run's
-`HOME` assignment beside a `~` entry or on a changed value. An earlier revision of this document
-counted it open in this summary while recording it repaired further down; the count above is the
-corrected one.
+Six findings are recorded open: five numbered below, and one test-hygiene item after them. Every
+numbered item in that list is open, so the count is read by counting. Findings 1 to 5 are
+unreachable by a client while `server.modern_protocol` defaults off. The sixth is unreachable
+because it lives in a test, not because of the switch.
 
 1. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
 
@@ -353,117 +350,125 @@ corrected one.
    was rejected — it is the protocol's own key, and the next release that wires log
    delivery needs the parse it would remove.
 
-6. **Restart detection for `HOME` is wrong in both directions.** A reload reports
-   `restart_required` whenever startup recorded a `~` entry and the overlay assigns `HOME`, changed
-   or not. `changed_startup_env_keys` filters every other key on whether its resolved value actually
-   differs from startup, then pushes `HOME` past that filter on presence alone:
-   `if env.env_paths().has_tilde_entry() && evaluated.overlay.assigns("HOME")`
-   (`src/config_reload/mod.rs:1311-1312`). The sequential `HOME` + `~/…` layout that branch
-   exists to serve therefore makes every later reload report a restart it does not need.
-
-   It errs in both directions, and the second direction was missed when this finding was first
-   written down. `HOME` is not in `IMPLICIT_STARTUP_ENV_KEYS` (`:1279-1283`), and it reaches the
-   value filter only if the config happens to name it as a secret reference. So an overlay that
-   *removes* a HOME assignment startup had — leaving the recorded `~` entries to resolve
-   somewhere else on a restart — pushes nothing and is compared against nothing. The common case
-   over-reports and is merely noisy; the removal case under-reports and is the one that matters.
-   Gated BEFORE-DEPLOY.
-
-   This document does not prescribe the repair, having got it wrong once: comparing the overlay's
-   final HOME against startup's is not sufficient. `~` resolves at the point each env file is
-   applied, and `EnvPaths` keeps those paths in application order
-   (`src/config/env_overlay.rs:45-48`), so moving an unchanged `HOME` assignment across a tilde
-   entry changes where that entry resolves while every value comparison still reports equal. What
-   the check has to be sensitive to is the HOME in force *at each tilde-spelled entry*, against what
-   was in force there at startup — assignment, removal and reordering alike.
-
-   **Repaired.** The rule is now a comparison of the HOME actually in force —
-   `startup.resolve("HOME") != evaluated.overlay.resolve("HOME")`, still conjoined with
-   `has_tilde_entry()` — in place of the presence check. A re-stated HOME resolves equal and
-   reports nothing; a removed assignment falls through to the process environment, resolves
-   different, and reports. The paragraph above overstated what defeats a value comparison: the
-   reordering case it describes is an edit to the `env_files` list, which the restart-field diff
-   already reports as `env_files` (`src/config_reload/mod.rs:571-572`, inside
-   `pending_restart_fields`, not `compute_diff`), so it never needed this rule to
-   catch it. Nothing resolves `~` a second time, so `RecordingHome`'s one-resolution assertion
-   (ENVFILE.19e) still holds. New rows ENVFILE.19g (re-stated HOME reports nothing) and
-   ENVFILE.19h (removed assignment reports HOME) were written first and observed failing on the
-   presence check — 19g reporting `HOME` with nothing moved, 19h omitting it with everything
-   moved. `config_reload` is 79/79. **This finding is closed** — see the repair cited in the
-   summary above.
-
-   **Closure re-check found the layer is wrong (2026-08-30).** Both vendors returned
-   SHIP-WITH-FIXES on the repair commit and converged on one defect: comparing the *final* HOME
-   still misses a HOME that changes before a later `~` entry and is restored by a file after it —
-   the paths move, both finals compare equal, and the `env_files` list is untouched, so nothing
-   reports. Verified at source: `~` is substituted with the home in force at that point in the
-   sequence (`src/config/mod.rs:456-466`, `expand_home` at `:475-484`), and the only consumer of
-   overlay HOME is a later env-file entry — `fallback_config_path` reads `dirs::home_dir()`
-   directly (`:268`). The same reading condemns the tests, including one that predates this
-   change: a HOME assignment inside the *sole* `~/x.env` entry moves nothing, because that entry
-   was expanded from the process home before its own assignments applied. ENVFILE.19h asserts a
-   restart for exactly that, and so does ENVFILE.19e, whose premise sentence — "a `HOME`
-   assignment against a `~` entry moves where a restart would read" — is false whenever the
-   assignment sits in the last, or only, tilde entry. The rule being encoded is not "did HOME
-   change" at any layer; it is *would a restart open different files than startup did*. That
-   question is answered by the recorded paths, not by HOME, and it needs an owner decision
-   because the design deliberately forbids resolving `~` a second time.
-
-   **Closed conservatively; the semantics question stays open.** ENVFILE.19i was written first and
-   observed failing on the value comparison — two entries, the first moving HOME and the file the
-   second names restoring it, finals equal, `HOME` absent from the report. The rule now fires on
-   either an assignment or a value change beside a tilde entry
-   (`src/config_reload/mod.rs:1325-1332`), which is statable in one line: *the notice is never
-   absent when a restart would read different files, and it does not clear*. This is a deliberate
-   design event, not a repair: ENVFILE.19g
-   now asserts the notice it previously asserted away, because nothing available at reload can tell
-   its harmless case apart from 19i's real one without re-expanding `~`, which the design forbids.
-   19h keeps its assertion and loses its false premise — its sole entry relocates nothing; it is
-   the value branch's test, not the relocation case.
-
-   Both vendors then found the same remaining silence, independently: checking assignment on the
-   *reload* overlay alone misses a startup move that the reload DELETES, when the value startup
-   restored happens to equal the process environment's. ENVFILE.19j reproduces it — observed
-   silent, `["env_files", "default_routing_profile"]` with no `HOME` — and the predicate now reads
-   either run's assignment (`startup.assigns("HOME") || evaluated.overlay.assigns("HOME") ||`
-   values differ). Only startup's own assignment records that the expansion base was ever moved.
-   The function doc was rewritten with it; it still taught the value-only rule.
-   `config_reload` is 81/81; lib 3763/3763; clippy and fmt clean.
-
-   One reviewer improvement is recorded and not taken: the ENVFILE.19 fixtures seed the running
-   config with `Config::default()`, so `restart_required` and the `env_files` field in these
-   outcomes are harness artifacts rather than evidence. The `HOME` assertions are unaffected and
-   are what these rows test; re-seeding a helper shared by the whole family is a change to other
-   tests' fixtures and out of this change's scope.
-
-   Closure re-check, both vendors, on the repaired head: SHIP (gpt 2026-08-30T16:15:34Z, grok
-   16:16:32Z, identical material). No further findings, and this was the last round on this
-   predicate: three examinations each found a new corner rather than damage to a repair, which is
-   the signal to stop patching and refer the question upward — which the open owner question below
-   already does.
-
-   The conservative rule has a consequence worth stating plainly, because it is what an operator
-   sees: for a config whose env files assign `HOME` beside a `~` entry, the notice fires on every
-   reload and a restart does not settle it — the next startup's env files assign `HOME` again, so
-   it returns immediately. The notice reports that a restart *could* read different files, not
-   that one is outstanding. It is fail-safe and it is noisy, and the noise is permanent for that
-   config shape. That is the strongest argument for the *no* branch of the owner question below:
-   the mechanism cannot both stay silent-free and stay actionable.
-
-   What remains for the owner is one question, and it is about behaviour rather than mechanism:
-   *should setting HOME in an env file be able to move where a later env file is looked for?*
-   If no, the coupling goes and `~` always means the real home directory — the branch, the
-   `so_far` parameter on `HomeResolver`, and the ENVFILE.19 family all delete, and the rule
-   becomes one an operator never has to think about. If yes, the check has to be path-based
-   ("a restart is required when it would open different files than startup did"), which means
-   relaxing ENVFILE.19e's one-resolution fixture. Either answer is its own change with its own
-   design review; neither gates 4.0.0, because the conservative rule cannot be silent.
-
 One further finding is open and gates nothing: the OAuth metadata tests release an ephemeral port
 before rebinding it — once inline at `src/oauth/metadata.rs:322-324` and once in the `free_addr`
 helper at `:332-337` — so a concurrent process can take it in between.
 Graded LOW / UNLIKELY / LATER. It is test hygiene rather than a shipped defect, recorded because it
 was found and never written down.
+
+### Closed during the review — restart detection for `HOME`
+
+This was carried as a sixth numbered finding in an earlier revision of this document. It is
+**closed**: the repair is in the tree at `src/config_reload/mod.rs:1340-1344`, where the notice
+fires on either run's `HOME` assignment beside a `~` entry or on a changed value. It is kept in
+full, out of the open list, because the owner question at the end of it is still open and because
+the analysis is the reason the repair is shaped the way it is.
+
+**Restart detection was wrong in both directions.** A reload reported
+`restart_required` whenever startup recorded a `~` entry and the overlay assigns `HOME`, changed
+or not. `changed_startup_env_keys` filters every other key on whether its resolved value actually
+differs from startup, then pushes `HOME` past that filter on presence alone:
+`if env.env_paths().has_tilde_entry() && evaluated.overlay.assigns("HOME")`
+(`src/config_reload/mod.rs:1311-1312`). The sequential `HOME` + `~/…` layout that branch
+exists to serve therefore makes every later reload report a restart it does not need.
+
+It errs in both directions, and the second direction was missed when this finding was first
+written down. `HOME` is not in `IMPLICIT_STARTUP_ENV_KEYS` (`:1279-1283`), and it reaches the
+value filter only if the config happens to name it as a secret reference. So an overlay that
+*removes* a HOME assignment startup had — leaving the recorded `~` entries to resolve
+somewhere else on a restart — pushes nothing and is compared against nothing. The common case
+over-reports and is merely noisy; the removal case under-reports and is the one that matters.
+Gated BEFORE-DEPLOY.
+
+This document does not prescribe the repair, having got it wrong once: comparing the overlay's
+final HOME against startup's is not sufficient. `~` resolves at the point each env file is
+applied, and `EnvPaths` keeps those paths in application order
+(`src/config/env_overlay.rs:45-48`), so moving an unchanged `HOME` assignment across a tilde
+entry changes where that entry resolves while every value comparison still reports equal. What
+the check has to be sensitive to is the HOME in force *at each tilde-spelled entry*, against what
+was in force there at startup — assignment, removal and reordering alike.
+
+**Repaired.** The rule is now a comparison of the HOME actually in force —
+`startup.resolve("HOME") != evaluated.overlay.resolve("HOME")`, still conjoined with
+`has_tilde_entry()` — in place of the presence check. A re-stated HOME resolves equal and
+reports nothing; a removed assignment falls through to the process environment, resolves
+different, and reports. The paragraph above overstated what defeats a value comparison: the
+reordering case it describes is an edit to the `env_files` list, which the restart-field diff
+already reports as `env_files` (`src/config_reload/mod.rs:571-572`, inside
+`pending_restart_fields`, not `compute_diff`), so it never needed this rule to
+catch it. Nothing resolves `~` a second time, so `RecordingHome`'s one-resolution assertion
+(ENVFILE.19e) still holds. New rows ENVFILE.19g (re-stated HOME reports nothing) and
+ENVFILE.19h (removed assignment reports HOME) were written first and observed failing on the
+presence check — 19g reporting `HOME` with nothing moved, 19h omitting it with everything
+moved. `config_reload` is 79/79. **This finding is closed** — see the repair cited at the head of
+this section.
+
+**Closure re-check found the layer is wrong (2026-08-30).** Both vendors returned
+SHIP-WITH-FIXES on the repair commit and converged on one defect: comparing the *final* HOME
+still misses a HOME that changes before a later `~` entry and is restored by a file after it —
+the paths move, both finals compare equal, and the `env_files` list is untouched, so nothing
+reports. Verified at source: `~` is substituted with the home in force at that point in the
+sequence (`src/config/mod.rs:456-466`, `expand_home` at `:475-484`), and the only consumer of
+overlay HOME is a later env-file entry — `fallback_config_path` reads `dirs::home_dir()`
+directly (`:268`). The same reading condemns the tests, including one that predates this
+change: a HOME assignment inside the *sole* `~/x.env` entry moves nothing, because that entry
+was expanded from the process home before its own assignments applied. ENVFILE.19h asserts a
+restart for exactly that, and so does ENVFILE.19e, whose premise sentence — "a `HOME`
+assignment against a `~` entry moves where a restart would read" — is false whenever the
+assignment sits in the last, or only, tilde entry. The rule being encoded is not "did HOME
+change" at any layer; it is *would a restart open different files than startup did*. That
+question is answered by the recorded paths, not by HOME, and it needs an owner decision
+because the design deliberately forbids resolving `~` a second time.
+
+**Closed conservatively; the semantics question stays open.** ENVFILE.19i was written first and
+observed failing on the value comparison — two entries, the first moving HOME and the file the
+second names restoring it, finals equal, `HOME` absent from the report. The rule now fires on
+either an assignment or a value change beside a tilde entry
+(`src/config_reload/mod.rs:1325-1332`), which is statable in one line: *the notice is never
+absent when a restart would read different files, and it does not clear*. This is a deliberate
+design event, not a repair: ENVFILE.19g
+now asserts the notice it previously asserted away, because nothing available at reload can tell
+its harmless case apart from 19i's real one without re-expanding `~`, which the design forbids.
+19h keeps its assertion and loses its false premise — its sole entry relocates nothing; it is
+the value branch's test, not the relocation case.
+
+Both vendors then found the same remaining silence, independently: checking assignment on the
+*reload* overlay alone misses a startup move that the reload DELETES, when the value startup
+restored happens to equal the process environment's. ENVFILE.19j reproduces it — observed
+silent, `["env_files", "default_routing_profile"]` with no `HOME` — and the predicate now reads
+either run's assignment (`startup.assigns("HOME") || evaluated.overlay.assigns("HOME") ||`
+values differ). Only startup's own assignment records that the expansion base was ever moved.
+The function doc was rewritten with it; it still taught the value-only rule.
+`config_reload` is 81/81; lib 3763/3763; clippy and fmt clean.
+
+One reviewer improvement is recorded and not taken: the ENVFILE.19 fixtures seed the running
+config with `Config::default()`, so `restart_required` and the `env_files` field in these
+outcomes are harness artifacts rather than evidence. The `HOME` assertions are unaffected and
+are what these rows test; re-seeding a helper shared by the whole family is a change to other
+tests' fixtures and out of this change's scope.
+
+Closure re-check, both vendors, on the repaired head: SHIP (gpt 2026-08-30T16:15:34Z, grok
+16:16:32Z, identical material). No further findings, and this was the last round on this
+predicate: three examinations each found a new corner rather than damage to a repair, which is
+the signal to stop patching and refer the question upward — which the open owner question below
+already does.
+
+The conservative rule has a consequence worth stating plainly, because it is what an operator
+sees: for a config whose env files assign `HOME` beside a `~` entry, the notice fires on every
+reload and a restart does not settle it — the next startup's env files assign `HOME` again, so
+it returns immediately. The notice reports that a restart *could* read different files, not
+that one is outstanding. It is fail-safe and it is noisy, and the noise is permanent for that
+config shape. That is the strongest argument for the *no* branch of the owner question below:
+the mechanism cannot both stay silent-free and stay actionable.
+
+What remains for the owner is one question, and it is about behaviour rather than mechanism:
+*should setting HOME in an env file be able to move where a later env file is looked for?*
+If no, the coupling goes and `~` always means the real home directory — the branch, the
+`so_far` parameter on `HomeResolver`, and the ENVFILE.19 family all delete, and the rule
+becomes one an operator never has to think about. If yes, the check has to be path-based
+("a restart is required when it would open different files than startup did"), which means
+relaxing ENVFILE.19e's one-resolution fixture. Either answer is its own change with its own
+design review; neither gates 4.0.0, because the conservative rule cannot be silent.
 
 ### Disposition of 3 and 4 — the extension ships not implemented
 
@@ -589,10 +594,10 @@ The path in the original finding, `firewall/mod.rs`, does not exist; the file is
 The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol` defaults **off**,
 and that is the isolation for findings 1 to 5 — no client reaches a modern protocol path while the
 switch is off. It does not cover the remaining item, the port race, which exists only in tests.
-Finding 6 was in config reload, which any authenticated operator can trigger regardless of the
-switch, and so was never covered by the switch either.
+The `HOME` restart-detection finding was in config reload, which any authenticated operator can
+trigger regardless of the switch, and so was never covered by the switch either.
 
-Finding 6 has since been repaired rather than accepted, on the operator's instruction that anything
+That finding has since been repaired rather than accepted, on the operator's instruction that anything
 fixable gets fixed and that the rules left standing should be ones any user can state. The rule that
 replaced it fires on either run's `HOME` assignment beside a `~` entry, or on a changed value: it is
 never silent when a restart would read different files, and for a config that assigns `HOME` beside
