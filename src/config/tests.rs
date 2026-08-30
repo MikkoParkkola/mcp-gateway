@@ -1398,6 +1398,53 @@ fn a_substitution_naming_a_defined_key_is_detected_and_a_quoted_one_is_not() {
     }
 }
 
+/// ENVFILE.13: `dotenvy` separates the optional `export` prefix from the key
+/// with ANY whitespace — `parse_line` reads the key, then `skip_whitespace`,
+/// before looking for the `=` (`dotenvy-0.15.7/src/parse.rs:48-58`). So
+/// `export\tKEY=v` is valid and defines `KEY`. Stripping only the literal
+/// `"export "` recorded the key as `export\tKEY`, left `KEY` looking
+/// undefined, and refused a later `${KEY}` the same file does define — the
+/// gateway would not start on a file dotenvy reads without complaint.
+#[test]
+fn an_export_prefix_is_stripped_whatever_whitespace_follows_it() {
+    use std::collections::BTreeSet;
+    let defined: BTreeSet<String> = ["KEY".to_string(), "export".to_string()]
+        .into_iter()
+        .collect();
+
+    let cases = [
+        ("export\tKEY=v\nURL=${KEY}\n", None, "a tab after export"),
+        (
+            "export   KEY=v\nURL=${KEY}\n",
+            None,
+            "several spaces after export",
+        ),
+        ("export KEY=v\nURL=${KEY}\n", None, "one space after export"),
+        // `export` is a legal key in its own right; treating it as a prefix
+        // here would define nothing and let the substitution through.
+        (
+            "export=v\nURL=${export}\n",
+            None,
+            "export as the key itself",
+        ),
+        // No whitespace follows, so this is not the prefix and the key is
+        // `exportKEY` — `KEY` really is undefined here.
+        (
+            "exportKEY=v\nURL=${KEY}\n",
+            Some("KEY"),
+            "no whitespace after export",
+        ),
+    ];
+
+    for (body, expected, what) in cases {
+        assert_eq!(
+            super::env_overlay::substitution_naming_defined_key(body, &defined).as_deref(),
+            expected,
+            "{what} was classified wrongly"
+        );
+    }
+}
+
 /// Measured against `dotenvy` rather than assumed: a substitution it expands
 /// but the scanner cannot see is a reload that silently changes meaning, which
 /// is the whole thing the refusal exists to prevent.

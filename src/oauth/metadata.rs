@@ -131,11 +131,19 @@ impl AuthorizationServerMetadata {
             .await
             .map_err(|e| Error::OAuth(format!("Failed to parse OAuth metadata: {e}")))?;
 
-        // RFC 8414 s3.3: the issuer in the response MUST be identical to the
-        // one the well-known URI was built from. Without this the response
-        // body chooses its own identity, and every credential this gateway
-        // files under a discovered issuer could be claimed by whichever server
+        // RFC 8414 s3.3: the issuer in the response must match the one the
+        // well-known URI was built from. Without this the response body
+        // chooses its own identity, and every credential this gateway files
+        // under a discovered issuer could be claimed by whichever server
         // answers the request.
+        //
+        // The comparison ignores a trailing slash, which the RFC's "identical"
+        // does not. That is deliberate: on the fallback path `initialize`
+        // passes `base_url()`, which is `scheme://host[:port]` and never ends
+        // in a slash, while servers that publish their issuer with one --
+        // Auth0 is the common case -- would then be refused. A trailing slash
+        // cannot hand the response a different identity: the two spellings are
+        // the same origin, so no second party gains anything by it.
         if metadata.issuer.trim_end_matches('/') != base_url.trim_end_matches('/') {
             return Err(Error::OAuth(format!(
                 "OAuth metadata issuer mismatch: discovered at {base_url}, metadata claims {}",

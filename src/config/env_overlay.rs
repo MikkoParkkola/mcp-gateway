@@ -147,7 +147,21 @@ pub(crate) fn substitution_naming_defined_key(
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
-            let key = key.trim().trim_start_matches("export ").trim().to_string();
+            // `dotenvy` reads the key, skips whitespace, then looks for the
+            // `=` (`parse.rs:48-58`), so ANY whitespace separates the optional
+            // `export` prefix from the key it qualifies. Matching only the
+            // literal `"export "` recorded a tab-separated assignment under the
+            // key `export\tKEY`, so the `KEY` it defines still looked
+            // undefined and a later `${KEY}` in the same file was refused.
+            // `export` is also a legal key on its own, which is why the prefix
+            // only counts when whitespace follows it.
+            let key = key.trim();
+            let key = key
+                .strip_prefix("export")
+                .filter(|rest| rest.starts_with(char::is_whitespace))
+                .unwrap_or(key)
+                .trim()
+                .to_string();
             (Some(key), value.trim_start().to_string())
         };
         // Rescanning the whole value on each continuation keeps the quote
