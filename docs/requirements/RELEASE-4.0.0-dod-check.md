@@ -53,7 +53,7 @@ another session's build cache was not this session's to decide. Only this branch
 artifacts were removed locally, which is housekeeping the rules already assign to the change that
 created them.
 
-## §4 Testing — BLOCKED: execution passes, coverage and mutation are unmeasured
+## §4 Testing — BLOCKED: execution passes, coverage is measured and short of the floor
 
 - **4,611 tests passing across 46 binaries, 0 failing** — measured at the head commit under `--all-features` with `--no-fail-fast`, so neither a disabled feature nor an earlier failing binary can hide a row. The figure recorded in the previous revision, 4,463 across 45 binaries, was the default feature set.
 - **41 doc-tests pass.**
@@ -73,32 +73,85 @@ record `"version": "4.0.0"` where their siblings record `"3.5.0"`; the row nulls
 asserts it separately against the crate version, and hand-editing a captured golden is the one thing
 the capture rule forbids.
 
-### Coverage and mutation — the two §4 criteria this release does not carry
+### Coverage — measured, and below the floor
 
-The canonical DoD §4 asks for two numbers this document does not have: line coverage against
-the tier threshold, and mutation score ≥75% on new code (`cargo-mutants`). Neither was run.
-Recording that is the point of this subsection — a §4 marked PASS while two of its criteria
-were never measured is the failure mode the gate exists to prevent, and the earlier revision
-of this document did exactly that.
+Coverage was the first of the two missing §4 numbers and it is now measured. Mutation is not, and
+the section below says so in its own words rather than borrowing this one's authority.
 
-What stands in their place, and what it does not substitute for: 4,611 passing tests and
-thirty-one falsification probes, of which two controls could not be made to fail and are named
-as such. A falsification probe is stronger evidence than a mutation score for the control it
-targets — it proves that specific control observes what it claims — and weaker for the release
-as a whole, because thirty-one probes cover thirty-one controls and mutation covers every line
-of new code. The probes do not tell us how much of the branch is untested.
+Run at head `4c599c89` from the branch worktree:
+`cargo llvm-cov --all-features --no-fail-fast --summary-only --json`. `--all-features` matches the
+feature set every other §4 figure was taken under, so the numbers are comparable to the suite result
+above rather than to a different build.
+
+| scope | lines | regions |
+|---|---|---|
+| whole crate, 318 instrumented files | **83.16%** (65,302 / 78,529) | 83.39% |
+| `src/protocol/`, the revision's new module, 14 files | **94.60%** (1,332 / 1,408) | 94.59% |
+| the 61 files this branch touched, aggregated | **77.40%** (13,402 / 17,315) | 75.87% |
+
+Against the canonical thresholds — Critical ≥95%, Standard ≥80% — this does not clear:
+
+- the crate as a whole clears the Standard floor;
+- `src/protocol/` misses the Critical threshold by 0.4 points, and protocol parsing on a security
+  path is Critical rather than Standard;
+- the files this branch touched, taken together, sit **2.6 points under the Standard floor**.
+
+The third row decides the gate, and it is also the one most easily misread, so what it is:
+file-level coverage of every file the branch edited, including lines the branch never touched. It
+attributes a legacy file's untested remainder to this change. A changed-line figure was derived as a
+cross-check and comes out near 90%, but it is **not** recorded as the measurement, because the
+control for it failed: llvm-cov's LCOV exporter and its own JSON summary disagree on 28 of the 51
+changed files present in both, by up to 9.9 points on `src/gateway/router/handlers.rs`. An
+instrument that disagrees with itself by ten points does not get to carry a gate verdict. The
+file-level rows above are llvm-cov's own per-file counts summed, with no derivation in between, and
+that is why they are the ones quoted.
+
+Under either reading the answer is the same and the gate does not turn on the ambiguity: 77.40% is
+below the floor, and 90% is below the 100% §5 asks of new and changed code.
+
+**Where the untested code sits.** The "what if it resolves badly" row below undertook to name
+specific modules rather than a percentage, and this is that list — added lines reached by no test,
+worst first:
+
+| file | added lines covered |
+|---|---|
+| `src/main.rs` | 0 / 22 |
+| `src/transport/http/mod.rs` | 30 / 57 |
+| `src/gateway/server/mod.rs` | 65 / 89 |
+| `src/oauth/client/mod.rs` | 54 / 73 |
+| `src/gateway/router/handlers.rs` | 189 / 223 |
+
+`src/main.rs` is the sharpest of these: 22 added lines, none executed by any test. These counts come
+from the cross-check whose control failed, so they rank the modules rather than grade them — which
+is what the row promised and all it needs to do.
+
+### Mutation — not yet measured
+
+The canonical DoD §4 asks for a mutation score ≥75% on new code (`cargo-mutants`), and this release
+does not have one. `cargo-mutants` finds **245 mutants** in `src/protocol/*.rs` alone; the full
+branch diff is several times that surface, and running every mutant against the full 4,611-test
+suite is not affordable on this hardware.
+
+What stands in its place, and what it does not substitute for: 4,611 passing tests and thirty-one
+falsification probes, of which two controls could not be made to fail and are named as such. A
+falsification probe is stronger evidence than a mutation score for the control it targets — it
+proves that specific control observes what it claims — and weaker for the release as a whole,
+because thirty-one probes cover thirty-one controls and mutation covers every line of new code. The
+probes do not tell us how much of the branch is untested. Coverage now partly does, and its answer
+is: not enough.
 
 | field | value |
 |---|---|
 | owner | **MIK-7324** |
-| what would resolve it | `cargo llvm-cov --all-features` for the coverage figure, `cargo mutants` scoped to the branch diff for the score, both on Spark |
+| what would resolve it | coverage: **done**, recorded above. Mutation: `cargo mutants` over the branch diff, on Spark, where the full suite per mutant is affordable |
 | when | before the 4.1.0 tag, or immediately if the operator holds 4.0.0 for it |
-| what if it resolves badly | coverage below the tier threshold or mutation below 75% names specific untested code; that becomes tickets against the modules it names, and the modern path stays default-off until they close |
+| what if it resolves badly | it has, on the coverage half: the touched-file aggregate is 2.6 points under the Standard floor and the five modules above are named. Those become tickets under MIK-7324, and the modern path stays default-off until they close |
 
-This is a deferred unknown under §P1, not an N/A: the criteria apply and were not measured.
-A §P1 deferral schedules an unknown; it does not waive a blocking DoD criterion, so §4 stands
-BLOCKED and the release cannot claim a passing DoD until MIK-7324 records both figures.
-Holding the tag for them is a live option and one line from the operator takes it.
+This is a deferred item under §P1, not an N/A: both criteria apply, one is now measured and fails,
+the other is still outstanding. A §P1 deferral schedules a question; it does not waive a blocking
+DoD criterion, so §4 stands BLOCKED. Coverage moving from unmeasured to measured-and-failing is
+progress in the record's honesty, not in the verdict.
+Holding the tag is a live option and one line from the operator takes it.
 
 ### Falsification — every control was made to fail, and two could not be
 

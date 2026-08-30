@@ -21,8 +21,11 @@ paths, and `server`/`discover` gained surface. Those are described in
   the mint counter are process-local; MIK-7312 owns the shared store.
 - Retry forwarding for multi-round-trip tool requests. A well-formed retry envelope is
   accepted and then refused with `-32602`; MIK-7325 owns the forwarding path.
-- Coverage and mutation measurement. Neither was run for this branch, so §4 of the DoD
-  check stands BLOCKED rather than passing; MIK-7324 owns both figures.
+- Coverage clearing its floor, and a mutation score. Coverage is now measured: 83.16% of
+  the crate, 94.60% of `src/protocol/`, and 77.40% across the 61 files this branch touched,
+  which is 2.6 points under the Standard floor. Mutation is not measured. §4 of the DoD check
+  therefore stands BLOCKED rather than passing, and it names the five modules carrying the
+  untested lines; MIK-7324 owns both figures.
 
 The first three are stated in `CHANGELOG.md` rather than left for a deployer to
 discover, and the multi-replica limit again in `docs/DEPLOYMENT.md`, which is where a
