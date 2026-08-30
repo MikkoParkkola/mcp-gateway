@@ -1,14 +1,13 @@
 # MIK-7256 — acceptance-criterion verdicts
 
-Commit: `51ce1f32`. Suite: `cargo test --quiet` → **4537 passed, 0 failed, 23 ignored**
+Commit: `ec633332`. Suite: `cargo test --quiet` → **4537 passed, 0 failed, 23 ignored**
 (E3). `cargo test --all-features` → **1 failure**, `ac_discover_3_initialize_result_is_unchanged`,
 a missing `spec_preview` golden fixture that has never existed in this repository. Pre-existing
 on this branch's base and out of scope here; disposed as a ticket because the choice between
 capturing the fixture and gating the assertion is a product decision.
 
-**Headline: this change does not pass DoD §1.** Of 26 acceptance criteria, 7 are verified by a
-test, 7 are partly verified, 11 have no verifying test, and 1 describes behaviour that was never
-built.
+**Headline: this change does not pass DoD §1.** Of 26 acceptance criteria, 9 are verified by a
+test, 6 are partly verified, and 11 have no verifying test. None is unimplemented.
 
 Verdict vocabulary: PASS = a named test asserts the criterion. PARTIAL = a test asserts part of
 it. NO TEST = no case asserts it, confirmed by a search run for this table. FAIL = the criterion
@@ -70,5 +69,6 @@ They are recorded separately so they cannot inflate the count above.
 
 ## What the operator has to decide
 
-Eleven criteria have no verifying test and one is unbuilt. Writing the missing tests, accepting
-them as recorded residual risk, or splitting them out is a scope decision, not an engineering one.
+Eleven criteria have no verifying test and six are only partly covered. Writing the missing tests,
+accepting them as recorded residual risk, or splitting them out is a scope decision, not an
+engineering one.

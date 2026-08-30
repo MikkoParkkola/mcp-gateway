@@ -221,17 +221,18 @@ first, then against the same file.** `dotenvy`'s `apply_substitution` consults
   `B` to `1` — the per-file table carries it. Identical to startup. The first
   draft claimed this resolved to empty; that was wrong, and reading the crate
   is what settled it.
-- *Referent present in the process*: the process value wins, whichever file
-  defines `A`. Startup makes this benign, because startup has just written
-  `A` itself. On the reload path nothing writes the process any more, so the
-  process still holds the value from STARTUP — and `B` keeps resolving to it
-  after every subsequent rotation of `A`, permanently, with nothing said.
+- *Across files, or referent present in the process*: the per-file table does
+  not carry a key another file assigned, and nothing in this change writes the
+  process environment at any point, so `B=${A}` expands to nothing whenever `A`
+  lives in a different file. Where the operator's own shell exports `A`, that
+  external value wins instead and keeps winning after every rotation of the
+  env-file `A`, permanently, with nothing said.
 
 The second case is the whole problem, and it is worse than the "documented
-divergence" an earlier draft accepted: not a value that resolves empty and is
-noticed, but a rotated secret that silently keeps its old value for the life
-of the process. Across files it is the common shape; within one file it
-appears as soon as the referenced key was applied at startup.
+divergence" an earlier draft accepted. Either the value is silently dropped or
+a rotated secret silently keeps a value the env files no longer name — and both
+happen with the config unedited. Measured, not reasoned: `A` in one file and
+`B=${A}` in the next parses `B` to the empty expansion.
 
 **So a reload REFUSES a config whose env files substitute a key those same env
 files define.** Each listed file is read ONCE into a buffer, and both the scan
@@ -1492,3 +1493,57 @@ settled here.
 Disposal, named so the default does not reassert itself: recorded as a design
 question, not filed. It has no runtime effect, and the `Warn`/`Fail` choice it
 turns on is outside what this change is for.
+
+### Two review findings that did not become repairs (2026-08-30)
+
+**A missing env file revokes the values it used to supply.** Raised as a
+possible data-loss regression: if a listed path disappears between reloads, the
+keys it assigned resolve to their baseline or to nothing rather than keeping
+their last value. Checked at source — `EnvOverlay` carries nothing forward from
+the overlay it replaces (`src/config/env_overlay.rs`), so a file that is gone
+contributes nothing, exactly as a file whose lines were deleted contributes
+nothing. That is MIK.ENVFILE.13, not a regression against it. The alternative,
+retaining a value whose source no longer exists, is the inheritance this change
+deliberately removed. Disposal: the finding died at source; no repair, recorded
+here so it is not re-raised.
+
+**A UTF-8 BOM at the head of an env file makes its first key unreadable.**
+`dotenvy` treats the BOM as part of the first key's name, so a leading BOM
+before `KEY=v` assigns a key no reader asks for. Reproduced, and it predates
+this change: nothing here touches parsing, and the same file behaved the same
+way under the loader being replaced. It maps to MIK.ENVFILE.8, which this
+change records as NO TEST. Disposal: recorded as an observation. Filing it
+would put a `dotenvy` parsing quirk in front of a human who cannot act on it
+without a decision about whether the gateway pre-strips BOMs from files it did
+not write, and that decision is not in this change.
+
+### Design event: the substitution guard runs on reload only
+
+`substitution_naming_defined_key` refuses a reload whose env files carry a
+`${K}` or `$K` reference to a key those same files define. Startup does not run
+the scan. The asymmetry is deliberate — a file that starts a gateway must keep
+starting it, and at startup the reference resolved to a value because the old
+loader exported the earlier file's keys — but it means one file can be
+acceptable at boot and refused on the next reload, with no operator action in
+between. That is a decision the design did not make, made during
+implementation, and it changes what an observable reload does.
+
+Deferred, with the four fields the process requires:
+
+- **owner** — filed for an operator decision; ticket linked from MIK-7256.
+- **what would resolve it** — asking the operator which of the two the gateway
+  owes: a startup that refuses the same files a reload refuses, or a reload that
+  expands the reference the way startup used to. Not a check that can be run; it
+  turns on what the gateway promises about env files, which only the operator
+  settles.
+- **when** — before any change that makes env-file paths themselves reloadable,
+  because that is the point at which a newly added file can introduce the
+  reference without a restart ever seeing it.
+- **what if it resolves badly** — if the answer is that startup must refuse too,
+  the scan is already written and the change is one call site plus the
+  acceptance criterion; if it is that the reload must expand instead, the
+  refusal is deleted and expansion is reimplemented against the overlay, which
+  is a larger change than this one and would supersede it.
+
+Nothing in this change depends on the answer: the refusal is what the criteria
+as written require, and both resolutions replace it rather than build on it.
