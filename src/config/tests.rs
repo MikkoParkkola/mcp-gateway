@@ -1398,6 +1398,56 @@ fn a_substitution_naming_a_defined_key_is_detected_and_a_quoted_one_is_not() {
     }
 }
 
+/// Measured against `dotenvy` rather than assumed: a substitution it expands
+/// but the scanner cannot see is a reload that silently changes meaning, which
+/// is the whole thing the refusal exists to prevent.
+///
+/// Two shapes the scanner used to miss. A braced name runs to the closing
+/// brace, and `dotenvy` accepts a `.` in a key, so `${BASE.URL}` is one dotted
+/// name rather than `BASE` followed by junk. And an unbalanced quote joins the
+/// physical lines that follow into one value, so a reference on a continuation
+/// line is expanded like any other.
+#[test]
+fn the_scanner_sees_every_substitution_dotenvy_expands() {
+    let cases = [
+        (
+            "BASE.URL",
+            "BASE.URL=upstream\nURL=${BASE.URL}/v1\n",
+            "URL",
+            "upstream/v1",
+            "REF=${BASE.URL}/v1\n",
+        ),
+        (
+            "OTHER",
+            "OTHER=middle\nK=\"first\n${OTHER}\nlast\"\n",
+            "K",
+            "first\nmiddle\nlast",
+            "REF=\"first\n${OTHER}\nlast\"\n",
+        ),
+    ];
+
+    for (key, same_file, expanded_key, expanded_value, other_file) in cases {
+        let parsed: std::collections::HashMap<String, String> =
+            dotenvy::from_read_iter(std::io::Cursor::new(same_file.as_bytes()))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap_or_else(|e| panic!("dotenvy must parse the {key} fixture: {e}"))
+                .into_iter()
+                .collect();
+        assert_eq!(
+            parsed.get(expanded_key).map(String::as_str),
+            Some(expanded_value),
+            "dotenvy must expand the {key} reference, or this case proves nothing"
+        );
+
+        let defined = [key.to_string()].into_iter().collect();
+        assert_eq!(
+            super::env_overlay::substitution_naming_defined_key(other_file, &defined).as_deref(),
+            Some(key),
+            "the scanner must name the {key} reference dotenvy just expanded"
+        );
+    }
+}
+
 /// `Env::prefixed(..)` parsed each value before handing it to Figment, and
 /// `Figment::extract` does not coerce a string into a number or a bool. A
 /// provider that stores raw strings therefore breaks every non-string field an

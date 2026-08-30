@@ -105,29 +105,57 @@ pub struct EnvOverlay {
 /// Only a substitution the parser would actually expand counts: a whole-line
 /// comment, a single-quoted region, an escaped `\$` and a trailing comment are
 /// all inert.
+///
+/// Scanned by logical line, not physical line. `dotenvy` joins the physical
+/// lines inside an unbalanced quote into one value, so a substitution on a
+/// continuation line is expanded like any other — and a `#` beginning such a
+/// line is part of the value rather than a comment.
 pub(crate) fn substitution_naming_defined_key(
     text: &str,
     defined: &BTreeSet<String>,
 ) -> Option<String> {
-    text.lines().find_map(|line| {
-        let line = line.trim_start();
-        if line.starts_with('#') {
-            return None;
+    let mut pending: Option<String> = None;
+    for line in text.lines() {
+        let value = if let Some(mut open) = pending.take() {
+            open.push('\n');
+            open.push_str(line);
+            open
+        } else {
+            let line = line.trim_start();
+            if line.starts_with('#') {
+                continue;
+            }
+            let Some((_, value)) = line.split_once('=') else {
+                continue;
+            };
+            value.trim_start().to_string()
+        };
+        // Rescanning the whole value on each continuation keeps the quote
+        // state in one place; env-file values are short enough for that to
+        // cost nothing.
+        let (found, unbalanced) = first_expanded_substitution(&value, defined);
+        if found.is_some() {
+            return found;
         }
-        let (_, value) = line.split_once('=')?;
-        first_expanded_substitution(value.trim_start(), defined)
-    })
+        if unbalanced {
+            pending = Some(value);
+        }
+    }
+    None
 }
 
 /// The first `${K}` or `$K` in `value` that the parser would expand and that
-/// names a key in `defined`.
+/// names a key in `defined`, and whether `value` ends inside an open quote.
+///
+/// The second half is what tells the caller the value continues onto the next
+/// physical line.
 ///
 /// One walk, because quoting decides three things at once: a single-quoted
 /// region is inert, a double-quoted region is not, and a trailing comment only
 /// begins outside both. Judging a value inert because it *starts* with a quote
 /// misses `K='literal'$OTHER`, which the parser expands — measured against
 /// `dotenvy` rather than assumed.
-fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> Option<String> {
+fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> (Option<String>, bool) {
     let chars: Vec<char> = value.chars().collect();
     let mut i = 0;
     let mut single = false;
@@ -156,7 +184,7 @@ fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> Optio
                 i += 1;
                 continue;
             }
-            ' ' if !double && chars.get(i + 1) == Some(&'#') => return None,
+            ' ' if !double && chars.get(i + 1) == Some(&'#') => return (None, false),
             '$' => {}
             _ => {
                 i += 1;
@@ -164,23 +192,31 @@ fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> Optio
             }
         }
         let mut j = i + 1;
-        if chars.get(j) == Some(&'{') {
+        // A braced name runs to the closing brace, whatever it contains:
+        // `dotenvy` accepts a `.` in a key and expands `${BASE.URL}` as the
+        // whole dotted name. Stopping at the first non-word character would
+        // look for `BASE` and find nothing.
+        let braced = chars.get(j) == Some(&'{');
+        if braced {
             j += 1;
         }
         let start = j;
-        while chars
-            .get(j)
-            .is_some_and(|c| c.is_alphanumeric() || *c == '_')
-        {
+        while chars.get(j).is_some_and(|c| {
+            if braced {
+                *c != '}'
+            } else {
+                c.is_alphanumeric() || *c == '_'
+            }
+        }) {
             j += 1;
         }
         let name: String = chars[start..j].iter().collect();
         if !name.is_empty() && defined.contains(&name) {
-            return Some(name);
+            return (Some(name), single || double);
         }
         i = j.max(i + 1);
     }
-    None
+    (None, single || double)
 }
 
 impl EnvOverlay {
