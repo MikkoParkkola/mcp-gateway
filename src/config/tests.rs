@@ -1412,31 +1412,66 @@ fn an_export_prefix_is_stripped_whatever_whitespace_follows_it() {
         .into_iter()
         .collect();
 
+    // Each case carries the key `dotenvy` actually takes from its first line.
+    // Without that column the cases only prove the scanner agrees with itself,
+    // and the whole point of the prefix rule is that it agrees with the parser
+    // that will later read the same file.
     let cases = [
-        ("export\tKEY=v\nURL=${KEY}\n", None, "a tab after export"),
+        (
+            "export\tKEY=v\nURL=${KEY}\n",
+            "KEY",
+            None,
+            "a tab after export",
+        ),
         (
             "export   KEY=v\nURL=${KEY}\n",
+            "KEY",
             None,
             "several spaces after export",
         ),
-        ("export KEY=v\nURL=${KEY}\n", None, "one space after export"),
+        (
+            "export KEY=v\nURL=${KEY}\n",
+            "KEY",
+            None,
+            "one space after export",
+        ),
+        (
+            "export KEY=v\r\nURL=${KEY}\r\n",
+            "KEY",
+            None,
+            "CRLF line endings",
+        ),
         // `export` is a legal key in its own right; treating it as a prefix
         // here would define nothing and let the substitution through.
         (
             "export=v\nURL=${export}\n",
+            "export",
             None,
             "export as the key itself",
         ),
         // No whitespace follows, so this is not the prefix and the key is
-        // `exportKEY` — `KEY` really is undefined here.
+        // `exportKEY` -- `KEY` really is undefined here.
         (
             "exportKEY=v\nURL=${KEY}\n",
+            "exportKEY",
             Some("KEY"),
             "no whitespace after export",
         ),
     ];
 
-    for (body, expected, what) in cases {
+    for (body, parsed_key, expected, what) in cases {
+        let parsed: Vec<String> = dotenvy::from_read_iter(std::io::Cursor::new(body.as_bytes()))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap_or_else(|e| panic!("dotenvy must parse the {what} fixture: {e}"))
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(
+            parsed.first().map(String::as_str),
+            Some(parsed_key),
+            "dotenvy takes a different key from {what}, so this case proves nothing"
+        );
+
         assert_eq!(
             super::env_overlay::substitution_naming_defined_key(body, &defined).as_deref(),
             expected,

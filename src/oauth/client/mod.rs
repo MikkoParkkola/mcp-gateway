@@ -18,7 +18,7 @@ use tracing::{debug, error, info, warn};
 use url::Url;
 
 use super::callback;
-use super::metadata::{self, AuthorizationServerMetadata, ProtectedResourceMetadata};
+use super::metadata::{self, AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
 use super::storage::{TokenInfo, TokenStorage};
 use crate::{Error, Result};
 
@@ -304,6 +304,14 @@ impl OAuthClient {
     pub async fn initialize(&mut self) -> Result<()> {
         let base_url = metadata::base_url(&self.resource_url)?;
 
+        // Which kind of issuer string this ends up with decides how exactly the
+        // discovered metadata is held to it: an identifier the resource server
+        // published is the authorization server's own spelling, while
+        // `base_url()` is one this gateway synthesised. Recorded at each
+        // assignment rather than inferred later, because by then only the
+        // string is left and the two are indistinguishable.
+        let mut issuer_source = IssuerSource::Origin;
+
         // Try to discover protected resource metadata first
         match ProtectedResourceMetadata::discover(&self.http_client, &base_url).await {
             Ok(meta) => {
@@ -312,6 +320,7 @@ impl OAuthClient {
                 // Get authorization server from metadata
                 if let Some(auth_server) = meta.authorization_server() {
                     self.oauth_base_url = Some(auth_server.to_string());
+                    issuer_source = IssuerSource::Advertised;
                 } else {
                     // Fallback to same base URL
                     self.oauth_base_url = Some(base_url.clone());
@@ -333,8 +342,10 @@ impl OAuthClient {
         // Discover authorization server metadata
         let auth_base = self.oauth_base_url.as_ref().unwrap();
         let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
-        self.auth_metadata =
-            Some(AuthorizationServerMetadata::discover(&self.http_client, auth_base).await?);
+        self.auth_metadata = Some(
+            AuthorizationServerMetadata::discover(&self.http_client, auth_base, issuer_source)
+                .await?,
+        );
 
         self.drop_credentials_from_other_issuer(previous_issuer.as_deref());
 
