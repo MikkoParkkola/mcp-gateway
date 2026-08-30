@@ -336,7 +336,10 @@ impl OAuthClient {
             Some(AuthorizationServerMetadata::discover(&self.http_client, auth_base).await?);
 
         // Load any cached token
-        if let Some(token) = self.storage.load(&self.backend_name, &self.resource_url) {
+        if let Some(token) = self
+            .storage
+            .load(&self.credential_key()?, &self.resource_url)
+        {
             *self.current_token.write() = Some(token);
         }
 
@@ -347,6 +350,25 @@ impl OAuthClient {
 
         info!(backend = %self.backend_name, "OAuth client initialized");
         Ok(())
+    }
+
+    /// The storage key this client's credentials belong under.
+    ///
+    /// One owner, because the alternative is seven call sites each free to
+    /// forget the issuer — and a credential saved under one key and read
+    /// under another is not a loud failure, it is a silent re-registration
+    /// loop or, worse, a client id presented to a server that never issued
+    /// it.
+    ///
+    /// An error before the authorization server has been discovered: a
+    /// credential cannot be attributed to an issuer that is not yet known.
+    /// There is deliberately no unqualified key to fall back to, because
+    /// falling back is precisely the reuse this keying exists to prevent.
+    fn credential_key(&self) -> Result<String> {
+        let meta = self.auth_metadata.as_ref().ok_or_else(|| {
+            Error::OAuth("OAuth not initialized: no issuer to key credentials by".to_string())
+        })?;
+        Ok(storage_key(&self.backend_name, &meta.issuer))
     }
 
     /// Load a previously-registered dynamic `client_id` from storage into
@@ -363,10 +385,10 @@ impl OAuthClient {
         if self.client_id.read().is_some() {
             return;
         }
-        if let Some(cid) = self
-            .storage
-            .load_client_id(&self.backend_name, &self.resource_url)
-        {
+        let Ok(key) = self.credential_key() else {
+            return;
+        };
+        if let Some(cid) = self.storage.load_client_id(&key, &self.resource_url) {
             *self.client_id.write() = Some(cid);
             *self.client_id_source.write() = Some(ClientIdSource::Registered);
         }
@@ -509,7 +531,7 @@ impl OAuthClient {
         );
 
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save(&self.credential_key()?, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
@@ -790,7 +812,7 @@ impl OAuthClient {
 
         // Store and cache the token
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save(&self.credential_key()?, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)
@@ -910,7 +932,7 @@ impl OAuthClient {
 
         // Store and cache
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save(&self.credential_key()?, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token refreshed successfully");
@@ -936,8 +958,9 @@ impl OAuthClient {
                     // Persist immediately: registration succeeded even if the
                     // browser authorize step below never completes. Without this
                     // every connection re-registers and opens a new OAuth tab.
+                    let credential_key = self.credential_key()?;
                     match self.storage.save_client_id(
-                        &self.backend_name,
+                        &credential_key,
                         &self.resource_url,
                         &client_id,
                     ) {
@@ -957,7 +980,7 @@ impl OAuthClient {
                             // that persistence failed.
                             let client_file = self
                                 .storage
-                                .client_path(&self.backend_name, &self.resource_url);
+                                .client_path(&credential_key, &self.resource_url);
                             error!(
                                 backend = %self.backend_name,
                                 error = %e,
@@ -1016,11 +1039,15 @@ impl OAuthClient {
         );
         *self.client_id.write() = None;
         *self.client_id_source.write() = None;
-        if let Err(e) = self
-            .storage
-            .delete_client_id(&self.backend_name, &self.resource_url)
-        {
-            warn!(backend = %self.backend_name, error = %e, "Failed to delete stale client_id file");
+        match self.credential_key() {
+            Ok(key) => {
+                if let Err(e) = self.storage.delete_client_id(&key, &self.resource_url) {
+                    warn!(backend = %self.backend_name, error = %e, "Failed to delete stale client_id file");
+                }
+            }
+            Err(e) => {
+                warn!(backend = %self.backend_name, error = %e, "Cannot locate stale client_id file without a discovered issuer");
+            }
         }
     }
 

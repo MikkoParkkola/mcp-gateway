@@ -397,7 +397,7 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
     // longer represents "dynamic" after the provenance fix.
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
-    let client = OAuthClient::new(
+    let mut client = OAuthClient::new(
         Client::new(),
         "dyn".to_string(),
         "http://localhost".to_string(),
@@ -409,8 +409,13 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
             ..Default::default()
         },
     );
+    // Credentials are keyed by the issuer that granted them, so this client
+    // has to have discovered one before it can find its own on disk. What is
+    // under test here is provenance, not keying.
+    client.auth_metadata = Some(test_auth_metadata("https://as.invalid-test"));
+    let key = storage_key("dyn", "https://as.invalid-test");
     storage
-        .save_client_id("dyn", "http://localhost", "dynamic-id")
+        .save_client_id(&key, "http://localhost", "dynamic-id")
         .unwrap();
     *client.client_id.write() = Some("dynamic-id".to_string());
     *client.client_id_source.write() = Some(ClientIdSource::Registered);
@@ -425,7 +430,7 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
         "dynamic client_id must be purged from memory"
     );
     assert_eq!(
-        storage.load_client_id("dyn", "http://localhost"),
+        storage.load_client_id(&key, "http://localhost"),
         None,
         "dynamic client_id file must be deleted"
     );
@@ -439,9 +444,13 @@ fn restore_persisted_client_id_tags_loaded_id_as_registered_and_purgeable() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
     storage
-        .save_client_id("dyn", "http://localhost", "persisted-dyn-id")
+        .save_client_id(
+            &storage_key("dyn", "https://as.invalid-test"),
+            "http://localhost",
+            "persisted-dyn-id",
+        )
         .unwrap();
-    let client = OAuthClient::new(
+    let mut client = OAuthClient::new(
         Client::new(),
         "dyn".to_string(),
         "http://localhost".to_string(),
@@ -453,6 +462,7 @@ fn restore_persisted_client_id_tags_loaded_id_as_registered_and_purgeable() {
             ..Default::default()
         },
     );
+    client.auth_metadata = Some(test_auth_metadata("https://as.invalid-test"));
     assert!(
         client.client_id.read().is_none(),
         "precondition: no operator-configured client_id"
@@ -735,4 +745,118 @@ fn client_credentials_params_include_resource() {
         Some("https://canonical.example.test/"),
         "client_credentials must send the RFC 8707 resource indicator"
     );
+}
+
+// =========================================================================
+// Credentials are keyed by the issuer that granted them (MCP 2026-07-28)
+// =========================================================================
+
+/// Build a client whose authorization server has already been discovered.
+///
+/// `initialize` is what normally sets `auth_metadata`, and it needs a live
+/// authorization server. These tests are about which key the storage calls
+/// use once discovery has happened, so they set the outcome of discovery
+/// directly rather than standing a server up to produce it.
+fn test_auth_metadata(issuer: &str) -> AuthorizationServerMetadata {
+    serde_json::from_value(serde_json::json!({
+        "issuer": issuer,
+        "authorization_endpoint": format!("{issuer}/authorize"),
+        "token_endpoint": format!("{issuer}/token"),
+    }))
+    .unwrap()
+}
+
+fn client_at_issuer(dir: &std::path::Path, issuer: &str) -> OAuthClient {
+    let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
+    let mut client = OAuthClient::new(
+        Client::new(),
+        "test-backend".to_string(),
+        "https://backend.example.com/mcp".to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    client.auth_metadata = Some(test_auth_metadata(issuer));
+    client
+}
+
+#[test]
+fn a_client_id_is_read_back_under_the_issuer_that_registered_it() {
+    // The stable half. Keying must not drift between runs, or the gateway
+    // re-registers on every restart and pops a browser tab each time.
+    let dir = std::env::temp_dir().join("oauth_issuer_key_same");
+    let _ = std::fs::remove_dir_all(&dir);
+    let issuer = "https://auth.example.com";
+
+    let client = client_at_issuer(&dir, issuer);
+    client
+        .storage
+        .save_client_id(
+            &storage_key("test-backend", issuer),
+            "https://backend.example.com/mcp",
+            "cid-from-this-issuer",
+        )
+        .unwrap();
+
+    client.restore_persisted_client_id();
+
+    assert_eq!(
+        client.client_id.read().clone(),
+        Some("cid-from-this-issuer".to_string()),
+        "a registration made against this issuer must be found again"
+    );
+}
+
+#[test]
+fn a_client_id_from_another_issuer_is_not_reused() {
+    // The rule this exists for: a client MUST NOT reuse a credential with a
+    // different authorization server, and MUST re-register when it changes.
+    // Keyed by backend alone, moving a backend to a new authorization server
+    // silently presents a client id that server never issued.
+    let dir = std::env::temp_dir().join("oauth_issuer_key_other");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let other = client_at_issuer(&dir, "https://auth.example.com");
+    other
+        .storage
+        .save_client_id(
+            &storage_key("test-backend", "https://auth.example.com"),
+            "https://backend.example.com/mcp",
+            "cid-from-the-old-issuer",
+        )
+        .unwrap();
+
+    let client = client_at_issuer(&dir, "https://auth.other-as.test");
+    client.restore_persisted_client_id();
+
+    assert_eq!(
+        client.client_id.read().clone(),
+        None,
+        "the same backend behind a different authorization server must \
+         re-register, not inherit the previous server's client id"
+    );
+}
+
+#[test]
+fn a_client_id_stored_without_an_issuer_is_not_reused() {
+    // Upgrade behaviour, stated so it is a decision rather than a surprise:
+    // a credential written by a version that keyed on the backend alone
+    // cannot be attributed to any issuer, so it is not served to one. The
+    // gateway re-registers, which is what the specification asks for.
+    let dir = std::env::temp_dir().join("oauth_issuer_key_legacy");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let client = client_at_issuer(&dir, "https://auth.example.com");
+    client
+        .storage
+        .save_client_id(
+            "test-backend",
+            "https://backend.example.com/mcp",
+            "cid-from-before-the-upgrade",
+        )
+        .unwrap();
+
+    client.restore_persisted_client_id();
+
+    assert_eq!(client.client_id.read().clone(), None);
 }
