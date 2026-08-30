@@ -131,6 +131,18 @@ impl AuthorizationServerMetadata {
             .await
             .map_err(|e| Error::OAuth(format!("Failed to parse OAuth metadata: {e}")))?;
 
+        // RFC 8414 s3.3: the issuer in the response MUST be identical to the
+        // one the well-known URI was built from. Without this the response
+        // body chooses its own identity, and every credential this gateway
+        // files under a discovered issuer could be claimed by whichever server
+        // answers the request.
+        if metadata.issuer.trim_end_matches('/') != base_url.trim_end_matches('/') {
+            return Err(Error::OAuth(format!(
+                "OAuth metadata issuer mismatch: discovered at {base_url}, metadata claims {}",
+                metadata.issuer
+            )));
+        }
+
         info!(issuer = %metadata.issuer, "Discovered authorization server");
         Ok(metadata)
     }
@@ -227,6 +239,83 @@ mod tests {
     // =========================================================================
     // well_known_url — RFC 8414 §3.1 path-aware construction (issue #346)
     // =========================================================================
+
+    /// Serve one canned authorization-server metadata document, and return
+    /// the base URL it is reachable at.
+    async fn serve_metadata(issuer_claimed: &str) -> String {
+        use axum::{Router, routing::get};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::json!({
+            "issuer": issuer_claimed,
+            "authorization_endpoint": format!("{issuer_claimed}/authorize"),
+            "token_endpoint": format!("{issuer_claimed}/token"),
+        });
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = body.clone();
+                async move { axum::Json(body) }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn discovery_refuses_metadata_claiming_another_issuer() {
+        // RFC 8414 s3.3. Without this the response body names its own issuer,
+        // and anything keyed by the discovered issuer -- persisted tokens and
+        // registered client ids -- can be claimed by whichever server answers.
+        let base = serve_metadata("https://someone-elses-as.invalid-test").await;
+        let err = AuthorizationServerMetadata::discover(&Client::new(), &base)
+            .await
+            .expect_err("metadata naming a different issuer must be refused");
+        assert!(
+            err.to_string().contains("issuer mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_accepts_metadata_naming_the_issuer_it_was_found_at() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let base = format!("http://{addr}");
+        let served = serve_metadata_at(&base).await;
+        let meta = AuthorizationServerMetadata::discover(&Client::new(), &served)
+            .await
+            .expect("matching issuer is accepted");
+        assert_eq!(meta.issuer, served);
+    }
+
+    /// Serve metadata whose `issuer` is the address it is served from, so the
+    /// positive case is not merely the negative one inverted.
+    async fn serve_metadata_at(base: &str) -> String {
+        use axum::{Router, routing::get};
+        let addr: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let issuer = base.to_string();
+        let body = serde_json::json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{issuer}/token"),
+        });
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = body.clone();
+                async move { axum::Json(body) }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        base.to_string()
+    }
 
     #[test]
     fn well_known_url_inserts_between_authority_and_path() {
