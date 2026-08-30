@@ -391,8 +391,9 @@ client declare the capability THIS method needs", which is a different question
 that happens to share a helper.
 
 On stdio (`server/mod.rs:1733`) there is no per-request declaration to read, so
-the value is `false`. That is a decision, not a default: `meta.rs:70-77` already
-states the specification's rule that explicitly-absent is still absent, and the
+the value is `false`. That is a decision, not a default: the type already
+states the specification's rule that explicitly-absent is still absent (the rule
+is at `meta.rs:66-68`; `declares_capability`, which applies it, at `meta.rs:283-285`), and the
 same reading applies to a transport that cannot declare at all. A stdio client
 is therefore never sent a continuation. If stdio should be able to elicit, it
 needs its own declaration mechanism, and that is a design question, not a
@@ -429,8 +430,8 @@ after DE-3 changed those signatures; they are not the values 9f16fae8 carried.
 
 | what | where |
 |---|---|
-| refusal to delete (`is_retry` arm only) | `router/handlers.rs:872-889` |
-| the `is_malformed` arm that STAYS | `router/handlers.rs:862-871` |
+| refusal to delete (the `if retry.is_retry()` arm only) | `router/handlers.rs:879-896` |
+| the `if retry.is_malformed()` arm that STAYS | `router/handlers.rs:867-878` |
 | `dispatch_to_backend` definition, 11 params | `meta_mcp/invoke.rs:1781` |
 | its only call site | `meta_mcp/invoke.rs:923` |
 | outbound params built here — siblings go here | `meta_mcp/invoke.rs:1902` |

@@ -336,6 +336,18 @@ mod may_request_input_tests {
     }
 
     #[test]
+    fn a_shape_that_failed_to_classify_may_not_be_asked_for_input() {
+        // The doc comment names this a false case, so something has to hold it
+        // there. Production does not reach it today -- the handler returns on a
+        // failed classification before the field is read -- which is exactly why
+        // a mutant flipping this arm to true would otherwise go unnoticed.
+        let shape = RequestShape::Malformed {
+            missing: vec!["protocolVersion"],
+        };
+        assert!(!shape.may_request_input());
+    }
+
+    #[test]
     fn a_legacy_request_may_not_be_asked_for_input() {
         let shape = classify_request(Some(&json!({})), Some("2025-11-25"));
         assert!(
