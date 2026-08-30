@@ -65,9 +65,17 @@ fn readable_invalid_config_still_reports_parse_error() {
 
     let err = Config::load(Some(&path)).expect_err("invalid YAML must fail parsing");
     let message = err.to_string();
+    // The path is matched by its last two components, not verbatim: the parser normalises a
+    // leading `./`, which a relative TMPDIR produces and which cargo-mutants sets.
+    let tail = format!(
+        "{}/gateway.yaml",
+        dir.path()
+            .file_name()
+            .expect("tempdir has a final component")
+            .to_string_lossy()
+    );
     assert!(
-        message.contains(&path.display().to_string())
-            && !message.contains("Cannot read config file"),
+        message.contains(&tail) && !message.contains("Cannot read config file"),
         "a readable invalid file must retain the parser path: {message}"
     );
 }
