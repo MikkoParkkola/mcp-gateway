@@ -99,9 +99,12 @@ not a wiring fix — it needs an owner's call, not an implementation.
 **9 — Gate and release mechanics (S).** Raise diff coverage over the 80% floor on branch-touched
 files, run mutation coverage and record it, reconcile the three disagreeing clippy invocations
 across docs and CI, and add a local guard for the npm version rather than relying on the publish
-step to overwrite it. Rewrite `docs/DEPLOYMENT.md:125-142`, and put the two operational
-consequences in the release notes: a retry against a round-robin service is refused on every
-replica but the minting one, and a rolling restart invalidates every outstanding continuation.
+step to overwrite it. Put the two operational consequences in the release notes: a retry against a
+round-robin service is refused on every replica but the minting one, and a rolling restart
+invalidates every outstanding continuation. The `docs/DEPLOYMENT.md` rewrite this increment
+originally carried is already committed — its "Replica Count and `server.modern_protocol`" section
+states the refusal, names the per-process key material as the mechanism, and rules out a
+sticky-session workaround. Nothing is left to do there.
 
 ## 3. Not blocking the release
 
