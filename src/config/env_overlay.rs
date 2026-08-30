@@ -91,6 +91,18 @@ pub struct EnvOverlay {
     sources: Vec<(PathBuf, String)>,
 }
 
+/// The 1-based line number where the parser's buffer begins in `text`.
+///
+/// Whole-line equality, not a substring search: a valid `A=this is not a pair`
+/// earlier in the file contains the malformed line's text and would otherwise
+/// be named instead. The first match is the right one — an identical line
+/// earlier in the file would itself have failed first, so the parser never
+/// reached this one.
+fn line_number_of(text: &str, buffer: &str) -> Option<usize> {
+    let first = buffer.lines().next()?;
+    text.lines().position(|line| line == first).map(|i| i + 1)
+}
+
 /// The name of a substitution in `path` that refers to a key `defined`
 /// contains, if there is one.
 ///
@@ -317,10 +329,10 @@ impl EnvOverlay {
             return Ok(());
         }
         let text = std::fs::read_to_string(path)
-            .map_err(|e| Self::describe(path, &dotenvy::Error::Io(e)))?;
+            .map_err(|e| Self::describe(path, &dotenvy::Error::Io(e), None))?;
         let iter = dotenvy::from_read_iter(std::io::Cursor::new(text.as_bytes()));
         for entry in iter {
-            let (key, value) = entry.map_err(|e| Self::describe(path, &e))?;
+            let (key, value) = entry.map_err(|e| Self::describe(path, &e, Some(&text)))?;
             self.insert(key, value);
         }
         self.sources.push((path.to_path_buf(), text));
@@ -345,15 +357,27 @@ impl EnvOverlay {
     }
 
     /// File, line and category — never the line's content.
-    fn describe(path: &Path, error: &dotenvy::Error) -> Error {
+    ///
+    /// The line number is derived from the parser's own buffer rather than read
+    /// off the error: `dotenvy`'s `LineParse` carries a byte offset *within* the
+    /// offending line, and reporting that as the line number named line 6 of a
+    /// two-line file.
+    fn describe(path: &Path, error: &dotenvy::Error, text: Option<&str>) -> Error {
         let where_ = path.display();
         match error {
-            dotenvy::Error::LineParse(_, index) => Error::Config(format!(
-                "Failed to parse env file {where_} line {}: the line is not a KEY=value \
-                 assignment. The offending text is withheld because env files carry \
-                 secrets.",
-                index + 1
-            )),
+            dotenvy::Error::LineParse(line, _) => {
+                match text.and_then(|text| line_number_of(text, line)) {
+                    Some(number) => Error::Config(format!(
+                        "Failed to parse env file {where_} line {number}: the line is not a \
+                         KEY=value assignment. The offending text is withheld because env files \
+                         carry secrets."
+                    )),
+                    None => Error::Config(format!(
+                        "Failed to parse env file {where_}: a line is not a KEY=value assignment. \
+                         The offending text is withheld because env files carry secrets."
+                    )),
+                }
+            }
             dotenvy::Error::Io(io) => {
                 Error::Config(format!("Cannot read env file {where_}: {}", io.kind()))
             }

@@ -2320,8 +2320,12 @@ fn assert_6c_diagnostic(diagnostic: &str, path: &std::path::Path) {
         diagnostic.contains(&*path.to_string_lossy()),
         "the diagnostic must name the file; got {diagnostic}"
     );
+    // The path is stripped before this one is asked. A temporary directory's
+    // random name carries digits, so a bare digit search passed on macOS and
+    // failed on Linux while the diagnostic named no line number on either.
+    let without_path = diagnostic.replace(&*path.to_string_lossy(), "<path>");
     assert!(
-        diagnostic.contains('2'),
+        without_path.contains("line 2"),
         "the diagnostic must name the line number; got {diagnostic}"
     );
     assert!(
