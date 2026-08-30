@@ -319,10 +319,34 @@ a client may narrow what it accepts between calls, and a null or absent
 specification's rule that explicitly-absent is still absent. An implementation
 must refuse on absence rather than default to permitted.
 
-Stated as inference, not verified here: DE-1's finding that the mint site in
-`invoke.rs` receives `MetaMcpCallerContext` is taken from that event's own
-source reading. If the mint site turns out not to hold that context, this
-returns to a design question before any code is written.
+### Three unknowns closed by reading the source — 2026-08-31
+
+The first was scheduled above as a condition on DE-2, and it came back **no**.
+The other two were adjacent inferences of the same class, checked at the same
+time so the answer arrives as one packet rather than three.
+
+`Does the mint site hold MetaMcpCallerContext?` — read `invoke.rs:423-441`,
+`:536-560`, `:930`, `:1788` — **no**. `MetaMcpCallerContext` arrives at
+`invoke_tool` (`:423`) and is flattened into ten loose parameters at `:432`
+before `invoke_tool_traced` (`:536`) is entered; that function calls
+`dispatch_to_backend` (`:930`), which takes eleven loose parameters of its own.
+The struct is one frame above the mint site and no parameter carries the
+keyring. Decision 3 therefore cannot be implemented without a signature change,
+which DE-2 said returns this to a design question. It has.
+
+`Is ContinuationState constructed on the production path, or only in tests?` —
+searched the whole crate for `ContinuationState::new` — **production**, once, at
+`server/mod.rs:1171`, into the field declared at `router/mod.rs:93`. Increment 1
+landed it; increment 2 inherits a live store, not a type.
+
+`Are the client's declared capabilities in scope where MetaMcpCallerContext is
+built?` — searched `router/handlers.rs` for every use of the `fields` binding —
+**no**. The `RequestShape::Modern(ref fields)` binding opens at
+`handlers.rs:595` and its last use is `:690`; the context is built at `:1099`,
+outside that block. MRTR.9 needs a capability answer carried out of the block —
+the smallest form is the boolean the check already computes at `:690`, hoisted,
+not the struct cloned. This is a second wiring gap, in the same increment, and
+it was not in the plan.
 
 ### The seam, mapped
 
@@ -335,7 +359,20 @@ Line numbers against 9f16fae8, so a later reader can tell drift from error.
 | `dispatch_to_backend` definition, 11 params | `meta_mcp/invoke.rs:1788` |
 | its only call site | `meta_mcp/invoke.rs:929` |
 | outbound params built here — siblings go here | `meta_mcp/invoke.rs:1910` |
-| idempotency + cache writes, all AFTER the call site | `invoke.rs:789, 851, 1040, 1276` |
+| idempotency + cache writes, all AFTER the call site | `invoke.rs:799, 851, 1040, 1276` |
+
+The four are not interchangeable, and decision 3 touches exactly one of them:
+
+| site | what it does | under decision 3 |
+|---|---|---|
+| `:799` | `enforce` — cache read plus in-flight registration | untouched; runs before dispatch |
+| `:851` | `mark_completed` on a response-cache hit | untouched; no backend call happened |
+| `:1040` | `remove` on dispatch error | must also fire for `input_required` |
+| `:1276` | `mark_completed` on success | the write that must be skipped |
+
+An `input_required` result is neither a success nor an error today, so it falls
+through `:1276` and would be cached as a final answer. That is the write
+decision 3 suppresses.
 
 The outbound shape is one line today:
 
