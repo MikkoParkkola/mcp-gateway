@@ -482,8 +482,7 @@ LOW test-hygiene one had never been written down, while round 11 had shipped a s
 list complete. Adding them introduced a fresh false claim — that the `HOME` branch errs only in the
 safe direction — which both vendors caught, and then a wrong prescribed repair, which one did. The
 safe-direction sentence was corrected, because the finding underneath it is real and had to be
-stated accurately. The completeness assertion and the prescribed repair were deleted outright,
-each having been written wrong twice.
+stated accurately. The completeness assertion and the prescribed repair were deleted outright.
 
 Rounds 9 and 10 both found their defect in the previous round's repair, in the same paragraph:
 a prose summary of the numbered open-findings list, which fell out of date each time the list
