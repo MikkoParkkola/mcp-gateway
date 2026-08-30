@@ -184,7 +184,7 @@ fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> (Opti
                 i += 1;
                 continue;
             }
-            ' ' if !double && chars.get(i + 1) == Some(&'#') => return (None, false),
+            ' ' | '\t' if !double && chars.get(i + 1) == Some(&'#') => return (None, false),
             '$' => {}
             _ => {
                 i += 1;
@@ -201,11 +201,16 @@ fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> (Opti
             j += 1;
         }
         let start = j;
+        // An unbraced name is alphanumeric only. `dotenvy` ends it at the
+        // first other character, so `$A_B` expands `A` and leaves `_B`
+        // literal. Accepting `_` here would both miss that expansion and
+        // refuse a reload over `$A_B` when `A_B` is the key that happens to be
+        // defined — measured against `dotenvy`, not assumed.
         while chars.get(j).is_some_and(|c| {
             if braced {
                 *c != '}'
             } else {
-                c.is_alphanumeric() || *c == '_'
+                c.is_alphanumeric()
             }
         }) {
             j += 1;

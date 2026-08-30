@@ -1424,6 +1424,7 @@ fn the_scanner_sees_every_substitution_dotenvy_expands() {
             "first\nmiddle\nlast",
             "REF=\"first\n${OTHER}\nlast\"\n",
         ),
+        ("A", "A=x\nK=$A_B\n", "K", "x_B", "REF=$A_B\n"),
     ];
 
     for (key, same_file, expanded_key, expanded_value, other_file) in cases {
@@ -1509,5 +1510,86 @@ fn overlay_env_survives_a_non_utf8_process_variable() {
     assert!(
         vars.contains_key("MCP_GATEWAY_SERVER__PORT"),
         "a lossily converted value must still be offered to Figment: {vars:?}"
+    );
+}
+
+/// The other half of the scanner's contract with `dotenvy`: a reference it
+/// would not expand must not refuse a reload. An over-report costs an operator
+/// a working reload and is invisible until they try one.
+///
+/// Every case is measured the same way as its positive sibling — the fixture
+/// is parsed first, and the assertion is that `dotenvy` left the reference
+/// alone.
+#[test]
+fn the_scanner_ignores_what_dotenvy_leaves_alone() {
+    let cases = [
+        // An unbraced name is alphanumeric, so this expands the undefined `A`
+        // and leaves `_B` literal: `A_B` is never read.
+        ("A_B", "A_B=x\nK=$A_B\n", "K", "_B"),
+        // A trailing comment begins after a tab as readily as after a space.
+        ("A", "A=x\nK=v\t# $A\n", "K", "v"),
+        // A single-quoted region is inert.
+        ("A", "A=x\nK='${A}'\n", "K", "${A}"),
+    ];
+
+    for (key, file, unexpanded_key, unexpanded_value) in cases {
+        let parsed: std::collections::HashMap<String, String> =
+            dotenvy::from_read_iter(std::io::Cursor::new(file.as_bytes()))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap_or_else(|e| panic!("dotenvy must parse the {key} fixture: {e}"))
+                .into_iter()
+                .collect();
+        assert_eq!(
+            parsed.get(unexpanded_key).map(String::as_str),
+            Some(unexpanded_value),
+            "dotenvy must leave the {key} reference unexpanded, or this case proves nothing"
+        );
+
+        let defined = [key.to_string()].into_iter().collect();
+        assert_eq!(
+            super::env_overlay::substitution_naming_defined_key(file, &defined),
+            None,
+            "the scanner must not refuse a reload over a reference dotenvy ignores: {file:?}"
+        );
+    }
+}
+
+/// A rewrite round-trips the file. An `MCP_GATEWAY_*` override reaching the
+/// struct would be serialised back out on the next write, planting in the
+/// config a value the operator only ever set in an env file — the same defect
+/// as a persisted secret, arriving through the prefix instead of through
+/// `env:`.
+#[test]
+fn a_literal_load_leaves_an_env_file_override_out_of_the_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_path = dir.path().join("override.env");
+    std::fs::write(&env_path, "MCP_GATEWAY_SERVER__PORT=9090\n").expect("write env file");
+    let config_path = dir.path().join("config.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "env_files:\n  - {}\nserver:\n  port: 8080\n",
+            env_path.display()
+        ),
+    )
+    .expect("write config");
+
+    let resolved = Config::load(Some(&config_path)).expect("resolved load");
+    assert_eq!(
+        resolved.server.port, 9090,
+        "the override must still reach a running gateway, or this case proves nothing"
+    );
+
+    let literal = Config::load_literal(Some(&config_path)).expect("literal load");
+    assert_eq!(
+        literal.server.port, 8080,
+        "a rewrite path must see the port the file spells, not the one the env file overrides"
+    );
+
+    crate::config_persistence::write_config(&config_path, &literal).expect("rewrite");
+    let rewritten = std::fs::read_to_string(&config_path).expect("read back");
+    assert!(
+        !rewritten.contains("9090"),
+        "the rewrite must not persist an env-file override: {rewritten}"
     );
 }
