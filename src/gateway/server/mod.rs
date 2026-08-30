@@ -726,7 +726,7 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt).with_env(&self.env.get()));
+            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt).with_env(Arc::clone(&self.env)));
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }
@@ -1153,7 +1153,7 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(&self.env.get()));
+            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(Arc::clone(&self.env)));
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }

@@ -267,7 +267,7 @@ impl Firewall {
     /// Read the input scanner's operator overrides from `env` rather than the
     /// process environment, so an env file can set them.
     #[must_use]
-    pub fn with_env(mut self, env: &crate::config::EnvOverlay) -> Self {
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
         self.input_scanner = input_scanner::InputScanner::with_env(env);
         self
     }
