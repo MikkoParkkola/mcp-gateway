@@ -10,7 +10,8 @@ the head, that is said in the same line rather than rounded up.
 ## Verdict, first
 
 **The 2025 path is done and shippable. The 2026 core path has no unbuilt piece left; what remains is
-gated on production topology, plus a tasks extension this release deliberately does not advertise.**
+gated on production topology, a tasks extension this release deliberately does not advertise, and
+one parsed protocol field with no consumer.**
 
 Eight independent review rounds produced **42 findings, and a later scope audit added a
 forty-third. Thirty-eight are closed**, each with a probe
@@ -163,7 +164,7 @@ Both are recorded as decisions rather than omissions, because in both cases the 
 was worse than nothing:
 
 - **Multi-round-trip retry forwarding.** The fields were merged into the tool `arguments` object. The specification makes them siblings of `arguments`, so a backend read them nowhere — and a tool with an argument of either name had it silently overwritten. Worse, the `requestState` forwarded was the **client's own envelope**, which `continuation.rs` exists specifically to keep from being passed onward. Forwarding correctly means unsealing the gateway's envelope and sending the *backend's* state, which needs the keyring reachable from request state and a retry parameter threaded to the dispatcher. Neither exists, so a retry now fails visibly instead of corrupting a call.
-- **`tasks/get`.** It answered every handle with a `not_found` **success** — a status absent from the protocol's task model, reported as though a lookup had happened against a store that does not exist. It now returns method-not-found, which is true. The specification page for the tasks extension returns 404 at the path its own index links, so there is no shape to build against.
+- **`tasks/get`.** It answered every handle with a `not_found` **success** — a status absent from the protocol's task model, reported as though a lookup had happened against a store that does not exist. It now returns method-not-found, which is true. The extension's own specification has since been fetched and the gap inventory below is stated against it.
 
 ## Round 8 — the repairs reviewed, and what that found
 
@@ -235,14 +236,24 @@ Five findings remain open. None is reachable by a client while `server.modern_pr
    `src/protocol/tasks.rs:21-28` defines three statuses where the specification defines
    five: `input_required` and `cancelled` are absent, and with them the whole mid-flight
    input exchange (`tasks/update`, `inputRequests`) and cooperative cancellation. The
-   `Task` struct at `:32-38` carries neither `ttlMs` nor `pollIntervalMs`, both of which
-   the specification requires a `CreateTaskResult` to return. Nothing verifies that the
+   `Task` struct at `:32-38` carries neither `ttlMs` nor `pollIntervalMs`; the paragraph
+   below corrects which of the two the schema actually requires. Nothing verifies that the
    client declared the extension in its per-request capabilities before a task is
    returned, which the specification states as a MUST.
 
-   The reviewer's claim about required `createdAt` and `lastUpdatedAt` fields is NOT
-   supported by that page; it names `taskId`, status, `ttlMs` and `pollIntervalMs`. The
-   claim is dismissed on source rather than carried as unverified.
+   That paragraph read the overview page, and the overview is not the schema. Against
+   `https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks` (fetched
+   2026-08-30) the normative `interface Task` requires **`createdAt: string` and
+   `lastUpdatedAt: string`** — a reviewer claim this document previously dismissed, wrongly
+   — declares **`pollIntervalMs?: number` as optional**, not required, and names a **third
+   method, `tasks/cancel`**, alongside a `notifications/tasks` notification. Neither the
+   third method nor the notification appears in `ADDED_IN_2026_07_28`, so the constant that
+   documents what the revision added is itself short by one.
+
+   MIK-7311's acceptance criteria were derived from the overview and inherit these errors.
+   They are corrected against the schema before that ticket is worked, because an
+   implementation built to this inventory would have shipped two missing timestamps and a
+   wrongly-required poll interval.
 
 4. **The failed-task payload is a string where the specification says a JSON-RPC error.**
    `src/protocol/tasks.rs:37` holds `error: Option<String>`; the specification's terminal
@@ -262,6 +273,11 @@ Five findings remain open. None is reachable by a client while `server.modern_pr
    The key's *presence* is load-bearing and stays: `meta.rs:150` counts it as an era
    declaration, so a request carrying `logLevel` and omitting the required pair is
    malformed rather than quietly legacy. Only the lifted value has no reader.
+
+   The vacuous satisfaction is a standing trap for the next change: the moment anything on
+   the modern path emits a `notifications/message`, STATELESS.7 becomes a live MUST-NOT and
+   the parsed level has to be read. Whoever wires log delivery closes this finding in the
+   same change or breaks the requirement silently.
 
    Same disposition as `gateway_declares()` below, for the same reason: the repair is to
    consume it, and consuming it means building per-request log delivery, which is a feature
@@ -370,7 +386,7 @@ production code it is meant to test, recorded earlier in this branch.
 Not everything the reviewers raised survived contact with the source, and saying so is part of the record:
 
 - **`cacheable.rs` is correct.** It defaults to `private`, which is the conservative direction: the specification confirms `public` responses "may be shared between callers even if the Result is coming from an authenticated endpoint". Its doc comment cites the schema, so despite the empty cached page it was not written from nothing. One real gap: the specification requires the same `cacheScope` across all pages of a paginated list, which is not implemented — though a uniform `private` default satisfies it by accident rather than by design.
-- **The tasks findings are UNVERIFIED, not accepted.** The specification page for tasks returns 404 at the path the index itself links to. The reviewer's claims about required `createdAt`/`lastUpdatedAt`/`ttlMs` fields and `input_required`/`cancelled` states have no source this session could reach, so they are recorded as unverified rather than treated as fact.
+- **The tasks findings are VERIFIED and the earlier dismissal was wrong.** They were first recorded as unreachable because the index link 404s, then dismissed against the *overview* page. The normative schema lives at `https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks` (fetched 2026-08-30), and against it every disputed claim holds: `interface Task` declares `createdAt: string` and `lastUpdatedAt: string` as required, and all five statuses. Dismissing a correct finding against the wrong page is the same failure this document already records for three other protocol areas — the second occurrence, and the reason the gap inventory below now cites the schema line it rests on.
 
 ### Two controls that failed open — both closed, re-verified at head
 
