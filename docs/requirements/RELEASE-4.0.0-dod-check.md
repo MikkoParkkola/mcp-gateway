@@ -54,7 +54,7 @@ another session's build cache was not this session's to decide. Only this branch
 artifacts were removed locally, which is housekeeping the rules already assign to the change that
 created them.
 
-## §4 Testing — PASS at head
+## §4 Testing — PASS on execution, NOT MEASURED on coverage and mutation
 
 - **4,610 tests passing across 46 binaries, 0 failing** — measured at the head commit under `--all-features` with `--no-fail-fast`, so neither a disabled feature nor an earlier failing binary can hide a row. The figure recorded in the previous revision, 4,463 across 45 binaries, was the default feature set.
 - **41 doc-tests pass.**
@@ -73,6 +73,31 @@ dropping the never-specified `2024-10-07`, and the result does not carry that li
 record `"version": "4.0.0"` where their siblings record `"3.5.0"`; the row nulls that field and
 asserts it separately against the crate version, and hand-editing a captured golden is the one thing
 the capture rule forbids.
+
+### Coverage and mutation — the two §4 criteria this release does not carry
+
+The canonical DoD §4 asks for two numbers this document does not have: line coverage against
+the tier threshold, and mutation score ≥75% on new code (`cargo-mutants`). Neither was run.
+Recording that is the point of this subsection — a §4 marked PASS while two of its criteria
+were never measured is the failure mode the gate exists to prevent, and the earlier revision
+of this document did exactly that.
+
+What stands in their place, and what it does not substitute for: 4,610 passing tests and
+thirty-one falsification probes, of which two controls could not be made to fail and are named
+as such. A falsification probe is stronger evidence than a mutation score for the control it
+targets — it proves that specific control observes what it claims — and weaker for the release
+as a whole, because thirty-one probes cover thirty-one controls and mutation covers every line
+of new code. The probes do not tell us how much of the branch is untested.
+
+| field | value |
+|---|---|
+| owner | **MIK-7324** |
+| what would resolve it | `cargo llvm-cov --all-features` for the coverage figure, `cargo mutants` scoped to the branch diff for the score, both on Spark |
+| when | before the 4.1.0 tag, or immediately if the operator holds 4.0.0 for it |
+| what if it resolves badly | coverage below the tier threshold or mutation below 75% names specific untested code; that becomes tickets against the modules it names, and the modern path stays default-off until they close |
+
+This is a deferred unknown under §P1, not an N/A: the criteria apply and were not measured.
+Holding the tag for them is a live option and one line from the operator takes it.
 
 ### Falsification — every control was made to fail, and two could not be
 

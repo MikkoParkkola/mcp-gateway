@@ -3,9 +3,15 @@
 ## What this is for
 
 Bring the gateway onto the MCP `2026-07-28` revision without moving any existing
-deployment onto it. `server.modern_protocol` defaults **off**; with it off the 2025
-path is unchanged, fully tested and byte-identical in behaviour. With it on, the
-gateway speaks the new revision.
+deployment onto it. `server.modern_protocol` defaults **off**, and with it off no
+client can reach the new revision.
+
+"Unchanged" is narrower than the switch, and the difference is stated rather than
+implied. Off, the 2025 request path behaves as it did. The release still changes
+behaviour a default-off switch does not gate: the env-file overlay now reaches
+credential and attestation readers, the OAuth and firewall changes apply on both
+paths, and `server`/`discover` gained surface. Those are described in
+`CHANGELOG.md` under their own entries.
 
 ## What is explicitly out
 
@@ -38,4 +44,11 @@ source and the installed build predates it; a probe of the running instance on
 
 ## Review
 
-Dual-vendor per the second-opinion gate, at final head, recorded in the ledger.
+Two non-Claude vendors returned a verdict on the release material on 2026-08-30:
+GPT and Kimi, both `SHIP-WITH-FIXES`, both recorded in their ledgers. Grok exited
+with an error on both attempts and produced no verdict, so it is recorded as
+unavailable rather than as agreement.
+
+Their findings are addressed in the commits that follow that review, which means
+the reviewed head is not the head being merged. The gate is re-run at the final
+head before the tag; the DoD check records which verdicts are current.

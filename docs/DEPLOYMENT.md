@@ -213,11 +213,13 @@ the offending line is the secret. A `~` in an `env_files` path resolves once, at
 against the home directory in force at that moment; each file is applied before the next
 is expanded, so a file that sets `HOME` moves where a later `~` points.
 
-Env files supply values to configuration references. They do **not** supply the
-attestation signing key: `ATTESTATION_SIGNING_KEY` and `ATTESTATION_KEY_ID` are read
-directly from the process environment under those fixed names, and are expected to be
-injected by the deployment — a systemd unit, a Kubernetes secret — rather than named in a
-config file. Putting them in an env file has no effect.
+Env files supply values to configuration references, and also the attestation signing
+key: `ATTESTATION_SIGNING_KEY` and `ATTESTATION_KEY_ID` are read through the same
+overlay under those fixed names, rather than named in a config file through a
+`{env.VAR}` reference. Injecting them from the deployment — a systemd unit, a
+Kubernetes secret — still works and is still the recommendation for an operational
+secret; an env file is now an alternative rather than a value that silently has no
+effect.
 
 ## TLS / mTLS
 

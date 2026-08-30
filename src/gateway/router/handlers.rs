@@ -469,10 +469,21 @@ pub(super) async fn meta_mcp_handler(
     // naming an unsupported 2026 revision is still a stateless client: minting
     // it a session hands it state its own revision deleted and grows a table on
     // behalf of a caller that is about to be refused.
-    let declares_modern_by_header = headers
-        .get("mcp-protocol-version")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(crate::protocol::meta::declares_modern_era);
+    // Read duplicate-safe, and read ONCE. `headers.get` returns the FIRST
+    // value, so a request sending the header twice — legacy first, modern
+    // second — would be classified legacy here and modern by the check further
+    // down, and the disagreement mints a session for a request that is about to
+    // be refused. Two occurrences is not a request to interpret; it is one to
+    // refuse, so an ambiguous header takes the modern reading and reaches the
+    // refusal with no session behind it.
+    let mut version_headers = headers.get_all("mcp-protocol-version").iter();
+    let declared_version = match (version_headers.next(), version_headers.next()) {
+        (Some(only), None) => only.to_str().ok(),
+        (None, _) => None,
+        (Some(_), Some(_)) => Some(crate::protocol::meta::MODERN_VERSIONS[0]),
+    };
+    let declares_modern_by_header =
+        declared_version.is_some_and(crate::protocol::meta::declares_modern_era);
 
     // Get or create session for this client
     let existing_session_id = headers
@@ -562,15 +573,8 @@ pub(super) async fn meta_mcp_handler(
     // modern declaration behind the legacy one and be classified legacy, which
     // is the bypass this argument exists to close. Two occurrences is not a
     // request to interpret; it is one to refuse, and the mirrored-header check
-    // below refuses it. Passing `None` here would silently pick the lenient
-    // reading before that check runs, so an ambiguous header is treated as a
-    // modern declaration and reaches the refusal.
-    let mut version_headers = headers.get_all("mcp-protocol-version").iter();
-    let declared_version = match (version_headers.next(), version_headers.next()) {
-        (Some(only), None) => only.to_str().ok(),
-        (None, _) => None,
-        (Some(_), Some(_)) => Some(crate::protocol::meta::MODERN_VERSIONS[0]),
-    };
+    // below refuses it. The value is read once, above the session decision, so
+    // the two readings cannot disagree.
     let shape = crate::protocol::meta::classify_request(params.as_ref(), declared_version);
     if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
         // Declared itself modern and then omitted a required field. The

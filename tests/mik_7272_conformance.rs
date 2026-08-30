@@ -107,17 +107,22 @@ const MAJOR: &[Row] = &[
         evidence: &[
             "mik_7215_acs::http::ac_stateless_6_ping_is_refused_on_the_modern_path",
             "mik_7215_acs::http::ac_stateless_6_ping_still_works_on_the_legacy_path",
-            "mik_7215_acs::ac_stateless_7_the_gateway_emits_no_log_notifications",
+            "mik_7215_acs::ac_stateless_7_a_log_notification_is_never_delivered_to_a_subscriber",
         ],
     },
     Row {
+        // The extension ships NOT implemented and NOT advertised, which is a
+        // conformance position rather than a gap in the matrix: no client
+        // negotiates a capability the gateway does not offer. The evidence is
+        // the refusal, not an implementation. MIK-7311 owns the extension.
         statement: "6. Move tasks into an official extension, polled via tasks/get",
         requirement: "MIK-7272.TASK.1",
         role: Role::Server,
         transport: Transport::Http,
         evidence: &[
             "mik_7272_exploit_acs::tasks::ac_task_1_a_task_is_polled_not_awaited",
-            "mik_7272_subscriptions_acs::http::ac_task_1_the_gateway_serves_tasks_get",
+            "mik_7272_subscriptions_acs::http::ac_task_1_tasks_get_reports_that_it_is_not_implemented",
+            "mik_7272_subscriptions_acs::http::ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path",
         ],
     },
     Row {
@@ -353,13 +358,44 @@ fn the_matrix_covers_every_major_change() {
 }
 
 #[test]
-fn evidence_names_look_like_test_paths() {
-    // A cell filled with prose is an empty cell that reads as a full one.
+fn every_cited_test_exists() {
+    // A cell naming a test that does not exist reads exactly like a covered
+    // one, and the shape check that preceded this passed it: it asserted the
+    // string LOOKED like a test path. It did — and one of the two tests it
+    // named had never been written. Checking the shape of evidence is not
+    // checking the evidence, so the name is now resolved against the source.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Both trees: an integration test lives under `tests/`, a unit test inside
+    // the module it covers under `src/`, and the matrix cites both shapes.
+    let mut sources = String::new();
+    let mut stack = vec![root.join("src"), root.join("tests")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .expect("source tree is readable")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                sources.push_str(&std::fs::read_to_string(&path).expect("source file is readable"));
+            }
+        }
+    }
+
     for row in all_rows() {
         for name in row.evidence {
+            let function = name.rsplit("::").next().unwrap_or_default();
+
             assert!(
-                name.contains("::") && name.contains("ac_"),
+                name.contains("::") && function.starts_with("ac_"),
                 "evidence for '{}' is not a test path: {name}",
+                row.statement
+            );
+
+            assert!(
+                sources.contains(&format!("fn {function}(")),
+                "evidence for '{}' names {name}, and no such test is defined anywhere in the tree",
                 row.statement
             );
         }

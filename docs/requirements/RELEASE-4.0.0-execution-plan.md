@@ -124,14 +124,14 @@ would leave the defect in place while the tests passed.
 echoes the offending line in its `Display`. The diagnostic carries file, line number and
 category only, because the offending line is the secret.
 
-**Attestation keys stay on the process environment; an env file cannot supply them.**
-`ATTESTATION_SIGNING_KEY` and `ATTESTATION_KEY_ID` are read directly by
-`attestation/wiring.rs:118-119` and `gateway/server/mod.rs:591-592` under fixed variable
-names, rather than resolved from a `{env.NAME}` reference in configuration. They are
-operational secrets injected by the deployment, which is a different thing from the
-config-file references this change is about. Threading them would extend the diff into
-the attestation subsystem for no test coverage and no requested behaviour, so the
-limitation is deliberate and is stated in the shipped documentation.
+**Attestation keys are read through the overlay, so an env file can supply them.**
+`GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read by
+`attestation/wiring.rs:124-125` through `env.resolve`, which is the overlay-aware reader
+rather than `std::env::var`. An earlier draft of this plan recorded the opposite, on a
+reading of line numbers that had moved; the current source is the authority. What remains
+true is that they are fixed variable names rather than `{env.NAME}` references in
+configuration, so they are supplied as environment values and not as config-file
+references.
 
 A sweep of every credential-shaped `std::env::var` in the tree returned 20 call sites, of
 which three are in scope: `SecretResolver::resolve` (`src/secrets.rs:51`),

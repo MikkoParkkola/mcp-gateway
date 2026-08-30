@@ -543,6 +543,34 @@ mod http {
     }
 
     #[tokio::test]
+    async fn a_duplicated_protocol_version_header_leaves_no_session_behind() {
+        // The refusal above and the session decision read the same header. When
+        // they read it differently — first-value-only for the session, all
+        // values for the refusal — a duplicate header mints a session for a
+        // request that is then refused, so a caller that cannot be served can
+        // still grow the table one entry per call.
+        let app_state = state();
+        for _ in 0..5 {
+            let (_, _) = post_against(
+                &app_state,
+                json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+                &[
+                    ("mcp-protocol-version", "2025-11-25"),
+                    ("mcp-protocol-version", "2026-07-28"),
+                    ("mcp-method", "tools/list"),
+                ],
+            )
+            .await;
+        }
+
+        assert_eq!(
+            app_state.multiplexer.session_count(),
+            0,
+            "a refused duplicate-header request must not leave a session behind"
+        );
+    }
+
+    #[tokio::test]
     async fn legacy_requests_still_get_a_session() {
         let app_state = state();
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
